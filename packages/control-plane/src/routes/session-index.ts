@@ -7,9 +7,12 @@ import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
   error,
+  defineRoute,
+  GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   parseJsonBody,
   parsePattern,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   type RequestContext,
   type Route,
 } from "./shared";
@@ -151,11 +154,19 @@ async function handleDeleteSession(
 }
 
 export const sessionIndexRoutes: Route[] = [
-  { method: "GET", pattern: parsePattern("/sessions"), handler: handleListSessions },
-  {
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+    method: "GET",
+    pattern: parsePattern("/sessions"),
+    handler: handleListSessions,
+  }),
+  defineRoute(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, {
     method: "PATCH",
     pattern: parsePattern("/sessions/:id/read-state"),
     handler: handlePatchReadState,
-  },
-  { method: "DELETE", pattern: parsePattern("/sessions/:id"), handler: handleDeleteSession },
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+    method: "DELETE",
+    pattern: parsePattern("/sessions/:id"),
+    handler: handleDeleteSession,
+  }),
 ];

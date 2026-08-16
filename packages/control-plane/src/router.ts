@@ -2,7 +2,6 @@
  * API router for Open-Inspect Control Plane.
  */
 
-import { isBrowserAuthProxyRoute } from "@open-inspect/shared/browser-auth-routes";
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
@@ -20,6 +19,7 @@ import { createLogger } from "./logger";
 import type { BackgroundJobDispatcher } from "./platform-ports";
 import {
   type Route,
+  type RouteAuthentication,
   type RequestContext,
   parsePattern,
   json,
@@ -58,51 +58,6 @@ function withCorsAndTraceHeaders(response: Response, ctx: RequestContext): Respo
     headers,
   });
 }
-
-/**
- * Routes that do not require authentication.
- */
-const PUBLIC_ROUTES: RegExp[] = [
-  /^\/health$/,
-  /^\/webhooks\/sentry\/[^/]+$/,
-  /^\/webhooks\/automation\/[^/]+$/,
-  // Image-build callbacks authenticate inside the workflow (internal HMAC
-  // for provider_image mode, per-build bearer token for provider_session).
-  /^\/image-builds\/build-complete$/,
-  /^\/image-builds\/build-failed$/,
-];
-
-/**
- * Routes that accept sandbox authentication.
- * These are session-specific routes that can be called by sandboxes using their auth token.
- * The sandbox token is validated by the Durable Object.
- */
-const SANDBOX_AUTH_ROUTES: RegExp[] = [
-  /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
-  /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
-  /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
-  /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
-  /^\/sessions\/[^/]+\/attachments\/[^/]+$/, // Session attachment download from sandbox bridge
-  /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
-  /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
-  /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
-  /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
-];
-
-/** Routes that require the session-specific sandbox token and reject internal HMAC auth. */
-const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
-  /^\/sessions\/[^/]+\/commit-signing$/, // Public signing configuration and remote signer
-  /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/, // Parent agent follow-up to a direct child
-  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI access-token broker
-  /^\/sessions\/[^/]+\/xai-token-refresh$/, // xAI access-token broker
-  /^\/sessions\/[^/]+\/sandbox-skills$/,
-];
-
-/** Diff endpoints the sandbox needs, constrained by both path and method. */
-const SANDBOX_DIFF_AUTH_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
-  { method: "PUT", pattern: /^\/sessions\/[^/]+\/diff$/ },
-  { method: "POST", pattern: /^\/sessions\/[^/]+\/diff\/failure$/ },
-];
 
 type CachedScmProvider =
   | {
@@ -144,69 +99,15 @@ function resolveDeploymentScmProvider(env: Env): SourceControlProviderName {
   return cachedScmProvider.provider;
 }
 
-/**
- * Check if a path matches any public route pattern.
- */
-function isPublicRoute(path: string): boolean {
-  return PUBLIC_ROUTES.some((pattern) => pattern.test(path));
-}
-
-/**
- * Check if a path matches any sandbox auth route pattern.
- */
-function isSandboxAuthRoute(path: string, method: string): boolean {
-  return (
-    SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path)) ||
-    SANDBOX_DIFF_AUTH_ROUTES.some((route) => route.method === method && route.pattern.test(path))
-  );
-}
-
-function isSandboxAuthOnlyRoute(path: string): boolean {
-  return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
-}
-
-export function isWebServiceAuthRoute(method: string, path: string): boolean {
-  return (
-    isBrowserAuthProxyRoute(method, path) ||
-    (method === "GET" && path === "/internal/auth/sign-in-providers")
-  );
-}
-
-export function isScmAgnosticRoute(method: string, path: string): boolean {
-  return (
-    isWebServiceAuthRoute(method, path) ||
-    /^\/scm-settings(?:\/.*)?$/.test(path) ||
-    /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    /^\/skills(?:\/.*)?$/.test(path) ||
-    /^\/skill-profiles(?:\/.*)?$/.test(path) ||
-    (method === "GET" && /^\/sessions\/[^/]+$/.test(path)) ||
-    (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
-    /^\/sessions\/[^/]+\/(sandbox-access|tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh|skills|sandbox-skills)$/.test(
-      path
-    ) ||
-    /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/.test(path) ||
-    /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
-  );
-}
-
-function isProviderImplementedRoute(provider: SourceControlProviderName, path: string): boolean {
-  if (provider === "github") return true;
-  return provider === "gitlab" && /^\/sessions\/[^/]+\/scm-credentials$/.test(path);
-}
-
 function enforceImplementedScmProvider(
-  method: string,
+  route: Route,
   path: string,
   env: Env,
   ctx: RequestContext
 ): Response | null {
   try {
     const provider = resolveDeploymentScmProvider(env);
-    if (
-      !isProviderImplementedRoute(provider, path) &&
-      !isPublicRoute(path) &&
-      !isScmAgnosticRoute(method, path)
-    ) {
+    if (route.supportedScmProviders !== "all" && !route.supportedScmProviders.includes(provider)) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
         scm_provider: provider,
@@ -322,12 +223,30 @@ function logPrincipal(principal: Principal, ctx: RequestContext, path: string): 
   });
 }
 
+export function enforceRoutePrincipal(
+  authentication: RouteAuthentication,
+  principal: Principal
+): Response | null {
+  if (
+    authentication.kind === "web-service" &&
+    (principal.kind !== "service" || principal.service !== "web")
+  ) {
+    return error("Unauthorized", 401);
+  }
+  if (authentication.kind === "user" && principal.kind !== "user") {
+    return error("Human user authentication required", 403);
+  }
+  return null;
+}
+
 /**
  * Routes definition.
  */
-const routes: Route[] = [
+export const routes: Route[] = [
   // Health check
   {
+    authentication: { kind: "public" },
+    supportedScmProviders: "all",
     method: "GET",
     pattern: parsePattern("/health"),
     handler: async () => json({ status: "healthy", service: "open-inspect-control-plane" }),
@@ -340,6 +259,8 @@ const routes: Route[] = [
   ...sessionRoutes,
   // Agent-initiated Slack notification (sandbox-authenticated)
   {
+    authentication: { kind: "user-or-service-with-sandbox-fallback" },
+    supportedScmProviders: ["github"],
     method: "POST",
     pattern: parsePattern("/sessions/:id/slack-notify"),
     handler: handleSlackNotify,
@@ -385,6 +306,27 @@ const routes: Route[] = [
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
 ];
+
+export function assertRouteTableComplete(routeTable: readonly Route[] = routes): void {
+  for (const route of routeTable) {
+    if (
+      !route.authentication ||
+      (route.supportedScmProviders !== "all" && route.supportedScmProviders.length === 0)
+    ) {
+      throw new Error(`Incomplete route policy for ${route.method} ${route.pattern.source}`);
+    }
+    const bindsSandbox =
+      route.authentication.kind === "sandbox" ||
+      route.authentication.kind === "user-or-service-with-sandbox-fallback";
+    if (bindsSandbox && !route.pattern.source.includes("(?<id>")) {
+      throw new Error(
+        `Route ${route.method} ${route.pattern.source} does not bind sandbox session parameter 'id'`
+      );
+    }
+  }
+}
+
+assertRouteTableComplete();
 
 /**
  * Match request to route and execute handler.
@@ -457,21 +399,23 @@ export async function handleRequest(
     return withCorsAndTraceHeaders(error("Not found", 404), ctx);
   }
 
-  // Require authentication for non-public routes
-  if (!isPublicRoute(path)) {
-    const requiresSandboxAuth = isSandboxAuthOnlyRoute(path);
+  const authentication = matchedRoute.route.authentication;
+  if (authentication.kind !== "public" && authentication.kind !== "handler-authenticated") {
     let authError: Response | null;
 
-    // Session id for sandbox auth (e.g., /sessions/abc123/pr -> abc123)
-    const sandboxSessionId = path.match(/^\/sessions\/([^/]+)\//)?.[1] ?? null;
+    const sandboxSessionId =
+      authentication.kind === "sandbox" ||
+      authentication.kind === "user-or-service-with-sandbox-fallback"
+        ? (matchedRoute.match.groups?.id ?? null)
+        : null;
 
-    if (requiresSandboxAuth) {
+    if (authentication.kind === "sandbox") {
       authError = sandboxSessionId
         ? await verifySandboxAuth(request, env, sandboxSessionId, ctx)
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService: isWebServiceAuthRoute(method, path) ? "service" : "user",
+        webService: authentication.kind === "web-service" ? "service" : "user",
       });
 
       if (isAuthError(authResult)) {
@@ -482,7 +426,7 @@ export async function handleRequest(
 
         if (
           authResult.failedScheme === "none" &&
-          isSandboxAuthRoute(path, method) &&
+          authentication.kind === "user-or-service-with-sandbox-fallback" &&
           sandboxSessionId
         ) {
           authError = await verifySandboxAuth(request, env, sandboxSessionId, ctx);
@@ -492,6 +436,7 @@ export async function handleRequest(
         ctx.principal = authResult.principal;
         ctx.authentication = authResult.authentication;
         request = authResult.request;
+        authError = enforceRoutePrincipal(authentication, ctx.principal);
       }
     }
 
@@ -504,7 +449,7 @@ export async function handleRequest(
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(method, path, env, ctx);
+  const providerCheck = enforceImplementedScmProvider(matchedRoute.route, path, env, ctx);
   if (providerCheck) {
     return providerCheck;
   }

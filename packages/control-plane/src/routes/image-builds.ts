@@ -43,6 +43,9 @@ import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
   type Route,
+  defineRoute,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   error,
   extractRepoParams,
   json,
@@ -500,44 +503,44 @@ async function handleGetEnabledRepos(
 }
 
 export const imageBuildRoutes: Route[] = [
-  {
+  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/build-complete"),
     handler: handleBuildComplete,
-  },
-  {
+  }),
+  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/build-failed"),
     handler: handleBuildFailed,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/environment/:id"),
     handler: handleTriggerEnvironmentBuild,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/repo/:owner/:name"),
     handler: handleTriggerRepoBuild,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "PUT",
     pattern: parsePattern("/image-builds/toggle/repo/:owner/:name"),
     handler: handleToggleRepoImageBuilds,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/status"),
     handler: handleGetStatus,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/enabled"),
     handler: handleGetEnabledUnits,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/enabled-repos"),
     handler: handleGetEnabledRepos,
-  },
+  }),
 ];

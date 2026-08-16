@@ -27,7 +27,14 @@ import {
 } from "../session/integration-settings-resolution";
 import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
-import { error, json, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  json,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-child-spawn");
@@ -305,10 +312,10 @@ async function handleSpawnChild(
   return json({ sessionId: childId, status: "created" }, 201);
 }
 
-export const sessionChildSpawnRoutes: Route[] = [
+export const sessionChildSpawnRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/children"),
     handler: handleSpawnChild,
   }),
-];
+]);

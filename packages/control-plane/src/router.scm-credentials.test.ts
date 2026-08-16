@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleRequest, isScmAgnosticRoute } from "./router";
+import { handleRequest, routes } from "./router";
 import {
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
+
+function routeFor(method: string, path: string) {
+  return routes.find((route) => route.method === method && route.pattern.test(path));
+}
 
 function createEnv() {
   const fetch = vi.fn(async (request: Request) => {
@@ -21,8 +25,10 @@ function createEnv() {
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
 
+  const idFromName = vi.fn((name: string) => name);
   return {
     fetch,
+    idFromName,
     env: {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
@@ -34,7 +40,7 @@ function createEnv() {
         dump: vi.fn(),
       },
       SESSION: {
-        idFromName: (name: string) => name,
+        idFromName,
         get: () => ({ fetch }),
       },
     },
@@ -110,8 +116,8 @@ describe("SCM credentials router provider gate", () => {
   });
 
   it("treats provider-neutral SCM settings routes as SCM-agnostic", () => {
-    expect(isScmAgnosticRoute("GET", "/scm-settings")).toBe(true);
-    expect(isScmAgnosticRoute("GET", "/scm-settings/repos")).toBe(true);
+    expect(routeFor("GET", "/scm-settings")?.supportedScmProviders).toBe("all");
+    expect(routeFor("GET", "/scm-settings/repos")?.supportedScmProviders).toBe("all");
   });
 
   it("returns an explicit disabled signing state for GitLab sandboxes", async () => {
@@ -160,7 +166,7 @@ describe("SCM credentials router provider gate", () => {
   });
 
   it("allows GitLab parent sandboxes to reach the child prompt route", async () => {
-    const { env, fetch } = createEnv();
+    const { env, fetch, idFromName } = createEnv();
 
     const response = await handleRequest(
       new Request("https://test.local/sessions/parent-1/children/child-1/prompt", {
@@ -178,6 +184,7 @@ describe("SCM credentials router provider gate", () => {
     // The null DB lookup rejects the unknown child after sandbox auth and SCM classification.
     expect(response.status).toBe(404);
     expect(fetch).toHaveBeenCalledOnce();
+    expect(idFromName).toHaveBeenCalledWith("parent-1");
     expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
   });
 
@@ -201,14 +208,16 @@ describe("SCM credentials router provider gate", () => {
   });
 
   it("allows GitLab deployments to reach the SCM-independent read-state route", async () => {
-    expect(isScmAgnosticRoute("PATCH", "/sessions/session-1/read-state")).toBe(true);
+    expect(routeFor("PATCH", "/sessions/session-1/read-state")?.supportedScmProviders).toBe("all");
   });
 
   it("allows GitLab deployments to read the canonical session resource", () => {
-    expect(isScmAgnosticRoute("GET", "/sessions/session-1")).toBe(true);
+    expect(routeFor("GET", "/sessions/session-1")?.supportedScmProviders).toBe("all");
   });
 
   it("allows GitLab deployments to read sandbox access", () => {
-    expect(isScmAgnosticRoute("GET", "/sessions/session-1/sandbox-access")).toBe(true);
+    expect(routeFor("GET", "/sessions/session-1/sandbox-access")?.supportedScmProviders).toBe(
+      "all"
+    );
   });
 });

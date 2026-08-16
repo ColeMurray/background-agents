@@ -47,6 +47,8 @@ import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   type Route,
   type RequestContext,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   parsePattern,
   json,
   error,
@@ -1272,7 +1274,7 @@ async function handleGetSlackChannels(
 
 // ─── Route exports ───────────────────────────────────────────────────────────
 
-export const automationRoutes: Route[] = [
+export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/slack/watched-channels"),
@@ -1338,4 +1340,4 @@ export const automationRoutes: Route[] = [
     pattern: parsePattern("/automations/:id/regenerate-key"),
     handler: handleRegenerateKey,
   },
-];
+]);

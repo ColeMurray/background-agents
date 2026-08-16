@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleRequest, isWebServiceAuthRoute } from "./router";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { handleRequest, routes } from "./router";
+import {
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
+
+function routeFor(method: string, path: string) {
+  return routes.find((route) => route.method === method && route.pattern.test(path));
+}
 
 function createEnv(verifyStatus: number) {
   const fetch = vi
@@ -15,6 +23,7 @@ function createEnv(verifyStatus: number) {
   };
 
   const env = {
+    ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "gitlab",
     GITLAB_ACCESS_TOKEN: "glpat-test",
     DB: {
@@ -80,6 +89,20 @@ describe("router sandbox-token fallback", () => {
     expect(response.status).toBe(401);
     expect(doFetch).not.toHaveBeenCalled();
   });
+
+  it("does not fall back after a failed service credential attempt", async () => {
+    const { env, doFetch } = createEnv(204);
+    const request = await signedServiceRequest(
+      "https://test.local/sessions/session-1/scm-credentials",
+      { method: "POST", service: "linear-bot" }
+    );
+    request.headers.set("X-OpenInspect-Service-Signature", "invalid");
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+
+    expect(response.status).toBe(401);
+    expect(doFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("retired browser-auth routes", () => {
@@ -108,6 +131,34 @@ describe("managed skill browser authentication", () => {
     ["PATCH", "/skill-profiles/profile_1"],
     ["GET", "/sessions/session_1/skills"],
   ])("requires Better Auth user authentication for %s %s", (method, path) => {
-    expect(isWebServiceAuthRoute(method, path)).toBe(false);
+    expect(routeFor(method, path)?.authentication.kind).toBe("user-or-service");
+  });
+});
+
+describe("route-owned principal restrictions", () => {
+  it("rejects a non-web service on web-service routes", async () => {
+    const { env } = createEnv(401);
+    const request = await signedServiceRequest(
+      "https://test.local/internal/auth/sign-in-providers",
+      { service: "linear-bot" }
+    );
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects a service principal on human-user routes", async () => {
+    const { env } = createEnv(401);
+    const request = await signedServiceRequest("https://test.local/sessions/session-1", {
+      service: "linear-bot",
+    });
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Human user authentication required",
+    });
   });
 });

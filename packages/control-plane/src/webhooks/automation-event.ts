@@ -17,7 +17,13 @@ import {
 import { requireEventPoster } from "../auth/identity-enforcement";
 import { createLogger } from "../logger";
 import type { Route, RequestContext } from "../routes/shared";
-import { parsePattern, json, error } from "../routes/shared";
+import {
+  defineRoute,
+  error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  json,
+  parsePattern,
+} from "../routes/shared";
 import type { Env } from "../types";
 
 type AutomationEventForSource<S extends AutomationEventSource> = Extract<
@@ -161,5 +167,9 @@ export function createAutomationEventRoute(opts: {
     return forwardAutomationEventToScheduler(env, validated.event);
   }
 
-  return { method: "POST", pattern: parsePattern(opts.path), handler };
+  return defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+    method: "POST",
+    pattern: parsePattern(opts.path),
+    handler,
+  });
 }

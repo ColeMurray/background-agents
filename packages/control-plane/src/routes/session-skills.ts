@@ -2,7 +2,16 @@ import { SessionIndexStore } from "../db/session-index";
 import { SessionSkillStore } from "../db/session-skills";
 import { hashSessionSkillManifest } from "../skills/content-addressing";
 import type { Env } from "../types";
-import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
+import {
+  defineRoute,
+  error,
+  json,
+  parsePattern,
+  SCM_AGNOSTIC_SANDBOX_ROUTE,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  type RequestContext,
+  type Route,
+} from "./shared";
 
 function sessionId(match: RegExpMatchArray): string | Response {
   return match.groups?.id ?? error("Session ID required", 400);
@@ -58,14 +67,14 @@ async function handleSandboxInstallation(
 }
 
 export const sessionSkillRoutes: Route[] = [
-  {
+  defineRoute(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/skills"),
     handler: handleSessionSkillsView,
-  },
-  {
+  }),
+  defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/sandbox-skills"),
     handler: handleSandboxInstallation,
-  },
+  }),
 ];

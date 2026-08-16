@@ -16,6 +16,7 @@ import {
   SourceControlProviderError,
   type SourceControlProvider,
   type RepositoryAccessResult,
+  type SourceControlProviderName,
 } from "../source-control";
 
 /**
@@ -48,7 +49,7 @@ export type RequestContext = CorrelationContext & {
 /**
  * Route configuration.
  */
-export interface Route {
+export interface RouteDefinition {
   method: string;
   pattern: RegExp;
   handler: (
@@ -57,6 +58,75 @@ export interface Route {
     match: RegExpMatchArray,
     ctx: RequestContext
   ) => Promise<Response>;
+}
+
+export type RouteAuthentication =
+  | { kind: "public" }
+  | { kind: "handler-authenticated" }
+  | { kind: "web-service" }
+  | { kind: "user" }
+  | { kind: "user-or-service" }
+  | { kind: "sandbox" }
+  | { kind: "user-or-service-with-sandbox-fallback" };
+
+export interface RoutePolicy {
+  authentication: RouteAuthentication;
+  supportedScmProviders: "all" | readonly SourceControlProviderName[];
+}
+
+export interface Route extends RouteDefinition, RoutePolicy {}
+
+export const GITHUB_USER_OR_SERVICE_ROUTE = {
+  authentication: { kind: "user-or-service" },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE = {
+  authentication: { kind: "user-or-service" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_HUMAN_USER_ROUTE = {
+  authentication: { kind: "user" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_WEB_SERVICE_ROUTE = {
+  authentication: { kind: "web-service" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE = {
+  authentication: { kind: "handler-authenticated" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const GITHUB_SANDBOX_FALLBACK_ROUTE = {
+  authentication: { kind: "user-or-service-with-sandbox-fallback" },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE = {
+  authentication: { kind: "user-or-service-with-sandbox-fallback" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_CREDENTIALS_ROUTE = {
+  authentication: { kind: "user-or-service-with-sandbox-fallback" },
+  supportedScmProviders: ["github", "gitlab"],
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_SANDBOX_ROUTE = {
+  authentication: { kind: "sandbox" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export function defineRoutes(policy: RoutePolicy, routes: RouteDefinition[]): Route[] {
+  return routes.map((route) => ({ ...route, ...policy }));
+}
+
+export function defineRoute(policy: RoutePolicy, route: RouteDefinition): Route {
+  return { ...route, ...policy };
 }
 
 /**

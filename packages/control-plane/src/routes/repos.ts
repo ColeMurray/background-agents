@@ -16,6 +16,8 @@ import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
   type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   type RequestContext,
   parsePattern,
   json,
@@ -315,7 +317,7 @@ async function handleListBranches(
   }
 }
 
-export const reposRoutes: Route[] = [
+export const reposRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
     pattern: parsePattern("/repos"),
@@ -336,4 +338,4 @@ export const reposRoutes: Route[] = [
     pattern: parsePattern("/repos/:owner/:name/branches"),
     handler: handleListBranches,
   },
-];
+]);

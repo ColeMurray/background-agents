@@ -22,7 +22,15 @@ import {
   buildValidatedSkillRevision,
   SkillRevisionValidationError,
 } from "../skills/content-addressing";
-import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
+import {
+  error,
+  json,
+  parsePattern,
+  type RequestContext,
+  type Route,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
+} from "./shared";
 
 const log = createLogger("router:skills");
 
@@ -358,7 +366,7 @@ function profileWriteError(value: unknown): Response {
   throw value;
 }
 
-export const skillRoutes: Route[] = [
+export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
   { method: "GET", pattern: parsePattern("/skills"), handler: handleListSkills },
   { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
   {
@@ -399,4 +407,4 @@ export const skillRoutes: Route[] = [
     pattern: parsePattern("/skill-profiles/:id"),
     handler: handleDeleteProfile,
   },
-];
+]);

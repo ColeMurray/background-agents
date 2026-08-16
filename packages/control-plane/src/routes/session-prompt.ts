@@ -21,7 +21,13 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
@@ -166,10 +172,10 @@ async function handleSessionPrompt(
   return response;
 }
 
-export const sessionPromptRoutes: Route[] = [
+export const sessionPromptRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/prompt"),
     handler: handleSessionPrompt,
   }),
-];
+]);
