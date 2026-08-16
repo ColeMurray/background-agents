@@ -2,7 +2,11 @@ import {
   createMcpServerInputSchema,
   updateMcpServerInputSchema,
 } from "@open-inspect/shared/types/integrations";
-import { McpServerStore, McpServerValidationError } from "../db/mcp-servers";
+import {
+  McpServerConflictError,
+  McpServerStore,
+  McpServerValidationError,
+} from "../db/mcp-servers";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import {
@@ -120,6 +124,9 @@ async function handleUpdateMcpServer(
     });
     return json(updated);
   } catch (err) {
+    if (err instanceof McpServerConflictError) {
+      return error(err.message, 409);
+    }
     if (err instanceof McpServerValidationError) {
       return error(err.message, 400);
     }

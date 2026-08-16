@@ -444,6 +444,7 @@ export const createMcpServerInputSchema = z.discriminatedUnion("type", [
 export const updateMcpServerInputSchema = z
   .object({
     ...mcpServerCommonFields,
+    revision: z.number().int().positive(),
     type: z.enum(["local", "remote"]),
     command: z.array(z.string()),
     url: z.url(),
@@ -461,6 +462,7 @@ export type ValidatedUpdateMcpServerInput = z.output<typeof updateMcpServerInput
 /** MCP server metadata for API responses — no decrypted credentials. */
 export interface McpServerMetadata {
   id: string;
+  revision: number;
   name: string;
   type: "local" | "remote";
   command?: string[];

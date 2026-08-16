@@ -63,6 +63,7 @@ function createFakeD1(options?: {
 
 const sampleRow = {
   id: "abc123",
+  revision: 1,
   name: "playwright",
   type: "local",
   command: JSON.stringify(["npx", "-y", "@playwright/mcp"]),
@@ -76,6 +77,7 @@ const sampleRow = {
 
 const remoteRow = {
   id: "def456",
+  revision: 1,
   name: "remote-mcp",
   type: "remote",
   command: null,
@@ -397,8 +399,6 @@ describe("McpServerStore", () => {
     });
 
     it("update() throws McpServerValidationError on duplicate name", async () => {
-      // First call (get existing) returns the row; second call (update) throws constraint error
-      let runCallCount = 0;
       let firstCallCount = 0;
       const fakeStmt = {
         bind(..._params: unknown[]) {
@@ -406,7 +406,8 @@ describe("McpServerStore", () => {
         },
         async first<T>(): Promise<T | null> {
           firstCallCount++;
-          return firstCallCount <= 1 ? (sampleRow as T) : null;
+          if (firstCallCount === 1) return sampleRow as T;
+          throw new Error("UNIQUE constraint failed: mcp_servers.name");
         },
         async all<T>(): Promise<D1Result<T>> {
           return {
@@ -416,15 +417,13 @@ describe("McpServerStore", () => {
           } as unknown as D1Result<T>;
         },
         async run(): Promise<D1Result> {
-          runCallCount++;
-          throw new Error("UNIQUE constraint failed: mcp_servers.name");
+          throw new Error("Unexpected run");
         },
       };
       const db = { prepare: () => fakeStmt, dump: vi.fn(), exec: vi.fn() } as unknown as D1Database;
       const store = new McpServerStore(db);
       const err = await store.update("abc123", { name: "other-server" }).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
-      expect(runCallCount).toBeGreaterThan(0);
     });
   });
 
