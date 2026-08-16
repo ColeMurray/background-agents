@@ -1,44 +1,18 @@
 import { postMessage } from "@open-inspect/shared/slack";
-import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { getAvailableModels } from "../app-home/models";
-import {
-  notifyDroppedAttachments,
-  prepareImageAttachments,
-  type SlackImageAttachment,
-} from "../attachments";
+import { notifyDroppedAttachments, prepareImageAttachments } from "../attachments";
 import { getUserRepoBranchPreference } from "../branch-preferences";
-import { formatChannelContext, formatThreadContext } from "../messages/context";
-import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
-import type { Env } from "../types";
-import type { SlackActorIdentity } from "../user-identity";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
 import { getSlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
+import { createSessionLauncher } from "./session-launcher-application";
 
-export interface StartSessionOptions {
-  target: SlackSessionTarget;
-  channel: string;
-  threadTs: string;
-  messageText: string;
-  actor: SlackActorIdentity;
-  /**
-   * Slack ts of the triggering message. Persisted on the thread mapping so
-   * follow-ups can scope interim thread context to newer messages.
-   */
-  messageTs?: string;
-  previousMessages?: string[];
-  channelName?: string;
-  channelDescription?: string;
-  /** Images attached to the triggering Slack message, normalized at ingress. */
-  images?: SlackImageAttachment[];
-  /** True when the triggering message had no user text, only images. */
-  imageOnly?: boolean;
-  traceId?: string;
-}
+export type { StartSessionOptions } from "./session-launcher-application";
 
-const defaultDependencies = {
+/** Production composition root for the Slack session-launch application. */
+export const startSessionAndSendPrompt = createSessionLauncher({
   getAvailableModels,
   getSlackSettings,
   getResolvedUserPreferences,
@@ -50,135 +24,4 @@ const defaultDependencies = {
   postMessage,
   buildThreadSession,
   storeThreadSession,
-};
-
-export type SessionLauncherDependencies = typeof defaultDependencies;
-
-export async function startSessionAndSendPrompt(
-  env: Env,
-  options: StartSessionOptions,
-  dependencies: SessionLauncherDependencies = defaultDependencies
-): Promise<{ sessionId: string } | null> {
-  const {
-    target,
-    channel,
-    threadTs,
-    messageText,
-    actor,
-    messageTs,
-    previousMessages,
-    channelName,
-    channelDescription,
-    images,
-    imageOnly,
-    traceId,
-  } = options;
-  const {
-    getAvailableModels,
-    getSlackSettings,
-    getResolvedUserPreferences,
-    getUserRepoBranchPreference,
-    createSession,
-    prepareImageAttachments,
-    notifyDroppedAttachments,
-    deliverPrompt,
-    postMessage,
-    buildThreadSession,
-    storeThreadSession,
-  } = dependencies;
-  // Download image bytes before creating the session: an image-only request
-  // whose images are all lost must never create a session it will not prompt.
-  const preparedImages = await prepareImageAttachments(env, images ?? [], traceId);
-  if (imageOnly && preparedImages.files.length === 0) {
-    await notifyDroppedAttachments(
-      env,
-      channel,
-      threadTs,
-      { references: [], dropped: preparedImages.dropped },
-      { traceId, nothingSent: true }
-    );
-    return null;
-  }
-  const [availableModels, slackConfig] = await Promise.all([
-    getAvailableModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  const userPrefs = await getResolvedUserPreferences(env, actor.userId, {
-    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels: availableModels.map((modelOption) => modelOption.value),
-  });
-  const model = userPrefs.model;
-  const reasoningEffort = userPrefs.reasoningEffort;
-  const preferenceRepo = branchPreferenceRepo(target);
-  let branch: string | undefined;
-  if (preferenceRepo) {
-    const repoBranch = await getUserRepoBranchPreference(env, actor.userId, preferenceRepo.id);
-    branch = repoBranch ?? userPrefs.branch;
-  }
-
-  const session = await createSession(env, {
-    target,
-    model,
-    reasoningEffort,
-    branch,
-    traceId,
-    slackUserId: actor.userId,
-    actorDisplayName: actor.displayName,
-    actorEmail: actor.email,
-  });
-  if (!session) {
-    await postMessage(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      "Sorry, I couldn't create a session. Please try again.",
-      { thread_ts: threadTs }
-    );
-    return null;
-  }
-
-  const callbackContext: CallbackContext = {
-    source: "slack",
-    channel,
-    threadTs,
-    repoFullName: targetLabel(target),
-    model,
-    reasoningEffort,
-  };
-  const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
-  const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
-  let content = channelContext + threadContext + messageText;
-  if (slackConfig.sessionInstructions) {
-    content += `\n\n## Additional Instructions\n\n${slackConfig.sessionInstructions}`;
-  }
-  const delivery = await deliverPrompt(env, {
-    sessionId: session.sessionId,
-    content,
-    authorId: `slack:${actor.userId}`,
-    attachments: preparedImages,
-    imageOnly: Boolean(imageOnly),
-    callbackContext,
-    channel,
-    threadTs,
-    traceId,
-  });
-  if (!delivery.ok) {
-    // "no_images_delivered" already told the user nothing ran; the other
-    // failures deserve an explicit retry hint against the created session.
-    if (delivery.reason !== "no_images_delivered") {
-      await postMessage(
-        env.SLACK_BOT_TOKEN,
-        channel,
-        "Session created but failed to send prompt. Please try again.",
-        { thread_ts: threadTs }
-      );
-    }
-    return null;
-  }
-  await storeThreadSession(
-    env,
-    channel,
-    threadTs,
-    buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs)
-  );
-  return { sessionId: session.sessionId };
-}
+});

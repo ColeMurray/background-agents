@@ -4,9 +4,9 @@ import type { SlackSessionTarget } from "../targets";
 import type { SlackActorIdentity } from "../user-identity";
 import type { SlackImageAttachment } from "../attachments";
 import {
-  startSessionAndSendPrompt as launchSession,
+  createSessionLauncher,
   type SessionLauncherDependencies,
-} from "./session-launcher";
+} from "./session-launcher-application";
 
 const dependencies: SessionLauncherDependencies = {
   getAvailableModels: vi.fn(),
@@ -34,8 +34,7 @@ const {
   buildThreadSession,
   storeThreadSession,
 } = dependencies;
-const startSessionAndSendPrompt: typeof launchSession = (env, options) =>
-  launchSession(env, options, dependencies);
+const startSessionAndSendPrompt = createSessionLauncher(dependencies);
 
 function makeEnv(): Env {
   return {
