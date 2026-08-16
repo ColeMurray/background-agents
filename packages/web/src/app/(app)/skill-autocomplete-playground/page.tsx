@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { PromptSkillAutocomplete } from "@/components/prompt-skill-autocomplete";
+import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import type { PromptSkillSuggestion } from "@/lib/prompt-skill-completion";
 
 const PLAYGROUND_SKILLS: PromptSkillSuggestion[] = [
@@ -62,10 +62,10 @@ export default function SkillAutocompletePlayground() {
           >
             <div className="border border-border bg-input shadow-2xl shadow-black/10">
               <div className="relative">
-                <PromptSkillAutocomplete
+                <PromptSkillTextarea
+                  ref={inputRef}
                   value={prompt}
-                  skills={PLAYGROUND_SKILLS}
-                  inputRef={inputRef}
+                  suggestions={{ status: "ready", skills: PLAYGROUND_SKILLS }}
                   onValueChange={(value) => {
                     setPrompt(value);
                     setSubmitted(null);
@@ -82,20 +82,12 @@ export default function SkillAutocompletePlayground() {
                       event.currentTarget.form?.requestSubmit();
                     }
                   }}
-                >
-                  {(autocompleteProps) => (
-                    <textarea
-                      {...autocompleteProps}
-                      ref={inputRef}
-                      value={prompt}
-                      data-testid="skill-playground-input"
-                      autoComplete="off"
-                      rows={7}
-                      placeholder="Try: Use $research to trace how sessions are created"
-                      className="w-full resize-none bg-transparent px-5 py-5 text-base leading-7 outline-none placeholder:text-secondary-foreground sm:px-6 sm:py-6"
-                    />
-                  )}
-                </PromptSkillAutocomplete>
+                  data-testid="skill-playground-input"
+                  autoComplete="off"
+                  rows={7}
+                  placeholder="Try: Use $research to trace how sessions are created"
+                  className="w-full resize-none bg-transparent px-5 py-5 text-base leading-7 outline-none placeholder:text-secondary-foreground sm:px-6 sm:py-6"
+                />
               </div>
               <div className="flex items-center justify-between gap-4 border-t border-border-muted px-5 py-3 sm:px-6">
                 <span className="text-xs text-muted-foreground">

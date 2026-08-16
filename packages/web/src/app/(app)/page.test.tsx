@@ -119,6 +119,7 @@ vi.mock("@/hooks/use-managed-skills", () => ({
     preview: mocks.skillPreview,
     loading: false,
     error: undefined,
+    suggestions: { status: "ready", skills: mocks.skillPreview.skills },
   }),
 }));
 

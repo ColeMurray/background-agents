@@ -4,6 +4,7 @@
 import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionPromptComposer } from "./session-prompt-composer";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
@@ -77,22 +78,12 @@ function ComposerHarness({
         onKeyDown: vi.fn(),
         onStopExecution: vi.fn(),
       }}
-      skills={
-        withSkill
-          ? [
-              {
-                skillId: "skill-1",
-                revisionId: "revision-1",
-                name: "review-pr",
-                description: "Review a pull request",
-                revisionNumber: 1,
-                revisionSha256: "abc",
-                totalBytes: 10,
-                assignmentSources: [],
-              },
-            ]
-          : []
-      }
+      skillSuggestions={{
+        status: "ready",
+        skills: withSkill
+          ? [{ skillId: "skill-1", name: "review-pr", description: "Review a pull request" }]
+          : [],
+      }}
       attachments={{
         items: [],
         error: null,
@@ -197,12 +188,12 @@ describe("SessionPromptComposer", () => {
   });
 
   it("offers pinned skills in the follow-up textarea", async () => {
+    const user = userEvent.setup();
     render(<ComposerHarness withSkill />);
     const input = screen.getByPlaceholderText("Ask or build anything");
 
-    fireEvent.change(input, { target: { value: "$rev", selectionStart: 4, selectionEnd: 4 } });
-    fireEvent.focus(input);
-    fireEvent.select(input, { target: { selectionStart: 4, selectionEnd: 4 } });
+    await user.click(input);
+    await user.type(input, "$rev");
 
     expect(await screen.findByRole("option", { name: /review-pr/i })).toBeInTheDocument();
   });

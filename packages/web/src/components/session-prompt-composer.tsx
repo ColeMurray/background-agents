@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef } from "react";
-import { PromptSkillAutocomplete } from "@/components/prompt-skill-autocomplete";
+import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import { ActionBar } from "@/components/action-bar";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
@@ -13,8 +13,8 @@ import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-attachments";
 import type { Artifact } from "@/types/session";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
-import type { ResolvedSkill } from "@open-inspect/shared/types/skills";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 
 type SessionPromptComposerProps = {
   session: {
@@ -37,9 +37,7 @@ type SessionPromptComposerProps = {
     onKeyDown: (e: React.KeyboardEvent) => void;
     onStopExecution: () => void;
   };
-  skills: readonly ResolvedSkill[];
-  skillsLoading?: boolean;
-  skillsError?: boolean;
+  skillSuggestions: PromptSkillSuggestionSource;
   attachments: {
     items: PendingAttachment[];
     error: string | null;
@@ -59,9 +57,7 @@ type SessionPromptComposerProps = {
 export function SessionPromptComposer({
   session,
   prompt,
-  skills,
-  skillsLoading,
-  skillsError,
+  skillSuggestions,
   attachments,
   model,
 }: SessionPromptComposerProps) {
@@ -128,32 +124,21 @@ export function SessionPromptComposer({
 
           {/* Text input area with floating send button */}
           <div className="relative flex flex-wrap items-end justify-end sm:block">
-            <PromptSkillAutocomplete
+            <PromptSkillTextarea
+              ref={prompt.inputRef}
               value={prompt.value}
-              skills={skills}
-              inputRef={prompt.inputRef}
+              suggestions={skillSuggestions}
               onValueChange={prompt.onValueChange}
               onKeyDown={prompt.onKeyDown}
               direction="up"
-              loadState={skillsLoading ? "loading" : skillsError ? "error" : "ready"}
               maxLength={MAX_WEB_PROMPT_CHARS}
               disabled={prompt.draftLocked}
-            >
-              {(autocompleteProps) => (
-                <textarea
-                  {...autocompleteProps}
-                  ref={prompt.inputRef}
-                  value={prompt.value}
-                  onPaste={handlePaste}
-                  disabled={prompt.draftLocked}
-                  autoComplete="off"
-                  maxLength={MAX_WEB_PROMPT_CHARS}
-                  placeholder={prompt.isProcessing ? "Add a follow-up..." : "Ask or build anything"}
-                  className="min-h-12 max-h-40 w-0 min-w-48 flex-1 resize-none overflow-y-auto bg-transparent px-4 py-3 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:block sm:min-h-[7.75rem] sm:w-full sm:px-4 sm:pt-4 sm:pb-12"
-                  rows={1}
-                />
-              )}
-            </PromptSkillAutocomplete>
+              onPaste={handlePaste}
+              autoComplete="off"
+              placeholder={prompt.isProcessing ? "Add a follow-up..." : "Ask or build anything"}
+              className="min-h-12 max-h-40 w-0 min-w-48 flex-1 resize-none overflow-y-auto bg-transparent px-4 py-3 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:block sm:min-h-[7.75rem] sm:w-full sm:px-4 sm:pt-4 sm:pb-12"
+              rows={1}
+            />
             {/* Floating action buttons */}
             <div
               data-testid="prompt-actions"

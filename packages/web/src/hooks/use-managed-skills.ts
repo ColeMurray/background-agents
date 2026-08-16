@@ -20,6 +20,7 @@ import type {
   SessionSkillSelection,
 } from "@open-inspect/shared/types/skills";
 import type { skillResolutionPreviewInputSchema } from "@open-inspect/shared/types/skills";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 
 export type SkillResolutionPreviewInput = z.infer<typeof skillResolutionPreviewInputSchema>;
 
@@ -232,5 +233,10 @@ export function useSkillResolutionPreview(
     ([, currentTarget, currentSelection]) =>
       resolveSkillPreview({ ...currentTarget, selection: currentSelection })
   );
-  return { preview: data ?? null, loading: isLoading, error };
+  const suggestions: PromptSkillSuggestionSource = isLoading
+    ? { status: "loading" }
+    : error
+      ? { status: "error" }
+      : { status: "ready", skills: data?.skills ?? [] };
+  return { preview: data ?? null, loading: isLoading, error, suggestions };
 }

@@ -107,23 +107,24 @@ autocomplete list.
 
 ## Component Design
 
-Add a reusable `PromptSkillAutocomplete` under `packages/web/src/components/`. It owns completion UI
-state while its parent continues to own the prompt value and existing submission side effects.
+Add a reusable forwarded-ref `PromptSkillTextarea` under `packages/web/src/components/`. It owns the
+native textarea and completion UI state while its parent owns the prompt value and submission side
+effects.
 
 The component interface should receive:
 
 - The current textarea value.
-- The textarea ref.
-- Available `ResolvedSkill` entries.
+- A forwarded textarea ref.
+- A discriminated loading, error, or ready suggestion source.
 - A value-change callback that uses the owning composer's normal draft update path.
 - Existing keydown handling, or a callback invoked when autocomplete does not consume the event.
 - Popup direction; both current prompt surfaces use `up`.
 - Disabled state.
 
-The component renders or decorates the native textarea rather than introducing a second search
-input. Keep focus in the textarea and expose handlers for change, selection/click, keyup, keydown,
-composition start/end, and blur. Recompute the active token from the latest value and
-`selectionStart`/`selectionEnd` instead of deriving it only from the last typed character.
+The component renders the native textarea rather than introducing a second search input or returning
+a handler bag. It composes change, selection/click, keyup, keydown, composition, and blur handlers.
+Recompute the active token from the latest value and `selectionStart`/`selectionEnd` instead of
+deriving it only from the last typed character.
 
 Render the suggestion list in the composer's existing relatively positioned input area. Constrain
 its width and height to the composer, allow vertical scrolling, and use the existing background,
@@ -157,8 +158,8 @@ When the list is open:
 - Shift/Alt-modified keys retain native behavior unless explicitly covered above.
 - Composition events do not open, filter, navigate, or select autocomplete results.
 
-Use `onMouseDown` with `preventDefault()` for pointer selection so the textarea does not blur before
-replacement. Close the menu on a genuine blur after pointer selection has completed.
+Use `onPointerDown` with `preventDefault()` for pointer selection so the textarea does not blur
+before replacement. Close the menu on a genuine blur after pointer selection has completed.
 
 ## File Changes
 
@@ -170,22 +171,24 @@ replacement. Close the menu on a genuine blur after pointer selection has comple
 - `packages/web/src/lib/prompt-skill-completion.test.ts`
   - Exhaustive pure tests for trigger boundaries, caret positions, matching, and replacement.
 - `packages/web/src/components/prompt-skill-autocomplete.tsx`
-  - Shared textarea integration, menu state, keyboard behavior, focus management, and accessible
-    suggestion rendering.
+  - Forwarded textarea integration, explicit interaction state, keyboard behavior, and focus
+    management.
+- `packages/web/src/components/prompt-skill-suggestion-panel.tsx`
+  - Accessible loading, error, empty, and suggestion-list rendering.
 - `packages/web/src/components/prompt-skill-autocomplete.test.tsx`
   - Interaction and accessibility tests independent of either page layout.
 
 ### Update
 
 - `packages/web/src/hooks/use-managed-skills.ts`
-  - Add the abortable resolution-preview hook and retain the existing imperative API helper.
+  - Add the SWR-keyed resolution-preview hook and retain the existing imperative API helper.
 - `packages/web/src/components/session-skill-selector.tsx`
   - Consume lifted preview state rather than issuing and reducing its own preview request.
 - `packages/web/src/app/(app)/page.tsx`
-  - Own resolution preview, provide resolved skills to autocomplete, and wrap the new-session
-    textarea without changing session warming or submission.
+  - Own resolution preview and provide its normalized suggestion source to the new-session textarea
+    without changing session warming or submission.
 - `packages/web/src/components/session-prompt-composer.tsx`
-  - Accept pinned skills and render the reusable autocomplete around the follow-up textarea.
+  - Accept pinned suggestions and render the reusable follow-up textarea.
 - `packages/web/src/app/(app)/session/[id]/page.tsx`
   - Load pinned session skills, pass them to the composer, and route inserted values through the
     existing input-update behavior so errors, retry identity, and typing state remain correct.

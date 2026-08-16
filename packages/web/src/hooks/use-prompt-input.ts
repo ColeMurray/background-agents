@@ -145,8 +145,8 @@ export function usePromptInput(
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setPrompt(e.target.value);
+  const handleInputValueChange = (value: string) => {
+    setPrompt(value);
     setSubmitError(null);
     retryRequestRef.current = null;
 
@@ -154,6 +154,10 @@ export function usePromptInput(
     typingTimeoutRef.current = setTimeout(() => {
       sendTyping();
     }, TYPING_DEBOUNCE_MS);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    handleInputValueChange(e.target.value);
   };
 
   const restorePrompt = useCallback(
@@ -177,6 +181,7 @@ export function usePromptInput(
     setSubmitError,
     handleSubmit,
     handleInputChange,
+    handleInputValueChange,
     handleKeyDown,
     restorePrompt,
   };

@@ -1,6 +1,10 @@
 import type { ResolvedSkill } from "@open-inspect/shared/types/skills";
 
 export type PromptSkillSuggestion = Pick<ResolvedSkill, "skillId" | "name" | "description">;
+export type PromptSkillSuggestionSource =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ready"; skills: readonly PromptSkillSuggestion[] };
 
 export type ActiveSkillCompletion = {
   trigger: "/" | "$";
@@ -10,6 +14,7 @@ export type ActiveSkillCompletion = {
 };
 
 const SKILL_CHARACTER = /^[a-z0-9-]$/i;
+const UNBOUNDED_PROMPT_LENGTH = Number.POSITIVE_INFINITY;
 
 function isSkillCharacter(character: string | undefined): boolean {
   return character !== undefined && SKILL_CHARACTER.test(character);
@@ -54,7 +59,7 @@ export function applySkillCompletion(
   value: string,
   completion: ActiveSkillCompletion,
   skillName: string,
-  maxLength = Number.POSITIVE_INFINITY
+  maxLength = UNBOUNDED_PROMPT_LENGTH
 ): { value: string; caret: number } | null {
   const suffix = completion.end === value.length ? " " : "";
   const replacement = `${completion.trigger}${skillName}${suffix}`;

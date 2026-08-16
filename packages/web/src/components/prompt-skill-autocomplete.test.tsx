@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { useRef, useState, type KeyboardEvent } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { useState, type KeyboardEvent } from "react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { PromptSkillAutocomplete } from "./prompt-skill-autocomplete";
+import { PromptSkillTextarea } from "./prompt-skill-autocomplete";
 
 expect.extend(matchers);
 
@@ -33,25 +33,25 @@ function Harness({
   maxLength?: number;
 }) {
   const [value, setValue] = useState("");
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const suggestions =
+    loadState === "ready"
+      ? ({ status: "ready", skills: availableSkills } as const)
+      : ({ status: loadState } as const);
   return (
     <div className="relative">
-      <PromptSkillAutocomplete
+      <PromptSkillTextarea
         value={value}
-        skills={availableSkills}
-        inputRef={inputRef}
+        suggestions={suggestions}
         onValueChange={setValue}
         onKeyDown={onFallbackKeyDown}
-        loadState={loadState}
         maxLength={maxLength}
-      >
-        {(props) => <textarea {...props} ref={inputRef} aria-label="Prompt" value={value} />}
-      </PromptSkillAutocomplete>
+        aria-label="Prompt"
+      />
     </div>
   );
 }
 
-describe("PromptSkillAutocomplete", () => {
+describe("PromptSkillTextarea", () => {
   it("filters and selects a skill with the keyboard", async () => {
     const user = userEvent.setup();
     render(<Harness />);
@@ -141,5 +141,35 @@ describe("PromptSkillAutocomplete", () => {
 
     expect(input).toHaveValue("/review-pr ");
     expect(input).toHaveFocus();
+  });
+
+  it("selects the active completion with Tab", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+
+    await user.type(input, "/rev");
+    await user.keyboard("{Tab}");
+
+    expect(input).toHaveValue("/review-pr ");
+    expect(input).toHaveFocus();
+  });
+
+  it("suppresses suggestions and selection while composing", async () => {
+    const onFallbackKeyDown = vi.fn();
+    render(<Harness onFallbackKeyDown={onFallbackKeyDown} />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+
+    fireEvent.focus(input);
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: "$re" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(input).toHaveValue("$re");
+    expect(onFallbackKeyDown).toHaveBeenCalled();
+
+    fireEvent.compositionEnd(input, { target: { selectionStart: 3, selectionEnd: 3 } });
+    expect(await screen.findByRole("option", { name: /review-pr/i })).toBeInTheDocument();
   });
 });

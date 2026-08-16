@@ -37,7 +37,7 @@ import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { SessionSkillSelector } from "@/components/session-skill-selector";
-import { PromptSkillAutocomplete } from "@/components/prompt-skill-autocomplete";
+import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
 import {
   useSkillResolutionPreview,
@@ -45,6 +45,7 @@ import {
   type SkillResolutionPreviewResponse,
 } from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
@@ -104,7 +105,7 @@ export default function Home() {
   const {
     preview: skillPreview,
     loading: skillPreviewLoading,
-    error: skillPreviewError,
+    suggestions: skillSuggestions,
   } = useSkillResolutionPreview(currentSkillPreviewTarget, skillSelection);
 
   useEffect(() => {
@@ -355,7 +356,7 @@ export default function Home() {
       skillPreviewTarget={currentSkillPreviewTarget}
       skillPreview={skillPreview}
       skillPreviewLoading={skillPreviewLoading}
-      skillPreviewError={Boolean(skillPreviewError)}
+      skillSuggestions={skillSuggestions}
     />
   );
 }
@@ -380,7 +381,7 @@ function HomeContent({
   skillPreviewTarget,
   skillPreview,
   skillPreviewLoading,
-  skillPreviewError,
+  skillSuggestions,
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
@@ -407,7 +408,7 @@ function HomeContent({
   skillPreviewTarget: Omit<SkillResolutionPreviewInput, "selection"> | null;
   skillPreview: SkillResolutionPreviewResponse | null;
   skillPreviewLoading: boolean;
-  skillPreviewError: boolean;
+  skillSuggestions: PromptSkillSuggestionSource;
 }) {
   const { isOpen } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -485,33 +486,20 @@ function HomeContent({
                 />
                 {/* Text input area */}
                 <div className="relative">
-                  <PromptSkillAutocomplete
+                  <PromptSkillTextarea
+                    ref={inputRef}
                     value={prompt}
-                    skills={skillPreview?.skills ?? []}
-                    inputRef={inputRef}
+                    suggestions={skillSuggestions}
                     onValueChange={handlePromptChange}
                     onKeyDown={handleKeyDown}
                     direction="up"
-                    loadState={
-                      skillPreviewLoading ? "loading" : skillPreviewError ? "error" : "ready"
-                    }
                     maxLength={MAX_WEB_PROMPT_CHARS}
                     disabled={creating}
-                  >
-                    {(autocompleteProps) => (
-                      <textarea
-                        {...autocompleteProps}
-                        ref={inputRef}
-                        value={prompt}
-                        placeholder="What do you want to build?"
-                        autoComplete="off"
-                        maxLength={MAX_WEB_PROMPT_CHARS}
-                        disabled={creating}
-                        className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
-                        rows={3}
-                      />
-                    )}
-                  </PromptSkillAutocomplete>
+                    placeholder="What do you want to build?"
+                    autoComplete="off"
+                    className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
+                    rows={3}
+                  />
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && (

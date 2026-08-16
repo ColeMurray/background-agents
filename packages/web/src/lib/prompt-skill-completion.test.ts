@@ -23,7 +23,7 @@ describe("prompt skill completion", () => {
   it.each([
     ["https://example.com/rev", 23, 23],
     ["cost$rev", 8, 8],
-    ["use /rev!", 9, 10],
+    ["use /rev!", 9, 9],
     ["use @rev", 8, 8],
   ] as const)("does not complete invalid token %j", (value, start, end) => {
     expect(findActiveSkillCompletion(value, start, end)).toBeNull();
