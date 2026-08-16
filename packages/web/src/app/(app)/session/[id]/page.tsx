@@ -702,7 +702,7 @@ function usePromptInput(
   loadingEnabledModels: boolean,
   sessionStatus: NonNullable<SessionState>["status"]
 ) {
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPromptState] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
@@ -716,6 +716,10 @@ function usePromptInput(
     .map((attachment) => attachment.id)
     .join("\u0000");
   const promptRef = useRef(prompt);
+  const setPrompt = useCallback((value: string) => {
+    promptRef.current = value;
+    setPromptState(value);
+  }, []);
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -789,7 +793,6 @@ function usePromptInput(
       }
 
       retryRequestRef.current = null;
-      promptRef.current = "";
       setPrompt("");
       sessionAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top
@@ -816,7 +819,6 @@ function usePromptInput(
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    promptRef.current = e.target.value;
     setPrompt(e.target.value);
     setSubmitError(null);
     retryRequestRef.current = null;
@@ -837,10 +839,9 @@ function usePromptInput(
         setPrompt,
         input: inputRef.current,
       });
-      if (restored) promptRef.current = content;
       return restored;
     },
-    [hasAttachments]
+    [hasAttachments, setPrompt]
   );
 
   return {
