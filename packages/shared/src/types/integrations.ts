@@ -412,6 +412,29 @@ export interface McpServerConfig {
   enabled: boolean;
 }
 
+const mcpServerWritableFields = {
+  name: z.string().trim().min(1),
+  type: z.enum(["local", "remote"]),
+  command: z.array(z.string()).optional(),
+  url: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  repoScopes: z.array(z.string()).nullable().optional(),
+  enabled: z.boolean().optional(),
+};
+
+export const createMcpServerInputSchema = z
+  .object({
+    ...mcpServerWritableFields,
+    enabled: mcpServerWritableFields.enabled.default(true),
+  })
+  .strict();
+
+export const updateMcpServerInputSchema = z.object(mcpServerWritableFields).partial().strict();
+
+export type CreateMcpServerInput = z.infer<typeof createMcpServerInputSchema>;
+export type UpdateMcpServerInput = z.infer<typeof updateMcpServerInputSchema>;
+
 /** MCP server metadata for API responses — no decrypted credentials. */
 export interface McpServerMetadata {
   id: string;

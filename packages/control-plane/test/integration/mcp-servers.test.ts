@@ -92,6 +92,26 @@ describe("MCP Servers API", () => {
       expect(response.status).toBe(400);
     });
 
+    it.each([
+      ["non-string URL", { url: 42 }],
+      ["non-string environment value", { env: { DEBUG: true } }],
+      ["non-object headers", { headers: ["Authorization"] }],
+      ["non-boolean enabled", { enabled: "yes" }],
+      ["unknown fields", { unexpected: true }],
+    ])("returns 400 for %s", async (_description, invalidField) => {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "invalid",
+          type: "remote",
+          url: "https://test.example.com",
+          ...invalidField,
+        }),
+      });
+
+      expect(response.status).toBe(400);
+    });
+
     it("returns 400 for duplicate name", async () => {
       await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
@@ -248,6 +268,32 @@ describe("MCP Servers API", () => {
         method: "PUT",
         body: JSON.stringify({ type: "local" }),
       });
+      expect(response.status).toBe(400);
+    });
+
+    it.each([
+      ["invalid type", { type: "stdio" }],
+      ["non-string URL", { url: 42 }],
+      ["non-object environment", { env: ["DEBUG=1"] }],
+      ["non-string header value", { headers: { Authorization: 123 } }],
+      ["non-boolean enabled", { enabled: 1 }],
+      ["unknown fields", { id: "replacement" }],
+    ])("returns 400 for %s", async (_description, patch) => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: `invalid-update-${_description}`,
+          type: "remote",
+          url: "https://test.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+
       expect(response.status).toBe(400);
     });
   });

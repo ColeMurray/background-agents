@@ -1,4 +1,9 @@
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
+import type {
+  CreateMcpServerInput,
+  McpServerConfig,
+  McpServerMetadata,
+  UpdateMcpServerInput,
+} from "@open-inspect/shared/types/integrations";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
 import { isUniqueConstraintError } from "./errors";
@@ -147,7 +152,7 @@ export class McpServerStore {
     return row ? rowToMetadata(row) : null;
   }
 
-  async create(config: Omit<McpServerConfig, "id">): Promise<McpServerMetadata> {
+  async create(config: CreateMcpServerInput): Promise<McpServerMetadata> {
     const id = generateId();
     const now = Date.now();
 
@@ -197,15 +202,7 @@ export class McpServerStore {
     return created;
   }
 
-  async update(
-    id: string,
-    patch: Partial<
-      Pick<
-        McpServerConfig,
-        "name" | "type" | "command" | "url" | "env" | "headers" | "repoScopes" | "enabled"
-      >
-    >
-  ): Promise<McpServerMetadata | null> {
+  async update(id: string, patch: UpdateMcpServerInput): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)

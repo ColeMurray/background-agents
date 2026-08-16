@@ -1,8 +1,18 @@
-import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
+import {
+  createMcpServerInputSchema,
+  updateMcpServerInputSchema,
+} from "@open-inspect/shared/types/integrations";
 import { McpServerStore, McpServerValidationError } from "../db/mcp-servers";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { type Route, type RequestContext, parsePattern, json, error } from "./shared";
+import {
+  type Route,
+  type RequestContext,
+  parsePattern,
+  json,
+  error,
+  parseJsonBody,
+} from "./shared";
 
 const logger = createLogger("router:mcp-servers");
 
@@ -58,49 +68,14 @@ async function handleCreateMcpServer(
 ): Promise<Response> {
   if (!ctx.db) return error("Database not configured", 503);
 
-  let body: Partial<McpServerConfig>;
-  try {
-    body = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return error("Request body must be a JSON object", 400);
-  }
-
-  if (!body.name || typeof body.name !== "string") {
-    return error("name is required", 400);
-  }
-  if (body.type !== "local" && body.type !== "remote") {
-    return error("type must be 'local' or 'remote'", 400);
-  }
-  if (
-    body.command !== undefined &&
-    (!Array.isArray(body.command) || !body.command.every((c: unknown) => typeof c === "string"))
-  ) {
-    return error("command must be an array of strings", 400);
-  }
-  if (
-    body.repoScopes !== undefined &&
-    body.repoScopes !== null &&
-    (!Array.isArray(body.repoScopes) ||
-      !body.repoScopes.every((s: unknown) => typeof s === "string"))
-  ) {
-    return error("repoScopes must be an array of strings", 400);
-  }
+  const body = await parseJsonBody<unknown>(request);
+  if (body instanceof Response) return body;
+  const parsed = createMcpServerInputSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid MCP server configuration", 400);
 
   try {
     const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
-    const server = await store.create({
-      name: body.name,
-      type: body.type,
-      command: body.command,
-      url: body.url,
-      env: body.env,
-      headers: body.headers,
-      repoScopes: body.repoScopes ?? null,
-      enabled: body.enabled !== false,
-    });
+    const server = await store.create(parsed.data);
     logger.info("MCP server created", {
       event: "mcp_server.created",
       request_id: ctx.request_id,
@@ -127,41 +102,14 @@ async function handleUpdateMcpServer(
   if (!id) return error("Missing server ID", 400);
   if (!ctx.db) return error("Database not configured", 503);
 
-  let body: Partial<McpServerConfig>;
-  try {
-    body = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return error("Request body must be a JSON object", 400);
-  }
-
-  if (
-    body.name !== undefined &&
-    (!body.name || typeof body.name !== "string" || !body.name.trim())
-  ) {
-    return error("name must be a non-empty string", 400);
-  }
-
-  if (
-    body.command !== undefined &&
-    (!Array.isArray(body.command) || !body.command.every((c: unknown) => typeof c === "string"))
-  ) {
-    return error("command must be an array of strings", 400);
-  }
-  if (
-    body.repoScopes !== undefined &&
-    body.repoScopes !== null &&
-    (!Array.isArray(body.repoScopes) ||
-      !body.repoScopes.every((s: unknown) => typeof s === "string"))
-  ) {
-    return error("repoScopes must be an array of strings", 400);
-  }
+  const body = await parseJsonBody<unknown>(request);
+  if (body instanceof Response) return body;
+  const parsed = updateMcpServerInputSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid MCP server configuration", 400);
 
   try {
     const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
-    const updated = await store.update(id, body);
+    const updated = await store.update(id, parsed.data);
     if (!updated) return error("MCP server not found", 404);
 
     logger.info("MCP server updated", {
