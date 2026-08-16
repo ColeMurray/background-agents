@@ -3,6 +3,11 @@
  */
 
 import type { SlackCompletionJob } from "../completion/job";
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+
+export interface SlackCompletionQueue {
+  send(message: SlackCompletionJob, options?: { contentType?: "json" }): Promise<unknown>;
+}
 
 /**
  * Cloudflare Worker environment bindings.
@@ -12,10 +17,10 @@ export interface Env {
   SLACK_KV: KVNamespace;
 
   // Service binding to control plane
-  CONTROL_PLANE: Fetcher;
+  CONTROL_PLANE: ControlPlaneFetcher;
 
   // Durable completion handoff. All Slack completion callbacks enqueue here.
-  SLACK_COMPLETION_QUEUE: Queue<SlackCompletionJob>;
+  SLACK_COMPLETION_QUEUE: SlackCompletionQueue;
 
   // Environment variables
   DEPLOYMENT_NAME: string;

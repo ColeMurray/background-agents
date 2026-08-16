@@ -84,7 +84,7 @@ function createProcessor() {
   };
 
   const processor = new SessionSandboxEventProcessor(
-    { waitUntil } as unknown as DurableObjectState,
+    { waitUntil },
     () => log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as SandboxRepository,

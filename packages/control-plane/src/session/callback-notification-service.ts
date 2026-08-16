@@ -14,6 +14,7 @@ import { deliverWithRetry } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
+import type { FetchClient } from "../platform-ports";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
@@ -31,9 +32,9 @@ export interface CallbackServiceEnv {
   // destination's own.
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
-  SLACK_BOT?: Fetcher;
-  LINEAR_BOT?: Fetcher;
-  SCHEDULER_CALLBACK?: Fetcher;
+  SLACK_BOT?: FetchClient;
+  LINEAR_BOT?: FetchClient;
+  SCHEDULER_CALLBACK?: FetchClient;
 }
 
 /**
@@ -106,7 +107,7 @@ export class CallbackNotificationService {
    * sources, etc.).
    */
   private resolveCallbackRoute(source: string | null): {
-    binding: Fetcher | undefined;
+    binding: FetchClient | undefined;
     secret: string | undefined;
   } {
     const destination: CallbackDestination = source === "linear" ? "linear-bot" : "slack-bot";

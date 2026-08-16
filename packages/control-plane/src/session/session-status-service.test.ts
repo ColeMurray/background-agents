@@ -69,7 +69,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
         };
 
   const waitUntil = vi.fn();
-  const ctx = { waitUntil, id: { toString: () => "do-id" } } as unknown as DurableObjectState;
+  const ctx = { waitUntil, id: { toString: () => "do-id" } };
 
   const parentFetch = vi.fn(async (_request: Request) => new Response(null, { status: 200 }));
   const parentStub = { fetch: parentFetch };

@@ -135,7 +135,7 @@ function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
       waitUntil: (task: Promise<unknown>) => {
         waitUntilTasks?.push(task);
       },
-    } as unknown as ExecutionContext,
+    },
   };
 }
 

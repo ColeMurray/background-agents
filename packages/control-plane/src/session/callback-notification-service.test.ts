@@ -7,6 +7,7 @@ import {
   type CallbackServiceDeps,
 } from "./callback-notification-service";
 import type { MessageRepository } from "./message-repository";
+import type { FetchClient } from "../platform-ports";
 
 // ---- Mock factories ----
 
@@ -27,10 +28,8 @@ function createMockRepository() {
   };
 }
 
-type MockFetcher = Fetcher & { fetch: ReturnType<typeof vi.fn> };
-
-function createMockFetcher(): MockFetcher {
-  return { fetch: vi.fn() } as unknown as MockFetcher;
+function createMockFetcher() {
+  return { fetch: vi.fn<FetchClient["fetch"]>() };
 }
 
 function createTestHarness(overrides?: {
@@ -97,9 +96,7 @@ describe("CallbackNotificationService", () => {
           duration_ms: expect.any(Number),
         })
       );
-      expect(
-        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      ).not.toHaveBeenCalled();
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
     });
 
     it("skips when callback_context is null on the message", async () => {
@@ -110,9 +107,7 @@ describe("CallbackNotificationService", () => {
 
       await harness.service.notifyComplete("msg-1", true);
 
-      expect(
-        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      ).not.toHaveBeenCalled();
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
     });
 
     it("absorbs and logs unexpected callback failures", async () => {
@@ -168,9 +163,7 @@ describe("CallbackNotificationService", () => {
 
       await h.service.notifyComplete("msg-1", true);
 
-      expect(
-        (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      ).not.toHaveBeenCalled();
+      expect(h.slackBot.fetch).not.toHaveBeenCalled();
     });
 
     it("skips when no binding for source", async () => {
@@ -204,13 +197,11 @@ describe("CallbackNotificationService", () => {
       });
 
       const mockResponse = new Response("ok", { status: 200 });
-      vi.mocked(
-        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      ).mockResolvedValue(mockResponse);
+      vi.mocked(harness.slackBot.fetch).mockResolvedValue(mockResponse);
 
       await harness.service.notifyComplete("msg-1", true);
 
-      const fetchMock = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      const fetchMock = harness.slackBot.fetch;
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith(
         "https://internal/callbacks/complete",
@@ -221,7 +212,7 @@ describe("CallbackNotificationService", () => {
       );
 
       // Verify payload shape
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
       expect(body).toMatchObject({
         sessionId: "session-123",
         messageId: "msg-1",
@@ -255,9 +246,7 @@ describe("CallbackNotificationService", () => {
         source: "slack",
       });
 
-      const fetchMock = vi.mocked(
-        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      );
+      const fetchMock = vi.mocked(harness.slackBot.fetch);
       fetchMock
         .mockRejectedValueOnce(new Error("network error"))
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
@@ -324,17 +313,14 @@ describe("CallbackNotificationService", () => {
       });
 
       const mockResponse = new Response("ok", { status: 200 });
-      vi.mocked(
-        (harness.linearBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      ).mockResolvedValue(mockResponse);
+      vi.mocked(harness.linearBot.fetch).mockResolvedValue(mockResponse);
 
       await harness.service.notifyComplete("msg-1", false);
 
-      const linearFetch = (harness.linearBot as unknown as { fetch: ReturnType<typeof vi.fn> })
-        .fetch;
+      const linearFetch = harness.linearBot.fetch;
       expect(linearFetch).toHaveBeenCalledTimes(1);
 
-      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      const slackFetch = harness.slackBot.fetch;
       expect(slackFetch).not.toHaveBeenCalled();
     });
   });
@@ -365,7 +351,7 @@ describe("CallbackNotificationService", () => {
         "https://internal/callbacks/start",
         expect.objectContaining({ method: "POST" })
       );
-      const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
       expect(body).toMatchObject({
         sessionId: "session-123",
         messageId: "msg-1",
@@ -469,7 +455,7 @@ describe("CallbackNotificationService", () => {
       await harness.service.notifyStarted("msg-1");
 
       expect(fetchMock).toHaveBeenCalledOnce();
-      const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
       expect(body.context).toEqual({
         source: "linear",
         issueId: "issue-1",
@@ -498,9 +484,7 @@ describe("CallbackNotificationService", () => {
         source: "slack",
       });
 
-      const fetchMock = vi.mocked(
-        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      );
+      const fetchMock = vi.mocked(harness.slackBot.fetch);
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       // First call should go through
@@ -518,9 +502,7 @@ describe("CallbackNotificationService", () => {
         source: "slack",
       });
 
-      const fetchMock = vi.mocked(
-        (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      );
+      const fetchMock = vi.mocked(harness.slackBot.fetch);
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       await harness.service.notifyToolCall("msg-1", {
@@ -537,7 +519,7 @@ describe("CallbackNotificationService", () => {
         expect.objectContaining({ method: "POST" })
       );
 
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
       expect(body).toMatchObject({
         sessionId: "session-123",
         tool: "bash",
@@ -562,7 +544,7 @@ describe("CallbackNotificationService", () => {
       });
 
       // No forward at all — previously this 404'd against the SchedulerDO.
-      const slackFetch = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      const slackFetch = harness.slackBot.fetch;
       expect(slackFetch).not.toHaveBeenCalled();
       expect(harness.log.debug).toHaveBeenCalledWith(
         "callback.tool_call",
@@ -579,7 +561,7 @@ describe("CallbackNotificationService", () => {
 
       await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
 
-      const fetchMock = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      const fetchMock = harness.slackBot.fetch;
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -597,7 +579,7 @@ describe("CallbackNotificationService", () => {
 
       await h.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
 
-      const fetchMock = (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      const fetchMock = h.slackBot.fetch;
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -617,9 +599,7 @@ describe("CallbackNotificationService", () => {
           callback_context: JSON.stringify({ channel: "C123" }),
           source: "slack",
         });
-        const fetchMock = vi.mocked(
-          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-        );
+        const fetchMock = vi.mocked(harness.slackBot.fetch);
         fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
         await harness.service.notifyToolCall("msg-1", {
@@ -651,9 +631,7 @@ describe("CallbackNotificationService", () => {
           callback_context: JSON.stringify({ channel: "C123" }),
           source: "slack",
         });
-        const fetchMock = vi.mocked(
-          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-        );
+        const fetchMock = vi.mocked(harness.slackBot.fetch);
         fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
         for (let i = 0; i < 3; i++) {
@@ -686,9 +664,7 @@ describe("CallbackNotificationService", () => {
           callback_context: JSON.stringify({ channel: "C123" }),
           source: "slack",
         });
-        const fetchMock = vi.mocked(
-          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-        );
+        const fetchMock = vi.mocked(harness.slackBot.fetch);
         fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
         // Cap is 500. Fire 501 distinct callIds; the first one ("call-0")
@@ -733,9 +709,7 @@ describe("CallbackNotificationService", () => {
           callback_context: JSON.stringify({ channel: "C123" }),
           source: "slack",
         });
-        const fetchMock = vi.mocked(
-          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-        );
+        const fetchMock = vi.mocked(harness.slackBot.fetch);
         fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
         await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
@@ -759,9 +733,7 @@ describe("CallbackNotificationService", () => {
           callback_context: JSON.stringify({ channel: "C123" }),
           source: "slack",
         });
-        const fetchMock = vi.mocked(
-          (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-        );
+        const fetchMock = vi.mocked(harness.slackBot.fetch);
         fetchMock
           .mockRejectedValueOnce(new Error("network"))
           .mockResolvedValue(new Response("ok", { status: 200 }));
@@ -815,9 +787,7 @@ describe("CallbackNotificationService", () => {
         source: "automation",
       });
 
-      const fetchMock = vi.mocked(
-        (schedulerFetcher as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      );
+      const fetchMock = vi.mocked(schedulerFetcher.fetch);
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       await h.service.notifyComplete("msg-1", true);
@@ -828,7 +798,7 @@ describe("CallbackNotificationService", () => {
         expect.objectContaining({ method: "POST" })
       );
 
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
       expect(body).toMatchObject({
         automationId: "auto-1",
         runId: "run-1",
@@ -856,14 +826,12 @@ describe("CallbackNotificationService", () => {
         source: "automation",
       });
 
-      const fetchMock = vi.mocked(
-        (schedulerFetcher as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      );
+      const fetchMock = vi.mocked(schedulerFetcher.fetch);
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       await h.service.notifyComplete("msg-1", false, "Sandbox crashed");
 
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
       expect(body).toMatchObject({
         success: false,
         error: "Sandbox crashed",
@@ -921,9 +889,7 @@ describe("CallbackNotificationService", () => {
         source: "automation",
       });
 
-      const fetchMock = vi.mocked(
-        (schedulerFetcher as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      );
+      const fetchMock = vi.mocked(schedulerFetcher.fetch);
       fetchMock
         .mockRejectedValueOnce(new Error("network error"))
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
@@ -953,14 +919,12 @@ describe("CallbackNotificationService", () => {
         source: "automation",
       });
 
-      const fetchMock = vi.mocked(
-        (schedulerFetcher as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
-      );
+      const fetchMock = vi.mocked(schedulerFetcher.fetch);
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       await h.service.notifyComplete("msg-1", true);
 
-      const slackFetch = (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+      const slackFetch = h.slackBot.fetch;
       expect(slackFetch).not.toHaveBeenCalled();
     });
   });

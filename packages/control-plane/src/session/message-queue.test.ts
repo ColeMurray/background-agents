@@ -199,7 +199,7 @@ function buildQueue() {
   const projectTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
-    { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
+    { waitUntil },
     log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,

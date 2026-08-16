@@ -124,10 +124,7 @@ describe("repository list route", () => {
       match,
       {
         ...ctx,
-        executionCtx: {
-          waitUntil,
-          passThroughOnException: vi.fn(),
-        } as unknown as ExecutionContext,
+        executionCtx: { waitUntil },
       }
     );
 

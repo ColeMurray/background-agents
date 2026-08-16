@@ -17,13 +17,14 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
+import type { DurableObjectTaskContext } from "../platform-ports";
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
 
 export class SessionStatusService {
   constructor(
-    private readonly ctx: DurableObjectState,
+    private readonly ctx: DurableObjectTaskContext,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,

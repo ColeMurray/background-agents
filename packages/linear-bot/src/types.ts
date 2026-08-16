@@ -3,6 +3,7 @@
  */
 
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
 
 /**
@@ -13,7 +14,7 @@ export interface Env {
   LINEAR_KV: KVNamespace;
 
   // Service binding to control plane
-  CONTROL_PLANE: Fetcher;
+  CONTROL_PLANE: ControlPlaneFetcher;
 
   // Environment variables
   DEPLOYMENT_NAME: string;
