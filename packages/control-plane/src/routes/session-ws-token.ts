@@ -1,8 +1,15 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
-import { error, parseJsonBody, parsePattern, type Route } from "./shared";
+import { z } from "zod";
+import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+
+const sessionWsTokenBodySchema = z.object({
+  scmLogin: z.string().optional(),
+  scmName: z.string().optional(),
+  scmEmail: z.string().optional(),
+});
 
 async function handleSessionWsToken(
   request: Request,
@@ -13,18 +20,23 @@ async function handleSessionWsToken(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  const body = await parseJsonBody<{
-    scmLogin?: string;
-    scmName?: string;
-    scmEmail?: string;
-  }>(request);
-  if (body instanceof Response) return body;
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return error("Invalid JSON body", 400);
+  }
 
   // The participant identity comes from the verified principal; body SCM
   // credentials are rejected (tokens arrive via the exchange; enrichment
   // reads the store server-side).
-  const enforcement = applyIdentityEnforcement(ctx, "ws-token", body);
+  const enforcement = applyIdentityEnforcement(ctx, "ws-token", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
+
+  const parsedBody = sessionWsTokenBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) return error("Invalid websocket token body", 400);
+  const body = parsedBody.data;
+
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = enforcement.enforced.canonicalUserId;
 
