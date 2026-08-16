@@ -12,7 +12,6 @@ export function SessionWithChildren({
   isMobile,
   onArchive,
   onSessionSelect,
-  onSessionRenamed,
   onMarkLatestMessageRead,
 }: {
   session: SessionItem;
@@ -22,7 +21,6 @@ export function SessionWithChildren({
   isMobile: boolean;
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
-  onSessionRenamed: (sessionId: string, title: string) => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
   return (
@@ -34,7 +32,6 @@ export function SessionWithChildren({
         isMobile={isMobile}
         onArchive={onArchive}
         onSessionSelect={onSessionSelect}
-        onSessionRenamed={onSessionRenamed}
         onMarkLatestMessageRead={onMarkLatestMessageRead}
       />
       <ChildSessionTree
