@@ -1339,6 +1339,7 @@ export class SchedulerDO extends DurableObject<Env> {
       request_id: run.id,
       metrics: createRequestMetrics(),
       db: this.db,
+      executionCtx: this.ctx,
     };
 
     // What the session opens — the run's repository snapshot or, for

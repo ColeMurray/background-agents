@@ -31,7 +31,7 @@ export type RequestContext = CorrelationContext & {
    */
   db: SqlDatabase;
   /** Request-scoped capability for scheduling background tasks. */
-  executionCtx?: BackgroundTaskContext;
+  executionCtx: BackgroundTaskContext;
   /** Lazy runtime dependency used by user-session authentication and credential access. */
   getUserAuth?: () => BetterAuthRuntime;
   /** Lazy normalized auth runtime used by server-only authentication composition routes. */

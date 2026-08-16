@@ -12,6 +12,7 @@ import { HttpError, resolveRepoOrError, type RequestContext } from "./shared";
 import type { Principal } from "../auth/principal";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -137,6 +138,7 @@ function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
     request_id: "req-1",
     principal,
     db: { batch: mockBatch } as unknown as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},

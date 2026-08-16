@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleRequest, isScmAgnosticRoute } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import {
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
 
 function createEnv() {
   const fetch = vi.fn(async (request: Request) => {
@@ -46,7 +50,8 @@ describe("SCM credentials router provider gate", () => {
         await signedServiceRequest(`https://test.local/sessions/session-1/${endpoint}`, {
           method: "POST",
         }),
-        env as never
+        env as never,
+        TEST_BACKGROUND_TASK_CONTEXT
       );
 
       expect(response.status).toBe(401);
@@ -60,7 +65,8 @@ describe("SCM credentials router provider gate", () => {
         method: "POST",
         headers: { Authorization: "Bearer sandbox-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(202);
@@ -76,7 +82,8 @@ describe("SCM credentials router provider gate", () => {
         method: "POST",
         service: "linear-bot",
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(202);
@@ -92,7 +99,8 @@ describe("SCM credentials router provider gate", () => {
       await signedServiceRequest("https://test.local/sessions/session-1/tunnel-urls", {
         service: "linear-bot",
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(202);
@@ -113,7 +121,8 @@ describe("SCM credentials router provider gate", () => {
       new Request("https://test.local/sessions/session-1/commit-signing", {
         headers: { Authorization: "Bearer sandbox-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(200);
@@ -128,7 +137,8 @@ describe("SCM credentials router provider gate", () => {
 
     const response = await handleRequest(
       await signedServiceRequest("https://test.local/sessions/session-1/commit-signing"),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(401);
@@ -142,7 +152,8 @@ describe("SCM credentials router provider gate", () => {
         method: "POST",
         body: JSON.stringify({ content: "Continue" }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(401);
@@ -160,7 +171,8 @@ describe("SCM credentials router provider gate", () => {
         },
         body: JSON.stringify({ content: "Continue" }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     // The null DB lookup rejects the unknown child after sandbox auth and SCM classification.
@@ -177,7 +189,8 @@ describe("SCM credentials router provider gate", () => {
         method: "POST",
         service: "linear-bot",
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(501);

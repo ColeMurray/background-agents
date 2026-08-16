@@ -11,6 +11,7 @@ import { generateInternalToken } from "@open-inspect/shared/auth";
 import { authenticate, isAuthError, SERVICE_REQUEST_MAX_BODY_BYTES } from "./authenticate";
 import type { RequestContext } from "../routes/shared";
 import type { Env } from "../types";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const SECRETS = {
   SERVICE_AUTH_SECRET_WEB: "web-secret",
@@ -36,6 +37,7 @@ function createCtx(identityRow: Record<string, unknown> | null = null): RequestC
   return {
     trace_id: "trace-test",
     request_id: "req-test",
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: { summarize: () => ({}) },
     db: { prepare: vi.fn(() => statement), batch: vi.fn(), exec: vi.fn() },
   } as unknown as RequestContext;

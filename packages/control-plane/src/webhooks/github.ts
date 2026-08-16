@@ -133,11 +133,7 @@ async function handleGitHubAutomationEvent(
   if (validated.response) return validated.response;
 
   const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
-  if (ctx.executionCtx) {
-    ctx.executionCtx.waitUntil(lifecycleWork);
-  } else {
-    await lifecycleWork;
-  }
+  ctx.executionCtx.waitUntil(lifecycleWork);
 
   return forwardAutomationEventToScheduler(env, validated.event);
 }

@@ -5,6 +5,7 @@ import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const sessionStoreMock = {
   get: vi.fn(),
@@ -47,6 +48,7 @@ function createCtx(): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     db: {} as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},

@@ -4,12 +4,14 @@ import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import type { Env } from "../types";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 function createCtx(db: SqlDatabase = {} as SqlDatabase): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
     db,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     principal: {
       kind: "user",
       userId: "user-1",

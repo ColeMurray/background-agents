@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleRequest, isWebServiceAuthRoute } from "./router";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
 
 function createEnv(verifyStatus: number) {
   const fetch = vi
@@ -43,7 +44,8 @@ describe("router sandbox-token fallback", () => {
         method: "POST",
         headers: { Authorization: "Bearer valid-sandbox-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(202);
@@ -57,7 +59,8 @@ describe("router sandbox-token fallback", () => {
         method: "POST",
         headers: { Authorization: "Bearer invalid-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(401);
@@ -70,7 +73,8 @@ describe("router sandbox-token fallback", () => {
       new Request("https://test.local/analytics/summary", {
         headers: { Authorization: "Bearer invalid-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(401);
@@ -87,7 +91,8 @@ describe("retired browser-auth routes", () => {
     const { env } = createEnv(401);
     const response = await handleRequest(
       new Request(`https://test.local${path}`, { method }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(404);

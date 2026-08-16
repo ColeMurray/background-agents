@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { scmSettingsRoutes } from "./scm-settings";
 import type { RequestContext, Route } from "./shared";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 function findRoute(method: string, path: string): { route: Route; match: RegExpMatchArray } {
   const route = scmSettingsRoutes.find(
@@ -14,6 +15,7 @@ function failingContext(): RequestContext {
   return {
     request_id: "request-1",
     trace_id: "trace-1",
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     db: {
       prepare: vi.fn(() => {
         throw new Error("D1 unavailable");
