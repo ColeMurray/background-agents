@@ -137,10 +137,10 @@ jobs:
           pip install -e "packages/modal-infra[dev]"
 
       - name: Run Ruff linter
-        run: ruff check packages/modal-infra/src/ packages/e2b-infra/ packages/daytona-infra/
+        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/
 
       - name: Run Ruff formatter check
-        run: ruff format --check packages/modal-infra/src/ packages/e2b-infra/ packages/daytona-infra/
+        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/
 
   typecheck-python:
     name: TypeCheck (Python)
