@@ -13,6 +13,7 @@ type SessionRow = {
   base_branch: string | null;
   status: string;
   parent_session_id: string | null;
+  root_session_id: string;
   spawn_source: SpawnSource;
   spawn_depth: number;
   automation_id: string | null;
@@ -197,6 +198,8 @@ class FakeD1Database {
         baseBranch,
         status,
         parentSessionId,
+        parentRootLookupId,
+        rootFallbackId,
         spawnSource,
         spawnDepth,
         automationId,
@@ -216,6 +219,8 @@ class FakeD1Database {
         string | null,
         string,
         string | null,
+        string,
+        string,
         "user" | "agent" | "automation",
         number,
         string | null,
@@ -229,6 +234,7 @@ class FakeD1Database {
       // INSERT OR IGNORE — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
+        const rootSessionId = this.rows.get(parentRootLookupId)?.root_session_id ?? rootFallbackId;
         this.rows.set(id, {
           id,
           title,
@@ -239,6 +245,7 @@ class FakeD1Database {
           base_branch: baseBranch,
           status,
           parent_session_id: parentSessionId,
+          root_session_id: rootSessionId,
           spawn_source: spawnSource,
           spawn_depth: spawnDepth,
           automation_id: automationId,

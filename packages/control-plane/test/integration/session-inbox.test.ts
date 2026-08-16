@@ -75,6 +75,52 @@ describe("session inbox", () => {
     expect(body.items[0].descendantSessions.map(({ id }) => id)).toEqual([child.id, grandchild.id]);
   });
 
+  it("persists roots and repairs them cycle-safely when parents change", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("root"));
+    await store.create(session("child", { parentSessionId: "root", spawnDepth: 1 }));
+    await store.create(session("grandchild", { parentSessionId: "child", spawnDepth: 2 }));
+
+    const initial = await env.DB.prepare(
+      "SELECT id, root_session_id FROM sessions ORDER BY id"
+    ).all<{ id: string; root_session_id: string }>();
+    expect(initial.results).toEqual([
+      { id: "child", root_session_id: "root" },
+      { id: "grandchild", root_session_id: "root" },
+      { id: "root", root_session_id: "root" },
+    ]);
+
+    await env.DB.prepare("UPDATE sessions SET parent_session_id = ? WHERE id = ?")
+      .bind("grandchild", "root")
+      .run();
+
+    const cycled = await env.DB.prepare(
+      "SELECT id, root_session_id FROM sessions ORDER BY id"
+    ).all<{ id: string; root_session_id: string }>();
+    expect(cycled.results).toEqual([
+      { id: "child", root_session_id: "child" },
+      { id: "grandchild", root_session_id: "child" },
+      { id: "root", root_session_id: "child" },
+    ]);
+  });
+
+  it("reroots surviving subtrees when a parent is deleted", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("root"));
+    await store.create(session("child", { parentSessionId: "root", spawnDepth: 1 }));
+    await store.create(session("grandchild", { parentSessionId: "child", spawnDepth: 2 }));
+
+    await store.delete("root");
+
+    const descendants = await env.DB.prepare(
+      "SELECT id, parent_session_id, root_session_id FROM sessions ORDER BY id"
+    ).all<{ id: string; parent_session_id: string | null; root_session_id: string }>();
+    expect(descendants.results).toEqual([
+      { id: "child", parent_session_id: null, root_session_id: "child" },
+      { id: "grandchild", parent_session_id: "child", root_session_id: "child" },
+    ]);
+  });
+
   it("puts active sessions with unread terminal output in needs attention", async () => {
     await serviceFetch("https://example.com/sessions/inbox?category=finished");
     const store = new SessionIndexStore(env.DB);
@@ -230,9 +276,9 @@ describe("session inbox", () => {
   it("paginates roots independently with cursors", async () => {
     await serviceFetch("https://example.com/sessions/inbox?category=finished");
     const store = new SessionIndexStore(env.DB);
-    for (let index = 0; index < 21; index += 1) {
-      await store.create(session(`root-${index}`, { updatedAt: 3000 - index }));
-    }
+    const rootIds = Array.from({ length: 21 }, (_, index) => `root-${index}`);
+    for (const rootId of rootIds) await store.create(session(rootId, { updatedAt: 3000 }));
+    const expectedOrder = rootIds.toSorted((a, b) => (a < b ? 1 : a > b ? -1 : 0));
 
     const first = await serviceFetch("https://example.com/sessions/inbox?category=finished");
     const firstBody = (await first.json()) as {
@@ -241,7 +287,7 @@ describe("session inbox", () => {
       nextCursor: string;
     };
     expect(firstBody.items).toHaveLength(20);
-    expect(firstBody.items[0].rootSession.id).toBe("root-0");
+    expect(firstBody.items.map((item) => item.rootSession.id)).toEqual(expectedOrder.slice(0, 20));
     expect(firstBody.hasMore).toBe(true);
 
     const second = await serviceFetch(
@@ -252,7 +298,7 @@ describe("session inbox", () => {
       hasMore: boolean;
       nextCursor: null;
     };
-    expect(secondBody.items[0].rootSession.id).toBe("root-20");
+    expect(secondBody.items.map((item) => item.rootSession.id)).toEqual(expectedOrder.slice(20));
     expect(secondBody.hasMore).toBe(false);
     expect(secondBody.nextCursor).toBeNull();
   });
