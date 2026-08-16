@@ -5,6 +5,7 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   listSkillProfilesResponseSchema,
   listSkillsResponseSchema,
+  SKILL_LIST_PAGE_SIZE,
   skillProfileResponseSchema,
   skillResolutionPreviewResponseSchema,
   skillResponseSchema,
@@ -36,6 +37,22 @@ const errorResponseSchema = z.object({ error: z.string() });
 const SKILLS_KEY = "/api/skills";
 const SKILL_PROFILES_KEY = "/api/skill-profiles";
 
+async function fetchSkillCatalog(): Promise<z.infer<typeof listSkillsResponseSchema>["skills"]> {
+  const skills: z.infer<typeof listSkillsResponseSchema>["skills"] = [];
+  let cursor: string | null = null;
+  do {
+    const searchParams = new URLSearchParams({ limit: String(SKILL_LIST_PAGE_SIZE) });
+    if (cursor) searchParams.set("cursor", cursor);
+    const page = await validatedFetcher(
+      `${SKILLS_KEY}?${searchParams.toString()}`,
+      listSkillsResponseSchema
+    );
+    skills.push(...page.skills);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return skills;
+}
+
 async function validatedFetcher<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
   const response = await browserApiFetch(path);
   if (!response.ok) throw new Error("Managed skills request failed");
@@ -61,11 +78,9 @@ async function apiRequest<T>(
 
 export function useSkills() {
   const { data: session, status } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR(session ? SKILLS_KEY : null, (path) =>
-    validatedFetcher(path, listSkillsResponseSchema)
-  );
+  const { data, isLoading, error, mutate } = useSWR(session ? SKILLS_KEY : null, fetchSkillCatalog);
   return {
-    skills: data?.skills ?? [],
+    skills: data ?? [],
     loading: status === "loading" || isLoading,
     error,
     mutate,

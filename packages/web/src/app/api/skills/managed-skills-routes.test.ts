@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { DELETE, PUT } from "./[id]/route";
+import { GET } from "./route";
 
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 vi.mock("@/lib/server-auth-session", () => ({ getServerAuthSession: vi.fn() }));
@@ -21,6 +22,24 @@ describe("managed skills BFF routes", () => {
 
     expect(response.status).toBe(401);
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
+  it("forwards catalog pagination parameters", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ skills: [], hasMore: false, nextCursor: null })
+    );
+    const request = new NextRequest(
+      "http://localhost/api/skills?limit=50&cursor=first-skill&ignored=value"
+    );
+
+    const response = await GET(request, { params: Promise.resolve(undefined) });
+
+    expect(response.status).toBe(200);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/skills?limit=50&cursor=first-skill",
+      undefined
+    );
   });
 
   it("forwards the aggregate edit and revision precondition", async () => {

@@ -239,6 +239,44 @@ describe("managed skills persistence and resolution", () => {
     expect(getResponse.status).toBe(404);
   });
 
+  it("paginates catalogs and hydrates assignments beyond D1's parameter limit", async () => {
+    const skills = new SkillStore(env.DB);
+    for (let index = 0; index < 101; index++) {
+      await skills.create(
+        {
+          name: `catalog-skill-${String(index).padStart(3, "0")}`,
+          content,
+          assignments: [{ type: "global" }],
+        },
+        "user_1"
+      );
+    }
+
+    const applicable = await skills.listApplicable({ repositories: [], environmentId: null });
+    expect(applicable).toHaveLength(101);
+    expect(applicable.every((skill) => skill.assignments[0]?.type === "global")).toBe(true);
+
+    const firstResponse = await serviceFetch("https://test.local/skills?limit=100");
+    expect(firstResponse.status).toBe(200);
+    const firstPage = await firstResponse.json<{
+      skills: { name: string }[];
+      hasMore: boolean;
+      nextCursor: string | null;
+    }>();
+    expect(firstPage.skills).toHaveLength(100);
+    expect(firstPage.hasMore).toBe(true);
+    expect(firstPage.nextCursor).toBe("catalog-skill-099");
+
+    const secondResponse = await serviceFetch(
+      `https://test.local/skills?limit=100&cursor=${firstPage.nextCursor}`
+    );
+    await expect(secondResponse.json()).resolves.toMatchObject({
+      skills: [{ name: "catalog-skill-100" }],
+      hasMore: false,
+      nextCursor: null,
+    });
+  });
+
   it("maps typed profile validation and conflict failures", async () => {
     const first = await serviceFetch("https://test.local/skill-profiles", {
       method: "POST",
