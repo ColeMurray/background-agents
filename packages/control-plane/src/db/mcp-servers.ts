@@ -69,8 +69,8 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
     id: row.id,
     name: row.name,
     type: row.type as "local" | "remote",
-    command: safeJsonParseCommand(row.command),
-    url: row.url ?? undefined,
+    command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
+    url: row.type === "remote" ? (row.url ?? undefined) : undefined,
     ...envOrHeaders,
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
@@ -83,8 +83,8 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
     id: row.id,
     name: row.name,
     type: row.type as "local" | "remote",
-    command: safeJsonParseCommand(row.command),
-    url: row.url ?? undefined,
+    command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
+    url: row.type === "remote" ? (row.url ?? undefined) : undefined,
     hasEnv: row.type === "local" && hasCredentials,
     hasHeaders: row.type === "remote" && hasCredentials,
     repoScopes: parseRepoScopes(row.repo_scope),
@@ -258,8 +258,8 @@ export class McpServerStore {
         .bind(
           patch.name ?? row.name,
           mergedType,
-          mergedCommand ? JSON.stringify(mergedCommand) : null,
-          mergedUrl ?? null,
+          mergedType === "local" && mergedCommand ? JSON.stringify(mergedCommand) : null,
+          mergedType === "remote" ? (mergedUrl ?? null) : null,
           encryptedEnv,
           patch.repoScopes !== undefined
             ? patch.repoScopes?.length

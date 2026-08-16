@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 
@@ -285,6 +285,56 @@ describe("MCP Servers API", () => {
         body: JSON.stringify({ type: "local" }),
       });
       expect(response.status).toBe(400);
+    });
+
+    it("changes a local server to remote without retaining command", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({ name: "local-to-remote", type: "local", command: ["npx", "x"] }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ type: "remote", url: "https://remote.example.com" }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json<McpServerMetadata>();
+      expect(body.type).toBe("remote");
+      expect(body.url).toBe("https://remote.example.com");
+      expect(body.command).toBeUndefined();
+      const row = await env.DB.prepare("SELECT command FROM mcp_servers WHERE id = ?")
+        .bind(created.id)
+        .first<{ command: string | null }>();
+      expect(row?.command).toBeNull();
+    });
+
+    it("changes a remote server to local without retaining URL", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "remote-to-local",
+          type: "remote",
+          url: "https://remote.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ type: "local", command: ["npx", "x"] }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json<McpServerMetadata>();
+      expect(body.type).toBe("local");
+      expect(body.command).toEqual(["npx", "x"]);
+      expect(body.url).toBeUndefined();
+      const row = await env.DB.prepare("SELECT url FROM mcp_servers WHERE id = ?")
+        .bind(created.id)
+        .first<{ url: string | null }>();
+      expect(row?.url).toBeNull();
     });
 
     it.each([

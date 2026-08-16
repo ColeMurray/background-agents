@@ -6,6 +6,7 @@ import type {
   CreateMcpServerRequest,
   McpServerMetadata,
 } from "@open-inspect/shared/types/integrations";
+import { DEFAULT_MCP_SERVER_ENABLED } from "@open-inspect/shared/types/integrations";
 import {
   useMcpServers,
   createMcpServer,
@@ -68,7 +69,7 @@ const emptyForm: FormState = {
   envRows: [createEnvRow()],
   repoScopes: [],
   scopeMode: "global",
-  enabled: true,
+  enabled: DEFAULT_MCP_SERVER_ENABLED,
 };
 
 function metadataToForm(metadata: McpServerMetadata): FormState {
