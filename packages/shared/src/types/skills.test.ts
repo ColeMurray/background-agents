@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createSkillInputSchema,
+  listSkillsResponseSchema,
   sessionSkillSelectionSchema,
   skillContentInputSchema,
   skillNameSchema,
@@ -82,5 +83,18 @@ describe("managed skill contracts", () => {
       repoName: `repo-${index}`,
     }));
     expect(skillResolutionPreviewInputSchema.safeParse({ repositories }).success).toBe(false);
+  });
+
+  it("requires a cursor exactly when another skill catalog page exists", () => {
+    expect(
+      listSkillsResponseSchema.safeParse({ skills: [], hasMore: false, nextCursor: null }).success
+    ).toBe(true);
+    expect(
+      listSkillsResponseSchema.safeParse({ skills: [], hasMore: true, nextCursor: "next-skill" })
+        .success
+    ).toBe(true);
+    expect(
+      listSkillsResponseSchema.safeParse({ skills: [], hasMore: true, nextCursor: null }).success
+    ).toBe(false);
   });
 });

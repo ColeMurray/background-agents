@@ -13,6 +13,7 @@
  * Better Auth endpoints remain responsible for session refresh.
  */
 
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { z } from "zod";
 import type { AuthenticationContext } from "../principal";
 
@@ -22,7 +23,7 @@ const sessionSchema = z.object({
     userId: z.string().min(1),
   }),
   user: z.object({
-    id: z.string().min(1),
+    id: z.string().refine(isCanonicalUserId),
   }),
 });
 

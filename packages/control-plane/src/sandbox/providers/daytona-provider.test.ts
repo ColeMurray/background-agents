@@ -37,6 +37,7 @@ function createMockClient(
     getSandbox: (id: string) => Promise<DaytonaSandboxResponse>;
     startSandbox: (id: string) => Promise<void>;
     stopSandbox: (id: string) => Promise<void>;
+    deleteSandbox: (id: string) => Promise<void>;
     recoverSandbox: (id: string) => Promise<void>;
     getSignedPreviewUrl: (
       id: string,
@@ -62,6 +63,7 @@ function createMockClient(
     ),
     startSandbox: vi.fn(async () => {}),
     stopSandbox: vi.fn(async () => {}),
+    deleteSandbox: vi.fn(async () => {}),
     recoverSandbox: vi.fn(async () => {}),
     getSignedPreviewUrl: vi.fn(
       async (): Promise<DaytonaSignedPreviewUrlResponse> => ({
@@ -561,6 +563,18 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(result.success).toBe(true);
       expect(client.stopSandbox).toHaveBeenCalledWith("daytona-sandbox-id");
+    });
+
+    it("deletes sandbox on replacement", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+      const signal = AbortSignal.timeout(1_000);
+
+      const result = await provider.stopSandbox({ ...baseStopConfig, reason: "respawn", signal });
+
+      expect(result.success).toBe(true);
+      expect(client.deleteSandbox).toHaveBeenCalledWith("daytona-sandbox-id", signal);
+      expect(client.stopSandbox).not.toHaveBeenCalled();
     });
 
     it("returns success when sandbox not found (already gone)", async () => {

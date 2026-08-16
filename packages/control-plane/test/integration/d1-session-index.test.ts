@@ -849,5 +849,101 @@ describe("D1 SessionIndexStore", () => {
 
       expect(ids).toEqual(["oldest", "middle"]);
     });
+
+    it("archives an orphaned draft so the batch advances past it", async () => {
+      // The end-to-end shape of the head-of-line bug. Reading oldest-first is
+      // only correct if a visited row leaves the candidate set; a row that could
+      // never be expired used to hold the head and starve everything behind it.
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+      const cutoff = now - 24 * HOUR_MS;
+
+      await seedSession(store, "orphan", "created", now - 72 * HOUR_MS);
+      await seedSession(store, "behind-it", "created", now - 48 * HOUR_MS);
+      expect(await store.listAbandonedDraftSessionIds(cutoff, 1)).toEqual(["orphan"]);
+
+      expect(await store.archiveOrphanedDraft("orphan")).toBe(true);
+
+      expect((await store.get("orphan"))!.status).toBe("archived");
+      expect(await store.listAbandonedDraftSessionIds(cutoff, 1)).toEqual(["behind-it"]);
+    });
+
+    it("refuses to archive a row that has left the draft status", async () => {
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+
+      await seedSession(store, "started", "active", now - 48 * HOUR_MS);
+
+      expect(await store.archiveOrphanedDraft("started")).toBe(false);
+      expect((await store.get("started"))!.status).toBe("active");
+    });
+  });
+
+  describe("repairStatus", () => {
+    const HOUR_MS = 60 * 60 * 1000;
+
+    async function seedDraft(store: SessionIndexStore, id: string, updatedAt: number) {
+      await store.create({
+        id,
+        title: id,
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "created",
+        createdAt: updatedAt,
+        updatedAt,
+      });
+    }
+
+    it("projects a diverged status without claiming new activity", async () => {
+      const store = new SessionIndexStore(env.DB);
+      const updatedAt = Date.now() - 48 * HOUR_MS;
+      await seedDraft(store, "diverged", updatedAt);
+
+      expect(await store.repairStatus("diverged", "completed")).toBe(true);
+
+      const session = await store.get("diverged");
+      expect(session!.status).toBe("completed");
+      // `updated_at` is user-visible recency, maintained by touchUpdatedAt on
+      // real activity. A repair is bookkeeping, so it must not reorder the list.
+      expect(session!.updatedAt).toBe(updatedAt);
+    });
+
+    it("lands even when the index is newer than the durable object", async () => {
+      // The regression this method exists for. updateStatus guards on
+      // `updated_at <= ?` to keep out-of-order async writes from winning, but a
+      // repair carries the durable object's own timestamp — which is older than
+      // D1 whenever touchUpdatedAt has run. The guard then drops the write and
+      // reports zero changes, leaving the row selectable forever.
+      const store = new SessionIndexStore(env.DB);
+      const durableObjectUpdatedAt = Date.now() - 48 * HOUR_MS;
+      await seedDraft(store, "index-ahead", durableObjectUpdatedAt);
+      await store.touchUpdatedAt("index-ahead");
+
+      expect(await store.updateStatus("index-ahead", "completed", durableObjectUpdatedAt)).toBe(
+        false
+      );
+
+      expect(await store.repairStatus("index-ahead", "completed")).toBe(true);
+      expect((await store.get("index-ahead"))!.status).toBe("completed");
+    });
+
+    it("reports no change when the index already agrees", async () => {
+      const store = new SessionIndexStore(env.DB);
+      await seedDraft(store, "agreed", Date.now() - 48 * HOUR_MS);
+
+      expect(await store.repairStatus("agreed", "created")).toBe(false);
+    });
+
+    it("does not overwrite a newer non-draft projection", async () => {
+      const store = new SessionIndexStore(env.DB);
+      await seedDraft(store, "advanced", Date.now() - 48 * HOUR_MS);
+      expect(await store.updateStatus("advanced", "active", Date.now())).toBe(true);
+
+      expect(await store.repairStatus("advanced", "completed")).toBe(false);
+      expect((await store.get("advanced"))!.status).toBe("active");
+    });
   });
 });

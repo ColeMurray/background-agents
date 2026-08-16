@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 type ProxyMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -31,7 +30,7 @@ async function proxyResponse(response: Response): Promise<NextResponse> {
 
 /** Creates the requested BFF route handlers for an authenticated control-plane resource. */
 export function settingsProxy<P>(
-  buildPath: (params: P) => string,
+  buildPath: (params: P, request: NextRequest) => string,
   label: string
 ): ProxyHandlers<P> {
   const proxy = async (
@@ -39,11 +38,6 @@ export function settingsProxy<P>(
     context: { params: Promise<P> },
     method: ProxyMethod
   ): Promise<NextResponse> => {
-    const session = await getServerAuthSession();
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const params = await context.params;
 
     try {
@@ -53,10 +47,10 @@ export function settingsProxy<P>(
       let init: RequestInit | undefined;
       if (method !== "GET") {
         init = { method };
-        if (method !== "DELETE") init.body = JSON.stringify(await request.json());
+        if (method !== "DELETE") init.body = await request.text();
         if (ifMatch) init.headers = { "If-Match": ifMatch };
       }
-      const response = await controlPlaneUserFetch(buildPath(params), init);
+      const response = await controlPlaneUserFetch(buildPath(params, request), init);
       return proxyResponse(response);
     } catch (error) {
       console.error(`Failed to ${METHOD_VERBS[method]} ${label}:`, error);

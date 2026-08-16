@@ -14,6 +14,7 @@ import type {
   ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import type { ClientInfo } from "../types";
+import { projectConnectedParticipants } from "./connections";
 import type { SessionMessenger } from "./messenger";
 
 /**
@@ -45,24 +46,7 @@ export class PresenceService {
    * participant active, and we take the most recent lastSeen across sockets.
    */
   getPresenceList(): ParticipantPresence[] {
-    const byId = new Map<string, ParticipantPresence>();
-    for (const c of this.deps.getAuthenticatedClients()) {
-      const existing = byId.get(c.participantId);
-      if (!existing) {
-        byId.set(c.participantId, {
-          participantId: c.participantId,
-          userId: c.userId,
-          name: c.name,
-          avatar: c.avatar,
-          status: c.status,
-          lastSeen: c.lastSeen,
-        });
-        continue;
-      }
-      if (c.status === "active") existing.status = "active";
-      if (c.lastSeen > existing.lastSeen) existing.lastSeen = c.lastSeen;
-    }
-    return Array.from(byId.values());
+    return projectConnectedParticipants(this.deps.getAuthenticatedClients());
   }
 
   /**

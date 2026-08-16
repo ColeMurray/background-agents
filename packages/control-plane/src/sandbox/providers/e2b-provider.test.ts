@@ -208,16 +208,33 @@ describe("E2BSandboxProvider", () => {
     }
   });
 
-  it("stopSandbox KILLS on connecting_timeout (terminal, non-resumable)", async () => {
+  it.each(["connecting_timeout", "respawn"])(
+    "stopSandbox KILLS on terminal reason %s",
+    async (reason) => {
+      const client = mockClient();
+      const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
+        providerObjectId: "x",
+        sessionId: "s",
+        reason,
+      });
+      expect(res.success).toBe(true);
+      expect(client.killSandbox).toHaveBeenCalledWith("x");
+      expect(client.pauseSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it("forwards the caller signal when killing a replaced sandbox", async () => {
     const client = mockClient();
-    const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
+    const signal = AbortSignal.timeout(1_000);
+
+    await new E2BSandboxProvider(client, providerConfig).stopSandbox({
       providerObjectId: "x",
       sessionId: "s",
-      reason: "connecting_timeout",
+      reason: "respawn",
+      signal,
     });
-    expect(res.success).toBe(true);
-    expect(client.killSandbox).toHaveBeenCalledWith("x");
-    expect(client.pauseSandbox).not.toHaveBeenCalled();
+
+    expect(client.killSandbox).toHaveBeenCalledWith("x", signal);
   });
 
   it("resumeSandbox: 404 during connect (post-GET race) returns shouldSpawnFresh", async () => {

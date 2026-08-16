@@ -1,22 +1,32 @@
-import type { AlarmScheduler } from "../../sandbox/lifecycle/manager";
+import type { AlarmScheduler } from "../../platform-ports";
 
-type AlarmStorage = Pick<DurableObjectStorage, "getAlarm" | "setAlarm">;
+/** Storage-independent access to the runtime's single scheduled wake-up. */
+export interface AlarmScheduleStore {
+  getAlarm(): Promise<number | null>;
+  setAlarm(timestamp: number): Promise<void>;
+}
 
 /**
- * Coordinate callers that share a Durable Object's single alarm slot.
+ * Coordinate callers that share a runtime's single alarm slot.
  *
  * Every alarm handler evaluates all due work, so retaining the earliest
  * deadline prevents one subsystem from delaying another. While an alarm
- * handler is running, Cloudflare returns null until a new alarm is set, which
- * lets the handler establish the next deadline normally.
+ * handler is running, the store may return null until a new alarm is set,
+ * which lets the handler establish the next deadline normally.
  */
-export function createEarliestAlarmScheduler(storage: AlarmStorage): AlarmScheduler {
+export function createEarliestAlarmScheduler(storage: AlarmScheduleStore): AlarmScheduler {
+  let scheduling = Promise.resolve();
+
   return {
-    async scheduleAlarm(timestamp: number): Promise<void> {
-      const currentAlarm = await storage.getAlarm();
-      if (currentAlarm === null || timestamp < currentAlarm) {
-        await storage.setAlarm(timestamp);
-      }
+    scheduleAlarm(timestamp: number): Promise<void> {
+      const operation = scheduling.then(async () => {
+        const currentAlarm = await storage.getAlarm();
+        if (currentAlarm === null || timestamp < currentAlarm) {
+          await storage.setAlarm(timestamp);
+        }
+      });
+      scheduling = operation.catch(() => {});
+      return operation;
     },
   };
 }

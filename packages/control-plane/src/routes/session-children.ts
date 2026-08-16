@@ -138,7 +138,7 @@ export async function handlePromptChild(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    ctx.executionCtx.waitUntil(
+    ctx.executionCtx.submit(
       sessionStore.touchUpdatedAt(childId).catch((error) => {
         logger.error("session_index.touch_updated_at.background_error", {
           parent_id: parentId,

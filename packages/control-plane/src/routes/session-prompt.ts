@@ -152,7 +152,7 @@ async function handleSessionPrompt(
   });
 
   const store = new SessionIndexStore(ctx.db);
-  ctx.executionCtx.waitUntil(
+  ctx.executionCtx.submit(
     store.touchUpdatedAt(sessionId).catch((error) => {
       logger.error("session_index.touch_updated_at.background_error", {
         session_id: sessionId,

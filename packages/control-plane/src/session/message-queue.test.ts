@@ -145,7 +145,7 @@ function buildQueue() {
       () => null as { id: string; created_at: number } | null
     ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
-    startMessageProcessing: vi.fn(),
+    startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
     updateMessageToProcessing: vi.fn(),
     updateMessageToPending: vi.fn(),
     getParticipantById: vi.fn(() => createParticipant()),
@@ -182,7 +182,7 @@ function buildQueue() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const sessionStatus = {
     transition: vi.fn(async (_status: string) => true),
     reconcileAfterExecution: vi.fn(async (_success: boolean) => {}),
@@ -194,12 +194,13 @@ function buildQueue() {
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
   };
   const waitUntil = vi.fn();
+  const backgroundJobs = { submit: waitUntil };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
-    { waitUntil },
+    backgroundJobs,
     log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
@@ -705,8 +706,12 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.processMessageQueue();
 
-    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
-    expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+      "msg-unsent",
+      expect.any(Number),
+      expect.objectContaining({ type: "user_message", messageId: "msg-unsent" })
+    );
+    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-unsent");
     expect(
       h.broadcast.mock.calls.filter(
         ([message]) => message.type === "sandbox_event" && message.event.type === "user_message"
@@ -715,6 +720,20 @@ describe("SessionMessageQueue", () => {
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "prompt_dispatch_send_failed"
+    );
+  });
+
+  it("does not dispatch when another worker wins the processing claim", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-lost" }));
+    h.repository.startMessageProcessing.mockReturnValue(false);
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "processing_status" })
     );
   });
 

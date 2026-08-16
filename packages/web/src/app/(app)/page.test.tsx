@@ -38,6 +38,22 @@ const mocks = vi.hoisted(() => ({
       baseBranch: string;
     }>;
   }>,
+  skillPreview: {
+    skills: [
+      {
+        skillId: "skill-1",
+        revisionId: "revision-1",
+        name: "review-pr",
+        description: "Review a pull request",
+        revisionNumber: 1,
+        revisionSha256: "abc",
+        totalBytes: 10,
+        assignmentSources: [],
+      },
+    ],
+    totalBytes: 10,
+    ignoredProfileSkillIds: [],
+  },
 }));
 
 const repo = {
@@ -97,6 +113,16 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-managed-skills", () => ({
+  useSkillProfiles: () => ({ profiles: [], loading: false }),
+  useSkillResolutionPreview: () => ({
+    preview: mocks.skillPreview,
+    loading: false,
+    error: undefined,
+    suggestions: { status: "ready", skills: mocks.skillPreview.skills },
+  }),
+}));
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -144,6 +170,19 @@ describe("Home", () => {
       "autocomplete",
       "off"
     );
+  });
+
+  it("completes skills from the current resolution preview", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+
+    await user.click(input);
+    await screen.findByText("(1)");
+    await user.type(input, "$rev");
+    await user.keyboard("{Enter}");
+
+    expect(input).toHaveValue("$review-pr ");
   });
 
   it("keeps the attachment control anchored while the sandbox warms", async () => {

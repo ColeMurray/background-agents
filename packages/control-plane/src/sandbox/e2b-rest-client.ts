@@ -235,8 +235,8 @@ export class E2BRestClient {
     });
   }
 
-  async killSandbox(id: string): Promise<void> {
-    await this.requestVoid("DELETE", `/sandboxes/${id}`, TIMEOUT_KILL_MS);
+  async killSandbox(id: string, signal?: AbortSignal): Promise<void> {
+    await this.requestVoid("DELETE", `/sandboxes/${id}`, TIMEOUT_KILL_MS, { signal });
   }
 
   async setSandboxTimeout(id: string, timeoutSeconds: number): Promise<void> {
@@ -265,7 +265,7 @@ export class E2BRestClient {
     path: string,
     timeoutMs: number,
     schema: z.ZodType<T>,
-    options?: { body?: unknown }
+    options?: { body?: unknown; signal?: AbortSignal }
   ): Promise<T> {
     return this.send(method, path, timeoutMs, options, async (response) => {
       const contentType = response.headers.get("content-type") ?? "";
@@ -289,7 +289,7 @@ export class E2BRestClient {
     method: "GET" | "POST" | "DELETE",
     path: string,
     timeoutMs: number,
-    options?: { body?: unknown }
+    options?: { body?: unknown; signal?: AbortSignal }
   ): Promise<void> {
     return this.send<void>(method, path, timeoutMs, options, () => {});
   }
@@ -303,7 +303,7 @@ export class E2BRestClient {
     method: "GET" | "POST" | "DELETE",
     path: string,
     timeoutMs: number,
-    options: { body?: unknown } | undefined,
+    options: { body?: unknown; signal?: AbortSignal } | undefined,
     consume: (response: Response) => T | Promise<T>
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
@@ -314,7 +314,9 @@ export class E2BRestClient {
       const init: RequestInit = {
         method,
         headers: this.getHeaders(),
-        signal: controller.signal,
+        signal: options?.signal
+          ? AbortSignal.any([controller.signal, options.signal])
+          : controller.signal,
       };
       if (options?.body !== undefined) init.body = JSON.stringify(options.body);
 

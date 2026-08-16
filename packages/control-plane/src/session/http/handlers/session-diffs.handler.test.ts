@@ -142,25 +142,25 @@ describe("SessionDiffsHandler", () => {
 
   it("accepts retry and reports a disconnected sandbox as a conflict", async () => {
     const { handler } = harness();
-    expect(handler.retry().status).toBe(202);
+    expect((await handler.retry()).status).toBe(202);
 
     const disconnected = harness({
-      requestRefresh: vi.fn(() => {
+      requestRefresh: vi.fn(async () => {
         throw new SandboxNotConnectedError();
       }),
     });
-    const response = disconnected.handler.retry();
+    const response = await disconnected.handler.retry();
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({ error: "Sandbox is not connected" });
   });
 
-  it("rethrows errors that are not session diff errors", () => {
+  it("rethrows errors that are not session diff errors", async () => {
     const { handler } = harness({
-      requestRefresh: vi.fn(() => {
+      requestRefresh: vi.fn(async () => {
         throw new TypeError("unexpected");
       }),
     });
 
-    expect(() => handler.retry()).toThrow(TypeError);
+    await expect(handler.retry()).rejects.toThrow(TypeError);
   });
 });

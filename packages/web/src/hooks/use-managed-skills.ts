@@ -1,10 +1,11 @@
-import useSWR from "swr";
+import useSWR, { mutate as mutateSWR } from "swr";
 import { z } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   listSkillProfilesResponseSchema,
   listSkillsResponseSchema,
+  SKILL_LIST_PAGE_SIZE,
   skillProfileResponseSchema,
   skillResolutionPreviewResponseSchema,
   skillResponseSchema,
@@ -16,12 +17,14 @@ import type {
   Skill,
   SkillContentInput,
   SkillProfile,
+  SessionSkillSelection,
 } from "@open-inspect/shared/types/skills";
 import type { skillResolutionPreviewInputSchema } from "@open-inspect/shared/types/skills";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 
 export type SkillResolutionPreviewInput = z.infer<typeof skillResolutionPreviewInputSchema>;
 
-type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
+export type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
 
 const skillContentPreviewSchema = z.strictObject({
   skillMarkdown: z.string(),
@@ -35,6 +38,29 @@ const errorResponseSchema = z.object({ error: z.string() });
 
 const SKILLS_KEY = "/api/skills";
 const SKILL_PROFILES_KEY = "/api/skill-profiles";
+export const SKILL_CATALOG_PAGE_SIZE = 25;
+
+function skillCatalogPageKey(cursor: string | null): BrowserApiPath {
+  const searchParams = new URLSearchParams({ limit: String(SKILL_CATALOG_PAGE_SIZE) });
+  if (cursor) searchParams.set("cursor", cursor);
+  return `${SKILLS_KEY}?${searchParams.toString()}`;
+}
+
+async function fetchSkillCatalog(): Promise<z.infer<typeof listSkillsResponseSchema>["skills"]> {
+  const skills: z.infer<typeof listSkillsResponseSchema>["skills"] = [];
+  let cursor: string | null = null;
+  do {
+    const searchParams = new URLSearchParams({ limit: String(SKILL_LIST_PAGE_SIZE) });
+    if (cursor) searchParams.set("cursor", cursor);
+    const page = await validatedFetcher(
+      `${SKILLS_KEY}?${searchParams.toString()}`,
+      listSkillsResponseSchema
+    );
+    skills.push(...page.skills);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return skills;
+}
 
 async function validatedFetcher<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
   const response = await browserApiFetch(path);
@@ -61,15 +87,34 @@ async function apiRequest<T>(
 
 export function useSkills() {
   const { data: session, status } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR(session ? SKILLS_KEY : null, (path) =>
-    validatedFetcher(path, listSkillsResponseSchema)
-  );
+  const { data, isLoading, error, mutate } = useSWR(session ? SKILLS_KEY : null, fetchSkillCatalog);
   return {
-    skills: data?.skills ?? [],
+    skills: data ?? [],
     loading: status === "loading" || isLoading,
     error,
     mutate,
   };
+}
+
+export function useSkillCatalogPage(cursor: string | null) {
+  const { data: session, status } = useAuthSession();
+  const { data, isLoading, error } = useSWR(session ? skillCatalogPageKey(cursor) : null, (path) =>
+    validatedFetcher(path, listSkillsResponseSchema)
+  );
+  return {
+    skills: data?.skills ?? [],
+    hasMore: data?.hasMore ?? false,
+    nextCursor: data?.nextCursor ?? null,
+    loading: status === "loading" || isLoading,
+    error,
+  };
+}
+
+export async function revalidateSkillCatalogPage(cursor: string | null): Promise<void> {
+  await Promise.all([
+    mutateSWR(SKILLS_KEY, undefined, { revalidate: false }),
+    mutateSWR(skillCatalogPageKey(cursor)),
+  ]);
 }
 
 export function useSkill(id: string | null) {
@@ -177,4 +222,21 @@ export async function resolveSkillPreview(
     body: JSON.stringify(input),
     signal,
   });
+}
+
+export function useSkillResolutionPreview(
+  target: Omit<SkillResolutionPreviewInput, "selection"> | null,
+  selection: SessionSkillSelection
+) {
+  const { data, isLoading, error } = useSWR(
+    target ? (["skill-resolution-preview", target, selection] as const) : null,
+    ([, currentTarget, currentSelection]) =>
+      resolveSkillPreview({ ...currentTarget, selection: currentSelection })
+  );
+  const suggestions: PromptSkillSuggestionSource = isLoading
+    ? { status: "loading" }
+    : error
+      ? { status: "error" }
+      : { status: "ready", skills: data?.skills ?? [] };
+  return { preview: data ?? null, loading: isLoading, error, suggestions };
 }

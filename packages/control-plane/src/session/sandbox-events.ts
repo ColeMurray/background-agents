@@ -15,7 +15,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
-import type { BackgroundTaskContext } from "../platform-ports";
+import type { BackgroundJobDispatcher } from "../platform-ports";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
@@ -37,7 +37,7 @@ export class SessionSandboxEventProcessor {
   private pendingPushResolvers = new Map<string, PushResolver>();
 
   constructor(
-    private readonly ctx: BackgroundTaskContext,
+    private readonly backgroundJobs: BackgroundJobDispatcher,
     // The DO swaps its logger for a request-scoped child during fetch();
     // a getter keeps this singleton reading the current logger instead of
     // capturing one by value at construction time.
@@ -187,7 +187,7 @@ export class SessionSandboxEventProcessor {
       this.messenger.broadcast({ type: "sandbox_event", event });
 
       if (messageId) {
-        this.ctx.waitUntil(
+        this.backgroundJobs.submit(
           this.callbackService.notifyToolCall(messageId, event).catch((error) => {
             this.log.error("callback.tool_call.background_error", {
               message_id: messageId,
@@ -244,7 +244,7 @@ export class SessionSandboxEventProcessor {
           isProcessing: this.messageRepository.getProcessingMessage() !== null,
         });
         this.broadcastPromptQueue();
-        this.ctx.waitUntil(
+        this.backgroundJobs.submit(
           this.callbackService.notifyComplete(event.messageId, event.success, event.error)
         );
         await this.statusService.reconcileAfterExecution(event.success);
@@ -257,7 +257,7 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.ctx.waitUntil(
+      this.backgroundJobs.submit(
         this.triggerSnapshot("execution_complete").catch((error) => {
           this.log.error("snapshot.trigger.background_error", {
             reason: "execution_complete",

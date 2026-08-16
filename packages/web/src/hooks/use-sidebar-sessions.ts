@@ -8,7 +8,6 @@ import useSWRInfinite from "swr/infinite";
 import type { SessionListQuery } from "@open-inspect/shared/session-list-query";
 import { isInactiveSession } from "@/lib/time";
 import {
-  applyTitleUpdate,
   applySessionReadState,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -254,27 +253,6 @@ export function useSidebarSessions(currentSessionId: string | null) {
     [currentSessionId, mutateExtraPages, mutateFirstPage, router]
   );
 
-  const handleSessionRenamed = useCallback(
-    (sessionId: string, title: string) => {
-      const updatedAt = Date.now();
-      void mutateFirstPage((current) => applyTitleUpdate(current, sessionId, title, updatedAt), {
-        revalidate: false,
-      });
-      void mutateExtraPages(
-        (current) =>
-          current?.map((page) => applyTitleUpdate(page, sessionId, title, updatedAt) ?? page),
-        { revalidate: false }
-      );
-
-      void mutate<SessionListResponse>(
-        isUnarchivedSessionListKey,
-        (currentData) => applyTitleUpdate(currentData, sessionId, title, updatedAt),
-        { revalidate: false }
-      );
-    },
-    [mutateExtraPages, mutateFirstPage]
-  );
-
   const handleMarkLatestMessageRead = useCallback(
     async (sessionId: string) => {
       const result = await markLatestMessageRead(sessionId);
@@ -306,7 +284,6 @@ export function useSidebarSessions(currentSessionId: string | null) {
     scrollContainerRef,
     maybeLoadMoreSessions,
     handleSessionArchived,
-    handleSessionRenamed,
     handleMarkLatestMessageRead,
   };
 }

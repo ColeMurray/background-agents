@@ -89,7 +89,6 @@ export function SessionSidebar({
     scrollContainerRef,
     maybeLoadMoreSessions,
     handleSessionArchived,
-    handleSessionRenamed,
     handleMarkLatestMessageRead,
   } = useSidebarSessions(currentSessionId);
 
@@ -232,7 +231,6 @@ export function SessionSidebar({
                 isMobile={isMobile}
                 onArchive={handleSessionArchived}
                 onSessionSelect={onSessionSelect}
-                onSessionRenamed={handleSessionRenamed}
                 onMarkLatestMessageRead={handleMarkLatestMessageRead}
               />
             ))}
@@ -259,7 +257,6 @@ export function SessionSidebar({
                     isMobile={isMobile}
                     onArchive={handleSessionArchived}
                     onSessionSelect={onSessionSelect}
-                    onSessionRenamed={handleSessionRenamed}
                     onMarkLatestMessageRead={handleMarkLatestMessageRead}
                   />
                 ))}
