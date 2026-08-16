@@ -292,6 +292,56 @@ describe("createSessionLifecycleHandler", () => {
     expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
   });
 
+  it("waits for initialization before scheduling sandbox warming", async () => {
+    const { handler, initializeSession, scheduleWarmSandbox } = createHandler();
+    let resolveInitialization!: () => void;
+    initializeSession.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveInitialization = resolve;
+      })
+    );
+
+    const responsePromise = handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          userId: "user-1",
+        }),
+      })
+    );
+    await vi.waitFor(() => expect(initializeSession).toHaveBeenCalledOnce());
+
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+    resolveInitialization();
+    expect((await responsePromise).status).toBe(200);
+    expect(scheduleWarmSandbox).toHaveBeenCalledOnce();
+  });
+
+  it("does not schedule sandbox warming when initialization fails", async () => {
+    const { handler, initializeSession, scheduleWarmSandbox } = createHandler();
+    initializeSession.mockRejectedValue(new Error("persistence failed"));
+
+    await expect(
+      handler.init(
+        new Request("http://internal/internal/init", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            sessionName: "session-public-id",
+            repoOwner: null,
+            repoName: null,
+            userId: "user-1",
+          }),
+        })
+      )
+    ).rejects.toThrow("persistence failed");
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+  });
+
   it("persists the repositories list in position order", async () => {
     const { handler, initializeSession, validateReasoningEffort } = createHandler();
     validateReasoningEffort.mockReturnValue(null);
