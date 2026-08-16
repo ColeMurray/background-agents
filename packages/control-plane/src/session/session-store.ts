@@ -15,6 +15,11 @@ type MutableTimelineEvent = Extract<
   SandboxEvent,
   { type: "token" | "tool_call" | "execution_complete" }
 >;
+type LifecycleTimelineEvent = Extract<
+  SandboxEvent,
+  { type: "token" | "tool_call" | "execution_complete" | "context_compacted" | "user_message" }
+>;
+type ImmutableTimelineEvent = Exclude<SandboxEvent, LifecycleTimelineEvent>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type ContextCompactedEvent = Extract<SandboxEvent, { type: "context_compacted" }>;
 
@@ -51,15 +56,13 @@ export interface SessionRecord {
   updatedAt: number;
 }
 
-interface EventWriteBase<TEvent extends SandboxEvent> {
+interface EventWrite<TEvent extends SandboxEvent> {
   event: TEvent;
   createdAt: number;
 }
 
 /** Adds an immutable event at the end of the timeline. */
-export interface AppendEvent<
-  TEvent extends SandboxEvent = SandboxEvent,
-> extends EventWriteBase<TEvent> {
+export interface AppendEvent extends EventWrite<ImmutableTimelineEvent> {
   operation: "append";
   id: string;
 }
@@ -69,7 +72,9 @@ export interface AppendEvent<
  * Existing timeline sequence is retained. Token and completion writes update
  * createdAt; tool-call writes retain the original createdAt.
  */
-export interface UpsertEvent extends EventWriteBase<MutableTimelineEvent> {
+export interface UpsertEvent<
+  TEvent extends MutableTimelineEvent = MutableTimelineEvent,
+> extends EventWrite<TEvent> {
   operation: "upsert";
 }
 
@@ -77,7 +82,7 @@ export interface UpsertEvent extends EventWriteBase<MutableTimelineEvent> {
  * Seals the prompt's current token event and appends a compaction marker atomically.
  * The current and sealed token identities are derived from event.messageId and id.
  */
-export interface CompactEvent extends EventWriteBase<ContextCompactedEvent> {
+export interface CompactEvent extends EventWrite<ContextCompactedEvent> {
   operation: "compact";
   id: string;
 }
@@ -123,15 +128,15 @@ export interface CreatePromptInput {
     | "startedAt"
     | "completedAt"
   >;
-  attachmentIds: string[];
+  attachments: ResolvedSessionAttachment[];
   maxUnfinishedPrompts: number;
-  event?: AppendEvent;
 }
 
 export type CreatePromptResult =
   | { outcome: "created"; prompt: PromptRecord; position: number }
   | { outcome: "duplicate"; prompt: PromptRecord; position: number | null }
   | { outcome: "request-conflict" }
+  | { outcome: "attachment-conflict" }
   | { outcome: "queue-full" }
   | { outcome: "session-not-promptable" };
 
@@ -155,13 +160,12 @@ export type PromptUpdate =
       type: "start";
       claimId: string;
       startedAt: number;
-      event: AppendEvent<UserMessageEvent>;
+      event: EventWrite<UserMessageEvent> & { operation: "append"; id: string };
     }
   | {
       type: "complete";
       expectedStatus: "pending" | "processing";
-      completedAt: number;
-      event: ExecutionCompleteEvent;
+      event: UpsertEvent<ExecutionCompleteEvent>;
     }
   | { type: "requeue"; promptId: string; claimId: string }
   | { type: "cancel"; promptId: string }
@@ -173,9 +177,7 @@ export interface SandboxRecord {
   id: string;
   connectionId: string | null;
   providerHandle: string | null;
-  snapshotId: string | null;
   snapshotImageRef: string | null;
-  authToken: string | null;
   authTokenHash: string | null;
   status: SandboxStatus;
   gitSyncStatus: GitSyncStatus;
@@ -218,22 +220,17 @@ export type SandboxUpdate =
   | { type: "record-activity"; activityAt: number }
   | { type: "set-git-sync-status"; status: GitSyncStatus }
   | { type: "set-spawn-error"; error: string | null; errorAt: number | null }
-  | {
-      type: "update-access";
-      codeServer: { url?: string | null; credential?: string | null };
-    }
-  | { type: "update-access"; vnc: { url?: string | null; credential?: string | null } }
-  | { type: "update-access"; tunnelUrls: Record<string, string> | null }
-  | {
-      type: "update-access";
-      terminal: { url?: string | null; credential?: string | null };
-    }
+  | { type: "set-code-server-access"; url?: string | null; credential?: string | null }
+  | { type: "set-vnc-access"; url?: string | null; credential?: string | null }
+  | { type: "set-tunnel-urls"; tunnelUrls: Record<string, string> | null }
+  | { type: "set-terminal-access"; url?: string | null; credential?: string | null }
   | { type: "reset-circuit-breaker" }
   | { type: "record-spawn-failure"; failedAt: number };
 
 export interface HistoryCursor {
   createdAt: number;
   eventId: string;
+  /** Absent only while reading a cursor created before timeline sequencing was introduced. */
   sequence?: number;
 }
 
@@ -254,11 +251,9 @@ export interface HistoryQuery {
 }
 
 /** Events are ordered oldest-to-newest within each backward-paginated page. */
-export interface SessionHistory {
-  events: PersistedEvent[];
-  hasMore: boolean;
-  cursor: HistoryCursor | null;
-}
+export type SessionHistory =
+  | { events: PersistedEvent[]; hasMore: true; cursor: HistoryCursor }
+  | { events: PersistedEvent[]; hasMore: false; cursor: HistoryCursor | null };
 
 /**
  * Atomic persistence operations for one initialized session.

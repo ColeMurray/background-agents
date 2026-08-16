@@ -20,11 +20,12 @@ import type {
 
 it("does not expose persistence providers or transaction primitives", () => {
   const source = readFileSync(new URL("./session-store.ts", import.meta.url), "utf8");
+  const specifiers = [...source.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]);
 
-  expect(source).not.toMatch(
-    /SqlStorage|D1Database|Hyperdrive|PostgreSQL|DurableObjectState|transactionSync/
-  );
-  expect(source).not.toMatch(/cloudflare:|@cloudflare|\.\/sql-storage/);
+  expect(specifiers).not.toHaveLength(0);
+  for (const specifier of specifiers) {
+    expect(specifier).toMatch(/^@open-inspect\/shared\/types\//);
+  }
 });
 
 it("defines the provider-neutral asynchronous session store contract", () => {
@@ -61,10 +62,12 @@ it("represents current atomic operations without storage primitives", () => {
     operation: "append",
     id: "event-1",
     event: {
-      type: "context_compacted",
+      type: "tool_result",
       sandboxId: "sandbox-1",
       messageId: "prompt-1",
       timestamp: 1,
+      callId: "call-1",
+      result: "done",
     },
     createdAt: 1_000,
   } satisfies AppendEvent;
@@ -103,7 +106,7 @@ it("represents current atomic operations without storage primitives", () => {
       requestFingerprint: "fingerprint-1",
       createdAt: 1_000,
     },
-    attachmentIds: ["attachment-1"],
+    attachments: [{ attachmentId: "attachment-1", name: "screenshot.png", mimeType: "image/png" }],
     maxUnfinishedPrompts: 10,
   } satisfies CreatePromptInput;
   const start = {
@@ -120,18 +123,21 @@ it("represents current atomic operations without storage primitives", () => {
   const complete = {
     type: "complete",
     expectedStatus: "processing",
-    completedAt: 3_000,
     event: {
-      type: "execution_complete",
-      sandboxId: "sandbox-1",
-      messageId: "prompt-1",
-      timestamp: 3,
-      success: true,
+      operation: "upsert",
+      createdAt: 3_000,
+      event: {
+        type: "execution_complete",
+        sandboxId: "sandbox-1",
+        messageId: "prompt-1",
+        timestamp: 3,
+        success: true,
+      },
     },
   } satisfies PromptUpdate;
   const accessUpdate = {
-    type: "update-access",
-    codeServer: { url: null },
+    type: "set-code-server-access",
+    url: null,
   } satisfies SandboxUpdate;
   const circuitBreakerUpdate = {
     type: "record-spawn-failure",
@@ -142,13 +148,9 @@ it("represents current atomic operations without storage primitives", () => {
     filter: { type: "for-prompt", promptId: "prompt-1" },
   } satisfies HistoryQuery;
 
-  expectTypeOf([append, upsert, compact]).toMatchTypeOf<PendingEvent[]>();
-  expectTypeOf(create).toMatchTypeOf<CreatePromptInput>();
-  expectTypeOf(start).toMatchTypeOf<PromptUpdate>();
-  expectTypeOf(complete).toMatchTypeOf<PromptUpdate>();
-  expectTypeOf(accessUpdate).toMatchTypeOf<SandboxUpdate>();
-  expectTypeOf(circuitBreakerUpdate).toMatchTypeOf<SandboxUpdate>();
-  expectTypeOf(history).toMatchTypeOf<HistoryQuery>();
+  const writes = [append, upsert, compact] satisfies PendingEvent[];
+  expect(writes).toHaveLength(3);
+  expect([create, start, complete, accessUpdate, circuitBreakerUpdate, history]).toHaveLength(6);
 });
 
 it("preserves nullable legacy repository state", () => {
@@ -159,6 +161,21 @@ it("preserves nullable legacy repository state", () => {
 
 it("models create outcomes explicitly", () => {
   expectTypeOf<CreatePromptResult["outcome"]>().toEqualTypeOf<
-    "created" | "duplicate" | "request-conflict" | "queue-full" | "session-not-promptable"
+    | "created"
+    | "duplicate"
+    | "request-conflict"
+    | "attachment-conflict"
+    | "queue-full"
+    | "session-not-promptable"
   >();
+});
+
+it("prevents lifecycle events from bypassing their atomic operations", () => {
+  expectTypeOf<
+    Extract<AppendEvent["event"], { type: "context_compacted" }>
+  >().toEqualTypeOf<never>();
+  expectTypeOf<
+    Extract<AppendEvent["event"], { type: "execution_complete" }>
+  >().toEqualTypeOf<never>();
+  expectTypeOf<Extract<AppendEvent["event"], { type: "user_message" }>>().toEqualTypeOf<never>();
 });
