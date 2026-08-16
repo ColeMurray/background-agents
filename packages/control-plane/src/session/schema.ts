@@ -540,8 +540,27 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   {
     id: 42,
     description: "Allow only one processing message per session",
-    run: `CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
-      ON messages(status) WHERE status = 'processing'`,
+    run: (sql) => {
+      // Preserve the oldest claim as the likely active execution and requeue later claims.
+      sql.exec(`WITH processing_messages AS (
+          SELECT id, ROW_NUMBER() OVER (
+            ORDER BY COALESCE(started_at, created_at), created_at, rowid
+          ) AS processing_order
+          FROM messages
+          WHERE status = 'processing'
+        )
+        UPDATE messages
+        SET status = 'pending', started_at = NULL
+        WHERE id IN (
+          SELECT id FROM processing_messages WHERE processing_order > 1
+        )`);
+      sql.exec(`DELETE FROM events
+        WHERE type = 'user_message'
+          AND id = 'user_message:' || message_id
+          AND message_id IN (SELECT id FROM messages WHERE status = 'pending')`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
+        ON messages(status) WHERE status = 'processing'`);
+    },
   },
 ];
 

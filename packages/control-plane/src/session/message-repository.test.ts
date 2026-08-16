@@ -10,7 +10,7 @@ import type { SqlResult, SqlStorage } from "./sql-storage";
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const data = new Map<string, unknown[]>();
-  let defaultData: unknown[] = [];
+  const matchingData: Array<{ pattern: RegExp; rows: unknown[] }> = [];
   let oneValue: unknown = null;
   let rowsWritten = 0;
   const sql: SqlStorage = {
@@ -20,7 +20,9 @@ function createMockSql() {
       return {
         toArray: () => {
           consumed = true;
-          return data.get(query) ?? defaultData;
+          return (
+            data.get(query) ?? matchingData.find(({ pattern }) => pattern.test(query))?.rows ?? []
+          );
         },
         one: () => oneValue,
         get rowsWritten() {
@@ -33,11 +35,9 @@ function createMockSql() {
     sql,
     calls,
     setData: (query: string, rows: unknown[]) => data.set(query, rows),
+    setMatchingData: (pattern: RegExp, rows: unknown[]) => matchingData.push({ pattern, rows }),
     setOne: (value: unknown) => (oneValue = value),
-    setRowsWritten: (value: number) => {
-      rowsWritten = value;
-      defaultData = Array.from({ length: value }, () => ({}));
-    },
+    setRowsWritten: (value: number) => (rowsWritten = value),
   };
 }
 
@@ -216,7 +216,9 @@ describe("MessageRepository", () => {
   });
 
   it("atomically starts processing and creates the canonical user event", () => {
-    mock.setRowsWritten(1);
+    mock.setMatchingData(/UPDATE messages SET status = 'processing'[\s\S]*RETURNING id/, [
+      { id: "msg-1" },
+    ]);
     expect(
       repository.startMessageProcessing("msg-1", 2000, {
         type: "user_message",
@@ -247,7 +249,9 @@ describe("MessageRepository", () => {
   });
 
   it("returns an undispatched processing message to pending and removes its user event", () => {
-    mock.setRowsWritten(1);
+    mock.setMatchingData(/UPDATE messages SET status = 'pending'[\s\S]*RETURNING id/, [
+      { id: "msg-1" },
+    ]);
     repository.updateMessageToPending("msg-1");
     expect(mock.calls[0].query).toContain("status = 'pending'");
     expect(mock.calls[0].params).toEqual(["msg-1"]);

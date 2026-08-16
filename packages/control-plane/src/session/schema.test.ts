@@ -431,23 +431,59 @@ describe("applyMigrations", () => {
 
   it("allows only one processing message per session", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 42);
-    expect(migration?.run).toContain("idx_messages_one_processing");
-    expect(migration?.run).toContain("WHERE status = 'processing'");
+    expect(typeof migration?.run).toBe("function");
 
     const db = new DatabaseSync(":memory:");
     const sql = createDatabaseSql(db);
     try {
-      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
-      (migration!.run as string)
-        .split(";")
-        .filter(Boolean)
-        .forEach((statement) => sql.exec(statement));
-      db.prepare("INSERT INTO messages (id, status) VALUES (?, ?)").run("first", "processing");
+      db.exec(`CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER
+      )`);
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        message_id TEXT
+      )`);
+      db.prepare(
+        "INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)"
+      ).run("first", "processing", 100, 120);
+      db.prepare(
+        "INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)"
+      ).run("second", "processing", 110, 130);
+      db.prepare("INSERT INTO events (id, type, message_id) VALUES (?, ?, ?)").run(
+        "user_message:first",
+        "user_message",
+        "first"
+      );
+      db.prepare("INSERT INTO events (id, type, message_id) VALUES (?, ?, ?)").run(
+        "user_message:second",
+        "user_message",
+        "second"
+      );
+
+      const run = migration!.run as (sql: SqlStorage) => void;
+      expect(() => run(sql)).not.toThrow();
+      expect(() => run(sql)).not.toThrow();
+
+      expect(db.prepare("SELECT id, status, started_at FROM messages ORDER BY id").all()).toEqual([
+        { id: "first", status: "processing", started_at: 120 },
+        { id: "second", status: "pending", started_at: null },
+      ]);
+      expect(db.prepare("SELECT id FROM events ORDER BY id").all()).toEqual([
+        { id: "user_message:first" },
+      ]);
       expect(() =>
-        db.prepare("INSERT INTO messages (id, status) VALUES (?, ?)").run("second", "processing")
+        db
+          .prepare("INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)")
+          .run("third", "processing", 140, 150)
       ).toThrow();
       expect(() =>
-        db.prepare("INSERT INTO messages (id, status) VALUES (?, ?)").run("queued", "pending")
+        db
+          .prepare("INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)")
+          .run("queued", "pending", 160, null)
       ).not.toThrow();
     } finally {
       db.close();
