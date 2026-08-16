@@ -863,9 +863,11 @@ export class SchedulerDO extends DurableObject<Env> {
     // One thread read per event, shared by every automation admitted for it and
     // created only on the first admission. Several automations can watch the
     // same channel; they must not each re-read the thread.
+    const slackEvent = event.source === "slack" ? event : null;
     let slackContextPromise: Promise<string> | undefined;
     const slackContextBlock = (): Promise<string> => {
-      slackContextPromise ??= this.buildSlackContextWithThread(event as SlackAutomationEvent);
+      if (!slackEvent) return Promise.resolve("");
+      slackContextPromise ??= this.buildSlackContextWithThread(slackEvent);
       return slackContextPromise;
     };
 
