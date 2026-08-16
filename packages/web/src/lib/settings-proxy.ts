@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 type ProxyMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -39,11 +38,6 @@ export function settingsProxy<P>(
     context: { params: Promise<P> },
     method: ProxyMethod
   ): Promise<NextResponse> => {
-    const session = await getServerAuthSession();
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const params = await context.params;
 
     try {
