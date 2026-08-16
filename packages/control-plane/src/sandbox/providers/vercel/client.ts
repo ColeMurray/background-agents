@@ -114,7 +114,7 @@ const vercelSnapshotMetadataSchema = z.object({
   id: z.string(),
   sourceSessionId: z.string(),
   status: vercelSnapshotStatusSchema,
-  region: z.string(),
+  region: z.string().optional(),
   sizeBytes: z.number(),
   createdAt: z.number(),
   updatedAt: z.number(),
@@ -172,7 +172,7 @@ export class VercelSandboxClient {
     request: VercelCreateSandboxRequest,
     correlation?: CorrelationContext
   ): Promise<VercelCreateSandboxResponse> {
-    const response = await this.request(
+    const response = await this.requestJson(
       "/v2/sandboxes",
       {
         method: "POST",
@@ -202,7 +202,7 @@ export class VercelSandboxClient {
     request: VercelRunCommandRequest,
     correlation?: CorrelationContext
   ): Promise<VercelCommandResult> {
-    const response = await this.request(
+    const response = await this.requestJson(
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/cmd`,
       {
         method: "POST",
@@ -250,7 +250,7 @@ export class VercelSandboxClient {
     request: VercelWriteFileArchiveRequest,
     correlation?: CorrelationContext
   ): Promise<void> {
-    await this.requestText(
+    await this.requestVoid(
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/fs/write`,
       {
         method: "POST",
@@ -274,7 +274,7 @@ export class VercelSandboxClient {
       opts.expirationMs === undefined
         ? undefined
         : JSON.stringify({ expiration: opts.expirationMs });
-    return this.request(
+    return this.requestJson(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/snapshot`,
       { method: "POST", body, signal: opts.signal },
       vercelSnapshotResponseSchema,
@@ -287,7 +287,7 @@ export class VercelSandboxClient {
     request: VercelListSnapshotsRequest = {},
     correlation?: CorrelationContext
   ): Promise<VercelSnapshotMetadata[]> {
-    const response = await this.request(
+    const response = await this.requestJson(
       buildQueryPath("/v2/sandboxes/snapshots", {
         project: this.config.projectId,
         name: request.name,
@@ -307,7 +307,7 @@ export class VercelSandboxClient {
     correlation?: CorrelationContext,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.requestText(
+    await this.requestVoid(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/stop`,
       { method: "POST", signal },
       correlation,
@@ -320,7 +320,7 @@ export class VercelSandboxClient {
     correlation?: CorrelationContext,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.requestText(
+    await this.requestVoid(
       `/v2/sandboxes/snapshots/${encodeURIComponent(snapshotId)}`,
       { method: "DELETE", signal },
       correlation,
@@ -328,80 +328,66 @@ export class VercelSandboxClient {
     );
   }
 
-  private async request<T>(
+  private requestJson<T>(
     path: string,
     init: RequestInit,
     schema: z.ZodType<T>,
     correlation: CorrelationContext | undefined,
     endpoint: string
   ): Promise<T> {
-    const text = await this.requestText(path, init, correlation, endpoint);
-    try {
-      const parsed = schema.safeParse(JSON.parse(text));
-      if (!parsed.success) {
-        throw new VercelSandboxApiError(
-          `Vercel Sandbox API returned an invalid ${endpoint} response: ${z.prettifyError(parsed.error)}`,
-          200,
-          text
-        );
-      }
-      return parsed.data;
-    } catch (error) {
-      if (error instanceof VercelSandboxApiError) throw error;
-      throw new VercelSandboxApiError(
-        `Vercel Sandbox API returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
-        200,
-        text
-      );
-    }
+    return this.send(path, init, correlation, endpoint, async (response) =>
+      this.parseJson(schema, await response.text(), response.status, endpoint)
+    );
   }
 
-  private async requestText(
+  private requestVoid(
     path: string,
     init: RequestInit,
     correlation: CorrelationContext | undefined,
     endpoint: string
-  ): Promise<string> {
-    const startTime = Date.now();
-    let httpStatus: number | undefined;
-    let outcome: "success" | "error" = "error";
-
-    try {
-      const url = this.buildUrl(path);
-      const headers = this.buildHeaders(init, correlation);
-
-      const response = await fetch(url.toString(), { ...init, headers });
-      httpStatus = response.status;
-      const text = await response.text();
-      if (!response.ok) {
-        throw new VercelSandboxApiError(
-          `Vercel Sandbox API error: ${response.status} ${text}`,
-          response.status,
-          text
-        );
-      }
-
-      outcome = "success";
-      return text;
-    } finally {
-      log.info("vercel_sandbox.request", {
-        event: "vercel_sandbox.request",
-        endpoint,
-        trace_id: correlation?.trace_id,
-        request_id: correlation?.request_id,
-        http_status: httpStatus,
-        duration_ms: Date.now() - startTime,
-        outcome,
-      });
-    }
+  ): Promise<void> {
+    return this.send(path, init, correlation, endpoint, () => {});
   }
 
-  private async requestCommandStream(
+  private parseJson<T>(schema: z.ZodType<T>, text: string, status: number, endpoint: string): T {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      throw new VercelSandboxApiError(
+        `Vercel Sandbox API returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+        status,
+        text
+      );
+    }
+
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) {
+      throw new VercelSandboxApiError(
+        `Vercel Sandbox API returned an invalid ${endpoint} response: ${z.prettifyError(parsed.error)}`,
+        status,
+        text
+      );
+    }
+    return parsed.data;
+  }
+
+  private requestCommandStream(
     path: string,
     init: RequestInit,
     correlation: CorrelationContext | undefined,
     endpoint: string
   ): Promise<VercelCommandResult> {
+    return this.send(path, init, correlation, endpoint, parseCommandNdjsonStream);
+  }
+
+  private async send<T>(
+    path: string,
+    init: RequestInit,
+    correlation: CorrelationContext | undefined,
+    endpoint: string,
+    consume: (response: Response) => T | Promise<T>
+  ): Promise<T> {
     const startTime = Date.now();
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
@@ -421,7 +407,7 @@ export class VercelSandboxClient {
         );
       }
 
-      const result = await parseCommandNdjsonStream(response);
+      const result = await consume(response);
       outcome = "success";
       return result;
     } finally {
@@ -458,7 +444,7 @@ export class VercelSandboxClient {
   }
 }
 
-function parseCommandNdjson(text: string): VercelCommandResult {
+function parseCommandNdjson(text: string, status: number): VercelCommandResult {
   let commandId = "";
   let exitCode: number | null = null;
 
@@ -472,7 +458,7 @@ function parseCommandNdjson(text: string): VercelCommandResult {
   if (!commandId) {
     throw new VercelSandboxApiError(
       "Vercel command stream did not include a command id",
-      200,
+      status,
       text
     );
   }
@@ -482,7 +468,7 @@ function parseCommandNdjson(text: string): VercelCommandResult {
 
 async function parseCommandNdjsonStream(response: Response): Promise<VercelCommandResult> {
   if (!response.body) {
-    return parseCommandNdjson(await response.text());
+    return parseCommandNdjson(await response.text(), response.status);
   }
 
   const reader = response.body.getReader();
@@ -519,7 +505,7 @@ async function parseCommandNdjsonStream(response: Response): Promise<VercelComma
   if (!commandId) {
     throw new VercelSandboxApiError(
       "Vercel command stream did not include a command id",
-      200,
+      response.status,
       responseExcerpt
     );
   }
