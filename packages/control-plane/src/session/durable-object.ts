@@ -16,7 +16,7 @@ import {
 } from "@open-inspect/shared/types/server-messages";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
@@ -134,6 +134,9 @@ import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { parseArtifactMetadataJson } from "./artifact-metadata";
 import { SessionEngine } from "./engine";
+import { SessionHttpDispatcher } from "./http/dispatcher";
+import { SessionSocketProtocol } from "./socket-protocol";
+import { SessionConnectionLifecycle } from "./connection-lifecycle";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -154,6 +157,8 @@ interface SessionSnapshotEnrichment {
   environmentId: string | null;
   environmentName: string | null;
 }
+
+type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -301,35 +306,45 @@ export class SessionDO extends DurableObject<Env> {
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     this.engine = new SessionEngine({
       initialize: () => this.ensureInitialized(),
-      getLogger: () => this.log,
-      routes: this.routes,
-      handleWebSocketUpgrade: (request, url, log) => this.handleWebSocketUpgrade(request, url, log),
-      classifyConnection: (ws) => this.wsManager.classify(ws),
-      send: (ws, message) => this.safeSend(ws, message),
-      close: (ws, code, reason) => this.wsManager.close(ws, code, reason),
-      closeOnError: (ws) => ws.close(1011, "Internal error"),
-      getClient: (ws) => this.getClientInfo(ws),
-      handleSubscribe: (ws, message) => this.handleSubscribe(ws, message),
-      handlePrompt: (ws, client, message) => this.handlePromptMessage(ws, client, message),
-      cancelPrompt: (ws, message) => this.messageQueue.cancelQueuedPrompt(ws, message),
-      stopExecution: () => this.stopExecution(),
-      handleTyping: () => this.presenceService.handleTyping(),
-      updatePresence: (client, message) => this.presenceService.updatePresence(client, message),
-      getHistoryPage: (message) => this.eventStream.getHistoryPage(message),
-      processSandboxEvent: (event) => this.processSandboxEvent(event),
-      clearSandboxConnectionIfMatch: (ws) => this.wsManager.clearSandboxSocketIfMatch(ws),
-      getSandboxStatus: () => this.getSandbox()?.status,
-      scheduleDisconnectCheck: () => this.lifecycleManager.scheduleDisconnectCheck(),
-      removeClient: (ws) => this.wsManager.removeClient(ws),
-      hasAuthenticatedParticipant: (participantId) =>
-        Array.from(this.wsManager.getAuthenticatedClients()).some(
-          (client) => client.participantId === participantId
-        ),
-      broadcastPresence: () => this.presenceService.broadcastPresence(),
-      broadcast: (message) => this.broadcast(message),
+      http: new SessionHttpDispatcher({
+        getLogger: () => this.log,
+        routes: this.routes,
+        handleWebSocketUpgrade: (request, url, log) =>
+          this.handleWebSocketUpgrade(request, url, log),
+        monotonicNow: () => performance.now(),
+      }),
+      socketProtocol: new SessionSocketProtocol({
+        getLogger: () => this.log,
+        classifyConnection: (ws) => this.wsManager.classify(ws),
+        send: (ws, message) => this.safeSend(ws, message),
+        getClient: (ws) => this.getClientInfo(ws),
+        handleSubscribe: (ws, message) => this.handleSubscribe(ws, message),
+        handlePrompt: (ws, client, message) => this.handlePromptMessage(ws, client, message),
+        cancelPrompt: (ws, message) => this.messageQueue.cancelQueuedPrompt(ws, message),
+        stopExecution: () => this.stopExecution(),
+        handleTyping: () => this.presenceService.handleTyping(),
+        updatePresence: (client, message) => this.presenceService.updatePresence(client, message),
+        getHistoryPage: (message) => this.eventStream.getHistoryPage(message),
+        processSandboxEvent: (event) => this.processSandboxEvent(event),
+        now: () => Date.now(),
+      }),
+      connectionLifecycle: new SessionConnectionLifecycle({
+        getLogger: () => this.log,
+        classifyConnection: (ws) => this.wsManager.classify(ws),
+        close: (ws, code, reason) => this.wsManager.close(ws, code, reason),
+        closeOnError: (ws) => ws.close(1011, "Internal error"),
+        clearSandboxConnectionIfMatch: (ws) => this.wsManager.clearSandboxSocketIfMatch(ws),
+        getSandboxStatus: () => this.getSandbox()?.status,
+        scheduleDisconnectCheck: () => this.lifecycleManager.scheduleDisconnectCheck(),
+        removeClient: (ws) => this.wsManager.removeClient(ws),
+        hasAuthenticatedParticipant: (participantId) =>
+          Array.from(this.wsManager.getAuthenticatedClients()).some(
+            (client) => client.participantId === participantId
+          ),
+        broadcastPresence: () => this.presenceService.broadcastPresence(),
+        broadcast: (message) => this.broadcast(message),
+      }),
       handleAlarm: () => this.alarmHandler.handle(),
-      now: () => Date.now(),
-      monotonicNow: () => performance.now(),
     });
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -1408,13 +1423,7 @@ export class SessionDO extends DurableObject<Env> {
   private async handlePromptMessage(
     ws: WebSocket,
     client: ClientInfo,
-    data: {
-      content: string;
-      model?: string;
-      reasoningEffort?: string;
-      attachments?: SessionAttachmentReference[];
-      clientRequestId: string;
-    }
+    data: ClientPrompt
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, client, data);
   }
