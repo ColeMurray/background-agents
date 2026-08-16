@@ -453,6 +453,9 @@ describe("applyMigrations", () => {
       db.prepare(
         "INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)"
       ).run("second", "processing", 110, 130);
+      db.prepare(
+        "INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)"
+      ).run("unrelated", "pending", 90, null);
       db.prepare("INSERT INTO events (id, type, message_id) VALUES (?, ?, ?)").run(
         "user_message:first",
         "user_message",
@@ -463,6 +466,11 @@ describe("applyMigrations", () => {
         "user_message",
         "second"
       );
+      db.prepare("INSERT INTO events (id, type, message_id) VALUES (?, ?, ?)").run(
+        "user_message:unrelated",
+        "user_message",
+        "unrelated"
+      );
 
       const run = migration!.run as (sql: SqlStorage) => void;
       expect(() => run(sql)).not.toThrow();
@@ -471,9 +479,11 @@ describe("applyMigrations", () => {
       expect(db.prepare("SELECT id, status, started_at FROM messages ORDER BY id").all()).toEqual([
         { id: "first", status: "processing", started_at: 120 },
         { id: "second", status: "pending", started_at: null },
+        { id: "unrelated", status: "pending", started_at: null },
       ]);
       expect(db.prepare("SELECT id FROM events ORDER BY id").all()).toEqual([
         { id: "user_message:first" },
+        { id: "user_message:unrelated" },
       ]);
       expect(() =>
         db
