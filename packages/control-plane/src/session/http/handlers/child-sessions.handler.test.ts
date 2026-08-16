@@ -162,7 +162,7 @@ function createHandler() {
     artifact.metadata ? (JSON.parse(artifact.metadata) as Record<string, unknown>) : null
   );
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const enqueuePrompt = vi.fn(async () => ({
     messageId: "message-follow-up",
     status: "queued" as const,

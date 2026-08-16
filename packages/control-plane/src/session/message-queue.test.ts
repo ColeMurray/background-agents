@@ -182,7 +182,7 @@ function buildQueue() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const sessionStatus = {
     transition: vi.fn(async (_status: string) => true),
     reconcileAfterExecution: vi.fn(async (_success: boolean) => {}),
@@ -194,12 +194,13 @@ function buildQueue() {
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
   };
   const waitUntil = vi.fn();
+  const backgroundJobs = { submit: waitUntil };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
-    { waitUntil },
+    backgroundJobs,
     log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,

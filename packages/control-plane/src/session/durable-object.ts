@@ -37,7 +37,6 @@ import {
   type SandboxStorage,
   type SandboxBroadcaster,
   type WebSocketManager,
-  type AlarmScheduler,
   type IdGenerator,
   type ImageBuildLookup,
   type McpServerLookup,
@@ -72,6 +71,7 @@ import { resolveParticipantName } from "./participant-name";
 import { validateReasoningEffort } from "./reasoning-effort";
 import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { DurableObjectSessionConnections } from "./durable-object-session-connections";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
@@ -95,6 +95,8 @@ import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
+import { createCloudflareBackgroundJobDispatcher } from "../cloudflare/background-job-dispatcher";
+import type { AlarmScheduler, BackgroundJobDispatcher } from "../platform-ports";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
@@ -170,6 +172,7 @@ export class SessionDO extends DurableObject<Env> {
    * binding at runtime. Distinct from `this.sql`, the DO-embedded SQLite.
    */
   private readonly db: SqlDatabase | null;
+  private readonly backgroundJobs: BackgroundJobDispatcher;
   private sessionCoreRepository: SessionCoreRepository;
   private sandboxRepository: SandboxRepository;
   private attachmentRepository: SessionAttachmentRepository;
@@ -185,6 +188,7 @@ export class SessionDO extends DurableObject<Env> {
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
+  private _connections: DurableObjectSessionConnections | null = null;
   // Session messenger (constructed in ensureInitialized once the session logger exists)
   private messenger!: SessionMessenger;
   // Session diff service (constructed in ensureInitialized once the session logger exists)
@@ -286,6 +290,7 @@ export class SessionDO extends DurableObject<Env> {
     super(ctx, env);
     // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
     this.db = env.DB ?? null;
+    this.backgroundJobs = createCloudflareBackgroundJobDispatcher(ctx);
     this.sql = ctx.storage.sql;
     this.attachmentRepository = new SessionAttachmentRepository(this.sql);
     this.artifactRepository = new ArtifactRepository(this.sql);
@@ -413,6 +418,13 @@ export class SessionDO extends DurableObject<Env> {
     return this._wsManager;
   }
 
+  private get connections(): DurableObjectSessionConnections {
+    if (!this._connections) {
+      this._connections = new DurableObjectSessionConnections(this.ctx, this.wsManager);
+    }
+    return this._connections;
+  }
+
   private get executionTimeoutMs(): number {
     try {
       const sandboxTimeoutMs = parsePersistedSandboxSettings(
@@ -440,7 +452,7 @@ export class SessionDO extends DurableObject<Env> {
   private get messageQueue(): SessionMessageQueue {
     if (!this._messageQueue) {
       this._messageQueue = new SessionMessageQueue(
-        this.ctx,
+        this.backgroundJobs,
         this.log,
         this.sessionCoreRepository,
         this.messageRepository,
@@ -611,7 +623,7 @@ export class SessionDO extends DurableObject<Env> {
           validateReasoningEffort(model, effort, this.log),
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
-        scheduleWarmSandbox: () => this.ctx.waitUntil(this.warmSandbox()),
+        scheduleWarmSandbox: () => this.backgroundJobs.submit(this.warmSandbox()),
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
@@ -673,7 +685,7 @@ export class SessionDO extends DurableObject<Env> {
 
   /** Fire a background read-through refresh; failures only log. */
   private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
-    this.ctx.waitUntil(
+    this.backgroundJobs.submit(
       refreshSessionPullRequests(
         this.sessionCoreRepository,
         this.artifactRepository,
@@ -746,7 +758,7 @@ export class SessionDO extends DurableObject<Env> {
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
     if (!this._sandboxEventProcessor) {
       this._sandboxEventProcessor = new SessionSandboxEventProcessor(
-        this.ctx,
+        this.backgroundJobs,
         () => this.log,
         this.sessionCoreRepository,
         this.sandboxRepository,
@@ -784,7 +796,7 @@ export class SessionDO extends DurableObject<Env> {
   private get statusService(): SessionStatusService {
     if (!this._statusService) {
       this._statusService = new SessionStatusService(
-        this.ctx,
+        this.backgroundJobs,
         this.log,
         this.sessionCoreRepository,
         this.messageRepository,
@@ -993,7 +1005,7 @@ export class SessionDO extends DurableObject<Env> {
     // Constructed here rather than in the constructor so they (and the
     // WebSocket manager they force) capture the session-scoped logger,
     // never the request-scoped child installed by fetch().
-    this.messenger = new SessionMessengerImpl(this.wsManager);
+    this.messenger = new SessionMessengerImpl(this.connections);
     this.diffService = new SessionDiffService(
       new SessionDiffStore(this.sql),
       this.sessionCoreRepository,
@@ -1001,7 +1013,6 @@ export class SessionDO extends DurableObject<Env> {
       this.log
     );
     this.diffsHandler = new SessionDiffsHandler(this.diffService);
-    this.wsManager.enableAutoPingPong();
   }
 
   /**
@@ -1138,8 +1149,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     try {
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
+      const { client, server } = this.connections.createUpgradeSockets();
 
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
@@ -1151,7 +1161,6 @@ export class SessionDO extends DurableObject<Env> {
           server,
           sandboxId ?? undefined
         );
-
         // Notify manager that sandbox connected so it can reset the spawning flag
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
@@ -1177,7 +1186,7 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.ctx.waitUntil(
+        this.backgroundJobs.submit(
           this.processMessageQueue().catch((error) => {
             log.error("message_queue.process.background_error", {
               error: error instanceof Error ? error : String(error),
@@ -1187,7 +1196,7 @@ export class SessionDO extends DurableObject<Env> {
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);
-        this.ctx.waitUntil(this.wsManager.enforceAuthTimeout(server, wsId));
+        this.backgroundJobs.submit(this.wsManager.enforceAuthTimeout(server, wsId));
       }
 
       return new Response(null, { status: 101, webSocket: client });
@@ -1280,7 +1289,7 @@ export class SessionDO extends DurableObject<Env> {
   async webSocketError(ws: WebSocket, error: Error): Promise<void> {
     this.ensureInitialized();
     this.log.error("WebSocket error", { error });
-    ws.close(1011, "Internal error");
+    this.wsManager.close(ws, 1011, "Internal error");
   }
 
   /**
@@ -1469,7 +1478,7 @@ export class SessionDO extends DurableObject<Env> {
         outcome: "auth_failed",
         reject_reason: "no_token",
       });
-      ws.close(4001, "Authentication required");
+      this.wsManager.close(ws, 4001, "Authentication required");
       return;
     }
 
@@ -1491,7 +1500,7 @@ export class SessionDO extends DurableObject<Env> {
           outcome: "auth_failed",
           reject_reason: "invalid_token",
         });
-        ws.close(4001, "Invalid authentication token");
+        this.wsManager.close(ws, 4001, "Invalid authentication token");
         return;
       }
 
@@ -1508,7 +1517,7 @@ export class SessionDO extends DurableObject<Env> {
           participant_id: participant.id,
           user_id: participant.user_id,
         });
-        ws.close(4001, "Token expired");
+        this.wsManager.close(ws, 4001, "Token expired");
         return;
       }
 
@@ -1757,7 +1766,7 @@ export class SessionDO extends DurableObject<Env> {
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     if (!this.db) return;
     const sessionStore = new SessionIndexStore(this.db);
-    this.ctx.waitUntil(
+    this.backgroundJobs.submit(
       sessionStore.updateTitleIfNewer(sessionId, title, updatedAt).catch((error) => {
         this.log.error("session_index.update_title.background_error", {
           session_id: sessionId,

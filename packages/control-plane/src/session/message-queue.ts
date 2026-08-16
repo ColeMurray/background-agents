@@ -16,7 +16,7 @@ import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
-import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
+import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
@@ -33,7 +33,7 @@ import type { SessionStatusService } from "./session-status-service";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import type { BackgroundTaskContext } from "../platform-ports";
+import type { AlarmScheduler, BackgroundJobDispatcher } from "../platform-ports";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -141,7 +141,7 @@ function resolveParticipantGitIdentity(
 
 export class SessionMessageQueue {
   constructor(
-    private readonly ctx: BackgroundTaskContext,
+    private readonly backgroundJobs: BackgroundJobDispatcher,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
@@ -233,7 +233,7 @@ export class SessionMessageQueue {
       const session = this.repository.getSession();
       const sessionId = session?.session_name || session?.id;
       if (sessionId) {
-        this.ctx.waitUntil(
+        this.backgroundJobs.submit(
           sessionIndex.touchUpdatedAt(sessionId).catch((error) => {
             this.log.error("session_index.touch_updated_at.background_error", {
               session_id: sessionId,
@@ -321,7 +321,7 @@ export class SessionMessageQueue {
       // and awaiting it here holds the prompt HTTP response open past bot
       // callers' request timeouts. The message is already persisted as
       // pending and dispatches when the sandbox WebSocket connects.
-      this.ctx.waitUntil(
+      this.backgroundJobs.submit(
         this.sandboxLifecycle.spawnSandbox().catch((error) => {
           // Expected provider failures broadcast sandbox_error inside the
           // lifecycle manager; this catch only sees throws from before those
@@ -393,7 +393,7 @@ export class SessionMessageQueue {
       const deadline = now + this.executionTimeoutMs;
       await this.alarmScheduler.scheduleAlarm(deadline);
 
-      this.ctx.waitUntil(
+      this.backgroundJobs.submit(
         this.callbackService.notifyStarted(message.id).catch((error) => {
           this.log.error("callback.started.background_error", {
             message_id: message.id,
@@ -537,7 +537,7 @@ export class SessionMessageQueue {
     );
     if (!completion) return false;
 
-    this.ctx.waitUntil(
+    this.backgroundJobs.submit(
       this.projectTerminalMessage(
         completion.messageId,
         completion.messageCreatedAt,
@@ -545,7 +545,7 @@ export class SessionMessageQueue {
       )
     );
     this.messenger.broadcast({ type: "sandbox_event", event });
-    this.ctx.waitUntil(this.callbackService.notifyComplete(message.id, false, error));
+    this.backgroundJobs.submit(this.callbackService.notifyComplete(message.id, false, error));
     return true;
   }
 

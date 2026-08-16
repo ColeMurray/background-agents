@@ -7,10 +7,10 @@
  */
 
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
-import type { BackgroundTaskContext } from "./platform-ports";
+import type { BackgroundJobDispatcher } from "./platform-ports";
 
-export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTaskContext = {
-  waitUntil: () => {},
+export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundJobDispatcher = {
+  submit: () => {},
 };
 
 /** Per-service secrets for unit-test env fixtures, mirrored by signedServiceRequest. */

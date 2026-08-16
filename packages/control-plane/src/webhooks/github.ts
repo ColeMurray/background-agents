@@ -118,7 +118,7 @@ async function handleGitHubAutomationEvent(
   }
 
   const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
-  ctx.executionCtx.waitUntil(lifecycleWork);
+  ctx.executionCtx.submit(lifecycleWork);
 
   return forwardAutomationEventToScheduler(env, validated.event);
 }

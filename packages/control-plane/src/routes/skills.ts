@@ -3,6 +3,8 @@ import {
   createSkillProfileInputSchema,
   replaceSkillContentAndAssignmentsInputSchema,
   setSkillEnabledInputSchema,
+  SKILL_LIST_PAGE_SIZE,
+  skillNameSchema,
   skillResolutionPreviewInputSchema,
   updateSkillProfileInputSchema,
 } from "@open-inspect/shared/types/skills";
@@ -65,12 +67,29 @@ function resourceId(match: RegExpMatchArray): string | Response {
 }
 
 async function handleListSkills(
-  _request: Request,
+  request: Request,
   _env: Env,
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  return json({ skills: await new SkillStore(ctx.db).list() });
+  const url = new URL(request.url);
+  const limitValue = url.searchParams.get("limit");
+  const cursorValue = url.searchParams.get("cursor");
+  if (url.searchParams.getAll("limit").length > 1 || url.searchParams.getAll("cursor").length > 1) {
+    return error("Invalid skill list query", 400);
+  }
+  const limit = limitValue === null ? SKILL_LIST_PAGE_SIZE : Number(limitValue);
+  if (!Number.isInteger(limit) || limit < 1 || limit > SKILL_LIST_PAGE_SIZE) {
+    return error("Invalid limit", 400);
+  }
+  const parsedCursor = cursorValue === null ? null : skillNameSchema.safeParse(cursorValue);
+  if (parsedCursor !== null && !parsedCursor.success) return error("Invalid cursor", 400);
+  return json(
+    await new SkillStore(ctx.db).list({
+      limit,
+      cursor: parsedCursor === null ? null : parsedCursor.data,
+    })
+  );
 }
 
 async function handleGetSkill(

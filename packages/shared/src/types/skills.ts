@@ -15,6 +15,7 @@ export const MAX_SKILL_PATH_BYTES = 240;
 export const MAX_SKILL_PATH_DEPTH = 10;
 export const MAX_MANAGED_SKILLS_PER_SESSION = 20;
 export const MAX_MANAGED_SKILL_MANIFEST_BYTES = 5 * 1024 * 1024;
+export const SKILL_LIST_PAGE_SIZE = 100;
 
 const utf8 = new TextEncoder();
 const skillNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -204,7 +205,18 @@ export const skillSchema = skillSummarySchema.extend({
   files: z.array(skillFileSchema),
 });
 
-export const listSkillsResponseSchema = z.strictObject({ skills: z.array(skillSummarySchema) });
+export const listSkillsResponseSchema = z.discriminatedUnion("hasMore", [
+  z.strictObject({
+    skills: z.array(skillSummarySchema),
+    hasMore: z.literal(false),
+    nextCursor: z.null(),
+  }),
+  z.strictObject({
+    skills: z.array(skillSummarySchema),
+    hasMore: z.literal(true),
+    nextCursor: skillNameSchema,
+  }),
+]);
 export const skillResponseSchema = z.strictObject({ skill: skillSchema });
 
 export const createSkillProfileInputSchema = z.strictObject({
@@ -322,6 +334,7 @@ export type SkillFile = z.infer<typeof skillFileSchema>;
 export type SkillAssignment = z.infer<typeof skillAssignmentSchema>;
 export type SkillSummary = z.infer<typeof skillSummarySchema>;
 export type Skill = z.infer<typeof skillSchema>;
+export type ListSkillsResponse = z.infer<typeof listSkillsResponseSchema>;
 export type SkillProfile = z.infer<typeof skillProfileSchema>;
 export type SessionSkillSelection = z.infer<typeof sessionSkillSelectionSchema>;
 export type SessionSkillManifestSelection = z.infer<typeof sessionSkillManifestSelectionSchema>;

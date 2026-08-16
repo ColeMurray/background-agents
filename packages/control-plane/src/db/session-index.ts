@@ -756,8 +756,9 @@ export class SessionIndexStore {
    *
    * `created` is the status a session holds until its first prompt is enqueued,
    * so a row still sitting there long after its last update was abandoned before
-   * any work started. Ordered oldest-first so a backlog drains deterministically
-   * across ticks rather than re-reading the same head each time.
+   * any work started. Ordered oldest-first, which drains a backlog only while
+   * every visited row leaves this set — see `archiveOrphanedDraft` and
+   * `repairStatus` for the two cases where that had to be made true.
    */
   async listAbandonedDraftSessionIds(staleBefore: number, limit: number): Promise<string[]> {
     const result = await this.db
@@ -771,6 +772,46 @@ export class SessionIndexStore {
       .all<{ id: string }>();
 
     return (result.results ?? []).map((row) => row.id);
+  }
+
+  /**
+   * Retire an index row whose Durable Object holds no session at all.
+   *
+   * A 404 from the expiry route is definitive rather than transient: there is no
+   * Durable Object state for this row to diverge from, so the index can be
+   * corrected on its own. Guarded on `created` so a row that acquired a real
+   * session between the sweep's read and this write is left alone.
+   */
+  async archiveOrphanedDraft(id: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'created'"
+      )
+      .bind(Date.now(), id)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Correct a draft status projection that drifted away from its Durable Object.
+   *
+   * Deliberately not `updateStatus`, which carries an `updated_at` and refuses
+   * writes that would move it backwards. That guard keeps concurrent transitions
+   * ordered, but it silently drops a repair: the Durable Object sends its own
+   * timestamp, which is behind D1's whenever `touchUpdatedAt` has run, so the
+   * write matches no rows and reports success as `false`. This repair asserts
+   * only the stale shape the draft sweep selected: D1 still says `created`, and
+   * the Durable Object says otherwise. Only that status column is written,
+   * leaving `updated_at` to keep meaning "last real activity".
+   */
+  async repairStatus(id: string, status: SessionStatus): Promise<boolean> {
+    const result = await this.db
+      .prepare("UPDATE sessions SET status = ? WHERE id = ? AND status = 'created' AND status != ?")
+      .bind(status, id, status)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async touchUpdatedAt(id: string): Promise<boolean> {

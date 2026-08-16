@@ -31,7 +31,7 @@ async function proxyResponse(response: Response): Promise<NextResponse> {
 
 /** Creates the requested BFF route handlers for an authenticated control-plane resource. */
 export function settingsProxy<P>(
-  buildPath: (params: P) => string,
+  buildPath: (params: P, request: NextRequest) => string,
   label: string
 ): ProxyHandlers<P> {
   const proxy = async (
@@ -56,7 +56,7 @@ export function settingsProxy<P>(
         if (method !== "DELETE") init.body = JSON.stringify(await request.json());
         if (ifMatch) init.headers = { "If-Match": ifMatch };
       }
-      const response = await controlPlaneUserFetch(buildPath(params), init);
+      const response = await controlPlaneUserFetch(buildPath(params, request), init);
       return proxyResponse(response);
     } catch (error) {
       console.error(`Failed to ${METHOD_VERBS[method]} ${label}:`, error);

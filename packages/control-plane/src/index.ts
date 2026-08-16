@@ -17,6 +17,7 @@ import {
 import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/instrumented-d1";
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
+import { createCloudflareBackgroundJobDispatcher } from "./cloudflare/background-job-dispatcher";
 
 const logger = createLogger("worker");
 
@@ -41,7 +42,7 @@ export default {
     }
 
     // Regular API request — logged by the router with requestId and timing
-    return handleRequest(request, env, ctx);
+    return handleRequest(request, env, createCloudflareBackgroundJobDispatcher(ctx));
   },
 
   /**
