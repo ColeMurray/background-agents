@@ -5,7 +5,6 @@ import {
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
-import type { CreateEventData } from "./session-store";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
 import type { EventRow } from "./types";
 
@@ -16,7 +15,17 @@ type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 
-export type { CreateEventData } from "./session-store";
+/**
+ * Data for creating an event. Type is open because sandboxes emit additional
+ * event types beyond the shared EventType union.
+ */
+export interface CreateEventData {
+  id: string;
+  type: string;
+  data: string;
+  messageId: string | null;
+  createdAt: number;
+}
 
 export interface ListEventPageOptions {
   cursor?: EventListCursor | null;

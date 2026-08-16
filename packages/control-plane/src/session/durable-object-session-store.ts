@@ -1,4 +1,3 @@
-import type { MessageRepository } from "./message-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -6,13 +5,11 @@ import type {
   InitializeSessionInput,
   SessionInitializationStore,
 } from "./session-initialization-store";
-import type { SandboxRow, SessionRow } from "./types";
 
 export interface DurableObjectSessionStoreRepositories {
   sessionCore: SessionCoreRepository;
   sandbox: SandboxRepository;
   participants: ParticipantRepository;
-  messages: MessageRepository;
 }
 
 /** Async adapter over the existing Durable Object SQLite repositories. */
@@ -22,29 +19,43 @@ export class DurableObjectSessionStore implements SessionInitializationStore {
     private readonly generateId: () => string
   ) {}
 
-  async initializeSession(data: InitializeSessionInput): Promise<void> {
+  async initializeSession(input: InitializeSessionInput): Promise<void> {
     // Preserve the existing independent write boundaries; initialization was
     // not one transaction before this adapter was introduced.
-    this.repositories.sessionCore.upsertSession(data.session);
-    this.repositories.sessionCore.replaceSessionRepositories(data.repositories);
-    this.repositories.sandbox.createSandbox({ id: this.generateId(), ...data.sandbox });
-    this.repositories.participants.createParticipant({ id: this.generateId(), ...data.owner });
-  }
-
-  async getSession(): Promise<SessionRow | null> {
-    return this.repositories.sessionCore.getSession();
-  }
-
-  async getSandbox(): Promise<SandboxRow | null> {
-    return this.repositories.sandbox.getSandbox();
-  }
-
-  async createPrompt(data: CreatePromptData): Promise<void> {
-    // MessageRepository owns the transactionSync boundary for this operation.
-    this.repositories.messages.createMessageWithAttachments(
-      data.message,
-      data.attachmentIds,
-      data.event
-    );
+    const primaryRepository = input.repositories[0] ?? null;
+    this.repositories.sessionCore.upsertSession({
+      id: input.sessionId,
+      sessionName: input.sessionName,
+      title: input.title,
+      repoOwner: primaryRepository?.repoOwner ?? null,
+      repoName: primaryRepository?.repoName ?? null,
+      repoId: primaryRepository?.repoId ?? null,
+      baseBranch: primaryRepository?.baseBranch ?? null,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      status: "created",
+      parentSessionId: input.parentSessionId,
+      spawnSource: input.spawnSource,
+      spawnDepth: input.spawnDepth,
+      codeServerEnabled: input.codeServerEnabled,
+      vncEnabled: input.vncEnabled,
+      sandboxSettings: input.sandboxSettings,
+      environmentId: input.environmentId,
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+    });
+    this.repositories.sessionCore.replaceSessionRepositories(input.repositories);
+    this.repositories.sandbox.createSandbox({
+      id: this.generateId(),
+      status: "pending",
+      gitSyncStatus: "pending",
+      createdAt: 0,
+    });
+    this.repositories.participants.createParticipant({
+      id: this.generateId(),
+      ...input.owner,
+      role: "owner",
+      joinedAt: input.createdAt,
+    });
   }
 }

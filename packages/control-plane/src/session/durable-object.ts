@@ -316,7 +316,6 @@ export class SessionDO extends DurableObject<Env> {
         sessionCore: this.sessionCoreRepository,
         sandbox: this.sandboxRepository,
         participants: this.participantRepository,
-        messages: this.messageRepository,
       },
       () => generateId()
     );

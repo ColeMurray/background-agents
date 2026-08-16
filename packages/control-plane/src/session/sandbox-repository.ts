@@ -1,6 +1,5 @@
 import type { GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import type { CreateSandboxData } from "./session-store";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { SandboxRow } from "./types";
 
@@ -14,7 +13,13 @@ export interface SandboxCircuitBreakerState {
   last_spawn_failure: number | null;
 }
 
-export type { CreateSandboxData } from "./session-store";
+/** Data for creating a sandbox. */
+export interface CreateSandboxData {
+  id: string;
+  status: SandboxStatus;
+  gitSyncStatus: GitSyncStatus;
+  createdAt: number;
+}
 
 /** Data for updating a sandbox during spawn. */
 export interface SpawnSandboxData {

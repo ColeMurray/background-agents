@@ -1,10 +1,43 @@
-import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
-import type { SessionRepositoryData, UpsertSessionData } from "./session-store";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { SessionRepositoryRow, SessionRow } from "./types";
 
-export type { SessionRepositoryData, UpsertSessionData } from "./session-store";
+/** Data for upserting a session. */
+export interface UpsertSessionData {
+  id: string;
+  sessionName: string;
+  title: string | null;
+  repoOwner: string | null;
+  repoName: string | null;
+  repoId?: number | null;
+  baseBranch?: string | null;
+  model: string;
+  reasoningEffort?: string | null;
+  status: SessionStatus;
+  parentSessionId?: string | null;
+  spawnSource?: SpawnSource;
+  spawnDepth?: number;
+  codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
+  sandboxSettings?: string | null;
+  /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
+  environmentId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Data for writing a session's member repository set. Per-repository git state
+ * is written separately by push handling.
+ */
+export interface SessionRepositoryData {
+  position: number;
+  repoOwner: string;
+  repoName: string;
+  repoId: number | null;
+  baseBranch: string;
+}
 
 /** Persistence for the session and its member repositories. */
 export class SessionCoreRepository {

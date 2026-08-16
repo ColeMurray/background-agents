@@ -242,42 +242,29 @@ export function createSessionLifecycleHandler(
           : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
             ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
             : [];
+      const initializationRepositories = memberRepositories.map((repo, position) => ({
+        position,
+        repoOwner: repo.repoOwner,
+        repoName: repo.repoName,
+        repoId: repo.repoId,
+        baseBranch: repo.baseBranch,
+      }));
       await deps.sessionStore.initializeSession({
-        session: {
-          id: sessionId,
-          sessionName,
-          title: body.title ?? null,
-          repoOwner,
-          repoName,
-          repoId: hasRepoOwner ? body.repoId : null,
-          baseBranch,
-          model,
-          reasoningEffort,
-          status: "created",
-          parentSessionId: body.parentSessionId ?? null,
-          spawnSource: body.spawnSource ?? "user",
-          spawnDepth: body.spawnDepth ?? 0,
-          codeServerEnabled: body.codeServerEnabled ?? false,
-          vncEnabled: body.vncEnabled ?? false,
-          sandboxSettings: body.sandboxSettings
-            ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
-            : null,
-          environmentId: body.environmentId ?? null,
-          createdAt: now,
-          updatedAt: now,
-        },
-        repositories: memberRepositories.map((repo, position) => ({
-          position,
-          repoOwner: repo.repoOwner,
-          repoName: repo.repoName,
-          repoId: repo.repoId,
-          baseBranch: repo.baseBranch,
-        })),
-        sandbox: {
-          status: "pending",
-          gitSyncStatus: "pending",
-          createdAt: 0,
-        },
+        sessionId,
+        sessionName,
+        title: body.title ?? null,
+        repositories: initializationRepositories,
+        model,
+        reasoningEffort,
+        parentSessionId: body.parentSessionId ?? null,
+        spawnSource: body.spawnSource ?? "user",
+        spawnDepth: body.spawnDepth ?? 0,
+        codeServerEnabled: body.codeServerEnabled ?? false,
+        vncEnabled: body.vncEnabled ?? false,
+        sandboxSettings: body.sandboxSettings
+          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+          : null,
+        environmentId: body.environmentId ?? null,
         owner: {
           userId: body.userId,
           ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
@@ -288,9 +275,8 @@ export function createSessionLifecycleHandler(
           scmAccessTokenEncrypted: encryptedToken,
           scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
           scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
-          role: "owner",
-          joinedAt: now,
         },
+        createdAt: now,
       });
 
       log.info("Triggering sandbox spawn for new session");
