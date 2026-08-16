@@ -37,7 +37,6 @@ import {
   type SandboxStorage,
   type SandboxBroadcaster,
   type WebSocketManager,
-  type AlarmScheduler,
   type IdGenerator,
   type ImageBuildLookup,
   type McpServerLookup,
@@ -96,7 +95,7 @@ import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { createCloudflareBackgroundJobDispatcher } from "../cloudflare/background-job-dispatcher";
-import type { BackgroundJobDispatcher } from "../platform-ports";
+import type { AlarmScheduler, BackgroundJobDispatcher } from "../platform-ports";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
@@ -130,7 +129,7 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
-import { createCloudflareAlarmScheduler } from "./alarm/cloudflare-scheduler";
+import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
@@ -436,7 +435,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get alarmScheduler(): AlarmScheduler {
     if (!this._alarmScheduler) {
-      this._alarmScheduler = createCloudflareAlarmScheduler(this.ctx.storage);
+      this._alarmScheduler = createEarliestAlarmScheduler(this.ctx.storage);
     }
     return this._alarmScheduler;
   }

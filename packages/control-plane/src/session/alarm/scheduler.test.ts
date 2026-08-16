@@ -36,7 +36,7 @@ describe("createEarliestAlarmScheduler", () => {
     expect(storage.setAlarm).not.toHaveBeenCalled();
   });
 
-  it("serializes concurrent updates across schedulers sharing a store", async () => {
+  it("serializes concurrent updates so a later deadline cannot replace an earlier one", async () => {
     let currentAlarm: number | null = null;
     let releaseFirstRead!: () => void;
     const firstRead = new Promise<void>((resolve) => {
@@ -54,11 +54,10 @@ describe("createEarliestAlarmScheduler", () => {
         currentAlarm = timestamp;
       }),
     };
-    const firstScheduler = createEarliestAlarmScheduler(storage);
-    const secondScheduler = createEarliestAlarmScheduler(storage);
+    const scheduler = createEarliestAlarmScheduler(storage);
 
-    const earlier = firstScheduler.scheduleAlarm(2_000);
-    const later = secondScheduler.scheduleAlarm(3_000);
+    const earlier = scheduler.scheduleAlarm(2_000);
+    const later = scheduler.scheduleAlarm(3_000);
     releaseFirstRead();
     await Promise.all([earlier, later]);
 
