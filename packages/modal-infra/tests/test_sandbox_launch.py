@@ -1,7 +1,7 @@
 """Behavior matrix for shared fresh, repository-image, and snapshot launches."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -39,17 +39,19 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     monkeypatch.setattr("src.sandbox.manager.base_image", base_image)
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", images.__getitem__)
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+    resolve_tunnels = AsyncMock(
+        return_value=(
+            "https://code.example",
+            "https://vnc.example",
+            "https://terminal.example",
+            {3000: "https://app.example"},
+        )
+    )
     monkeypatch.setattr(
         SandboxManager,
         "_resolve_and_setup_tunnels",
-        AsyncMock(
-            return_value=(
-                "https://code.example",
-                "https://vnc.example",
-                "https://terminal.example",
-                {3000: "https://app.example"},
-            )
-        ),
+        resolve_tunnels,
     )
     monkeypatch.setattr(
         SandboxManager, "_generate_code_server_password", staticmethod(lambda: "code-password")
@@ -153,3 +155,27 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     assert handle.vnc_password == "vnc-pass"
     assert handle.ttyd_url == "https://terminal.example"
     assert handle.tunnel_urls == {3000: "https://app.example"}
+    resolve_tunnels.assert_awaited_once_with(
+        handle.modal_sandbox,
+        "sandbox-1",
+        True,
+        True,
+        True,
+        [3000],
+        9000,
+        9001,
+        9002,
+    )
+
+
+@pytest.mark.asyncio
+async def test_repository_image_create_validates_repo_before_image_lookup(monkeypatch):
+    from_id = Mock(side_effect=AssertionError("image lookup should not run"))
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", from_id)
+
+    with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
+        await SandboxManager().create_sandbox(
+            SandboxConfig(repo_owner="acme", repo_name=None, repo_image_id="repo-image-1")
+        )
+
+    from_id.assert_not_called()

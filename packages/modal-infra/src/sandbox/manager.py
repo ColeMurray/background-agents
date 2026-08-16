@@ -347,7 +347,7 @@ class SandboxManager:
 
     async def _launch_sandbox(self, spec: _SandboxLaunchSpec) -> SandboxHandle:
         """Launch a Modal sandbox from a normalized create or restore specification."""
-        has_repository = _has_repository(spec.repo_owner, spec.repo_name)
+        has_repository = bool(spec.repo_owner)
         sandbox_id = spec.sandbox_id
         if not sandbox_id:
             sandbox_name = (
@@ -484,6 +484,7 @@ class SandboxManager:
             SandboxHandle with the running sandbox
         """
         start_time = time.time()
+        _has_repository(config.repo_owner, config.repo_name)
 
         # Determine image to use (priority: repo image > base image)
         system_env_vars: dict[str, str] = {}
