@@ -95,7 +95,12 @@ describe("buildCodeReviewPrompt", () => {
     const reviewWriteStart = prompt.indexOf(
       'review_url="$(gh api repos/acme/widgets/pulls/42/reviews'
     );
-    const failureStart = prompt.indexOf('if test "$review_result" != "0"', reviewWriteStart);
+    const successStatusStart = prompt.indexOf(
+      "gh api repos/acme/widgets/statuses/abc123",
+      reviewWriteStart
+    );
+    const successStatusResult = prompt.indexOf("review_result=$?", successStatusStart);
+    const failureStart = prompt.indexOf('if test "$review_result" != "0"', successStatusResult);
     const failureStatusStart = prompt.indexOf("post_submission_error || true", failureStart);
     const releaseStart = prompt.indexOf(
       'curl -fsS -X DELETE -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN"',
@@ -103,10 +108,11 @@ describe("buildCodeReviewPrompt", () => {
     );
 
     expect(reviewWriteStart).toBeGreaterThan(-1);
-    expect(failureStart).toBeGreaterThan(reviewWriteStart);
+    expect(successStatusStart).toBeGreaterThan(reviewWriteStart);
+    expect(successStatusResult).toBeGreaterThan(successStatusStart);
     expect(failureStatusStart).toBeGreaterThan(failureStart);
     expect(releaseStart).toBeGreaterThan(failureStatusStart);
-    expect(prompt.slice(reviewWriteStart, failureStart)).toContain("review_result=$?");
+    expect(failureStart).toBeGreaterThan(successStatusResult);
     expect(prompt.slice(releaseStart)).toContain("|| true");
   });
 
