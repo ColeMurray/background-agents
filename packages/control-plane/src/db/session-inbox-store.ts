@@ -41,6 +41,7 @@ interface InboxSessionRow extends ViewerReadStateRow {
   updated_at: number;
   effective_root_session_id: string;
   latest_updated_at: number;
+  category: SessionInboxCategory;
 }
 
 interface InboxPageData {
@@ -84,13 +85,13 @@ export class SessionInboxStore {
   async snapshot(
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {
-    const results = await this.db.batch<InboxSessionRow>(
-      INBOX_CATEGORIES.map((category) =>
-        this.bindInboxQuery({ ...options, category, cursor: null })
+    const result = await this.bindInboxSnapshotQuery(options).all<InboxSessionRow>();
+    const rows = result.results ?? [];
+    const pages = INBOX_CATEGORIES.map((category) =>
+      this.buildPageData(
+        options.limit,
+        rows.filter((row) => row.category === category)
       )
-    );
-    const pages = INBOX_CATEGORIES.map((_, index) =>
-      this.buildPageData(options.limit, results[index]?.results ?? [])
     );
     const decorated = await decorateSessionEntries(
       this.db,
@@ -106,66 +107,22 @@ export class SessionInboxStore {
   }
 
   private bindInboxQuery(options: ListSessionInboxOptions): SqlStatement {
-    const { conditions, params } = this.eligibility(options);
+    const { sql, params } = this.inboxCtes(options);
     const cursorCondition = options.cursor
       ? `AND (latest_updated_at < ? OR (latest_updated_at = ? AND effective_root_session_id < ?))`
       : "";
 
     return this.db
       .prepare(
-        `WITH RECURSIVE eligible_sessions AS (
-           SELECT sessions.*, ${unreadSql("sessions")} AS unread
-           FROM sessions
-           LEFT JOIN users viewer ON viewer.id = ?
-           LEFT JOIN session_read_states read_state
-             ON read_state.session_id = sessions.id
-            AND read_state.user_id = viewer.id
-           WHERE ${conditions.join(" AND ")}
-         ),
-         rerooted_sessions(id, effective_root_session_id) AS (
-           SELECT eligible.id, eligible.id
-           FROM eligible_sessions eligible
-           WHERE eligible.parent_session_id IS NOT NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM eligible_sessions parent
-               WHERE parent.id = eligible.parent_session_id
-             )
-           UNION
-           SELECT child.id, rerooted_sessions.effective_root_session_id
-           FROM rerooted_sessions
-           JOIN eligible_sessions child ON child.parent_session_id = rerooted_sessions.id
-         ),
-         effective_sessions AS (
-           SELECT eligible_sessions.*,
-                  COALESCE(
-                    (
-                      SELECT rerooted.effective_root_session_id
-                      FROM rerooted_sessions rerooted
-                      WHERE rerooted.id = eligible_sessions.id
-                    ),
-                    eligible_sessions.root_session_id
-                  ) AS effective_root_session_id
-           FROM eligible_sessions
-         ),
-         inbox_roots AS (
-           SELECT effective_root_session_id,
-                   MAX(updated_at) AS latest_updated_at,
-                  CASE
-                    WHEN MAX(unread) = 1 THEN 'needs_attention'
-                    WHEN MAX(status = 'active') = 1 THEN 'in_progress'
-                    ELSE 'finished'
-                  END AS category
-           FROM effective_sessions
-           GROUP BY effective_root_session_id
-         ),
+        `${sql},
          selected_roots AS (
-           SELECT effective_root_session_id, latest_updated_at
+           SELECT effective_root_session_id, latest_updated_at, category
            FROM inbox_roots
            WHERE category = ? ${cursorCondition}
            ORDER BY latest_updated_at DESC, effective_root_session_id DESC
            LIMIT ?
          )
-         SELECT effective_sessions.*, selected_roots.latest_updated_at
+         SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
          FROM selected_roots
          JOIN effective_sessions USING (effective_root_session_id)
          ORDER BY selected_roots.latest_updated_at DESC,
@@ -174,7 +131,6 @@ export class SessionInboxStore {
                   effective_sessions.id DESC`
       )
       .bind(
-        options.viewerUserId,
         ...params,
         options.category,
         ...(options.cursor
@@ -186,6 +142,95 @@ export class SessionInboxStore {
           : []),
         options.limit + 1
       );
+  }
+
+  private bindInboxSnapshotQuery(
+    options: Omit<ListSessionInboxOptions, "category" | "cursor">
+  ): SqlStatement {
+    const { sql, params } = this.inboxCtes(options);
+    return this.db
+      .prepare(
+        `${sql},
+         ranked_roots AS (
+           SELECT inbox_roots.*,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY category
+                    ORDER BY latest_updated_at DESC, effective_root_session_id DESC
+                  ) AS category_rank
+           FROM inbox_roots
+         ),
+         selected_roots AS (
+           SELECT effective_root_session_id, latest_updated_at, category
+           FROM ranked_roots
+           WHERE category_rank <= ?
+         )
+         SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
+         FROM selected_roots
+         JOIN effective_sessions USING (effective_root_session_id)
+         ORDER BY selected_roots.category,
+                  selected_roots.latest_updated_at DESC,
+                  selected_roots.effective_root_session_id DESC,
+                  effective_sessions.updated_at DESC,
+                  effective_sessions.id DESC`
+      )
+      .bind(...params, options.limit + 1);
+  }
+
+  private inboxCtes(
+    options: Pick<
+      ListSessionInboxOptions,
+      "createdByUserIds" | "excludeAutomationLineage" | "viewerUserId"
+    >
+  ): { sql: string; params: unknown[] } {
+    const { conditions, params } = this.eligibility(options);
+    return {
+      sql: `WITH RECURSIVE eligible_sessions AS (
+              SELECT sessions.*, ${unreadSql("sessions")} AS unread
+              FROM sessions
+              LEFT JOIN users viewer ON viewer.id = ?
+              LEFT JOIN session_read_states read_state
+                ON read_state.session_id = sessions.id
+               AND read_state.user_id = viewer.id
+              WHERE ${conditions.join(" AND ")}
+            ),
+            rerooted_sessions(id, effective_root_session_id) AS (
+              SELECT eligible.id, eligible.id
+              FROM eligible_sessions eligible
+              WHERE eligible.parent_session_id IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM eligible_sessions parent
+                  WHERE parent.id = eligible.parent_session_id
+                )
+              UNION
+              SELECT child.id, rerooted_sessions.effective_root_session_id
+              FROM rerooted_sessions
+              JOIN eligible_sessions child ON child.parent_session_id = rerooted_sessions.id
+            ),
+            effective_sessions AS (
+              SELECT eligible_sessions.*,
+                     COALESCE(
+                       (
+                         SELECT rerooted.effective_root_session_id
+                         FROM rerooted_sessions rerooted
+                         WHERE rerooted.id = eligible_sessions.id
+                       ),
+                       eligible_sessions.root_session_id
+                     ) AS effective_root_session_id
+              FROM eligible_sessions
+            ),
+            inbox_roots AS (
+              SELECT effective_root_session_id,
+                     MAX(updated_at) AS latest_updated_at,
+                     CASE
+                       WHEN MAX(unread) = 1 THEN 'needs_attention'
+                       WHEN MAX(status = 'active') = 1 THEN 'in_progress'
+                       ELSE 'finished'
+                     END AS category
+              FROM effective_sessions
+              GROUP BY effective_root_session_id
+            )`,
+      params: [options.viewerUserId, ...params],
+    };
   }
 
   private eligibility(

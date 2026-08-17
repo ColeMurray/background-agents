@@ -458,13 +458,22 @@ describe("session inbox", () => {
       terminalMessageCompletedAt: Date.now(),
     });
     await store.create(session("running", { status: "active", updatedAt: 4000 }));
-    await store.create(session("finished", { updatedAt: 3000 }));
+    for (let index = 0; index < 21; index += 1) {
+      await store.create(session(`finished-${index}`, { updatedAt: 3000 - index }));
+    }
 
     const response = await serviceFetch("https://example.com/sessions/inbox");
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     const body = (await response.json()) as {
-      categories: Record<string, { items: Array<{ rootSession: { id: string } }> }>;
+      categories: Record<
+        string,
+        {
+          items: Array<{ rootSession: { id: string } }>;
+          hasMore: boolean;
+          nextCursor: string | null;
+        }
+      >;
     };
     expect(body.categories.needs_attention.items.map((item) => item.rootSession.id)).toEqual([
       "attention",
@@ -472,7 +481,10 @@ describe("session inbox", () => {
     expect(body.categories.in_progress.items.map((item) => item.rootSession.id)).toEqual([
       "running",
     ]);
-    expect(body.categories.finished.items.map((item) => item.rootSession.id)).toEqual(["finished"]);
+    expect(body.categories.finished.items).toHaveLength(20);
+    expect(body.categories.finished.items[0].rootSession.id).toBe("finished-0");
+    expect(body.categories.finished.hasMore).toBe(true);
+    expect(body.categories.finished.nextCursor).not.toBeNull();
     const rootIds = Object.values(body.categories).flatMap((page) =>
       page.items.map((item) => item.rootSession.id)
     );
