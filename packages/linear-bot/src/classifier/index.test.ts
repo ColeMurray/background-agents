@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  anthropicMessagesResponseSchema,
-  classifyRepo,
-  classifyToolInputSchema,
-  CLASSIFICATION_REQUEST_TIMEOUT_MS,
-  openaiChatCompletionResponseSchema,
-} from "./index";
+import { anthropicMessagesResponseSchema, classifyRepo, classifyToolInputSchema } from "./index";
+import { CLASSIFICATION_REQUEST_TIMEOUT_MS } from "@open-inspect/shared/classification";
 import { clearReposLocalCache } from "./repos";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
 import type { Env } from "../types";
@@ -68,22 +63,6 @@ describe("classifyToolInputSchema", () => {
       confidence: "certain",
       reasoning: "Invalid confidence value.",
     });
-
-    expect(parsed.success).toBe(false);
-  });
-});
-
-describe("openaiChatCompletionResponseSchema", () => {
-  it("parses a response with the consumed message fields", () => {
-    const parsed = openaiChatCompletionResponseSchema.safeParse({
-      choices: [{ message: { content: "{}", refusal: null } }],
-    });
-
-    expect(parsed.success).toBe(true);
-  });
-
-  it("rejects a response without choices", () => {
-    const parsed = openaiChatCompletionResponseSchema.safeParse({});
 
     expect(parsed.success).toBe(false);
   });
@@ -198,7 +177,8 @@ describe("classifyRepo provider dispatch", () => {
 
     const body = JSON.parse(init!.body as string);
     expect(body.model).toBe("gpt-5.4-mini");
-    expect(body.temperature).toBe(0);
+    // gpt-5-family models reject an explicit temperature with HTTP 400.
+    expect(body).not.toHaveProperty("temperature");
     expect(body.max_completion_tokens).toBe(2000);
     expect(body).not.toHaveProperty("max_tokens");
     expect(body.response_format.type).toBe("json_schema");
@@ -281,4 +261,36 @@ describe("classifyRepo provider dispatch", () => {
     expect(result.repo).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      binding: "OPENAI_API_KEY",
+      model: "gpt-5.4-mini",
+      overrides: { OPENAI_API_KEY: undefined },
+    },
+    {
+      binding: "ANTHROPIC_API_KEY",
+      model: "claude-haiku-4-5",
+      overrides: { ANTHROPIC_API_KEY: undefined },
+    },
+  ])(
+    "degrades without calling out when $model is selected but $binding is unbound",
+    async ({ model, overrides }) => {
+      const { kv } = createFakeKV();
+      const env = makeLinearBotEnv(kv, {
+        CONTROL_PLANE: twoRepoControlPlane(),
+        CLASSIFICATION_MODEL: model,
+        ...overrides,
+      });
+
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await classify(env);
+
+      expect(result.needsClarification).toBe(true);
+      expect(result.repo).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
 });

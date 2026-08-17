@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Env } from "../types";
+import { CLASSIFICATION_REQUEST_TIMEOUT_MS } from "@open-inspect/shared/classification";
 
 const {
   mockMessagesCreate,
@@ -43,7 +44,7 @@ vi.mock("./environments", async (importOriginal) => ({
   getEnvironmentById: vi.fn(),
 }));
 
-import { CLASSIFICATION_REQUEST_TIMEOUT_MS, RepoClassifier } from "./index";
+import { RepoClassifier } from "./index";
 
 const TEST_REPOS: RepoConfig[] = [
   {
@@ -674,6 +675,12 @@ describe("RepoClassifier", () => {
   });
 
   describe("provider selection", () => {
+    // These tests stub the global fetch; restore it so anything added after
+    // this block doesn't inherit a stale stub.
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
     function openAiEnv(overrides: Partial<Env> = {}): Env {
       return {
         ...TEST_ENV,
@@ -718,7 +725,9 @@ describe("RepoClassifier", () => {
       const body = JSON.parse(init.body as string);
       // The bare model id — no "openai/" prefix reaches the wire.
       expect(body.model).toBe("gpt-5.4-mini");
-      expect(body.temperature).toBe(0);
+      // gpt-5-family models accept only the default temperature and reject an
+      // explicit value with HTTP 400 `unsupported_value`.
+      expect(body).not.toHaveProperty("temperature");
       expect(body.max_completion_tokens).toBe(2000);
       // gpt-5.x rejects `max_tokens` outright ("Unsupported parameter").
       expect(body).not.toHaveProperty("max_tokens");
@@ -786,5 +795,37 @@ describe("RepoClassifier", () => {
       expect(mockMessagesCreate).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    it.each([
+      {
+        binding: "OPENAI_API_KEY",
+        model: "gpt-5.4-mini",
+        overrides: { OPENAI_API_KEY: undefined },
+      },
+      {
+        binding: "ANTHROPIC_API_KEY",
+        model: "claude-haiku-4-5",
+        overrides: { ANTHROPIC_API_KEY: undefined },
+      },
+    ])(
+      "degrades to the picker without calling out when $model is selected but $binding is unbound",
+      async ({ model, overrides }) => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock);
+
+        const classifier = new RepoClassifier({
+          ...TEST_ENV,
+          CLASSIFICATION_MODEL: model,
+          ...overrides,
+        } as Env);
+        const result = await classifier.classify("please fix prod slack alerts");
+
+        expect(result.target).toBeNull();
+        expect(result.needsClarification).toBe(true);
+        expect(result.reasoning).toContain("structured model output");
+        expect(mockMessagesCreate).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
+    );
   });
 });

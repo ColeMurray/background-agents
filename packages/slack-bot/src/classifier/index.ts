@@ -14,18 +14,18 @@ import { loadTargetCatalog, type TargetCatalog } from "./catalog";
 import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
+import {
+  CLASSIFICATION_REQUEST_TIMEOUT_MS,
+  DEFAULT_CLASSIFICATION_MODEL,
+  callOpenAIStructured,
+  resolveClassificationProvider,
+} from "@open-inspect/shared/classification";
 import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
 const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium", "low"];
-
-/**
- * Bound on the classification request to either provider, so a stalled model
- * call can't hang message handling indefinitely.
- */
-export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 15_000;
 
 const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
   name: CLASSIFY_TARGET_TOOL_NAME,
@@ -59,69 +59,6 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
     additionalProperties: false,
   },
 };
-
-/**
- * Plain JSON Schema mirror of {@link CLASSIFY_TARGET_TOOL}'s input shape, used
- * for OpenAI's strict structured-output mode (`response_format.json_schema`).
- * Kept in sync with the Anthropic tool's `input_schema` by hand — the two
- * provider SDKs use incompatible schema types, so there's no single shared
- * declaration to derive both from.
- */
-const CLASSIFY_TARGET_JSON_SCHEMA = {
-  type: "object",
-  properties: {
-    targetId: {
-      type: ["string", "null"],
-      description:
-        'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
-    },
-    confidence: {
-      type: "string",
-      enum: CONFIDENCE_LEVELS,
-    },
-    reasoning: {
-      type: "string",
-      description: "Brief explanation of classification decision.",
-    },
-    alternatives: {
-      type: "array",
-      items: { type: "string" },
-      description:
-        "Alternative repository fullNames / environment ids when confidence is not high.",
-    },
-  },
-  required: ["targetId", "confidence", "reasoning", "alternatives"],
-  additionalProperties: false,
-} as const;
-
-type ClassificationProvider = "anthropic" | "openai";
-
-/**
- * Resolve which provider serves a classification model id, and the bare id to
- * send that provider (any `anthropic/`/`openai/` prefix stripped).
- *
- * There is no separate provider env var — the model id alone selects the
- * provider, so `CLASSIFICATION_MODEL=gpt-5.4-mini` routes to OpenAI while the
- * default `claude-haiku-4-5` keeps routing to Anthropic.
- */
-function resolveClassificationProvider(model: string): {
-  provider: ClassificationProvider;
-  model: string;
-} {
-  if (model.startsWith("anthropic/")) {
-    return { provider: "anthropic", model: model.slice("anthropic/".length) };
-  }
-  if (model.startsWith("openai/")) {
-    return { provider: "openai", model: model.slice("openai/".length) };
-  }
-  if (model.startsWith("claude-")) {
-    return { provider: "anthropic", model };
-  }
-  if (model.startsWith("gpt-")) {
-    return { provider: "openai", model };
-  }
-  throw new Error(`Unrecognized classification model: ${model}`);
-}
 
 /**
  * Build the classification prompt for the LLM over the target catalog.
@@ -264,61 +201,37 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
  * Call OpenAI's Chat Completions API with strict JSON-schema structured
  * output, then funnel the parsed object through the same
  * {@link normalizeModelResponse} validation as the Anthropic tool-use path.
+ *
+ * The Anthropic tool's `input_schema` already carries
+ * `additionalProperties: false`, which is what OpenAI's `strict` mode requires,
+ * so both providers are driven from that one declaration.
  */
 async function callOpenAI(apiKey: string, model: string, prompt: string): Promise<LLMResponse> {
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      max_completion_tokens: 2000,
-      messages: [{ role: "user", content: prompt }],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: CLASSIFY_TARGET_TOOL_NAME,
-          strict: true,
-          schema: CLASSIFY_TARGET_JSON_SCHEMA,
-        },
-      },
-    }),
-    signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
+  const parsed = await callOpenAIStructured(apiKey, model, prompt, {
+    name: CLASSIFY_TARGET_TOOL_NAME,
+    schema: CLASSIFY_TARGET_TOOL.input_schema,
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(
-      `OpenAI classification request failed (${response.status}): ${body.slice(0, 500)}`
-    );
-  }
-
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string | null; refusal?: string | null } }>;
-  };
-
-  const message = payload.choices?.[0]?.message;
-  if (message?.refusal) {
-    throw new Error(`OpenAI classification refused: ${message.refusal}`);
-  }
-
-  if (!message?.content) {
-    throw new Error("OpenAI classification response had no content");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(message.content);
-  } catch (e) {
-    throw new Error(
-      `OpenAI classification response was not valid JSON: ${e instanceof Error ? e.message : String(e)}`
-    );
-  }
-
   return normalizeModelResponse(parsed);
+}
+
+/**
+ * Read the provider credential the resolved classification model needs.
+ *
+ * Only the selected provider's key is bound to the Worker, so a model id that
+ * points at the unbound provider is a deployment misconfiguration — fail with
+ * that, rather than sending a request with an empty credential and reporting
+ * the provider's 401.
+ */
+function requireProviderKey(
+  key: string | undefined,
+  binding: "ANTHROPIC_API_KEY" | "OPENAI_API_KEY",
+  modelId: string
+): string {
+  if (!key) {
+    throw new Error(`Classification model "${modelId}" requires ${binding} to be set`);
+  }
+  return key;
 }
 
 /**
@@ -336,13 +249,36 @@ export class RepoClassifier {
    * Lazily construct the Anthropic client so an OpenAI-configured deployment
    * (no `ANTHROPIC_API_KEY`) never reaches `new Anthropic({ apiKey: undefined })`.
    */
-  private getAnthropicClient(): Anthropic {
+  private getAnthropicClient(apiKey: string): Anthropic {
     if (!this.anthropicClient) {
-      this.anthropicClient = new Anthropic({
-        apiKey: this.env.ANTHROPIC_API_KEY,
-      });
+      this.anthropicClient = new Anthropic({ apiKey });
     }
     return this.anthropicClient;
+  }
+
+  /**
+   * Call Anthropic's Messages API with the classification tool, then funnel the
+   * tool input through the same {@link normalizeModelResponse} validation as
+   * the OpenAI structured-output path.
+   */
+  private async callAnthropic(apiKey: string, model: string, prompt: string): Promise<LLMResponse> {
+    const response = await this.getAnthropicClient(apiKey).messages.create(
+      {
+        model,
+        max_tokens: 500,
+        temperature: 0,
+        tools: [CLASSIFY_TARGET_TOOL],
+        tool_choice: {
+          type: "tool",
+          name: CLASSIFY_TARGET_TOOL_NAME,
+          disable_parallel_tool_use: true,
+        },
+        messages: [{ role: "user", content: prompt }],
+      },
+      { signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS) }
+    );
+
+    return extractStructuredResponse(response);
   }
 
   /**
@@ -492,35 +428,21 @@ export class RepoClassifier {
     // Use LLM for classification
     try {
       const prompt = buildClassificationPrompt(message, catalog, context);
-      const { provider, model } = resolveClassificationProvider(
-        this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5"
-      );
+      const modelId = this.env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
+      const { provider, model } = resolveClassificationProvider(modelId);
 
       const llmResult =
         provider === "anthropic"
-          ? extractStructuredResponse(
-              await this.getAnthropicClient().messages.create(
-                {
-                  model,
-                  max_tokens: 500,
-                  temperature: 0,
-                  tools: [CLASSIFY_TARGET_TOOL],
-                  tool_choice: {
-                    type: "tool",
-                    name: CLASSIFY_TARGET_TOOL_NAME,
-                    disable_parallel_tool_use: true,
-                  },
-                  messages: [
-                    {
-                      role: "user",
-                      content: prompt,
-                    },
-                  ],
-                },
-                { signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS) }
-              )
+          ? await this.callAnthropic(
+              requireProviderKey(this.env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY", modelId),
+              model,
+              prompt
             )
-          : await callOpenAI(this.env.OPENAI_API_KEY ?? "", model, prompt);
+          : await callOpenAI(
+              requireProviderKey(this.env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
+              model,
+              prompt
+            );
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 

@@ -9,6 +9,12 @@ import type {
 } from "@open-inspect/shared/types/repository-catalog";
 import type { Env } from "../types";
 import { z } from "zod";
+import {
+  CLASSIFICATION_REQUEST_TIMEOUT_MS,
+  DEFAULT_CLASSIFICATION_MODEL,
+  callOpenAIStructured,
+  resolveClassificationProvider,
+} from "@open-inspect/shared/classification";
 import { getAvailableRepos, buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
 
@@ -16,11 +22,6 @@ const log = createLogger("classifier");
 
 const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
 export const CLASSIFIER_REQUEST_TIMEOUT_MS = 10_000;
-
-/** Bound on every classification request (Anthropic or OpenAI). */
-export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 15_000;
-
-const DEFAULT_CLASSIFICATION_MODEL = "claude-haiku-4-5";
 
 export const classifyToolInputSchema = z.object({
   repoId: z.string().nullable(),
@@ -41,41 +42,14 @@ export const anthropicMessagesResponseSchema = z.object({
   ),
 });
 
-export const openaiChatCompletionResponseSchema = z.object({
-  choices: z.array(
-    z.object({
-      message: z.object({
-        content: z.string().nullable(),
-        refusal: z.string().nullable().optional(),
-      }),
-    })
-  ),
-});
-
-type ClassificationProvider = "anthropic" | "openai";
-
-/**
- * Resolve which provider serves a classification model id, stripping any
- * `anthropic/`/`openai/` prefix so callers send the bare id to the provider.
- */
-function resolveClassificationProvider(modelId: string): {
-  provider: ClassificationProvider;
-  model: string;
-} {
-  if (modelId.startsWith("anthropic/")) {
-    return { provider: "anthropic", model: modelId.slice("anthropic/".length) };
-  }
-  if (modelId.startsWith("openai/")) {
-    return { provider: "openai", model: modelId.slice("openai/".length) };
-  }
-  if (modelId.startsWith("claude-")) return { provider: "anthropic", model: modelId };
-  if (modelId.startsWith("gpt-")) return { provider: "openai", model: modelId };
-  throw new Error(`Unrecognized classification model id: ${modelId}`);
-}
-
 /**
  * JSON schema for the classification result, shared by the Anthropic tool
  * definition and the OpenAI strict structured-output schema.
+ *
+ * Anthropic's tool `input_schema` omits `additionalProperties`, so it stays a
+ * base schema here and the OpenAI side spreads the flag on: `strict: true`
+ * requires it, and keeping it off the base leaves the Anthropic request bytes
+ * unchanged.
  */
 const classifyRepoJsonSchema = {
   type: "object",
@@ -99,6 +73,11 @@ const classifyRepoJsonSchema = {
     },
   },
   required: ["repoId", "confidence", "reasoning", "alternatives"],
+} as const;
+
+/** OpenAI's strict structured-output mode requires `additionalProperties: false`. */
+const classifyRepoStrictJsonSchema = {
+  ...classifyRepoJsonSchema,
   additionalProperties: false,
 } as const;
 
@@ -178,29 +157,7 @@ async function callAnthropic(
         {
           name: CLASSIFY_REPO_TOOL_NAME,
           description: "Classify which repository an issue belongs to.",
-          input_schema: {
-            type: "object" as const,
-            properties: {
-              repoId: {
-                type: ["string", "null"],
-                description: "Repository ID (owner/name) if confident, otherwise null.",
-              },
-              confidence: {
-                type: "string",
-                enum: ["high", "medium", "low"],
-              },
-              reasoning: {
-                type: "string",
-                description: "Brief explanation.",
-              },
-              alternatives: {
-                type: "array",
-                items: { type: "string" },
-                description: "Alternative repo IDs when not confident.",
-              },
-            },
-            required: ["repoId", "confidence", "reasoning", "alternatives"],
-          },
+          input_schema: classifyRepoJsonSchema,
         },
       ],
       tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
@@ -239,53 +196,34 @@ async function callOpenAI(
   prompt: string,
   model: string
 ): Promise<ClassifyToolInput> {
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      max_completion_tokens: 2000,
-      messages: [{ role: "user", content: prompt }],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: CLASSIFY_REPO_TOOL_NAME,
-          strict: true,
-          schema: classifyRepoJsonSchema,
-        },
-      },
-    }),
-    signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
+  const parsed = await callOpenAIStructured(apiKey, model, prompt, {
+    name: CLASSIFY_REPO_TOOL_NAME,
+    schema: classifyRepoStrictJsonSchema,
   });
-
-  if (!response.ok) {
-    const errText = (await response.text()).slice(0, 500);
-    throw new Error(`OpenAI API error ${response.status}: ${errText}`);
-  }
-
-  const data = openaiChatCompletionResponseSchema.safeParse(await response.json());
-  if (!data.success) throw new Error("Malformed OpenAI response");
-
-  const message = data.data.choices[0]?.message;
-  if (!message) throw new Error("No choices in OpenAI response");
-  if (message.refusal) throw new Error(`OpenAI refused to classify: ${message.refusal}`);
-  if (!message.content) throw new Error("Empty OpenAI response content");
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(message.content);
-  } catch {
-    throw new Error("Failed to parse OpenAI response content as JSON");
-  }
 
   const input = classifyToolInputSchema.safeParse(parsed);
   if (!input.success) throw new Error("Malformed OpenAI tool input");
 
   return input.data;
+}
+
+/**
+ * Read the provider credential the resolved classification model needs.
+ *
+ * Only the selected provider's key is bound to the Worker, so a model id that
+ * points at the unbound provider is a deployment misconfiguration — fail with
+ * that, rather than sending a request with an empty credential and reporting
+ * the provider's 401.
+ */
+function requireProviderKey(
+  key: string | undefined,
+  binding: "ANTHROPIC_API_KEY" | "OPENAI_API_KEY",
+  modelId: string
+): string {
+  if (!key) {
+    throw new Error(`Classification model "${modelId}" requires ${binding} to be set`);
+  }
+  return key;
 }
 
 /**
@@ -338,15 +276,18 @@ export async function classifyRepo(
     const modelId = env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
     const { provider, model } = resolveClassificationProvider(modelId);
 
-    let result: ClassifyToolInput;
-    if (provider === "anthropic") {
-      result = await callAnthropic(env.ANTHROPIC_API_KEY, prompt, model);
-    } else {
-      if (!env.OPENAI_API_KEY) {
-        throw new Error(`Classification model "${modelId}" requires OPENAI_API_KEY to be set`);
-      }
-      result = await callOpenAI(env.OPENAI_API_KEY, prompt, model);
-    }
+    const result: ClassifyToolInput =
+      provider === "anthropic"
+        ? await callAnthropic(
+            requireProviderKey(env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY", modelId),
+            prompt,
+            model
+          )
+        : await callOpenAI(
+            requireProviderKey(env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
+            prompt,
+            model
+          );
 
     let matchedRepo: RepoConfig | null = null;
     if (result.repoId) {
