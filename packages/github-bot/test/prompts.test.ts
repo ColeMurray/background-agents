@@ -72,6 +72,44 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).not.toContain("pulls/42/comments \\");
   });
 
+  it("terminalizes submission guards except when a newer owner returns 409", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+
+    expect(prompt).toContain('-f description="Review failed to start"');
+    expect(prompt).toContain(
+      'snapshot="$(gh api repos/acme/widgets/pulls/42 --jq \'.head.sha + " " + .state + " draft:" + (.draft|tostring)\')" || \\\n' +
+        "     { post_submission_error; exit 0; }"
+    );
+
+    const conflictStart = prompt.indexOf('if test "$ownership_status" = "409"');
+    const otherFailureStart = prompt.indexOf('test "$ownership_status" = "204"');
+    expect(conflictStart).toBeGreaterThan(-1);
+    expect(otherFailureStart).toBeGreaterThan(conflictStart);
+    expect(prompt.slice(conflictStart, otherFailureStart)).not.toContain("post_submission_error");
+    expect(prompt.slice(otherFailureStart)).toContain("post_submission_error");
+  });
+
+  it("terminalizes write failures before releasing an acquired lease", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+
+    const reviewWriteStart = prompt.indexOf(
+      'review_url="$(gh api repos/acme/widgets/pulls/42/reviews'
+    );
+    const failureStart = prompt.indexOf('if test "$review_result" != "0"', reviewWriteStart);
+    const failureStatusStart = prompt.indexOf("post_submission_error || true", failureStart);
+    const releaseStart = prompt.indexOf(
+      'curl -fsS -X DELETE -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN"',
+      failureStatusStart
+    );
+
+    expect(reviewWriteStart).toBeGreaterThan(-1);
+    expect(failureStart).toBeGreaterThan(reviewWriteStart);
+    expect(failureStatusStart).toBeGreaterThan(failureStart);
+    expect(releaseStart).toBeGreaterThan(failureStatusStart);
+    expect(prompt.slice(reviewWriteStart, failureStart)).toContain("review_result=$?");
+    expect(prompt.slice(releaseStart)).toContain("|| true");
+  });
+
   it("limits self-reviews to comments", () => {
     const prompt = buildCodeReviewPrompt({ ...baseParams, isSelfReview: true });
     expect(prompt).toContain('"event": "COMMENT"');
