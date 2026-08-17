@@ -457,6 +457,52 @@ describe("AutomationStore", () => {
       expect(statements).toHaveLength(0);
     });
   });
+
+  describe("schedule advancement", () => {
+    const invocation = {
+      id: "inv-1",
+      automation_id: "auto_test1",
+      source: "schedule" as const,
+      scheduled_at: now,
+      trigger_key: null,
+      concurrency_key: null,
+      trigger_metadata: null,
+      skip_reason: null,
+      failure_counted_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    it("guards a guarded invocation advance against schedule rewind", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.insertInvocationGuarded({
+        invocation,
+        children: [sampleRunRow],
+        overlapScope: { kind: "automation" },
+        advanceSchedule: { nextRunAt: now + 60_000 },
+      });
+
+      const advance = statements.at(-1)!;
+      expect(advance.sql).toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now + 60_000);
+    });
+
+    it("guards a skipped invocation advance against schedule rewind", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.insertSkippedInvocation(
+        { ...invocation, id: "inv-skipped", skip_reason: "concurrent_run_active" },
+        { nextRunAt: now + 60_000 }
+      );
+
+      const advance = statements.at(-1)!;
+      expect(advance.sql).toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now + 60_000);
+    });
+  });
 });
 
 describe("isDuplicateKeyError", () => {

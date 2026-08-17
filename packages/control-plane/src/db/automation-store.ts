@@ -803,8 +803,9 @@ export class AutomationStore {
    * statement ERROR — a 0-row INSERT…SELECT is a success and later statements
    * still run. The invocation insert is suppressed when the overlap predicate
    * matches; child inserts are 0-row no-ops when the invocation was
-   * suppressed; the schedule advance is deliberately unconditional (a blocked
-   * firing must still advance or the tick re-collides forever).
+   * suppressed; the schedule advance still runs for a blocked firing so the
+   * tick does not re-collide forever, but is monotonic so a stale batch cannot
+   * rewind a newer tick's advance.
    *
    * A UNIQUE violation (cron double-fire on the idempotency index, event dedup
    * on the trigger-key index) rolls back the WHOLE batch including the
@@ -885,9 +886,15 @@ export class AutomationStore {
         this.db
           .prepare(
             `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL`
+             WHERE id = ? AND deleted_at IS NULL
+               AND (next_run_at IS NULL OR next_run_at < ?)`
           )
-          .bind(params.advanceSchedule.nextRunAt, Date.now(), invocation.automation_id)
+          .bind(
+            params.advanceSchedule.nextRunAt,
+            Date.now(),
+            invocation.automation_id,
+            params.advanceSchedule.nextRunAt
+          )
       );
     }
 
@@ -899,8 +906,8 @@ export class AutomationStore {
    * Record a skipped firing: a childless invocation carrying skip_reason,
    * atomically paired with the schedule advance when the skip serves a cron
    * slot. INSERT OR IGNORE tolerates an idempotency-index race without
-   * blocking the advance — a skip recorded without the advance would
-   * re-collide on (automation_id, scheduled_at) every tick thereafter.
+   * blocking the monotonic advance — a skip recorded without the advance
+   * would re-collide on (automation_id, scheduled_at) every tick thereafter.
    */
   async insertSkippedInvocation(
     invocation: AutomationInvocationRow,
@@ -934,9 +941,15 @@ export class AutomationStore {
         this.db
           .prepare(
             `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL`
+             WHERE id = ? AND deleted_at IS NULL
+               AND (next_run_at IS NULL OR next_run_at < ?)`
           )
-          .bind(advanceSchedule.nextRunAt, Date.now(), invocation.automation_id)
+          .bind(
+            advanceSchedule.nextRunAt,
+            Date.now(),
+            invocation.automation_id,
+            advanceSchedule.nextRunAt
+          )
       );
     }
 

@@ -540,6 +540,34 @@ describe("Scheduler", () => {
       );
     });
 
+    it("does not enqueue a prompt when recovery wins the launch transition", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.updateRun.mockResolvedValue(false);
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const response = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(await response.json()).toMatchObject({ processed: 0, failed: 1 });
+      expect(promptCallCount(fetchMock)).toBe(0);
+      expect(mockStore.updateRun).toHaveBeenNthCalledWith(
+        1,
+        expect.any(String),
+        expect.objectContaining({ status: "running" })
+      );
+      expect(mockStore.updateRun).toHaveBeenNthCalledWith(
+        2,
+        expect.any(String),
+        expect.objectContaining({ status: "failed" })
+      );
+    });
+
     it("fans out one child per selected repository", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [

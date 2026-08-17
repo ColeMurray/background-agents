@@ -326,7 +326,10 @@ export class CallbackNotificationService {
             ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
             : {}),
         });
-      }
+      },
+      // D1 operations do not accept AbortSignals. A fake timeout would retry
+      // while the first in-process completion can still be running.
+      { attemptTimeoutMs: null }
     );
   }
 

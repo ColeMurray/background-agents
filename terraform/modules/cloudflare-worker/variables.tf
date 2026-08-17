@@ -133,7 +133,7 @@ variable "new_sqlite_classes" {
 }
 
 variable "deleted_classes" {
-  description = "DO class names deleted in this migration step. Requires a new migration tag and the bindings-disabled phase."
+  description = "DO class names deleted in this migration step. Requires a new migration tag; surviving bindings remain enabled."
   type        = list(string)
   default     = []
 }
