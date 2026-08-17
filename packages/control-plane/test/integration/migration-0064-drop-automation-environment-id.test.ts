@@ -166,12 +166,12 @@ async function expectCanonicalSchema(): Promise<void> {
   }
 }
 
-describe("migration 0063: drop automation environment id", () => {
+describe("migration 0064: drop automation environment id", () => {
   it("preserves automation data, relationships, constraints, and indexes", async () => {
     // The test setup applies the complete migration history, covering fresh databases.
     await expectCanonicalSchema();
 
-    // Restore the sole pre-0063 difference, then migrate representative existing data.
+    // Restore the sole pre-0064 difference, then migrate representative existing data.
     await env.DB.prepare("ALTER TABLE automations ADD COLUMN environment_id TEXT").run();
     await env.DB.prepare(
       `INSERT INTO automations
@@ -208,8 +208,8 @@ describe("migration 0063: drop automation environment id", () => {
        VALUES ('auto-1', 'env-1', 1000, 1100)`
     ).run();
 
-    const migration = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith("0063"));
-    if (!migration) throw new Error("Migration 0063 not found in TEST_MIGRATIONS");
+    const migration = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith("0064"));
+    if (!migration) throw new Error("Migration 0064 not found in TEST_MIGRATIONS");
     await env.DB.batch(migration.queries.map((query) => env.DB.prepare(query)));
 
     await expectCanonicalSchema();
