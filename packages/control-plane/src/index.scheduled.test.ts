@@ -45,7 +45,8 @@ function createEmptyDb(events: string[]): SqlDatabase {
       events.push(query);
       return statement();
     },
-    batch: async <T>(): Promise<SqlResult<T>[]> => [],
+    batch: async <T>(statements: SqlStatement[]): Promise<SqlResult<T>[]> =>
+      statements.map(() => ({ results: [] as T[], meta: { changes: 0 } })),
   };
 }
 
