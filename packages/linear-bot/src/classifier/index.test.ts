@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { anthropicMessagesResponseSchema, classifyRepo, classifyToolInputSchema } from "./index";
-import { CLASSIFICATION_REQUEST_TIMEOUT_MS } from "@open-inspect/shared/classification";
+import {
+  CLASSIFICATION_REQUEST_TIMEOUT_MS,
+  OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
+} from "@open-inspect/shared/classification";
 import { clearReposLocalCache } from "./repos";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
 import type { Env } from "../types";
@@ -179,7 +182,7 @@ describe("classifyRepo provider dispatch", () => {
     expect(body.model).toBe("gpt-5.4-mini");
     // gpt-5-family models reject an explicit temperature with HTTP 400.
     expect(body).not.toHaveProperty("temperature");
-    expect(body.max_completion_tokens).toBe(2000);
+    expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
     expect(body).not.toHaveProperty("max_tokens");
     expect(body.response_format.type).toBe("json_schema");
     expect(body.response_format.json_schema.strict).toBe(true);

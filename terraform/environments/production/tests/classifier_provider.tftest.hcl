@@ -205,3 +205,49 @@ run "rejects_blank_classification_model" {
 
   expect_failures = [var.classification_model]
 }
+
+# A prefix with no model id after it satisfies startswith but names nothing —
+# the bots' resolver would accept it and send it to the provider verbatim.
+run "rejects_a_bare_provider_prefix" {
+  command = plan
+
+  variables {
+    classification_model = "claude-"
+  }
+
+  expect_failures = [var.classification_model]
+}
+
+run "rejects_a_bare_openai_namespace" {
+  command = plan
+
+  variables {
+    classification_model          = "openai/"
+    classification_openai_api_key = "test-openai-key"
+  }
+
+  expect_failures = [var.classification_model]
+}
+
+run "rejects_whitespace_after_a_prefix" {
+  command = plan
+
+  variables {
+    classification_model = "anthropic/   "
+  }
+
+  expect_failures = [var.classification_model]
+}
+
+run "accepts_a_prefixed_model_with_one_character" {
+  command = plan
+
+  variables {
+    classification_model = "claude-x"
+  }
+
+  assert {
+    condition     = !local.classifier_uses_openai
+    error_message = "A minimal claude- id must still resolve to Anthropic."
+  }
+}

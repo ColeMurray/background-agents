@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Env } from "../types";
-import { CLASSIFICATION_REQUEST_TIMEOUT_MS } from "@open-inspect/shared/classification";
+import {
+  CLASSIFICATION_REQUEST_TIMEOUT_MS,
+  OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
+} from "@open-inspect/shared/classification";
 
 const {
   mockMessagesCreate,
@@ -728,7 +731,7 @@ describe("RepoClassifier", () => {
       // gpt-5-family models accept only the default temperature and reject an
       // explicit value with HTTP 400 `unsupported_value`.
       expect(body).not.toHaveProperty("temperature");
-      expect(body.max_completion_tokens).toBe(2000);
+      expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
       // gpt-5.x rejects `max_tokens` outright ("Unsupported parameter").
       expect(body).not.toHaveProperty("max_tokens");
 

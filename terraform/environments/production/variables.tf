@@ -307,23 +307,27 @@ variable "classification_model" {
   description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by anthropic_api_key; an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
   type        = string
   default     = "claude-haiku-4-5"
+  nullable    = false
 
+  # Each prefix must be followed by an actual model id: a bare "claude-" or
+  # "openai/" satisfies startswith but names no model, and would reach the bots
+  # as a value their resolver accepts and then sends to the provider verbatim.
   validation {
-    condition = (
-      startswith(var.classification_model, "anthropic/") ||
-      startswith(var.classification_model, "claude-") ||
-      startswith(var.classification_model, "openai/") ||
-      startswith(var.classification_model, "gpt-")
-    )
-    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\")."
+    condition = anytrue([
+      for prefix in ["anthropic/", "claude-", "openai/", "gpt-"] :
+      startswith(var.classification_model, prefix) &&
+      trimspace(substr(var.classification_model, length(prefix), -1)) != ""
+    ])
+    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\"), naming a model after the prefix."
   }
 }
 
 variable "classification_openai_api_key" {
-  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when classification_model is an OpenAI model and a classifier bot is enabled."
+  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled."
   type        = string
   sensitive   = true
   default     = ""
+  nullable    = false
 
   # Fail closed once a deployed classifier is pointed at OpenAI: CI renders an
   # unset secret as an empty string, which would otherwise deploy a
