@@ -110,7 +110,8 @@ resource "cloudflare_worker_version" "this" {
   migrations = length(var.durable_objects) > 0 && !var.enable_durable_object_bindings ? {
     old_tag            = var.migration_old_tag
     new_tag            = var.migration_tag
-    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : [for do in var.durable_objects : do.class_name]
+    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for do in var.durable_objects : do.class_name])
+    deleted_classes    = var.deleted_classes
   } : null
 }
 

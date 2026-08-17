@@ -2,8 +2,8 @@
  * Shared handling for the internal "normalized automation event" endpoints
  * (e.g. `/internal/github-event`, `/internal/slack-event`). Each bot
  * pre-normalizes its source's events and POSTs them here; this layer
- * authenticates, validates the event envelope, and forwards to the singleton
- * SchedulerDO for matching and dispatch. Sources with no extra behavior use
+ * authenticates, validates the event envelope, and invokes the scheduler for
+ * matching and dispatch. Sources with no extra behavior use
  * `createAutomationEventRoute`; sources that piggyback additional processing
  * (github's PR lifecycle tracking) compose the exported steps in their own
  * named handler.
@@ -25,6 +25,7 @@ import {
   parsePattern,
 } from "../routes/shared";
 import type { Env } from "../types";
+import { Scheduler } from "../scheduler/scheduler";
 
 type AutomationEventForSource<S extends AutomationEventSource> = Extract<
   AutomationEvent,
@@ -106,23 +107,15 @@ export function validateAutomationEventEnvelope<S extends AutomationEventSource>
   return { event: parsed.data };
 }
 
-/** Forward a validated event to the singleton SchedulerDO for matching. */
+/** Process a validated event through the automation scheduler. */
 export async function forwardAutomationEventToScheduler(
   env: Env,
-  event: AutomationEvent
+  event: AutomationEvent,
+  ctx: RequestContext
 ): Promise<Response> {
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-  const stub = env.SCHEDULER.get(env.SCHEDULER.idFromName("global-scheduler"));
-
   let response: Response;
   try {
-    response = await stub.fetch("http://internal/internal/event", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-    });
+    response = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
   } catch {
     return json({ ok: false, error: "Failed to reach scheduler" }, 502);
   }
@@ -164,7 +157,7 @@ export function createAutomationEventRoute(opts: {
       return validated.response;
     }
 
-    return forwardAutomationEventToScheduler(env, validated.event);
+    return forwardAutomationEventToScheduler(env, validated.event, ctx);
   }
 
   return defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {

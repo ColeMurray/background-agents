@@ -96,7 +96,7 @@ import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
-import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
+import { Scheduler } from "../scheduler/scheduler";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import type { BackgroundTasks } from "../platform-ports";
 import { PresenceService } from "./presence-service";
@@ -436,18 +436,17 @@ export class SessionDO extends DurableObject<Env> {
    */
   private get callbackService(): CallbackNotificationService {
     if (!this._callbackService) {
-      // Wrap SchedulerDO namespace as a Fetcher for automation callbacks
-      const schedulerCallback = this.env.SCHEDULER
-        ? new DOFetcherAdapter(this.env.SCHEDULER, "global-scheduler")
+      const scheduler = this.db
+        ? new Scheduler(this.db, this.env, this.backgroundTasks)
         : undefined;
 
       this._callbackService = new CallbackNotificationService({
         repository: this.sessionCoreRepository,
         messageRepository: this.messageRepository,
-        env: {
-          ...this.env,
-          SCHEDULER_CALLBACK: schedulerCallback,
-        },
+        env: this.env,
+        completeAutomationRun: scheduler
+          ? (completion) => scheduler.runComplete(completion)
+          : undefined,
         log: this.log,
         getSessionId: () => {
           const session = this.getSession();

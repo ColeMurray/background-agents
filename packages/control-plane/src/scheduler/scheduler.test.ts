@@ -1,5 +1,5 @@
 /**
- * Unit tests for SchedulerDO.
+ * Unit tests for Scheduler.
  *
  * Uses mocked D1 and SESSION namespace. For full integration tests
  * (with real D1 + workerd), see test/integration/scheduler.test.ts and
@@ -10,18 +10,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
-
-// Mock cloudflare:workers before importing SchedulerDO (extends DurableObject)
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -51,8 +39,7 @@ vi.mock("../session/skill-resolution", () => ({
   })),
 }));
 
-// Must import AFTER vi.mock so the hoisted mock is in place
-const { SchedulerDO } = await import("./durable-object");
+const { Scheduler } = await import("./scheduler");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
@@ -333,9 +320,9 @@ function createEnv(overrides?: Partial<Env>): Env {
   } as Env;
 }
 
-function createSchedulerDO(env?: Env): InstanceType<typeof SchedulerDO> {
-  const ctx = { storage: {} } as unknown as DurableObjectState;
-  return new SchedulerDO(ctx, env ?? createEnv());
+function createSchedulerDO(env = createEnv()) {
+  const scheduler = new Scheduler(env.DB, env, { submit: vi.fn() });
+  return Object.assign(scheduler, { fetch: (request: Request) => scheduler.dispatch(request) });
 }
 
 // ─── Sample data ─────────────────────────────────────────────────────────────
@@ -474,7 +461,7 @@ function lastInsertedChildren(): Array<Record<string, unknown>> {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe("SchedulerDO", () => {
+describe("Scheduler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveSessionProviderAuth.mockResolvedValue([

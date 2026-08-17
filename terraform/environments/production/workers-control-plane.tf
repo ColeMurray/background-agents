@@ -199,7 +199,6 @@ module "control_plane_worker" {
 
   durable_objects = [
     { binding_name = "SESSION", class_name = "SessionDO" },
-    { binding_name = "SCHEDULER", class_name = "SchedulerDO" },
   ]
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
@@ -209,6 +208,7 @@ module "control_plane_worker" {
   migration_tag       = var.control_plane_migration_tag
   migration_old_tag   = var.control_plane_migration_old_tag
   new_sqlite_classes  = var.control_plane_new_sqlite_classes
+  deleted_classes     = var.control_plane_deleted_classes
 
   # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts,
   # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.

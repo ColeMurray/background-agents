@@ -422,6 +422,10 @@ Use the built-in two-phase flags instead of editing Terraform modules:
 3. Set both values back to `true`.
 4. Run `terraform apply` again to attach the Durable Object and service bindings.
 
+Class removal uses the same two phases. Remove its binding, set a new migration tag and previous
+tag, list the class in `control_plane_deleted_classes`, then apply once with
+`enable_durable_object_bindings = false` and again with it set to `true`.
+
 See
 [Cloudflare's documentation](https://developers.cloudflare.com/workers/platform/infrastructure-as-code/)
 for details.

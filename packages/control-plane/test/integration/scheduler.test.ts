@@ -3,14 +3,19 @@ import { env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-import { resolveAutomationProviderAuth } from "../../src/scheduler/durable-object";
+import { Scheduler, resolveAutomationProviderAuth } from "../../src/scheduler/scheduler";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
+import type { Env } from "../../src/types";
 
 function getSchedulerStub() {
-  const id = env.SCHEDULER.idFromName("global-scheduler");
-  return env.SCHEDULER.get(id);
+  const scheduler = new Scheduler(env.DB, env as Env, { submit() {} });
+  return {
+    fetch(input: RequestInfo | URL, init?: RequestInit) {
+      return scheduler.dispatch(new Request(input, init));
+    },
+  };
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -39,7 +44,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   };
 }
 
-describe("SchedulerDO (integration)", () => {
+describe("Scheduler (integration)", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     await env.DB.exec(
@@ -552,6 +557,33 @@ describe("SchedulerDO (integration)", () => {
   // ─── Trigger handler ──────────────────────────────────────────────────────
 
   describe("/internal/trigger", () => {
+    it("admits exactly one run across two triggers and a concurrent tick", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(
+        makeAutomation({
+          id: "auto-concurrent-admission",
+          schedule_cron: "* * * * *",
+          next_run_at: Date.now() - 60_000,
+        })
+      );
+
+      const triggerRequest = () =>
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: "auto-concurrent-admission" }),
+        });
+      const schedulers = [getSchedulerStub(), getSchedulerStub(), getSchedulerStub()];
+
+      await Promise.allSettled([
+        schedulers[0]!.fetch(triggerRequest()),
+        schedulers[1]!.fetch(triggerRequest()),
+        schedulers[2]!.fetch("http://internal/internal/tick", { method: "POST" }),
+      ]);
+
+      expect(await fetchRuns("auto-concurrent-admission")).toHaveLength(1);
+    });
+
     it("returns 400 when automationId is missing", async () => {
       const stub = getSchedulerStub();
       const res = await stub.fetch("http://internal/internal/trigger", {

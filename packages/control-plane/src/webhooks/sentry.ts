@@ -16,6 +16,7 @@ import {
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
+import { Scheduler } from "../scheduler/scheduler";
 
 /** Maximum Sentry webhook payload size (256KB — Sentry payloads with stack traces can be large). */
 const MAX_PAYLOAD_SIZE = 256 * 1024;
@@ -113,19 +114,8 @@ async function handleSentryWebhook(
   }
   const event = normalization.event;
 
-  // 4. Forward to SchedulerDO
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-
-  const doId = env.SCHEDULER.idFromName("global-scheduler");
-  const stub = env.SCHEDULER.get(doId);
-
-  const response = await stub.fetch("http://internal/internal/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
+  // 4. Process the event.
+  const response = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
 
   const result = await response.json<{ triggered: number; skipped: number }>();
   return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);
