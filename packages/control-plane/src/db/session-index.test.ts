@@ -198,8 +198,9 @@ class FakeD1Database {
         baseBranch,
         status,
         parentSessionId,
+        rootParentId,
+        topLevelRootId,
         parentRootLookupId,
-        rootFallbackId,
         spawnSource,
         spawnDepth,
         automationId,
@@ -219,8 +220,9 @@ class FakeD1Database {
         string | null,
         string,
         string | null,
+        string | null,
         string,
-        string,
+        string | null,
         "user" | "agent" | "automation",
         number,
         string | null,
@@ -234,7 +236,9 @@ class FakeD1Database {
       // INSERT OR IGNORE — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
-        const rootSessionId = this.rows.get(parentRootLookupId)?.root_session_id ?? rootFallbackId;
+        const rootSessionId = rootParentId
+          ? (this.rows.get(parentRootLookupId!)?.root_session_id ?? id)
+          : topLevelRootId;
         this.rows.set(id, {
           id,
           title,
@@ -551,6 +555,7 @@ describe("SessionIndexStore", () => {
     });
 
     it("stores parent fields when provided", async () => {
+      await store.create(makeSession({ id: "parent-1" }));
       const session = makeSession({
         id: "child-1",
         parentSessionId: "parent-1",

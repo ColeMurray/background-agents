@@ -39,7 +39,14 @@ interface InboxSessionRow extends ViewerReadStateRow {
   environment_id: string | null;
   created_at: number;
   updated_at: number;
+  effective_root_session_id: string;
   latest_updated_at: number;
+}
+
+interface InboxPageData {
+  roots: Array<[string, InboxSessionRow[]]>;
+  hasMore: boolean;
+  nextCursor: SessionInboxCursor | null;
 }
 
 const INBOX_CATEGORIES: SessionInboxCategory[] = ["needs_attention", "in_progress", "finished"];
@@ -66,7 +73,12 @@ export class SessionInboxStore {
 
   async list(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     const result = await this.bindInboxQuery(options).all<InboxSessionRow>();
-    return this.buildPage(options.limit, result.results ?? []);
+    const page = this.buildPageData(options.limit, result.results ?? []);
+    const decorated = await decorateSessionEntries(
+      this.db,
+      page.roots.flatMap(([, lineage]) => lineage.map(toListItem))
+    );
+    return this.assemblePage(page, new Map(decorated.map((session) => [session.id, session])));
   }
 
   async snapshot(
@@ -77,25 +89,31 @@ export class SessionInboxStore {
         this.bindInboxQuery({ ...options, category, cursor: null })
       )
     );
-    const pages = await Promise.all(
-      INBOX_CATEGORIES.map((_, index) =>
-        this.buildPage(options.limit, results[index]?.results ?? [])
-      )
+    const pages = INBOX_CATEGORIES.map((_, index) =>
+      this.buildPageData(options.limit, results[index]?.results ?? [])
     );
+    const decorated = await decorateSessionEntries(
+      this.db,
+      pages.flatMap((page) => page.roots.flatMap(([, lineage]) => lineage.map(toListItem)))
+    );
+    const decoratedById = new Map(decorated.map((session) => [session.id, session]));
     return Object.fromEntries(
-      INBOX_CATEGORIES.map((category, index) => [category, pages[index]])
+      INBOX_CATEGORIES.map((category, index) => [
+        category,
+        this.assemblePage(pages[index], decoratedById),
+      ])
     ) as ListSessionInboxSnapshotResult;
   }
 
   private bindInboxQuery(options: ListSessionInboxOptions): SqlStatement {
     const { conditions, params } = this.eligibility(options);
     const cursorCondition = options.cursor
-      ? `AND (latest_updated_at < ? OR (latest_updated_at = ? AND root_session_id < ?))`
+      ? `AND (latest_updated_at < ? OR (latest_updated_at = ? AND effective_root_session_id < ?))`
       : "";
 
     return this.db
       .prepare(
-        `WITH eligible_sessions AS (
+        `WITH RECURSIVE eligible_sessions AS (
            SELECT sessions.*, ${unreadSql("sessions")} AS unread
            FROM sessions
            LEFT JOIN users viewer ON viewer.id = ?
@@ -104,31 +122,56 @@ export class SessionInboxStore {
             AND read_state.user_id = viewer.id
            WHERE ${conditions.join(" AND ")}
          ),
+         rerooted_sessions(id, effective_root_session_id) AS (
+           SELECT eligible.id, eligible.id
+           FROM eligible_sessions eligible
+           WHERE eligible.parent_session_id IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM eligible_sessions parent
+               WHERE parent.id = eligible.parent_session_id
+             )
+           UNION
+           SELECT child.id, rerooted_sessions.effective_root_session_id
+           FROM rerooted_sessions
+           JOIN eligible_sessions child ON child.parent_session_id = rerooted_sessions.id
+         ),
+         effective_sessions AS (
+           SELECT eligible_sessions.*,
+                  COALESCE(
+                    (
+                      SELECT rerooted.effective_root_session_id
+                      FROM rerooted_sessions rerooted
+                      WHERE rerooted.id = eligible_sessions.id
+                    ),
+                    eligible_sessions.root_session_id
+                  ) AS effective_root_session_id
+           FROM eligible_sessions
+         ),
          inbox_roots AS (
-           SELECT root_session_id,
-                  MAX(updated_at) AS latest_updated_at,
+           SELECT effective_root_session_id,
+                   MAX(updated_at) AS latest_updated_at,
                   CASE
                     WHEN MAX(unread) = 1 THEN 'needs_attention'
                     WHEN MAX(status = 'active') = 1 THEN 'in_progress'
                     ELSE 'finished'
                   END AS category
-           FROM eligible_sessions
-           GROUP BY root_session_id
+           FROM effective_sessions
+           GROUP BY effective_root_session_id
          ),
          selected_roots AS (
-           SELECT root_session_id, latest_updated_at
+           SELECT effective_root_session_id, latest_updated_at
            FROM inbox_roots
            WHERE category = ? ${cursorCondition}
-           ORDER BY latest_updated_at DESC, root_session_id DESC
+           ORDER BY latest_updated_at DESC, effective_root_session_id DESC
            LIMIT ?
          )
-         SELECT eligible_sessions.*, selected_roots.latest_updated_at
+         SELECT effective_sessions.*, selected_roots.latest_updated_at
          FROM selected_roots
-         JOIN eligible_sessions USING (root_session_id)
+         JOIN effective_sessions USING (effective_root_session_id)
          ORDER BY selected_roots.latest_updated_at DESC,
-                  selected_roots.root_session_id DESC,
-                  eligible_sessions.updated_at DESC,
-                  eligible_sessions.id DESC`
+                  selected_roots.effective_root_session_id DESC,
+                  effective_sessions.updated_at DESC,
+                  effective_sessions.id DESC`
       )
       .bind(
         options.viewerUserId,
@@ -164,22 +207,33 @@ export class SessionInboxStore {
     return { conditions, params };
   }
 
-  private async buildPage(limit: number, rows: InboxSessionRow[]): Promise<ListSessionInboxResult> {
+  private buildPageData(limit: number, rows: InboxSessionRow[]): InboxPageData {
     const rowsByRoot = new Map<string, InboxSessionRow[]>();
     for (const row of rows) {
-      const lineage = rowsByRoot.get(row.root_session_id) ?? [];
+      const lineage = rowsByRoot.get(row.effective_root_session_id) ?? [];
       lineage.push(row);
-      rowsByRoot.set(row.root_session_id, lineage);
+      rowsByRoot.set(row.effective_root_session_id, lineage);
     }
 
     const selectedRoots = [...rowsByRoot.entries()];
-    const pageRoots = selectedRoots.slice(0, limit);
-    const decorated = await decorateSessionEntries(
-      this.db,
-      pageRoots.flatMap(([, lineage]) => lineage.map(toListItem))
-    );
-    const decoratedById = new Map(decorated.map((session) => [session.id, session]));
-    const items = pageRoots.map(([rootId, lineage]) => {
+    const roots = selectedRoots.slice(0, limit);
+    const hasMore = selectedRoots.length > limit;
+    const last = roots.at(-1);
+    return {
+      roots,
+      hasMore,
+      nextCursor:
+        hasMore && last
+          ? { latestUpdatedAt: last[1][0].latest_updated_at, rootSessionId: last[0] }
+          : null,
+    };
+  }
+
+  private assemblePage(
+    page: InboxPageData,
+    decoratedById: Map<string, SessionListItem>
+  ): ListSessionInboxResult {
+    const items = page.roots.map(([rootId, lineage]) => {
       const rootRow = lineage.find(({ id }) => id === rootId) ?? lineage[0];
       const rootSession = decoratedById.get(rootRow.id)!;
       return {
@@ -189,18 +243,6 @@ export class SessionInboxStore {
           .map(({ id }) => decoratedById.get(id)!),
       };
     });
-    const hasMore = selectedRoots.length > limit;
-    const last = pageRoots.at(-1);
-    return {
-      items,
-      hasMore,
-      nextCursor:
-        hasMore && last
-          ? {
-              latestUpdatedAt: last[1][0].latest_updated_at,
-              rootSessionId: last[0],
-            }
-          : null,
-    };
+    return { items, hasMore: page.hasMore, nextCursor: page.nextCursor };
   }
 }

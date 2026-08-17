@@ -104,6 +104,42 @@ describe("session inbox", () => {
     ]);
   });
 
+  it("fills old-worker roots and repairs child-before-parent inserts", async () => {
+    await env.DB.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)")
+      .bind("legacy-root", 1000, 1000)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO sessions (id, parent_session_id, spawn_source, spawn_depth, created_at, updated_at)
+       VALUES (?, ?, 'agent', 1, ?, ?)`
+    )
+      .bind("legacy-child", "legacy-root", 1000, 1000)
+      .run();
+
+    const roots = await env.DB.prepare("SELECT id, root_session_id FROM sessions ORDER BY id").all<{
+      id: string;
+      root_session_id: string;
+    }>();
+    expect(roots.results).toEqual([
+      { id: "legacy-child", root_session_id: "legacy-root" },
+      { id: "legacy-root", root_session_id: "legacy-root" },
+    ]);
+
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("orphan", { parentSessionId: "late-parent", spawnDepth: 1 }));
+    expect(
+      await env.DB.prepare("SELECT root_session_id FROM sessions WHERE id = 'orphan'").first<{
+        root_session_id: string;
+      }>()
+    ).toEqual({ root_session_id: "orphan" });
+
+    await store.create(session("late-parent"));
+    expect(
+      await env.DB.prepare("SELECT root_session_id FROM sessions WHERE id = 'orphan'").first<{
+        root_session_id: string;
+      }>()
+    ).toEqual({ root_session_id: "late-parent" });
+  });
+
   it("reroots surviving subtrees when a parent is deleted", async () => {
     const store = new SessionIndexStore(env.DB);
     await store.create(session("root"));
@@ -273,12 +309,77 @@ describe("session inbox", () => {
     expect(body.items.map((item) => item.rootSession.id)).toEqual(["mine"]);
   });
 
+  it("reroots every visible subtree when Mine filters out the persisted root", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await store.create(
+      session("filtered-root", {
+        userId: "22222222222222222222222222222222",
+        updatedAt: 5000,
+      })
+    );
+    await store.create(
+      session("child-a", { parentSessionId: "filtered-root", spawnDepth: 1, updatedAt: 4000 })
+    );
+    await store.create(
+      session("grandchild", { parentSessionId: "child-a", spawnDepth: 2, updatedAt: 3500 })
+    );
+    await store.create(
+      session("child-b", { parentSessionId: "filtered-root", spawnDepth: 1, updatedAt: 3000 })
+    );
+
+    const response = await serviceFetch(
+      "https://example.com/sessions/inbox?category=finished&mine=true"
+    );
+    const body = (await response.json()) as {
+      items: Array<{ rootSession: { id: string }; descendantSessions: Array<{ id: string }> }>;
+    };
+    expect(body.items).toEqual([
+      {
+        rootSession: expect.objectContaining({ id: "child-a" }),
+        descendantSessions: [expect.objectContaining({ id: "grandchild" })],
+      },
+      {
+        rootSession: expect.objectContaining({ id: "child-b" }),
+        descendantSessions: [],
+      },
+    ]);
+  });
+
+  it("reroots below a filtered middle ancestor while keeping the root visible", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("visible-root", { updatedAt: 5000 }));
+    await store.create(
+      session("filtered-middle", {
+        parentSessionId: "visible-root",
+        spawnDepth: 1,
+        userId: "22222222222222222222222222222222",
+        updatedAt: 4000,
+      })
+    );
+    await store.create(
+      session("visible-leaf", {
+        parentSessionId: "filtered-middle",
+        spawnDepth: 2,
+        updatedAt: 3000,
+      })
+    );
+
+    const response = await serviceFetch(
+      "https://example.com/sessions/inbox?category=finished&mine=true"
+    );
+    const body = (await response.json()) as {
+      items: Array<{ rootSession: { id: string }; descendantSessions: Array<{ id: string }> }>;
+    };
+    expect(body.items.map((item) => item.rootSession.id)).toEqual(["visible-root", "visible-leaf"]);
+    expect(body.items.every((item) => item.descendantSessions.length === 0)).toBe(true);
+  });
+
   it("paginates roots independently with cursors", async () => {
     await serviceFetch("https://example.com/sessions/inbox?category=finished");
     const store = new SessionIndexStore(env.DB);
     const rootIds = Array.from({ length: 21 }, (_, index) => `root-${index}`);
     for (const rootId of rootIds) await store.create(session(rootId, { updatedAt: 3000 }));
-    const expectedOrder = rootIds.toSorted((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+    const expectedOrder = [...rootIds].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
 
     const first = await serviceFetch("https://example.com/sessions/inbox?category=finished");
     const firstBody = (await first.json()) as {
@@ -301,6 +402,49 @@ describe("session inbox", () => {
     expect(secondBody.items.map((item) => item.rootSession.id)).toEqual(expectedOrder.slice(20));
     expect(secondBody.hasMore).toBe(false);
     expect(secondBody.nextCursor).toBeNull();
+  });
+
+  it("decorates complete lineages beyond one D1 parameter chunk", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("large-root", { updatedAt: 5000 }));
+    for (let index = 0; index < 105; index += 1) {
+      await store.create(
+        session(`child-${index}`, {
+          parentSessionId: "large-root",
+          spawnDepth: 1,
+          updatedAt: 4000 - index,
+          ...(index === 104
+            ? {
+                repositories: [
+                  {
+                    repoOwner: "chunk-owner",
+                    repoName: "chunk-repo",
+                    repoId: 123,
+                    baseBranch: "main",
+                  },
+                ],
+              }
+            : {}),
+        })
+      );
+    }
+
+    const response = await serviceFetch("https://example.com/sessions/inbox?category=finished");
+    const body = (await response.json()) as {
+      items: Array<{
+        rootSession: { id: string };
+        descendantSessions: Array<{
+          id: string;
+          repositories?: Array<{ repoOwner: string; repoName: string }>;
+        }>;
+      }>;
+    };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].rootSession.id).toBe("large-root");
+    expect(body.items[0].descendantSessions).toHaveLength(105);
+    expect(
+      body.items[0].descendantSessions.find(({ id }) => id === "child-104")?.repositories
+    ).toEqual([expect.objectContaining({ repoOwner: "chunk-owner", repoName: "chunk-repo" })]);
   });
 
   it("returns all categories from one coherent snapshot", async () => {

@@ -5,6 +5,7 @@ export interface ViewerReadStateRow {
   latest_terminal_message_id: string | null;
 }
 
+/** Requires `users AS viewer` and `session_read_states AS read_state` joins. */
 export function unreadSql(sessionAlias: string): string {
   return `CASE
             WHEN ${sessionAlias}.latest_terminal_message_id IS NOT NULL

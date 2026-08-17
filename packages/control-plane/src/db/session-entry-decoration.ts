@@ -3,6 +3,8 @@ import type { SessionListRepository } from "@open-inspect/shared/types/repositor
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
 
+const MAX_D1_QUERY_PARAMETERS = 100;
+
 interface SessionRepositoryRow {
   session_id: string;
   position: number;
@@ -20,22 +22,30 @@ export async function decorateSessionEntries<T extends { id: string }>(
 > {
   if (sessions.length === 0) return sessions;
   const sessionIds = sessions.map((session) => session.id);
-  const placeholders = sessionIds.map(() => "?").join(", ");
+  const chunks: string[][] = [];
+  for (let start = 0; start < sessionIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+    chunks.push(sessionIds.slice(start, start + MAX_D1_QUERY_PARAMETERS));
+  }
 
-  const [repositoryRows, summariesBySession] = await Promise.all([
-    db
-      .prepare(
-        `SELECT * FROM session_repositories
-         WHERE session_id IN (${placeholders})
-         ORDER BY session_id, position`
+  const pullRequestStore = new SessionPullRequestStore(db);
+  const [repositoryResults, summaryResults] = await Promise.all([
+    Promise.all(
+      chunks.map((chunk) =>
+        db
+          .prepare(
+            `SELECT * FROM session_repositories
+             WHERE session_id IN (${chunk.map(() => "?").join(", ")})
+             ORDER BY session_id, position`
+          )
+          .bind(...chunk)
+          .all<SessionRepositoryRow>()
       )
-      .bind(...sessionIds)
-      .all<SessionRepositoryRow>(),
-    new SessionPullRequestStore(db).summariesForSessions(sessionIds),
+    ),
+    Promise.all(chunks.map((chunk) => pullRequestStore.summariesForSessions(chunk))),
   ]);
 
   const repositoriesBySession = new Map<string, SessionListRepository[]>();
-  for (const row of repositoryRows.results ?? []) {
+  for (const row of repositoryResults.flatMap((result) => result.results ?? [])) {
     const repositories = repositoriesBySession.get(row.session_id) ?? [];
     repositories.push({
       repoOwner: row.repo_owner,
@@ -45,6 +55,9 @@ export async function decorateSessionEntries<T extends { id: string }>(
     });
     repositoriesBySession.set(row.session_id, repositories);
   }
+  const summariesBySession = new Map(
+    summaryResults.flatMap((summaries) => [...summaries.entries()])
+  );
 
   return sessions.map((session) => {
     const repositories = repositoriesBySession.get(session.id);
