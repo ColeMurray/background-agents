@@ -185,7 +185,7 @@ class GitSigningRuntime:
             await self._run_git_config(repository, "--unset-all", key, allow_missing=True)
 
     async def _set_git_config(self, repository: Path, key: str, value: str) -> None:
-        await self._run_git_config(repository, key, value)
+        await self._run_git_config(repository, "--replace-all", key, value)
 
     async def _run_git_config(
         self,

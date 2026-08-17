@@ -314,15 +314,17 @@ async def test_reapplying_enabled_configuration_repairs_drift_and_updates_partic
     await runtime.apply_configuration(
         ENABLED_CONFIGURATION, GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com")
     )
-    git(repo, "config", "user.signingkey", "key::externally-changed")
-    git(repo, "config", "--unset-all", "commit.gpgsign")
+    git(repo, "config", "--add", "user.signingkey", "key::externally-added")
+    git(repo, "config", "--add", "commit.gpgsign", "false")
 
     await runtime.apply_configuration(
         ENABLED_CONFIGURATION, GitUser(name="Ada Dev", email="456+ada@users.noreply.github.com")
     )
 
-    assert git(repo, "config", "user.signingkey").stdout.strip() == f"key::{PUBLIC_KEY}"
-    assert git(repo, "config", "commit.gpgsign").stdout.strip() == "true"
+    assert git(repo, "config", "--get-all", "user.signingkey").stdout.splitlines() == [
+        f"key::{PUBLIC_KEY}"
+    ]
+    assert git(repo, "config", "--get-all", "commit.gpgsign").stdout.splitlines() == ["true"]
     assert git(repo, "config", "author.name").stdout.strip() == "Ada Dev"
     assert git(repo, "config", "author.email").stdout.strip() == (
         "456+ada@users.noreply.github.com"
