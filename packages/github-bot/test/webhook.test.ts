@@ -173,7 +173,7 @@ describe("POST /webhooks/github", () => {
         base: { ref: "main" },
         draft: false,
       },
-      repository: null,
+      repository: { owner: { login: "test" }, name: "repo" },
       sender: { login: "alice" },
     });
     const signature = await sign(SECRET, body);
@@ -202,6 +202,18 @@ describe("POST /webhooks/github", () => {
     await flushWaitUntil(ctx, 1);
 
     expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    expect(controlPlaneFetch).toHaveBeenCalledTimes(2);
+    for (const [url, init] of controlPlaneFetch.mock.calls) {
+      expect(url).toBe("https://internal/internal/github-event");
+      expect(JSON.parse(init.body as string)).toMatchObject({
+        eventType: "pull_request.opened",
+        repoOwner: "test",
+        repoName: "repo",
+        pullRequest: { number: 42 },
+      });
+    }
     const githubKv = env.GITHUB_KV as unknown as {
       get: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;
