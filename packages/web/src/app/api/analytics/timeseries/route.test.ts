@@ -34,7 +34,7 @@ describe("analytics timeseries API route", () => {
       new Request("http://localhost/api/analytics/timeseries?trace=1&view=status&days=7") as never
     );
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/timeseries?days=7", undefined);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/timeseries?days=7");
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ series: [] });
   });

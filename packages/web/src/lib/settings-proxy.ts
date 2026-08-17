@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { serializeBrowserSessionCookies } from "@/lib/browser-session-cookie";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { relayJsonResponse } from "@/lib/control-plane-json-proxy";
 
 type ProxyMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
@@ -14,16 +15,12 @@ const METHOD_VERBS: Record<ProxyMethod, string> = {
   DELETE: "delete",
 };
 
-const RELAYED_RESPONSE_HEADERS = ["etag", "retry-after", "x-request-id"] as const;
-
 type RouteHandler<P> = (
   request: NextRequest,
   context: { params: Promise<P> }
 ) => Promise<NextResponse>;
 
 type ProxyHandlers<P> = Record<ProxyMethod, RouteHandler<P>>;
-type StaticRouteHandler = (request: NextRequest) => Promise<NextResponse>;
-type StaticProxyHandlers = Record<ProxyMethod, StaticRouteHandler>;
 
 /** JSON mutation budget kept below portable web-function request limits. */
 export const SETTINGS_PROXY_MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -34,21 +31,7 @@ async function readMutationBody(request: NextRequest): Promise<Uint8Array | null
   return readBodyCapped(request.body, SETTINGS_PROXY_MAX_BODY_BYTES);
 }
 
-async function proxyResponse(response: Response): Promise<NextResponse> {
-  const text = await response.text();
-  const headers = new Headers({ "Cache-Control": "private, no-store" });
-  for (const name of RELAYED_RESPONSE_HEADERS) {
-    const value = response.headers.get(name);
-    if (value) headers.set(name, value);
-  }
-  const init = {
-    status: response.status,
-    headers,
-  };
-  return text ? NextResponse.json(JSON.parse(text), init) : new NextResponse(null, init);
-}
-
-async function relayJsonResource(
+async function relaySettingsResource(
   request: NextRequest,
   buildPath: () => string | Promise<string>,
   label: string,
@@ -75,7 +58,7 @@ async function relayJsonResource(
       if (ifMatch) init.headers = { "If-Match": ifMatch };
     }
     const response = await controlPlaneUserFetch(await buildPath(), init);
-    return proxyResponse(response);
+    return relayJsonResponse(response);
   } catch (error) {
     console.error(`Failed to ${METHOD_VERBS[method]} ${label}:`, error);
     return NextResponse.json(
@@ -93,31 +76,12 @@ export function settingsProxy<P>(
   const handler =
     (method: ProxyMethod): RouteHandler<P> =>
     (request, context) =>
-      relayJsonResource(
+      relaySettingsResource(
         request,
         async () => buildPath(await context.params, request),
         label,
         method
       );
-
-  return {
-    GET: handler("GET"),
-    POST: handler("POST"),
-    PATCH: handler("PATCH"),
-    PUT: handler("PUT"),
-    DELETE: handler("DELETE"),
-  };
-}
-
-/** Creates BFF handlers for an ordinary static JSON/no-content resource. */
-export function jsonResourceProxy(
-  buildPath: (request: NextRequest) => string,
-  label: string
-): StaticProxyHandlers {
-  const handler =
-    (method: ProxyMethod): StaticRouteHandler =>
-    (request) =>
-      relayJsonResource(request, () => buildPath(request), label, method);
 
   return {
     GET: handler("GET"),

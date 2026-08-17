@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
-import { jsonResourceProxy } from "@/lib/settings-proxy";
+import { controlPlaneJsonGetProxy } from "@/lib/control-plane-json-proxy";
 
-export const { GET } = jsonResourceProxy(
+export const { GET } = controlPlaneJsonGetProxy(
   (request: NextRequest) =>
     buildControlPlanePath("/analytics/summary", new URL(request.url).searchParams, ["days"]),
   "analytics summary"

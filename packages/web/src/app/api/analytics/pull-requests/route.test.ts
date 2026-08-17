@@ -19,10 +19,7 @@ describe("pull request analytics API route", () => {
       new Request("http://localhost/api/analytics/pull-requests?days=30&debug=true") as never
     );
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/analytics/pull-requests?days=30",
-      undefined
-    );
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/pull-requests?days=30");
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ pullRequests: [] });
   });

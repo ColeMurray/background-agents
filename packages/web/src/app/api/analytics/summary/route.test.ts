@@ -35,7 +35,7 @@ describe("analytics summary API route", () => {
       new Request("http://localhost/api/analytics/summary?debug=true&days=14") as never
     );
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/summary?days=14", undefined);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/summary?days=14");
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ totalSessions: 5 });
   });

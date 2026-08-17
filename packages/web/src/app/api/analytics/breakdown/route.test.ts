@@ -34,10 +34,7 @@ describe("analytics breakdown API route", () => {
       new Request("http://localhost/api/analytics/breakdown?days=90&foo=bar&by=repo") as never
     );
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/analytics/breakdown?days=90&by=repo",
-      undefined
-    );
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/breakdown?days=90&by=repo");
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ entries: [] });
   });
