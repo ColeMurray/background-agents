@@ -21,7 +21,8 @@ function streamingMutationRequest(size: number, cookie?: string): NextRequest {
 }
 
 describe("settingsProxy", () => {
-  const { GET, POST } = settingsProxy(() => "/settings", "settings");
+  const { GET, POST, PUT } = settingsProxy(() => "/settings", "settings");
+  const context = { params: Promise.resolve(undefined) };
 
   beforeEach(() => vi.resetAllMocks());
 
@@ -38,6 +39,64 @@ describe("settingsProxy", () => {
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", undefined);
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("forwards JSON responses and selected safe headers", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json(
+        { settings: [] },
+        {
+          headers: {
+            ETag: '"revision-4"',
+            "Retry-After": "30",
+            "X-Request-Id": "request-1",
+            "Set-Cookie": "private=value",
+          },
+        }
+      )
+    );
+
+    const response = await GET(new NextRequest("http://localhost/api/settings"), context);
+
+    await expect(response.json()).resolves.toEqual({ settings: [] });
+    expect(response.headers.get("ETag")).toBe('"revision-4"');
+    expect(response.headers.get("Retry-After")).toBe("30");
+    expect(response.headers.get("X-Request-Id")).toBe("request-1");
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("forwards empty no-content responses", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+    const response = await GET(new NextRequest("http://localhost/api/settings"), context);
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  it("forwards If-Match and non-success responses without interpretation", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Revision conflict" }, { status: 412 })
+    );
+    const request = new NextRequest("http://localhost/api/settings", {
+      method: "PUT",
+      headers: {
+        Cookie: "__Secure-openinspect.session_token=session.signature",
+        "If-Match": 'W/"revision-2"',
+      },
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    const response = await PUT(request, context);
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", {
+      method: "PUT",
+      headers: { "If-Match": 'W/"revision-2"' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(response.status).toBe(412);
+    await expect(response.json()).resolves.toEqual({ error: "Revision conflict" });
   });
 
   it("delegates authentication before malformed mutation JSON is interpreted", async () => {
