@@ -12,7 +12,7 @@ import {
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import type { SessionSkillManifestInput } from "../session/skill-resolution";
-import { decorateSessionEntries } from "./session-entry-decoration";
+import { attachSessionListMetadata } from "./session-list-metadata";
 import {
   SessionInboxStore,
   type ListSessionInboxOptions,
@@ -486,7 +486,7 @@ export class SessionIndexStore {
           .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = await this.decorateEntries(
+    const sessions = await this.attachListMetadata(
       rows.slice(0, limit).map((row) => ({
         ...toEntry(row),
         ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
@@ -509,16 +509,8 @@ export class SessionIndexStore {
     return new SessionInboxStore(this.db).snapshot(options);
   }
 
-  /**
-   * Attach repository lists and PR status summaries to the paged
-   * entries. The two lookups are independent — each is one grouped query
-   * keyed by the same session ids — so they run in parallel and merge onto
-   * the entries in a single pass. Sessions without rows are returned without
-   * the field: consumers fall back to the scalar repo columns, and PR state
-   * never influences session ordering (this only decorates paged rows).
-   */
-  private async decorateEntries<T extends { id: string }>(sessions: T[]): Promise<T[]> {
-    return decorateSessionEntries(this.db, sessions);
+  private async attachListMetadata<T extends { id: string }>(sessions: T[]): Promise<T[]> {
+    return attachSessionListMetadata(this.db, sessions);
   }
 
   async recordLatestTerminalMessage(input: {
@@ -783,7 +775,7 @@ export class SessionIndexStore {
       .prepare(`SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at DESC`)
       .bind(parentSessionId)
       .all<SessionRow>();
-    return this.decorateEntries((result.results || []).map(toEntry));
+    return this.attachListMetadata((result.results || []).map(toEntry));
   }
 
   /** List non-terminal descendants, deepest first, so cancellation cascades bottom-up. */

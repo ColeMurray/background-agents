@@ -15,7 +15,7 @@ interface SessionRepositoryRow {
 }
 
 /** Load repository rows and PR summaries in parallel for one D1-safe ID chunk. */
-async function loadDecorationChunk(
+async function loadSessionMetadataChunk(
   db: SqlDatabase,
   pullRequestStore: SessionPullRequestStore,
   sessionIds: string[]
@@ -39,7 +39,11 @@ async function loadDecorationChunk(
   return { repositoryRows: repositoryResult.results ?? [], summaries };
 }
 
-export async function decorateSessionEntries<T extends { id: string }>(
+/**
+ * Attach ordered repository membership and PR summaries without changing the
+ * input order. Lookups are chunked to stay below D1's parameter limit.
+ */
+export async function attachSessionListMetadata<T extends { id: string }>(
   db: SqlDatabase,
   sessions: T[]
 ): Promise<
@@ -54,7 +58,7 @@ export async function decorateSessionEntries<T extends { id: string }>(
 
   const pullRequestStore = new SessionPullRequestStore(db);
   const chunkResults = await Promise.all(
-    chunks.map((chunk) => loadDecorationChunk(db, pullRequestStore, chunk))
+    chunks.map((chunk) => loadSessionMetadataChunk(db, pullRequestStore, chunk))
   );
 
   const repositoriesBySession = new Map<string, SessionListRepository[]>();

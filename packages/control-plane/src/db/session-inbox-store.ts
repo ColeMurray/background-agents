@@ -4,7 +4,7 @@ import type {
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
-import { decorateSessionEntries } from "./session-entry-decoration";
+import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
@@ -75,11 +75,14 @@ export class SessionInboxStore {
   async list(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     const result = await this.bindInboxQuery(options).all<InboxSessionRow>();
     const page = this.buildPageData(options.limit, result.results ?? []);
-    const decorated = await decorateSessionEntries(
+    const sessionsWithMetadata = await attachSessionListMetadata(
       this.db,
       page.roots.flatMap(([, lineage]) => lineage.map(toListItem))
     );
-    return this.assemblePage(page, new Map(decorated.map((session) => [session.id, session])));
+    return this.assemblePage(
+      page,
+      new Map(sessionsWithMetadata.map((session) => [session.id, session]))
+    );
   }
 
   async snapshot(
@@ -93,19 +96,20 @@ export class SessionInboxStore {
         rows.filter((row) => row.category === category)
       )
     );
-    const decorated = await decorateSessionEntries(
+    const sessionsWithMetadata = await attachSessionListMetadata(
       this.db,
       pages.flatMap((page) => page.roots.flatMap(([, lineage]) => lineage.map(toListItem)))
     );
-    const decoratedById = new Map(decorated.map((session) => [session.id, session]));
+    const sessionsById = new Map(sessionsWithMetadata.map((session) => [session.id, session]));
     return Object.fromEntries(
       INBOX_CATEGORIES.map((category, index) => [
         category,
-        this.assemblePage(pages[index], decoratedById),
+        this.assemblePage(pages[index], sessionsById),
       ])
     ) as ListSessionInboxSnapshotResult;
   }
 
+  /** Select one ordered category page plus one extra root for cursor metadata. */
   private bindInboxQuery(options: ListSessionInboxOptions): SqlStatement {
     const { sql, params } = this.inboxCtes(options);
     const cursorCondition = options.cursor
@@ -144,6 +148,7 @@ export class SessionInboxStore {
       );
   }
 
+  /** Select the first page of every category through one shared recursive traversal. */
   private bindInboxSnapshotQuery(
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): SqlStatement {
@@ -151,6 +156,7 @@ export class SessionInboxStore {
     return this.db
       .prepare(
         `${sql},
+         -- Rank roots independently so one query returns LIMIT + 1 for every category.
          ranked_roots AS (
            SELECT inbox_roots.*,
                   ROW_NUMBER() OVER (
@@ -176,6 +182,7 @@ export class SessionInboxStore {
       .bind(...params, options.limit + 1);
   }
 
+  /** Build the shared visibility, effective-root, and category aggregation CTEs. */
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
@@ -193,6 +200,8 @@ export class SessionInboxStore {
                AND read_state.user_id = viewer.id
               WHERE ${conditions.join(" AND ")}
             ),
+            -- Filtering can hide an ancestor. Re-root each resulting visible subtree
+            -- while retaining the persisted root for uninterrupted lineages.
             rerooted_sessions(id, effective_root_session_id) AS (
               SELECT eligible.id, eligible.id
               FROM eligible_sessions eligible
@@ -252,6 +261,7 @@ export class SessionInboxStore {
     return { conditions, params };
   }
 
+  /** Group ordered SQL rows into complete lineages and derive cursor metadata. */
   private buildPageData(limit: number, rows: InboxSessionRow[]): InboxPageData {
     const rowsByRoot = new Map<string, InboxSessionRow[]>();
     for (const row of rows) {
@@ -260,6 +270,8 @@ export class SessionInboxStore {
       rowsByRoot.set(row.effective_root_session_id, lineage);
     }
 
+    // SQL returns LIMIT + 1 complete roots so this layer derives pagination
+    // metadata without counting or loading any additional lineage.
     const selectedRoots = [...rowsByRoot.entries()];
     const roots = selectedRoots.slice(0, limit);
     const hasMore = selectedRoots.length > limit;
@@ -274,18 +286,19 @@ export class SessionInboxStore {
     };
   }
 
+  /** Replace selected D1 rows with their metadata-enriched list items. */
   private assemblePage(
     page: InboxPageData,
-    decoratedById: Map<string, SessionListItem>
+    sessionsById: Map<string, SessionListItem>
   ): ListSessionInboxResult {
     const items = page.roots.map(([rootId, lineage]) => {
       const rootRow = lineage.find(({ id }) => id === rootId) ?? lineage[0];
-      const rootSession = decoratedById.get(rootRow.id)!;
+      const rootSession = sessionsById.get(rootRow.id)!;
       return {
         rootSession,
         descendantSessions: lineage
           .filter(({ id }) => id !== rootSession.id)
-          .map(({ id }) => decoratedById.get(id)!),
+          .map(({ id }) => sessionsById.get(id)!),
       };
     });
     return { items, hasMore: page.hasMore, nextCursor: page.nextCursor };
