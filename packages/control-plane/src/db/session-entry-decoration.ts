@@ -14,6 +14,30 @@ interface SessionRepositoryRow {
   base_branch: string;
 }
 
+async function loadDecorationChunk(
+  db: SqlDatabase,
+  pullRequestStore: SessionPullRequestStore,
+  sessionIds: string[]
+): Promise<{
+  repositoryRows: SessionRepositoryRow[];
+  summaries: Map<string, PullRequestSummary>;
+}> {
+  const placeholders = sessionIds.map(() => "?").join(", ");
+  const [repositoryResult, summaries] = await Promise.all([
+    db
+      .prepare(
+        `SELECT * FROM session_repositories
+         WHERE session_id IN (${placeholders})
+         ORDER BY session_id, position`
+      )
+      .bind(...sessionIds)
+      .all<SessionRepositoryRow>(),
+    pullRequestStore.summariesForSessions(sessionIds),
+  ]);
+
+  return { repositoryRows: repositoryResult.results ?? [], summaries };
+}
+
 export async function decorateSessionEntries<T extends { id: string }>(
   db: SqlDatabase,
   sessions: T[]
@@ -28,24 +52,12 @@ export async function decorateSessionEntries<T extends { id: string }>(
   }
 
   const pullRequestStore = new SessionPullRequestStore(db);
-  const [repositoryResults, summaryResults] = await Promise.all([
-    Promise.all(
-      chunks.map((chunk) =>
-        db
-          .prepare(
-            `SELECT * FROM session_repositories
-             WHERE session_id IN (${chunk.map(() => "?").join(", ")})
-             ORDER BY session_id, position`
-          )
-          .bind(...chunk)
-          .all<SessionRepositoryRow>()
-      )
-    ),
-    Promise.all(chunks.map((chunk) => pullRequestStore.summariesForSessions(chunk))),
-  ]);
+  const chunkResults = await Promise.all(
+    chunks.map((chunk) => loadDecorationChunk(db, pullRequestStore, chunk))
+  );
 
   const repositoriesBySession = new Map<string, SessionListRepository[]>();
-  for (const row of repositoryResults.flatMap((result) => result.results ?? [])) {
+  for (const row of chunkResults.flatMap((result) => result.repositoryRows)) {
     const repositories = repositoriesBySession.get(row.session_id) ?? [];
     repositories.push({
       repoOwner: row.repo_owner,
@@ -56,7 +68,7 @@ export async function decorateSessionEntries<T extends { id: string }>(
     repositoriesBySession.set(row.session_id, repositories);
   }
   const summariesBySession = new Map(
-    summaryResults.flatMap((summaries) => [...summaries.entries()])
+    chunkResults.flatMap((result) => [...result.summaries.entries()])
   );
 
   return sessions.map((session) => {
