@@ -27,6 +27,7 @@ export interface SpawnSandboxData {
   createdAt: number;
   authTokenHash: string;
   modalSandboxId: string;
+  preserveProviderObjectId?: boolean;
 }
 
 /** Data for updating a sandbox during an in-place resume. */
@@ -83,7 +84,7 @@ export class SandboxRepository {
          auth_token_hash = ?,
          auth_token = NULL,
          modal_sandbox_id = ?,
-         modal_object_id = NULL,
+         modal_object_id = ${data.preserveProviderObjectId ? "modal_object_id" : "NULL"},
          code_server_url = NULL,
          code_server_password = NULL,
          vnc_url = NULL,
@@ -111,7 +112,7 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxModalObjectId(modalObjectId: string): void {
+  updateSandboxModalObjectId(modalObjectId: string | null): void {
     this.sql.exec(
       `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       modalObjectId

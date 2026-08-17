@@ -109,7 +109,8 @@ export type SessionHeaderProps = {
   onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
   actions: SessionActionProps;
-  renameSession: (title: string) => Promise<boolean | undefined>;
+  optimisticTitle?: string;
+  renameSession: (title: string) => Promise<boolean>;
 };
 
 export function SessionHeader({
@@ -126,6 +127,7 @@ export function SessionHeader({
   onToggleDesktopDetails,
   onOpenMobileDetails,
   actions,
+  optimisticTitle,
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
@@ -142,8 +144,6 @@ export function SessionHeader({
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [title, setTitle] = useState(baseResolvedTitle);
-  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
-
   const resolvedTitle =
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 
@@ -165,24 +165,13 @@ export function SessionHeader({
       return;
     }
 
-    const previousTitle = resolvedTitle;
     setIsRenaming(false);
-    setOptimisticTitle(trimmed);
 
     const success = await renameSession(trimmed);
     if (!success) {
-      setOptimisticTitle(null);
-      setTitle(previousTitle);
       setIsRenaming(true);
     }
   };
-
-  useEffect(() => {
-    if (!optimisticTitle) return;
-    if (sessionState?.title === optimisticTitle) {
-      setOptimisticTitle(null);
-    }
-  }, [optimisticTitle, sessionState?.title]);
 
   useEffect(() => {
     if (!isRenaming) setTitle(sessionState?.title ?? fallbackSessionInfo.title ?? "");

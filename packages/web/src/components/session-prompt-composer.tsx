@@ -1,6 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef } from "react";
+import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import { ActionBar } from "@/components/action-bar";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
@@ -13,6 +14,7 @@ import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-a
 import type { Artifact } from "@/types/session";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 
 type SessionPromptComposerProps = {
   session: {
@@ -31,10 +33,11 @@ type SessionPromptComposerProps = {
     submitError: string | null;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
-    onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+    onValueChange: (value: string) => void;
     onKeyDown: (e: React.KeyboardEvent) => void;
     onStopExecution: () => void;
   };
+  skillSuggestions: PromptSkillSuggestionSource;
   attachments: {
     items: PendingAttachment[];
     error: string | null;
@@ -54,6 +57,7 @@ type SessionPromptComposerProps = {
 export function SessionPromptComposer({
   session,
   prompt,
+  skillSuggestions,
   attachments,
   model,
 }: SessionPromptComposerProps) {
@@ -120,15 +124,16 @@ export function SessionPromptComposer({
 
           {/* Text input area with floating send button */}
           <div className="relative flex flex-wrap items-end justify-end sm:block">
-            <textarea
+            <PromptSkillTextarea
               ref={prompt.inputRef}
               value={prompt.value}
-              onChange={prompt.onChange}
+              suggestions={skillSuggestions}
+              onValueChange={prompt.onValueChange}
               onKeyDown={prompt.onKeyDown}
-              onPaste={handlePaste}
-              disabled={prompt.draftLocked}
-              autoComplete="off"
               maxLength={MAX_WEB_PROMPT_CHARS}
+              disabled={prompt.draftLocked}
+              onPaste={handlePaste}
+              autoComplete="off"
               placeholder={prompt.isProcessing ? "Add a follow-up..." : "Ask or build anything"}
               className="min-h-12 max-h-40 w-0 min-w-48 flex-1 resize-none overflow-y-auto bg-transparent px-4 py-3 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:block sm:min-h-[7.75rem] sm:w-full sm:px-4 sm:pt-4 sm:pb-12"
               rows={1}

@@ -118,5 +118,5 @@ export interface ClientInfo {
   lastSeen: number;
   clientId: string;
   ws: WebSocket;
-  lastFetchHistoryAt?: number;
+  lastFetchHistoryAtMs?: number;
 }

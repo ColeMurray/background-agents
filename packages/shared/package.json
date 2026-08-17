@@ -126,6 +126,10 @@
       "import": "./dist/types/sessions.js",
       "types": "./dist/types/sessions.d.ts"
     },
+    "./types/session-inbox": {
+      "import": "./dist/types/session-inbox.js",
+      "types": "./dist/types/session-inbox.d.ts"
+    },
     "./types/artifacts": {
       "import": "./dist/types/artifacts.js",
       "types": "./dist/types/artifacts.d.ts"

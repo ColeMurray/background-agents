@@ -547,14 +547,19 @@ export class SessionMessageQueue {
     );
     if (!completion) return false;
 
-    this.backgroundJobs.submit(
-      this.projectTerminalMessage(
-        completion.messageId,
-        completion.messageCreatedAt,
-        completion.completedAt
-      )
-    );
-    this.messenger.broadcast({ type: "sandbox_event", event });
+    const projection = this.projectTerminalMessage(
+      completion.messageId,
+      completion.messageCreatedAt,
+      completion.completedAt
+    )
+      .catch((projectionError) => {
+        this.log.error("terminal_message.projection_failed", {
+          message_id: message.id,
+          error: projectionError,
+        });
+      })
+      .then(() => this.messenger.broadcast({ type: "sandbox_event", event }));
+    this.backgroundJobs.submit(projection);
     this.backgroundJobs.submit(this.callbackService.notifyComplete(message.id, false, error));
     return true;
   }

@@ -225,6 +225,26 @@ function logPrincipal(principal: Principal, ctx: RequestContext, path: string): 
   });
 }
 
+function logRequest(
+  response: Response,
+  ctx: RequestContext,
+  method: string,
+  path: string,
+  startTime: number
+): void {
+  logger.info("http.request", {
+    event: "http.request",
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+    http_method: method,
+    http_path: path,
+    http_status: response.status,
+    duration_ms: Date.now() - startTime,
+    outcome: response.status >= 500 ? "error" : "success",
+    ...ctx.metrics.summarize(),
+  });
+}
+
 export function enforceRoutePrincipal(
   authentication: RouteAuthentication,
   principal: Principal
@@ -420,6 +440,10 @@ export async function handleRequest(
     }
 
     if (authError) {
+      if (ctx.principal) {
+        logPrincipal(ctx.principal, ctx, path);
+        logRequest(authError, ctx, method, path, startTime);
+      }
       return withCorsAndTraceHeaders(authError, ctx);
     }
 
@@ -434,14 +458,11 @@ export async function handleRequest(
   }
 
   let response: Response;
-  let outcome: "success" | "error";
   try {
     response = await matchedRoute.route.handler(request, env, matchedRoute.match, ctx);
-    outcome = response.status >= 500 ? "error" : "success";
   } catch (e) {
     if (e instanceof HttpError) {
       response = error(e.message, e.status);
-      outcome = e.status >= 500 ? "error" : "success";
     } else {
       const durationMs = Date.now() - startTime;
       logger.error("http.request", {
@@ -460,18 +481,7 @@ export async function handleRequest(
     }
   }
 
-  const durationMs = Date.now() - startTime;
-  logger.info("http.request", {
-    event: "http.request",
-    request_id: ctx.request_id,
-    trace_id: ctx.trace_id,
-    http_method: method,
-    http_path: path,
-    http_status: response.status,
-    duration_ms: durationMs,
-    outcome,
-    ...ctx.metrics.summarize(),
-  });
+  logRequest(response, ctx, method, path, startTime);
 
   return withCorsAndTraceHeaders(response, ctx);
 }

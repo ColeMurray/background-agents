@@ -34,7 +34,7 @@ export function usePromptInput(
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
-  const hasAttachments = sessionAttachments.hasAttachments;
+  const hasDraftAttachments = sessionAttachments.hasAttachments;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
@@ -145,8 +145,8 @@ export function usePromptInput(
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setPrompt(e.target.value);
+  const handleInputValueChange = (value: string) => {
+    setPrompt(value);
     setSubmitError(null);
     retryRequestRef.current = null;
 
@@ -156,16 +156,20 @@ export function usePromptInput(
     }, TYPING_DEBOUNCE_MS);
   };
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    handleInputValueChange(e.target.value);
+  };
+
   const restorePrompt = useCallback(
     (content: string) =>
       restoreQueuedPrompt({
         content,
         currentPrompt: promptRef.current,
-        hasAttachments: hasAttachments(),
+        hasAttachments: hasDraftAttachments(),
         setPrompt,
         input: inputRef.current,
       }),
-    [hasAttachments, setPrompt]
+    [hasDraftAttachments, setPrompt]
   );
 
   return {
@@ -177,6 +181,7 @@ export function usePromptInput(
     setSubmitError,
     handleSubmit,
     handleInputChange,
+    handleInputValueChange,
     handleKeyDown,
     restorePrompt,
   };

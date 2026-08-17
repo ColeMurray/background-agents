@@ -18,12 +18,15 @@ export class McpServerValidationError extends Error {
   }
 }
 
+export class McpServerConflictError extends Error {}
+
 function generateId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
 interface McpServerRow {
   id: string;
+  revision: number;
   name: string;
   type: string;
   command: string | null;
@@ -81,6 +84,7 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
   const hasCredentials = row.env !== "" && row.env !== "{}" && row.env !== "null";
   return {
     id: row.id,
+    revision: row.revision,
     name: row.name,
     type: row.type as "local" | "remote",
     command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
@@ -204,13 +208,17 @@ export class McpServerStore {
 
   async update(
     id: string,
-    patch: ValidatedUpdateMcpServerInput
+    patch: ValidatedUpdateMcpServerInput,
+    expectedRevision?: number
   ): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)
       .first<McpServerRow>();
     if (!row) return null;
+    if (expectedRevision !== undefined && row.revision !== expectedRevision) {
+      throw new McpServerConflictError("MCP server changed; reload and try again");
+    }
 
     const mergedType = patch.type ?? (row.type as "local" | "remote");
     if (mergedType === "local" && (patch.url !== undefined || patch.headers !== undefined)) {
@@ -250,11 +258,12 @@ export class McpServerStore {
     const now = Date.now();
 
     try {
-      await this.db
-        .prepare(
-          `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, enabled = ?, updated_at = ?
-           WHERE id = ?`
-        )
+      const statement = this.db.prepare(
+        `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, enabled = ?, updated_at = ?, revision = revision + 1
+         WHERE id = ? AND revision = COALESCE(?, revision)
+         RETURNING *`
+      );
+      const updated = await statement
         .bind(
           patch.name ?? row.name,
           mergedType,
@@ -268,9 +277,14 @@ export class McpServerStore {
             : row.repo_scope,
           patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : row.enabled,
           now,
-          id
+          id,
+          expectedRevision ?? null
         )
-        .run();
+        .first<McpServerRow>();
+      if (!updated) {
+        throw new McpServerConflictError("MCP server changed; reload and try again");
+      }
+      return rowToMetadata(updated);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw new McpServerValidationError(
@@ -279,12 +293,6 @@ export class McpServerStore {
       }
       throw err;
     }
-
-    const updated = await this.get(id);
-    if (!updated) {
-      throw new Error(`MCP server '${id}' not found after update — this should not happen`);
-    }
-    return updated;
   }
 
   async delete(id: string): Promise<boolean> {

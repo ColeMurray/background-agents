@@ -88,6 +88,18 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
+
+    it("can preserve the provider object ID while fencing a replacement", () => {
+      repository.updateSandboxForSpawn({
+        status: "spawning",
+        createdAt: 123,
+        authTokenHash: "hash",
+        modalSandboxId: "sandbox-new",
+        preserveProviderObjectId: true,
+      });
+
+      expect(mock.calls[0].query).toContain("modal_object_id = modal_object_id");
+    });
   });
 
   describe("updateSandboxModalObjectId", () => {

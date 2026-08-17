@@ -251,6 +251,44 @@ describe("session runtime proxy routes", () => {
     });
   });
 
+  it("forwards the verified service actor on title updates", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "updated" });
+    });
+    const { handler, match } = getHandler("PATCH", "/sessions/session-1/title");
+    const ctx = createCtx();
+    ctx.principal = {
+      kind: "service",
+      service: "slack-bot",
+      actor: {
+        provider: "slack",
+        providerUserId: "U0123",
+        canonicalUserId: "user-1",
+        participantUserId: "slack:U0123",
+      },
+    };
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/title", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New title" }),
+      }),
+      createEnv(fetch),
+      match,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    await expect(requests[0].json()).resolves.toEqual({
+      userId: "slack:U0123",
+      title: "New title",
+    });
+  });
+
   it("rejects a caller-asserted title-update userId without forwarding to the runtime", async () => {
     const fetch = vi.fn(async () => Response.json({ status: "updated" }));
     const { handler, match } = getHandler("PATCH", "/sessions/session-1/title");

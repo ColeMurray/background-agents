@@ -72,6 +72,7 @@ describe("route policy table", () => {
 
   it.each([
     ["GET", "/sessions/session-1"],
+    ["GET", "/sessions/inbox"],
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],
     ["GET", "/sessions/session-1/skills"],
@@ -94,6 +95,7 @@ describe("route policy table", () => {
     ["GET", "/skills"],
     ["GET", "/skill-profiles"],
     ["GET", "/sessions/session-1"],
+    ["GET", "/sessions/inbox"],
     ["PATCH", "/sessions/session-1/read-state"],
     ["GET", "/sessions/session-1/sandbox-access"],
     ["GET", "/sessions/session-1/tunnel-urls"],

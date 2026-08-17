@@ -2,7 +2,11 @@ import {
   createMcpServerInputSchema,
   updateMcpServerInputSchema,
 } from "@open-inspect/shared/types/integrations";
-import { McpServerStore, McpServerValidationError } from "../db/mcp-servers";
+import {
+  McpServerConflictError,
+  McpServerStore,
+  McpServerValidationError,
+} from "../db/mcp-servers";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import {
@@ -111,7 +115,8 @@ async function handleUpdateMcpServer(
 
   try {
     const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
-    const updated = await store.update(id, parsed.data);
+    const { revision, ...patch } = parsed.data;
+    const updated = await store.update(id, patch, revision);
     if (!updated) return error("MCP server not found", 404);
 
     logger.info("MCP server updated", {
@@ -122,6 +127,9 @@ async function handleUpdateMcpServer(
     });
     return json(updated);
   } catch (err) {
+    if (err instanceof McpServerConflictError) {
+      return error(err.message, 409);
+    }
     if (err instanceof McpServerValidationError) {
       return error(err.message, 400);
     }

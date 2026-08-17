@@ -59,10 +59,10 @@ export class E2BSandboxProvider implements SandboxProvider {
   readonly name = "e2b";
 
   /**
-   * Stop reasons that are terminal (the manager sets the session `failed` and
-   * never resumes it) — kill instead of pausing to avoid orphaning a sandbox.
+   * Stop reasons after which the provider object cannot be resumed, including
+   * replacement by a newly-created sandbox.
    */
-  private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout"]);
+  private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout", "respawn"]);
 
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSandboxTimeout: true,
@@ -258,7 +258,10 @@ export class E2BSandboxProvider implements SandboxProvider {
     try {
       try {
         if (terminal) {
-          await this.client.killSandbox(config.providerObjectId);
+          await this.client.killSandbox(
+            config.providerObjectId,
+            ...(config.signal ? [config.signal] : [])
+          );
         } else {
           await this.client.pauseSandbox(config.providerObjectId);
         }

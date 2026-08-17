@@ -150,6 +150,7 @@ describe("route-owned principal restrictions", () => {
 
   it("rejects a service principal on human-user routes", async () => {
     const { env } = createEnv(401);
+    const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const request = await signedServiceRequest("https://test.local/sessions/session-1", {
       service: "linear-bot",
     });
@@ -160,5 +161,12 @@ describe("route-owned principal restrictions", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Human user authentication required",
     });
+    const events = info.mock.calls.map(([line]) => JSON.parse(String(line)) as { event?: string });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "auth.principal" }),
+        expect.objectContaining({ event: "http.request", http_status: 403 }),
+      ])
+    );
   });
 });

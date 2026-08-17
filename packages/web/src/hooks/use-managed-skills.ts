@@ -17,12 +17,14 @@ import type {
   Skill,
   SkillContentInput,
   SkillProfile,
+  SessionSkillSelection,
 } from "@open-inspect/shared/types/skills";
 import type { skillResolutionPreviewInputSchema } from "@open-inspect/shared/types/skills";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 
 export type SkillResolutionPreviewInput = z.infer<typeof skillResolutionPreviewInputSchema>;
 
-type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
+export type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
 
 const skillContentPreviewSchema = z.strictObject({
   skillMarkdown: z.string(),
@@ -220,4 +222,21 @@ export async function resolveSkillPreview(
     body: JSON.stringify(input),
     signal,
   });
+}
+
+export function useSkillResolutionPreview(
+  target: Omit<SkillResolutionPreviewInput, "selection"> | null,
+  selection: SessionSkillSelection
+) {
+  const { data, isLoading, error } = useSWR(
+    target ? (["skill-resolution-preview", target, selection] as const) : null,
+    ([, currentTarget, currentSelection]) =>
+      resolveSkillPreview({ ...currentTarget, selection: currentSelection })
+  );
+  const suggestions: PromptSkillSuggestionSource = isLoading
+    ? { status: "loading" }
+    : error
+      ? { status: "error" }
+      : { status: "ready", skills: data?.skills ?? [] };
+  return { preview: data ?? null, loading: isLoading, error, suggestions };
 }

@@ -962,4 +962,29 @@ describe("OpenComputerSandboxProvider", () => {
 
     expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1");
   });
+
+  it("deletes sandboxes on replacement", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+    const signal = AbortSignal.timeout(1_000);
+
+    await expect(
+      provider.stopSandbox({
+        providerObjectId: "oc-sandbox-1",
+        sessionId: "session-1",
+        reason: "respawn",
+        signal,
+      })
+    ).resolves.toEqual({ success: true });
+
+    expect(client.deleteSandbox).toHaveBeenCalledWith(
+      "oc-sandbox-1",
+      { deleteSecretStore: true },
+      signal
+    );
+    expect(client.hibernateSandbox).not.toHaveBeenCalled();
+  });
 });

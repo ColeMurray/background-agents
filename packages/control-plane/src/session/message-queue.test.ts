@@ -963,6 +963,32 @@ describe("SessionMessageQueue", () => {
     ).toBeLessThan(h.wsManager.send.mock.invocationCallOrder[0]);
   });
 
+  it("projects terminal unread state before broadcasting synthetic completion", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
+      createMessage({ id: "msg-ordered", status: "processing", created_at: 900 })
+    );
+    let resolveProjection!: () => void;
+    h.projectTerminalMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveProjection = resolve;
+      })
+    );
+
+    await h.queue.stopExecution();
+    expect(h.broadcast).not.toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({ type: "execution_complete" }),
+    });
+
+    resolveProjection();
+    await h.waitUntil.mock.calls[0][0];
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({ type: "execution_complete" }),
+    });
+  });
+
   it("waits for sandbox stop confirmation before dispatching the next prompt", async () => {
     const h = buildQueue();
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({

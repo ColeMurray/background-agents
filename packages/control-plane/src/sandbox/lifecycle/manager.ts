@@ -59,6 +59,7 @@ const log = createLogger("lifecycle-manager");
 
 /** TTL for terminal auth JWTs (24 hours, matching typical sandbox lifetime). */
 const TERMINAL_TOKEN_TTL_SECONDS = 86400;
+const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 
 // ==================== Dependency Interfaces ====================
 
@@ -101,11 +102,12 @@ export interface SandboxStorage {
     createdAt: number;
     authTokenHash: string;
     modalSandboxId: string;
+    preserveProviderObjectId?: boolean;
   }): void;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
   updateSandboxForResume?(data: { status: SandboxStatus; createdAt: number }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
-  updateSandboxModalObjectId(modalObjectId: string): void;
+  updateSandboxModalObjectId(modalObjectId: string | null): void;
   /** Update sandbox snapshot image ID */
   updateSandboxSnapshotImageId(sandboxId: string, imageId: string): void;
   /** Update last activity timestamp */
@@ -428,15 +430,19 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       let sandboxAuthToken = this.idGenerator.generateId();
       const hasRepository = sessionHasRepository(session);
       let expectedSandboxId = buildSandboxIdForSession(session, now);
+      const authTokenHash = await hashToken(sandboxAuthToken);
 
       // Store expected sandbox ID and auth token BEFORE calling provider
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt: now,
-        authTokenHash: await hashToken(sandboxAuthToken),
+        authTokenHash,
         modalSandboxId: expectedSandboxId,
+        preserveProviderObjectId: true,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
+
+      await this.stopPriorProviderSandbox();
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
@@ -750,8 +756,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         createdAt: now,
         authTokenHash: sandboxAuthTokenHash,
         modalSandboxId: expectedSandboxId,
+        preserveProviderObjectId: true,
       });
       this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
+
+      await this.stopPriorProviderSandbox();
 
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
@@ -1046,6 +1055,44 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
+   * Stop a sandbox that is about to be replaced before its provider handle is cleared.
+   */
+  private async stopPriorProviderSandbox(): Promise<void> {
+    const providerObjectId = this.storage.getSandbox()?.modal_object_id;
+    if (!providerObjectId) {
+      return;
+    }
+
+    if (!this.canStopProviderSandbox()) {
+      this.storage.updateSandboxModalObjectId(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const stopTimeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Provider stop timed out before sandbox replacement"));
+        }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
+      });
+      await Promise.race([
+        this.stopProviderSandbox("respawn", controller.signal, providerObjectId),
+        stopTimeoutPromise,
+      ]);
+      this.storage.updateSandboxModalObjectId(null);
+    } catch (error) {
+      this.log.warn("Provider stop failed before sandbox replacement", {
+        provider_object_id: providerObjectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+  }
+
+  /**
    * Clear preview URLs after a sandbox is no longer reachable.
    *
    * Persistent resumes preserve code-server and VNC passwords, so only their
@@ -1076,21 +1123,27 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Stop a provider-managed sandbox via its API.
    */
-  private async stopProviderSandbox(reason: string): Promise<void> {
+  private async stopProviderSandbox(
+    reason: string,
+    signal?: AbortSignal,
+    providerObjectId?: string
+  ): Promise<void> {
     if (!this.provider.stopSandbox) {
       return;
     }
 
-    const sandbox = this.storage.getSandbox();
+    const sandbox = providerObjectId ? null : this.storage.getSandbox();
     const session = this.storage.getSession();
-    if (!sandbox?.modal_object_id || !session) {
+    const objectId = providerObjectId ?? sandbox?.modal_object_id;
+    if (!objectId || !session) {
       return;
     }
 
     const result = await this.provider.stopSandbox({
-      providerObjectId: sandbox.modal_object_id,
+      providerObjectId: objectId,
       sessionId: session.session_name || session.id,
       reason,
+      signal,
     });
 
     if (!result.success) {

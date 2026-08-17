@@ -4,6 +4,7 @@
 import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionPromptComposer } from "./session-prompt-composer";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
@@ -43,6 +44,7 @@ function ComposerHarness({
   connecting = false,
   status = "active",
   submitError = null,
+  withSkill = false,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
@@ -50,6 +52,7 @@ function ComposerHarness({
   connecting?: boolean;
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
+  withSkill?: boolean;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -71,9 +74,15 @@ function ComposerHarness({
         submitError,
         inputRef,
         onSubmit: vi.fn(),
-        onChange: (event) => setValue(event.target.value),
+        onValueChange: setValue,
         onKeyDown: vi.fn(),
         onStopExecution: vi.fn(),
+      }}
+      skillSuggestions={{
+        status: "ready",
+        skills: withSkill
+          ? [{ skillId: "skill-1", name: "review-pr", description: "Review a pull request" }]
+          : [],
       }}
       attachments={{
         items: [],
@@ -176,6 +185,17 @@ describe("SessionPromptComposer", () => {
     render(<ComposerHarness initialValue="Keep me" submitError="The prompt queue is full" />);
     expect(screen.getByRole("alert")).toHaveTextContent("The prompt queue is full");
     expect(screen.getByDisplayValue("Keep me")).toBeInTheDocument();
+  });
+
+  it("offers pinned skills in the follow-up textarea", async () => {
+    const user = userEvent.setup();
+    render(<ComposerHarness withSkill />);
+    const input = screen.getByPlaceholderText("Ask or build anything");
+
+    await user.click(input);
+    await user.type(input, "$rev");
+
+    expect(await screen.findByRole("option", { name: /review-pr/i })).toBeInTheDocument();
   });
 
   it("removes the action bar row and spacing below md", () => {

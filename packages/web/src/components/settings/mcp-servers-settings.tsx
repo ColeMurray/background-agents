@@ -34,6 +34,9 @@ import {
 } from "@/components/ui/alert-dialog";
 
 type ScopeMode = "global" | "selected";
+type Editor =
+  | { kind: "new"; draftId: string }
+  | { kind: "existing"; draftId: string; id: string; revision: number };
 
 type EnvRow = { id: string; key: string; value: string };
 
@@ -289,7 +292,13 @@ function McpServerForm({
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => setForm({ ...form, type: "local" })}
+            onClick={() =>
+              setForm({
+                ...form,
+                type: "local",
+                envRows: form.type === "local" ? form.envRows : [createEnvRow()],
+              })
+            }
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
               form.type === "local"
                 ? "border-foreground/30 text-foreground bg-muted"
@@ -301,7 +310,13 @@ function McpServerForm({
           </button>
           <button
             type="button"
-            onClick={() => setForm({ ...form, type: "remote" })}
+            onClick={() =>
+              setForm({
+                ...form,
+                type: "remote",
+                envRows: form.type === "remote" ? form.envRows : [createEnvRow()],
+              })
+            }
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
               form.type === "remote"
                 ? "border-foreground/30 text-foreground bg-muted"
@@ -426,32 +441,32 @@ function McpServerForm({
 export function McpServersSettings() {
   const { servers, loading, mutate } = useMcpServers();
   const { repos, loading: loadingRepos } = useRepos();
-  const [editing, setEditing] = useState<string | "new" | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [editor, setEditor] = useState<Editor | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   function startNew() {
-    setExpanded(null);
     setForm(emptyForm);
-    setEditing("new");
+    setEditor({ kind: "new", draftId: crypto.randomUUID() });
   }
 
   function startEdit(server: McpServerMetadata) {
-    if (expanded === server.id) {
-      setExpanded(null);
-      setEditing(null);
+    if (editor?.kind === "existing" && editor.id === server.id) {
+      setEditor(null);
     } else {
       setForm(metadataToForm(server));
-      setEditing(server.id);
-      setExpanded(server.id);
+      setEditor({
+        kind: "existing",
+        draftId: crypto.randomUUID(),
+        id: server.id,
+        revision: server.revision,
+      });
     }
   }
 
   function cancel() {
-    setEditing(null);
-    setExpanded(null);
+    setEditor(null);
   }
 
   async function save() {
@@ -472,6 +487,8 @@ export function McpServersSettings() {
       return;
     }
 
+    const saveOwner = editor;
+    if (!saveOwner) return;
     setSaving(true);
 
     try {
@@ -484,7 +501,7 @@ export function McpServersSettings() {
 
       const envRecord = envRowsToRecord(form.envRows);
       const hasEnvValues = Object.keys(envRecord).length > 0;
-      const includeCredentials = hasEnvValues || editing === "new";
+      const includeCredentials = hasEnvValues || saveOwner.kind === "new";
       const payload: CreateMcpServerRequest =
         form.type === "remote"
           ? {
@@ -500,16 +517,15 @@ export function McpServersSettings() {
               ...(includeCredentials ? { env: envRecord } : {}),
             };
 
-      if (editing === "new") {
+      if (saveOwner.kind === "new") {
         await createMcpServer(payload);
         toast.success("MCP server created");
-      } else if (editing) {
-        await updateMcpServer(editing, payload);
+      } else {
+        await updateMcpServer(saveOwner.id, { ...payload, revision: saveOwner.revision });
         toast.success("MCP server updated");
       }
 
-      setEditing(null);
-      setExpanded(null);
+      setEditor((current) => (current?.draftId === saveOwner.draftId ? null : current));
       mutate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save");
@@ -522,9 +538,8 @@ export function McpServersSettings() {
     try {
       await deleteMcpServer(id);
       mutate();
-      if (editing === id) {
-        setEditing(null);
-        setExpanded(null);
+      if (editor?.kind === "existing" && editor.id === id) {
+        setEditor(null);
       }
       toast.success("MCP server deleted");
     } catch (err) {
@@ -535,7 +550,10 @@ export function McpServersSettings() {
 
   async function handleToggle(server: McpServerMetadata) {
     try {
-      await updateMcpServer(server.id, { enabled: !server.enabled });
+      await updateMcpServer(server.id, {
+        enabled: !server.enabled,
+        revision: server.revision,
+      });
       mutate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to toggle");
@@ -558,7 +576,7 @@ export function McpServersSettings() {
       </p>
 
       {/* New server form */}
-      {editing === "new" && (
+      {editor?.kind === "new" && (
         <div className="border border-border rounded-md p-4 mb-6 space-y-4">
           <div className="flex items-center justify-between mb-1">
             <h3 className="text-sm font-medium text-foreground">New MCP Server</h3>
@@ -595,14 +613,14 @@ export function McpServersSettings() {
       {/* Server list */}
       {loading ? (
         <div className="text-sm text-muted-foreground">Loading...</div>
-      ) : servers.length === 0 && editing !== "new" ? (
+      ) : servers.length === 0 && editor?.kind !== "new" ? (
         <div className="text-sm text-muted-foreground py-8 text-center">
           No MCP servers configured. Add one to extend agent capabilities.
         </div>
       ) : (
         <div className="space-y-2">
           {servers.map((server) => {
-            const isExpanded = expanded === server.id;
+            const isExpanded = editor?.kind === "existing" && editor.id === server.id;
             return (
               <div
                 key={server.id}
@@ -666,7 +684,7 @@ export function McpServersSettings() {
                 </div>
 
                 {/* Expanded edit form */}
-                {isExpanded && editing === server.id && (
+                {isExpanded && (
                   <div className="px-4 pb-4 pt-3 border-t border-border-muted space-y-4">
                     <McpServerForm
                       form={form}
@@ -674,7 +692,9 @@ export function McpServersSettings() {
                       repos={repos}
                       loadingRepos={loadingRepos}
                       radioPrefix={server.id}
-                      hasExistingCredentials={server.hasEnv || server.hasHeaders}
+                      hasExistingCredentials={
+                        server.type === form.type && (server.hasEnv || server.hasHeaders)
+                      }
                     />
                     <div className="flex gap-2 pt-2">
                       <Button onClick={save} disabled={saving} size="sm">

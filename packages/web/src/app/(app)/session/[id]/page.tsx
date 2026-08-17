@@ -5,6 +5,7 @@ import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
+import { useSessionSkills } from "@/hooks/use-session-skills";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
@@ -56,6 +57,7 @@ import {
 } from "@/lib/session-read-state";
 import { usePromptInput } from "@/hooks/use-prompt-input";
 import { useSessionSnapshot } from "./session-snapshot-provider";
+import { useSessionRename } from "@/hooks/use-session-rename";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -92,6 +94,7 @@ export default function SessionPage() {
     participants,
     events
   );
+  const { suggestions: skillSuggestions } = useSessionSkills(sessionId);
 
   const fallbackSessionInfo = {
     repoOwner: initialSnapshot.session.repoOwner,
@@ -99,7 +102,13 @@ export default function SessionPage() {
     title: initialSnapshot.session.title,
   };
 
-  const { handleArchive, handleUnarchive, renameSession } = useSessionListActions(sessionId);
+  const { handleArchive, handleUnarchive } = useSessionListActions(sessionId);
+  const { optimisticTitle, renameSession } = useSessionRename({
+    sessionId,
+    currentTitle: sessionState?.title ?? initialSnapshot.session.title,
+    authoritativeTitle: sessionState?.title,
+    awaitAuthoritativeTitle: true,
+  });
   const {
     selectedModel,
     reasoningEffort,
@@ -116,7 +125,7 @@ export default function SessionPage() {
     submitError,
     setSubmitError,
     handleSubmit,
-    handleInputChange,
+    handleInputValueChange,
     handleKeyDown,
     restorePrompt,
   } = usePromptInput(
@@ -356,10 +365,11 @@ export default function SessionPage() {
           submitError,
           inputRef,
           onSubmit: handleSubmit,
-          onChange: handleInputChange,
+          onValueChange: handleInputValueChange,
           onKeyDown: handleKeyDown,
           onStopExecution: stopExecution,
         }}
+        skillSuggestions={skillSuggestions}
         attachments={{
           items: sessionAttachments.attachments,
           error: sessionAttachments.attachmentError,
@@ -401,6 +411,7 @@ export default function SessionPage() {
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
         }}
+        optimisticTitle={optimisticTitle}
         renameSession={renameSession}
       />
 
@@ -535,26 +546,10 @@ export default function SessionPage() {
 }
 
 /**
- * Archive, unarchive, and rename actions for the current session, each keeping
- * the SWR session-list caches in sync.
+ * Archive and unarchive actions for the current session.
  */
 function useSessionListActions(sessionId: string) {
   const router = useRouter();
-
-  const { trigger: triggerRename } = useSWRMutation(
-    `/api/sessions/${sessionId}/title`,
-    (url: BrowserApiPath, { arg }: { arg: { title: string } }) =>
-      browserApiFetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: arg.title }),
-      }).then((r) => {
-        if (r.ok) return true;
-        console.error("Failed to update session title");
-        return false;
-      }),
-    { throwOnError: false }
-  );
 
   const handleArchive = useCallback(async () => {
     const didArchive = await archiveSession(sessionId);
@@ -570,42 +565,6 @@ function useSessionListActions(sessionId: string) {
       router.push("/");
     }
   }, [router, sessionId]);
-
-  const renameSession = useCallback(
-    async (title: string) => {
-      const updatedAt = Date.now();
-      const updateSessionsTitle = (data?: SessionListResponse): SessionListResponse | undefined => {
-        if (!data?.sessions) return data;
-        return {
-          ...data,
-          sessions: data.sessions.map((session) =>
-            session.id === sessionId ? { ...session, title, updatedAt } : session
-          ),
-        };
-      };
-
-      try {
-        const success = await triggerRename({ title });
-        if (!success) {
-          throw new Error("Failed to update session title");
-        }
-        await Promise.all([
-          mutate<SessionListResponse>(isUnarchivedSessionListKey, updateSessionsTitle, {
-            populateCache: true,
-            revalidate: true,
-          }),
-          mutate<SessionListResponse>(isArchivedSessionListKey, updateSessionsTitle, {
-            populateCache: true,
-            revalidate: false,
-          }),
-        ]);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    [sessionId, triggerRename]
-  );
 
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,
@@ -628,7 +587,7 @@ function useSessionListActions(sessionId: string) {
     { throwOnError: false }
   );
 
-  return { handleArchive, handleUnarchive, renameSession };
+  return { handleArchive, handleUnarchive };
 }
 
 /**
