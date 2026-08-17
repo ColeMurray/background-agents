@@ -98,19 +98,6 @@ export function applySessionReadState(
   };
 }
 
-export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
-  const seen = new Set(existing.map((session) => session.id));
-  const merged = [...existing];
-
-  for (const session of incoming) {
-    if (seen.has(session.id)) continue;
-    seen.add(session.id);
-    merged.push(session);
-  }
-
-  return merged;
-}
-
 export function removeSessionFromList(sessions: Session[], sessionId: string) {
   return sessions.filter((session) => session.id !== sessionId);
 }

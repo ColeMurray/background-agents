@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { PlusIcon, SparkleIcon } from "@/components/ui/icons";
 import { SkillEditor } from "./skill-editor";
-import { errorMessage } from "./shared";
+import { errorMessage } from "./utils";
 
 export function SkillsCatalog() {
   const [cursorHistory, setCursorHistory] = useState<string[]>([]);
