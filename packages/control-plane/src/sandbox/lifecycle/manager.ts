@@ -504,6 +504,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       };
 
       let result: CreateSandboxResult;
+      await this.armConnectingTimeout();
       try {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
@@ -772,6 +773,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      await this.armConnectingTimeout();
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -907,6 +909,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
 
+      await this.armConnectingTimeout();
       const result = await this.provider.resumeSandbox({
         providerObjectId,
         sessionId: session.session_name || session.id,
@@ -1540,7 +1543,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.storage.updateSandboxStatus("connecting");
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
     }
+  }
 
+  private async armConnectingTimeout(): Promise<void> {
     // The bridge replaces this with its inactivity alarm when it connects.
     await this.alarmScheduler.scheduleAlarm(Date.now() + this.config.connectingTimeout.timeoutMs);
   }

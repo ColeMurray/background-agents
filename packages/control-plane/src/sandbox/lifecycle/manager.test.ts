@@ -435,7 +435,7 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
   expect(storage.calls.filter((call) => call === "updateSandboxStatus:connecting")).toHaveLength(
     kind === "resume" ? 1 : 0
   );
-  expect(alarmScheduler.alarms).toEqual([]);
+  expect(alarmScheduler.alarms).toHaveLength(1);
   expect(manager.isProviderStartupPending()).toBe(false);
   const readyIndex = broadcaster.messages.findIndex(
     (message) =>
@@ -833,14 +833,24 @@ describe("SandboxLifecycleManager", () => {
       ).toBe(false);
     });
 
-    it("schedules connecting timeout alarm after spawn", async () => {
+    it("schedules connecting timeout alarm before spawn provider call", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const alarmScheduler = createMockAlarmScheduler();
       const config = createTestConfig();
+      const provider = createMockProvider({
+        createSandbox: vi.fn(async (createConfig) => {
+          expect(alarmScheduler.alarms).toHaveLength(1);
+          return {
+            sandboxId: createConfig.sandboxId,
+            status: "connecting",
+            createdAt: Date.now(),
+          };
+        }),
+      });
 
       const manager = new SandboxLifecycleManager(
-        createMockProvider(),
+        provider,
         storage,
         createMockBroadcaster(),
         createMockWebSocketManager(false),
@@ -1146,7 +1156,7 @@ describe("SandboxLifecycleManager", () => {
       expect(terminalLogs[0]).toEqual(expect.objectContaining({ outcome: "error" }));
     });
 
-    it("schedules connecting timeout alarm after restore", async () => {
+    it("schedules connecting timeout alarm before restore provider call", async () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
@@ -1154,9 +1164,15 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(createMockSession(), sandbox);
       const alarmScheduler = createMockAlarmScheduler();
       const config = createTestConfig();
+      const provider = createMockProvider({
+        restoreFromSnapshot: vi.fn(async (restoreConfig) => {
+          expect(alarmScheduler.alarms).toHaveLength(1);
+          return { success: true, sandboxId: restoreConfig.sandboxId };
+        }),
+      });
 
       const manager = new SandboxLifecycleManager(
-        createMockProvider(),
+        provider,
         storage,
         createMockBroadcaster(),
         createMockWebSocketManager(false),
@@ -1173,6 +1189,38 @@ describe("SandboxLifecycleManager", () => {
       const scheduledTime = alarmScheduler.alarms[0];
       expect(scheduledTime).toBeGreaterThanOrEqual(before + config.connectingTimeout.timeoutMs);
       expect(scheduledTime).toBeLessThanOrEqual(after + config.connectingTimeout.timeoutMs);
+    });
+
+    it("schedules connecting timeout alarm before resume provider call", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "provider-obj",
+        snapshot_image_id: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      const provider = createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => {
+          expect(alarmScheduler.alarms).toHaveLength(1);
+          return { success: true };
+        }),
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        alarmScheduler,
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.resumeSandbox).toHaveBeenCalledOnce();
+      expect(alarmScheduler.alarms).toHaveLength(1);
     });
 
     it("stores providerObjectId after successful restore for future snapshots", async () => {

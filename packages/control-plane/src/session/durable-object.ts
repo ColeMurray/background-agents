@@ -683,7 +683,14 @@ export class SessionDO extends DurableObject<Env> {
           validateReasoningEffort(model, effort, this.log),
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
-        scheduleWarmSandbox: () => this.backgroundJobs.submit(this.warmSandbox()),
+        scheduleWarmSandbox: () =>
+          this.backgroundJobs.submit(
+            this.warmSandbox().catch((error) => {
+              this.log.error("sandbox.warm.background_error", {
+                error: error instanceof Error ? error : String(error),
+              });
+            })
+          ),
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
