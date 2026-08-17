@@ -14,16 +14,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
-import type { ServiceName } from "@open-inspect/shared/service-auth";
+import { SERVICE_NAMES } from "@open-inspect/shared/service-auth";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, seedSandboxAuth, serviceFetch } from "./helpers";
-
-const NON_SANDBOX_SERVICES = [
-  "web",
-  "slack-bot",
-  "github-bot",
-  "linear-bot",
-] as const satisfies readonly ServiceName[];
 
 async function setupSession(): Promise<{ sessionName: string; sandboxToken: string }> {
   const sessionName = `scm-creds-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -76,7 +69,7 @@ describe("POST /sessions/:id/scm-credentials", () => {
     const { sessionName, sandboxToken } = await setupSession();
     const url = `https://test.local/sessions/${sessionName}/scm-credentials`;
 
-    for (const service of NON_SANDBOX_SERVICES) {
+    for (const service of SERVICE_NAMES) {
       const rejected = await serviceFetch(url, { method: "POST", service });
 
       expect(rejected.status, service).toBe(401);
