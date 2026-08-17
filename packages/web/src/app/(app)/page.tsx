@@ -14,6 +14,7 @@ import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { createSessionResponseSchema } from "@open-inspect/shared/types/session-api";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import {
   DEFAULT_MODEL,
@@ -174,7 +175,9 @@ export default function Home() {
         });
 
         if (res.ok) {
-          const data = await res.json();
+          const parsed = createSessionResponseSchema.safeParse(await res.json());
+          if (!parsed.success) return null;
+          const data = parsed.data;
           if (
             pendingConfigRef.current?.target === currentConfig.target &&
             pendingConfigRef.current?.model === currentConfig.model &&
@@ -183,7 +186,7 @@ export default function Home() {
             pendingConfigRef.current?.skills === currentConfig.skills
           ) {
             setPendingSessionId(data.sessionId);
-            return data.sessionId as string;
+            return data.sessionId;
           }
           return null;
         }
