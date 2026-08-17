@@ -8,6 +8,7 @@ import type { Env } from "../types";
 import {
   githubReviewRoutes,
   handleClaimReviewGeneration,
+  handleReleaseReviewGeneration,
   handleReviewLeaseRelease,
   handleReviewOwnership,
   handleSweepStaleReviews,
@@ -46,13 +47,17 @@ function createFakeDb(
     staleRowLease?: { lease_session_id: string; lease_expires_at: number };
     /** meta.changes for the lease-acquire UPDATE (ownership handler). */
     leaseAcquireChanges?: number;
+    /** meta.changes for the conditional generation rollback (release handler). */
+    releaseClaimChanges?: number;
   } = {}
 ): {
   db: SqlDatabase;
   deletedSessionIds: string[];
   leaseReleases: number;
+  releaseClaimBindings: unknown[][];
 } {
   const deletedSessionIds: string[] = [];
+  const releaseClaimBindings: unknown[][] = [];
   const counters = { leaseReleases: 0 };
   const db = {
     prepare(sql: string) {
@@ -91,6 +96,12 @@ function createFakeDb(
               if (trimmed.startsWith("DELETE FROM github_review_sessions")) {
                 deletedSessionIds.push(values[2] as string);
               }
+              if (
+                trimmed.startsWith("UPDATE github_review_state\n         SET latest_generation")
+              ) {
+                releaseClaimBindings.push(values);
+                return { results: [] as T[], meta: { changes: config.releaseClaimChanges ?? 1 } };
+              }
               if (trimmed.startsWith("UPDATE github_review_state SET lease_session_id = NULL")) {
                 counters.leaseReleases += 1;
                 return { results: [] as T[], meta: { changes: 1 } };
@@ -111,6 +122,7 @@ function createFakeDb(
   return {
     db,
     deletedSessionIds,
+    releaseClaimBindings,
     get leaseReleases() {
       return counters.leaseReleases;
     },
@@ -141,6 +153,7 @@ describe("auth gating", () => {
 
   it.each([
     ["/internal/github-reviews/claim", { repoId: 1, prNumber: 2 }],
+    ["/internal/github-reviews/release-claim", { repoId: 1, prNumber: 2, generation: 3 }],
     ["/internal/github-reviews/sweep", { repoId: 1, prNumber: 2, generation: 3 }],
   ])("rejects %s from a non-github-bot principal", async (path, body) => {
     const route = githubReviewRoutes.find((r) => r.pattern.test(path));
@@ -159,6 +172,7 @@ describe("auth gating", () => {
 
   it.each([
     ["/internal/github-reviews/claim", { repoId: 1, prNumber: 2 }],
+    ["/internal/github-reviews/release-claim", { repoId: 1, prNumber: 2, generation: 3 }],
     ["/internal/github-reviews/sweep", { repoId: 1, prNumber: 2, generation: 3 }],
   ])("rejects %s from an unauthenticated request", async (path, body) => {
     const route = githubReviewRoutes.find((r) => r.pattern.test(path));
@@ -206,6 +220,49 @@ describe("handleClaimReviewGeneration", () => {
       routeMatch("/internal/github-reviews/claim", "/internal/github-reviews/claim"),
       requestContext(db, GITHUB_BOT_PRINCIPAL)
     );
+
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("handleReleaseReviewGeneration", () => {
+  const path = "/internal/github-reviews/release-claim";
+
+  function release(db: SqlDatabase, body: Record<string, unknown>) {
+    return handleReleaseReviewGeneration(
+      jsonRequest(`https://test.local${path}`, body),
+      {} as Env,
+      routeMatch(path, path),
+      requestContext(db, GITHUB_BOT_PRINCIPAL)
+    );
+  }
+
+  it("rolls the claim back conditionally on the claiming generation", async () => {
+    const { db, releaseClaimBindings } = createFakeDb({ releaseClaimChanges: 1 });
+
+    const response = await release(db, { repoId: 555, prNumber: 42, generation: 7 });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ released: true });
+    // The rollback is bound to the claimed generation, so a newer claim that
+    // has already moved latest_generation on cannot match and is left alone.
+    expect(releaseClaimBindings).toHaveLength(1);
+    expect(releaseClaimBindings[0].slice(1)).toEqual([555, 42, 7, 7]);
+  });
+
+  it("reports no rollback when a newer claim already superseded this one", async () => {
+    const { db } = createFakeDb({ releaseClaimChanges: 0 });
+
+    const response = await release(db, { repoId: 555, prNumber: 42, generation: 7 });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ released: false });
+  });
+
+  it("rejects a request without a generation", async () => {
+    const { db } = createFakeDb();
+
+    const response = await release(db, { repoId: 555, prNumber: 42 });
 
     expect(response.status).toBe(400);
   });
@@ -479,6 +536,8 @@ describe("handleReviewOwnership / handleReviewLeaseRelease", () => {
 });
 
 describe("sweep lease deferral", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("retains a stale row whose session holds an unexpired submission lease", async () => {
     const { db, deletedSessionIds } = createFakeDb({
       staleSessionIds: ["leaseholder"],

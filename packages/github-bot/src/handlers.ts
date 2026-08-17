@@ -27,7 +27,11 @@ import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
-import { claimReviewGeneration, sweepStaleReviews } from "./review-supersession";
+import {
+  claimReviewGeneration,
+  releaseReviewGeneration,
+  sweepStaleReviews,
+} from "./review-supersession";
 
 export type HandlerResult =
   | {
@@ -373,9 +377,18 @@ export async function handleReviewRequested(
     });
   } catch (error) {
     if (error instanceof ReviewSupersededError) {
+      // A newer trigger already owns the fence; its claim must stand.
       log.info("handler.review_superseded", { ...meta, generation });
       return { outcome: "skipped", skip_reason: "superseded" };
     }
+    // The claim bumped the fence but no session will ever carry it. Roll it
+    // back so a review still running on the previous generation is not
+    // permanently locked out of submitting.
+    await releaseReviewGeneration(env, log, traceId, {
+      repoId: repo.id,
+      prNumber: pr.number,
+      generation,
+    });
     throw error;
   }
 
@@ -531,9 +544,18 @@ export async function handlePullRequestReviewTrigger(
     });
   } catch (error) {
     if (error instanceof ReviewSupersededError) {
+      // A newer trigger already owns the fence; its claim must stand.
       log.info("handler.review_superseded", { ...meta, generation });
       return { outcome: "skipped", skip_reason: "superseded" };
     }
+    // The claim bumped the fence but no session will ever carry it. Roll it
+    // back so a review still running on the previous generation is not
+    // permanently locked out of submitting.
+    await releaseReviewGeneration(env, log, traceId, {
+      repoId: repo.id,
+      prNumber: pr.number,
+      generation,
+    });
     throw error;
   }
 

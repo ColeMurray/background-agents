@@ -1,4 +1,8 @@
-import { REVIEW_COMPLETED_DESCRIPTION, REVIEW_STATUS_CONTEXT } from "./github-auth";
+import {
+  REVIEW_COMPLETED_DESCRIPTION,
+  REVIEW_STALE_DESCRIPTION,
+  REVIEW_STATUS_CONTEXT,
+} from "./github-auth";
 
 function buildCustomInstructionsSection(instructions: string | null | undefined): string {
   if (!instructions?.trim()) return "";
@@ -128,13 +132,31 @@ ${prDescriptionBlock}
 
    ${reviewEventGuidance}
 
-5. Submit as ONE command that chains the ownership and freshness fence directly into the
-   write calls, so any guard failure mechanically prevents the POST:
+5. First resolve this session's id and the PR's live snapshot:
 
    session_id="$(printf '%s' "$SESSION_CONFIG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')" && \\
-   snapshot="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha + " " + .state + " draft:" + (.draft|tostring)')" && \\
+   snapshot="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha + " " + .state + " draft:" + (.draft|tostring)')"
+
+6. If the snapshot no longer matches, this review is obsolete. Close out the pending status
+   on the commit you were started for and stop — do NOT post a review or inline comment:
+
+   test "$snapshot" = "${headSha} open draft:false" || { \\
+     gh api repos/${owner}/${repo}/statuses/${headSha} \\
+       --method POST \\
+       -f state="error" \\
+       -f context="${REVIEW_STATUS_CONTEXT}" \\
+       -f description="${REVIEW_STALE_DESCRIPTION}"; \\
+     exit 0; }
+
+   Only this branch writes a terminal status on failure, and only because the head moved or
+   the PR closed/became a draft — no other review session is writing to "${headSha}", so
+   there is nothing to race.
+
+7. Submit as ONE command that chains the freshness and ownership fence directly into the
+   write calls, so any guard failure mechanically prevents the POST:
+
    test "$snapshot" = "${headSha} open draft:false" && \\
-   curl -fsS -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
+   curl -fsS -X POST -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
      "$CONTROL_PLANE_URL/sessions/$session_id/review-ownership" && \\
    review_url="$(gh api repos/${owner}/${repo}/pulls/${number}/reviews \\
      --method POST \\
@@ -149,13 +171,14 @@ ${prDescriptionBlock}
    curl -fsS -X DELETE -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
      "$CONTROL_PLANE_URL/sessions/$session_id/review-ownership"
 
-   The fence: the \`test\` asserts the live head is still exactly "${headSha}", open, and not
-   a draft; the GET \`curl\` acquires this session's submission lease from the control plane
-   (204 = owned; 409 = a newer review session has taken over, curl exits 22); the final
-   DELETE releases the lease after the writes. If ANY part fails — missing environment
-   variable, freshness mismatch, ownership 409, network error — the chain stops before or at
-   the review POST. In that case exit immediately WITHOUT posting a review, inline comment,
-   or status update by any other means.
+   The fence: the \`test\` re-asserts the live head is still exactly "${headSha}", open, and
+   not a draft; the POST \`curl\` acquires this session's submission lease from the control
+   plane (204 = owned; 409 = a newer review session has taken over, curl exits 22); the
+   final DELETE releases the lease after the writes. If ANY part fails — missing environment
+   variable, ownership 409, network error — the chain stops before or at the review POST. In
+   that case exit immediately WITHOUT posting a review, inline comment, or status update by
+   any other means. On a 409 in particular, stay silent: the newer session owns the
+   "${headSha}" status and will post its own terminal result.
 
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;

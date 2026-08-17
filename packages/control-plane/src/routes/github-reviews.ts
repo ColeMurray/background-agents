@@ -129,6 +129,55 @@ export async function handleClaimReviewGeneration(
 }
 
 /**
+ * POST /internal/github-reviews/release-claim
+ * Compensating counterpart to the claim: rolls `latest_generation` back by one
+ * when the github-bot's own session creation failed for a reason other than
+ * supersession, so the bump it made does not permanently outrank a review
+ * session that is still running from the previous generation.
+ *
+ * Conditional by construction — the update lands only while the caller's
+ * generation is still the latest. A newer trigger that has already claimed
+ * past it wins, and its claim is left untouched.
+ */
+export async function handleReleaseReviewGeneration(
+  request: Request,
+  _env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  const parsed = sweepRequestSchema.safeParse(rawBody);
+  if (!parsed.success) return error("Invalid release request body", 400);
+  const { repoId, prNumber, generation } = parsed.data;
+
+  const result = await ctx.db
+    .prepare(
+      `UPDATE github_review_state
+         SET latest_generation = latest_generation - 1, updated_at = ?
+       WHERE repo_id = ? AND pr_number = ? AND latest_generation = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM github_review_sessions grs
+           WHERE grs.repo_id = github_review_state.repo_id
+             AND grs.pr_number = github_review_state.pr_number
+             AND grs.generation = ?
+         )`
+    )
+    .bind(Date.now(), repoId, prNumber, generation, generation)
+    .run();
+
+  const released = (result.meta?.changes ?? 0) > 0;
+  logger.info("review_claim.release", {
+    event: "review_claim.release",
+    repo_id: repoId,
+    pull_number: prNumber,
+    generation,
+    released,
+  });
+  return json({ released });
+}
+
+/**
  * Cancel one stale review session's DO plus its active descendants
  * (mirroring handleCancelChild's cascade in routes/session-children.ts).
  * Returns whether the caller may delete the github_review_sessions row:
@@ -265,8 +314,9 @@ export async function handleSweepStaleReviews(
 }
 
 /**
- * GET /sessions/:id/review-ownership
- * Sandbox-token-authenticated ownership check: the review agent calls this
+ * POST /sessions/:id/review-ownership
+ * Sandbox-token-authenticated ownership check and lease acquisition: the
+ * review agent calls this
  * immediately before its final GitHub writes. `owned` is true only while the
  * calling session's registered generation is still the latest claimed one
  * for its PR — a superseded (or swept) session gets false and must exit
@@ -362,6 +412,7 @@ export async function reapSupersededReviewSessions(
        JOIN github_review_state st
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
        WHERE grs.generation < st.latest_generation
+       ORDER BY grs.created_at ASC, grs.session_id ASC
        LIMIT 20`
     )
     .all<StaleReviewSessionRow>();
@@ -404,6 +455,11 @@ export const githubReviewRoutes: Route[] = [
     pattern: parsePattern("/internal/github-reviews/claim"),
     handler: requireGitHubBotService(handleClaimReviewGeneration),
   }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+    method: "POST",
+    pattern: parsePattern("/internal/github-reviews/release-claim"),
+    handler: requireGitHubBotService(handleReleaseReviewGeneration),
+  }),
   defineRoute(
     GITHUB_USER_OR_SERVICE_ROUTE,
     sessionRoute({
@@ -415,7 +471,7 @@ export const githubReviewRoutes: Route[] = [
   // Submission-boundary fence, called by the review agent from the sandbox.
   // Both handlers additionally require the caller's own sandbox principal.
   defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
-    method: "GET",
+    method: "POST",
     pattern: parsePattern("/sessions/:id/review-ownership"),
     handler: handleReviewOwnership,
   }),

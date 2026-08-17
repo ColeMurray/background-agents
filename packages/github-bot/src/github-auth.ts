@@ -19,6 +19,7 @@ export const REVIEW_STATUS_CONTEXT = "open-inspect";
 export const REVIEW_PENDING_DESCRIPTION = "Review in progress";
 export const REVIEW_COMPLETED_DESCRIPTION = "Review completed";
 export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
+export const REVIEW_STALE_DESCRIPTION = "Review skipped: PR changed before submission";
 export interface GitHubAppConfig {
   appId: string;
   privateKey: string;

@@ -132,11 +132,21 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 1. Check `pull_request.draft` — skip draft PRs.
 2. Apply the configured trigger-user gate. The bot reviews bot-created PRs only when
    `allowedTriggerUsers` includes its login.
-3. Post a pending `open-inspect` status on `pull_request.head.sha`.
-4. Post an eyes reaction on the PR.
-5. Create a session through the control plane.
-6. Send the code review prompt. The prompt posts the completed review, then replaces the status on
-   the same head SHA with `success` and links it to the review. Reviews of the bot's own PRs use
+3. Post an eyes reaction on the PR.
+4. Re-read the PR from GitHub and skip when the head SHA, state, or draft flag no longer match the
+   webhook payload. This runs as the last step before the claim, so the narrowest possible window
+   remains in which a push or close can outrank the snapshot.
+5. Claim the next review generation for the PR from the control plane.
+6. Create a session through the control plane, fenced on that generation. A 409 means a newer
+   trigger already won, and the handler skips. Any other failure releases the claim — conditionally,
+   so a newer claim is never disturbed — before rethrowing.
+7. Sweep and cancel review sessions for the PR that hold an older generation.
+8. Post a pending `open-inspect` status on `pull_request.head.sha`.
+9. Send the code review prompt. Before submitting, the prompt re-checks freshness and acquires a
+   submission lease from the control plane; a superseded session exits silently, because the newer
+   session owns that head SHA's status. On a freshness mismatch the prompt closes the pending status
+   out with `error` — no successor is writing to that SHA. On success it posts the review, then
+   replaces the status with `success` and links it to the review. Reviews of the bot's own PRs use
    `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
 
 **Review Requested (compatibility path):**
@@ -145,9 +155,10 @@ This handler is retained for webhook compatibility. The user-facing GitHub workf
 people to request the GitHub App bot through the PR reviewer picker.
 
 1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not.
-2. Post a pending `open-inspect` status on `pull_request.head.sha`.
-3. Post an eyes reaction on the PR.
-4. Create a session through the control plane.
+2. Post an eyes reaction on the PR.
+3. Run the same freshness check, generation claim, fenced session creation (with conditional claim
+   release on failure), and stale-review sweep as the auto-review path.
+4. Post a pending `open-inspect` status on `pull_request.head.sha`.
 5. Send the code review prompt, which posts the successful status after the review.
 
 **Issue Comment:**

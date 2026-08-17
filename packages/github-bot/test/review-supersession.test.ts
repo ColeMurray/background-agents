@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
-import { claimReviewGeneration, sweepStaleReviews } from "../src/review-supersession";
+import {
+  claimReviewGeneration,
+  releaseReviewGeneration,
+  sweepStaleReviews,
+} from "../src/review-supersession";
 
 function createMockLogger(): Logger {
   return {
@@ -67,6 +71,69 @@ describe("claimReviewGeneration", () => {
     await expect(
       claimReviewGeneration(env, "trace-claim-malformed", { repoId: 501, prNumber: 42 })
     ).rejects.toThrow("Review generation claim failed: invalid response");
+  });
+});
+
+describe("releaseReviewGeneration", () => {
+  it("posts repoId/prNumber/generation so the rollback stays conditional", async () => {
+    const env = createMockEnv(
+      async () => new Response(JSON.stringify({ released: true }), { status: 200 })
+    );
+    const log = createMockLogger();
+
+    await releaseReviewGeneration(env, log, "trace-release", {
+      repoId: 501,
+      prNumber: 42,
+      generation: 3,
+    });
+
+    const fetchMock = getFetch(env);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://internal/internal/github-reviews/release-claim");
+    expect(init.method).toBe("POST");
+    // The generation is what makes the rollback conditional: the control plane
+    // only decrements while this claim is still the latest one.
+    expect(JSON.parse(init.body)).toEqual({ repoId: 501, prNumber: 42, generation: 3 });
+    expect(log.info).toHaveBeenCalledWith(
+      "review_claim.released",
+      expect.objectContaining({ generation: 3 })
+    );
+  });
+
+  it("never throws when the control plane rejects the release", async () => {
+    const env = createMockEnv(async () => new Response("nope", { status: 503 }));
+    const log = createMockLogger();
+
+    await expect(
+      releaseReviewGeneration(env, log, "trace-release-503", {
+        repoId: 501,
+        prNumber: 42,
+        generation: 3,
+      })
+    ).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(
+      "review_claim.release_failed",
+      expect.objectContaining({ status: 503 })
+    );
+  });
+
+  it("never throws when the control plane is unreachable", async () => {
+    const env = createMockEnv(async () => {
+      throw new Error("network down");
+    });
+    const log = createMockLogger();
+
+    await expect(
+      releaseReviewGeneration(env, log, "trace-release-error", {
+        repoId: 501,
+        prNumber: 42,
+        generation: 3,
+      })
+    ).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(
+      "review_claim.release_error",
+      expect.objectContaining({ generation: 3 })
+    );
   });
 });
 

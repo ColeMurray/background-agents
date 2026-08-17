@@ -13,6 +13,7 @@ vi.mock("../src/github-auth", () => ({
   REVIEW_COMPLETED_DESCRIPTION: "Review completed",
   REVIEW_PENDING_DESCRIPTION: "Review in progress",
   REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
+  REVIEW_STALE_DESCRIPTION: "Review skipped: PR changed before submission",
   REVIEW_STATUS_CONTEXT: "open-inspect",
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postCommitStatus: vi.fn().mockResolvedValue({ ok: true }),
@@ -78,6 +79,9 @@ function createMockLogger(): Logger {
 function defaultReviewSupersessionResponse(url: string): Response | null {
   if (url === "https://internal/internal/github-reviews/claim") {
     return new Response(JSON.stringify({ generation: 1 }), { status: 200 });
+  }
+  if (url === "https://internal/internal/github-reviews/release-claim") {
+    return new Response(JSON.stringify({ released: true }), { status: 200 });
   }
   if (url === "https://internal/internal/github-reviews/sweep") {
     return new Response(JSON.stringify({ cancelledSessionIds: [], failedSessionIds: [] }), {
@@ -342,7 +346,25 @@ describe("handlePullRequestReviewTrigger", () => {
       handlePullRequestReviewTrigger(env, log, pullRequestReviewTriggerPayload, "trace-0")
     ).rejects.toThrow("Session creation failed: invalid response");
 
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    // The claim bumped the fence but no session carries it, so the handler
+    // must release it — conditionally, on exactly the generation it claimed —
+    // before rethrowing. Without this a review still running on the previous
+    // generation would be permanently locked out of submitting.
+    const releaseCalls = cpFetch.mock.calls.filter(
+      ([url]: [string]) => url === "https://internal/internal/github-reviews/release-claim"
+    );
+    expect(releaseCalls).toHaveLength(1);
+    expect(JSON.parse(releaseCalls[0][1].body)).toEqual({
+      repoId: 501,
+      prNumber: 42,
+      generation: 1,
+    });
+    // No sweep ran: the superseding session never existed.
+    expect(
+      cpFetch.mock.calls.filter(
+        ([url]: [string]) => url === "https://internal/internal/github-reviews/sweep"
+      )
+    ).toHaveLength(0);
     expect(postCommitStatus).not.toHaveBeenCalled();
   });
 
