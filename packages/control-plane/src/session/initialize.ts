@@ -324,6 +324,7 @@ export async function initializeSession(
           trace_id: ctx.trace_id,
         });
       }
+      await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
       throw new ReviewGenerationSupersededError();
     }
   }

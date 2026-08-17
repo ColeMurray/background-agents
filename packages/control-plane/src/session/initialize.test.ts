@@ -367,6 +367,7 @@ describe("initializeSession", () => {
       );
       expect(cancelCalls).toHaveLength(1);
       expect(deletes).toHaveLength(1);
+      expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
     });
 
     it("retains the fence row when the self-cancel is not confirmed", async () => {
@@ -381,6 +382,7 @@ describe("initializeSession", () => {
         ReviewGenerationSupersededError
       );
       expect(deletes).toEqual([]);
+      expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
     });
   });
 });

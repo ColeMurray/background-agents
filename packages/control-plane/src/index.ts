@@ -73,10 +73,6 @@ export default {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
-    if (!env.SCHEDULER) {
-      logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
-      return;
-    }
     const requestId = crypto.randomUUID();
     const cronCtx = {
       request_id: requestId,
@@ -86,10 +82,20 @@ export default {
     // Always wake the SchedulerDO first — it runs both the recovery sweep
     // (orphaned/timed-out runs) and processes overdue automations, and must
     // not be delayed or skipped by a slow or failing review reaper.
-    const doId = env.SCHEDULER.idFromName("global-scheduler");
-    const stub = env.SCHEDULER.get(doId);
-
-    await stub.fetch("http://internal/internal/tick", { method: "POST" });
+    if (env.SCHEDULER) {
+      const doId = env.SCHEDULER.idFromName("global-scheduler");
+      const stub = env.SCHEDULER.get(doId);
+      try {
+        await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      } catch (tickError) {
+        logger.warn("Scheduler tick failed", {
+          event: "scheduler.tick_failed",
+          error: tickError instanceof Error ? tickError.message : String(tickError),
+        });
+      }
+    } else {
+      logger.debug("SCHEDULER binding not configured, skipping scheduler tick");
+    }
 
     try {
       // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: cron env.DB read
