@@ -80,22 +80,44 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(fetch.mock.calls[1][0].url).pathname).toBe("/internal/xai-token-refresh");
   });
 
-  it("allows GitLab deployments to reach the SCM credential broker", async () => {
+  it.each(["slack-bot", "github-bot", "linear-bot"] as const)(
+    "rejects %s authentication before reaching the SCM credential broker",
+    async (service) => {
+      const { env, fetch } = createEnv();
+
+      const response = await handleRequest(
+        await signedServiceRequest("https://test.local/sessions/session-1/scm-credentials", {
+          method: "POST",
+          service,
+        }),
+        env as never,
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({
+        error: "Unauthorized: Missing sandbox token",
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("allows a matching sandbox token to reach the GitLab SCM credential broker", async () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
-      await signedServiceRequest("https://test.local/sessions/session-1/scm-credentials", {
+      new Request("https://test.local/sessions/session-1/scm-credentials", {
         method: "POST",
-        service: "linear-bot",
+        headers: { Authorization: "Bearer sandbox-token" },
       }),
       env as never,
       TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(202);
-    expect(fetch).toHaveBeenCalledOnce();
-    const request = fetch.mock.calls[0][0];
-    expect(new URL(request.url).pathname).toBe("/internal/scm-credentials");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
+    expect(new URL(fetch.mock.calls[1][0].url).pathname).toBe("/internal/scm-credentials");
   });
 
   it("allows GitLab deployments to reach the tunnel URLs endpoint", async () => {

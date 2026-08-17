@@ -93,8 +93,11 @@ describe("router sandbox-token fallback", () => {
   it("does not fall back after a failed service credential attempt", async () => {
     const { env, doFetch } = createEnv(204);
     const request = await signedServiceRequest(
-      "https://test.local/sessions/session-1/scm-credentials",
-      { method: "POST", service: "linear-bot" }
+      "https://test.local/sessions/session-1/tunnel-urls",
+      {
+        service: "linear-bot",
+        headers: { Authorization: "Bearer valid-sandbox-token" },
+      }
     );
     request.headers.set("X-OpenInspect-Service-Signature", "invalid");
 

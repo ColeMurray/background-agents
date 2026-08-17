@@ -32,7 +32,6 @@ describe("route policy table", () => {
 
   it.each([
     ["POST", "/sessions/session-1/pr"],
-    ["POST", "/sessions/session-1/scm-credentials"],
     ["GET", "/sessions/session-1/tunnel-urls"],
     ["POST", "/sessions/session-1/media"],
     ["GET", "/sessions/session-1/attachments/attachment-1"],
@@ -53,6 +52,7 @@ describe("route policy table", () => {
   });
 
   it.each([
+    ["POST", "/sessions/session-1/scm-credentials"],
     ["GET", "/sessions/session-1/commit-signing"],
     ["POST", "/sessions/session-1/commit-signing"],
     ["POST", "/sessions/parent-1/children/child-1/prompt"],

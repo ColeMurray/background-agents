@@ -138,7 +138,7 @@ export const SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE = {
 } as const satisfies RoutePolicy;
 
 export const SCM_CREDENTIALS_ROUTE = {
-  authentication: { kind: "user-or-service-with-sandbox-fallback", ...SESSION_ID_BINDING },
+  authentication: { kind: "sandbox", ...SESSION_ID_BINDING },
   supportedScmProviders: ["github", "gitlab"],
 } as const satisfies RoutePolicy;
 
