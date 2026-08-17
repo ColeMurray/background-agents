@@ -185,6 +185,39 @@ describe("POST /internal/prompt", () => {
     sandboxWs!.close();
   });
 
+  it("dispatches exactly one of two concurrent prompts and leaves the other queued", async () => {
+    const name = `prompt-concurrent-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const sandboxMessages = collectMessages(sandboxWs!, { timeoutMs: 500 });
+    const enqueue = (content: string) =>
+      stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+      });
+    const responses = await Promise.all([enqueue("Concurrent A"), enqueue("Concurrent B")]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+
+    const prompts = (await sandboxMessages).filter((message) => message.type === "prompt");
+    expect(prompts).toHaveLength(1);
+    const rows = await queryDO<{ id: string; status: string }>(
+      stub,
+      `SELECT id, status FROM messages ORDER BY created_at ASC, rowid ASC`
+    );
+    expect(rows.map(({ status }) => status).sort()).toEqual(["pending", "processing"]);
+    expect(prompts[0].messageId).toBe(rows.find(({ status }) => status === "processing")?.id);
+
+    sandboxWs!.close();
+  });
+
   it("stores attachments as JSON", async () => {
     const { stub } = await initSession();
     const attachmentId = "attachment-1";

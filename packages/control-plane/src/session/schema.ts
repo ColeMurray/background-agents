@@ -199,6 +199,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
 ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
+ON messages(status) WHERE status = 'processing';
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
@@ -534,6 +536,29 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 41,
     description: "Add dedicated stop confirmation deadline",
     run: `ALTER TABLE messages ADD COLUMN stop_confirmation_deadline INTEGER`,
+  },
+  {
+    id: 42,
+    description: "Allow only one processing message per session",
+    run: (sql) => {
+      // Preserve the oldest claim as the likely active execution and requeue later claims.
+      const duplicateProcessingMessages = `SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            ORDER BY COALESCE(started_at, created_at), created_at, rowid
+          ) AS processing_order
+          FROM messages
+          WHERE status = 'processing'
+        ) WHERE processing_order > 1`;
+      sql.exec(`DELETE FROM events
+        WHERE type = 'user_message'
+          AND id = 'user_message:' || message_id
+          AND message_id IN (${duplicateProcessingMessages})`);
+      sql.exec(`UPDATE messages
+        SET status = 'pending', started_at = NULL
+        WHERE id IN (${duplicateProcessingMessages})`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
+        ON messages(status) WHERE status = 'processing'`);
+    },
   },
 ];
 

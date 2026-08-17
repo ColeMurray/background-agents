@@ -61,13 +61,4 @@ describe("DOFetcherAdapter", () => {
     expect(ns.idFromName).toHaveBeenCalledTimes(2);
     expect(ns.get).toHaveBeenCalledTimes(2);
   });
-
-  it("throws on connect()", () => {
-    const { ns } = createMockNamespace();
-    const adapter = new DOFetcherAdapter(ns, "global-scheduler");
-
-    expect(() => adapter.connect("127.0.0.1:8080")).toThrow(
-      "DOFetcherAdapter does not support connect()"
-    );
-  });
 });

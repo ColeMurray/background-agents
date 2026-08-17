@@ -7,7 +7,7 @@ export interface EventTimelineCursor {
   sequence?: number;
 }
 
-export interface LegacyEventCursor {
+interface LegacyEventCursor {
   kind: "legacy";
   createdAt: number;
 }

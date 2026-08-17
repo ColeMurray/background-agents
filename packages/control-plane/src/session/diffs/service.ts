@@ -10,7 +10,8 @@ import {
 import { generateId } from "../../auth/crypto";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
-import type { SessionRepository } from "../repository";
+import { SandboxDeliveryUnavailableError } from "../connections";
+import type { SessionCoreRepository } from "../session-core-repository";
 import { repoIdentityEquals, type SessionRepositoryEntry } from "../repository-target";
 import {
   DiffBaselineMismatchError,
@@ -36,7 +37,7 @@ function shaEquals(a: string, b: string): boolean {
 export class SessionDiffService {
   constructor(
     private readonly store: SessionDiffStore,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
     private readonly messenger: SessionMessenger,
     private readonly log: Logger,
     private readonly generateRevisionId: () => string = () => generateId(),
@@ -46,7 +47,7 @@ export class SessionDiffService {
   /** Return the latest patch-free manifest and any non-destructive refresh error. */
   getPublicState(): SessionDiffState {
     const repositories = this.repository.getSessionRepositories();
-    const missingBaseline = repositories.some((repository) => !repository.row?.base_sha);
+    const missingBaseline = repositories.some((repository) => !this.getBaseline(repository));
     return this.store.getPublicState(
       missingBaseline ? "Changes unavailable for this session" : null
     );
@@ -94,7 +95,7 @@ export class SessionDiffService {
     sessionRepositories: SessionRepositoryEntry[]
   ): void {
     for (const [index, sessionRepository] of sessionRepositories.entries()) {
-      const existing = sessionRepository.row?.base_sha;
+      const existing = this.getBaseline(sessionRepository);
       const next = advertised[index]!.baseSha;
       if (existing && !shaEquals(existing, next)) {
         this.log.warn("session_diff.baseline_conflict", {
@@ -157,9 +158,14 @@ export class SessionDiffService {
   }
 
   /** Request a non-blocking refresh from the connected session sandbox. */
-  requestRefresh(): void {
-    if (!this.messenger.sendToSandbox({ type: "refresh_diff" })) {
-      throw new SandboxNotConnectedError();
+  async requestRefresh(): Promise<void> {
+    try {
+      await this.messenger.sendToSandbox({ type: "refresh_diff" });
+    } catch (error) {
+      if (error instanceof SandboxDeliveryUnavailableError) {
+        throw new SandboxNotConnectedError();
+      }
+      throw error;
     }
   }
 
@@ -175,7 +181,7 @@ export class SessionDiffService {
       if (!repository || !repoIdentityEquals(repository, sessionRepository)) {
         throw new DiffRepositoryMismatchError();
       }
-      const baseSha = sessionRepository.row?.base_sha;
+      const baseSha = this.getBaseline(sessionRepository);
       if (!baseSha) {
         throw new DiffBaselineUnavailableError();
       }
@@ -183,6 +189,13 @@ export class SessionDiffService {
         throw new DiffBaselineMismatchError();
       }
     }
+  }
+
+  private getBaseline(repository: SessionRepositoryEntry): string | null {
+    return (
+      repository.row?.base_sha ??
+      (repository.isPrimary ? (this.repository.getSession()?.base_sha ?? null) : null)
+    );
   }
 
   private broadcastState(updatedAt: number): void {

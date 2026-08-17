@@ -137,6 +137,18 @@ describe("E2BRestClient", () => {
     await expect(client.killSandbox("sb-1")).resolves.toBeUndefined();
   });
 
+  it("combines a kill caller signal with the request timeout", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    const controller = new AbortController();
+    controller.abort();
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await client.killSandbox("sb-1", controller.signal);
+
+    expect(fetchSpy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+  });
+
   it("rejects malformed E2B success responses", async () => {
     const client = new E2BRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1" }));

@@ -10,7 +10,6 @@ import { resolveSessionOAuthSecretScope } from "./session-target-secrets";
 import type { SessionRow } from "./types";
 
 export {
-  OpenAITokenBrokerError,
   OpenAITokenNotConfiguredError,
   OpenAITokenStorageError,
   OpenAITokenUnauthorizedError,

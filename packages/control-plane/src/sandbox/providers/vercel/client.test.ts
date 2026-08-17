@@ -158,6 +158,39 @@ describe("VercelSandboxClient", () => {
     expect(result).toEqual({ commandId: "cmd-1", exitCode: null });
   });
 
+  it.each([
+    ["createSandbox", () => createClient().createSandbox({ name: "sandbox-1" })],
+    [
+      "startCommand",
+      () => createClient().startCommand({ sessionId: "session-1", command: "true" }),
+    ],
+    ["snapshotSession", () => createClient().snapshotSession("session-1")],
+    ["listSnapshots", () => createClient().listSnapshots()],
+  ])("rejects a valid JSON error envelope from %s", async (_endpoint, request) => {
+    const responseBody = JSON.stringify({ error: { code: "provider_drift" } });
+    fetchSpy.mockResolvedValue(new Response(responseBody, { status: 201 }));
+
+    await expect(request()).rejects.toMatchObject({
+      name: "VercelSandboxApiError",
+      status: 201,
+      responseText: responseBody,
+    });
+  });
+
+  it("preserves status and logs an error for invalid JSON", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    fetchSpy.mockResolvedValue(new Response("not-json", { status: 202 }));
+
+    await expect(createClient().listSnapshots()).rejects.toMatchObject({
+      message: expect.stringContaining("Vercel Sandbox API returned invalid JSON"),
+      status: 202,
+    });
+    const requestLog = logSpy.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .find((entry) => entry.event === "vercel_sandbox.request");
+    expect(requestLog).toMatchObject({ http_status: 202, outcome: "error" });
+  });
+
   it("parses NDJSON output from a waited command", async () => {
     fetchSpy.mockResolvedValue(
       new Response(
@@ -268,7 +301,7 @@ describe("VercelSandboxClient", () => {
     expect(fetchSpy.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "DELETE" }));
   });
 
-  it("lists snapshots by sandbox name", async () => {
+  it("lists snapshots without requiring an undocumented region", async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({
         snapshots: [
@@ -276,7 +309,6 @@ describe("VercelSandboxClient", () => {
             id: "snapshot-1",
             sourceSessionId: "session-1",
             status: "created",
-            region: "iad1",
             sizeBytes: 1024,
             createdAt: 456,
             updatedAt: 789,
@@ -296,6 +328,7 @@ describe("VercelSandboxClient", () => {
       expect.objectContaining({ method: "GET" })
     );
     expect(snapshots[0]?.id).toBe("snapshot-1");
+    expect(snapshots[0]?.region).toBeUndefined();
   });
 
   it("stops a sandbox session with the expected endpoint", async () => {

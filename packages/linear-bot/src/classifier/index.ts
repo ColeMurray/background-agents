@@ -23,7 +23,7 @@ export const classifyToolInputSchema = z.object({
   alternatives: z.array(z.string()),
 });
 
-export type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
+type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
 
 const DEFAULT_CLASSIFICATION_MODEL = "gpt-5.4-mini";
 

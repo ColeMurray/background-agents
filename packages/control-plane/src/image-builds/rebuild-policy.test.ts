@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import type { ImageBuildProvider } from "./model";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
+import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 
 const unit = {
   scope: { kind: "repo" as const, id: "acme/web" },
@@ -17,7 +19,7 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
     status: "ready",
     repositories_fingerprint: "fp-current",
     repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
-    runtime_version: "v57-vnc-runtime",
+    runtime_version: COMPATIBLE_RUNTIME_VERSION,
     build_duration_seconds: 1,
     error_message: null,
     created_at: 1,
@@ -54,6 +56,30 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     expect(
       evaluateImageBuildRebuildPolicy(unit, [row({ provider: "vercel" })], "modal")
     ).toMatchObject({ type: "rebuild", reason: "missing_image" });
+  });
+
+  it("rebuilds each provider's pre-wraparound image and keeps the shared new generation", () => {
+    const superseded: Array<[ImageBuildProvider, string]> = [
+      ["modal", "v58-image-build-stdin-launch-vnc"],
+      ["opencomputer", "v57-vnc-opencode-1-18-11"],
+      ["vercel", "v57-vnc-opencode-1-18-11"],
+    ];
+    for (const [provider, runtime_version] of superseded) {
+      expect(
+        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtime_version })], provider)
+      ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
+    }
+
+    const current: Array<[ImageBuildProvider, string]> = [
+      ["modal", "v59-opencode-1-18-18"],
+      ["opencomputer", "v59-vnc-opencode-1-18-18"],
+      ["vercel", "v59-vnc-opencode-1-18-18"],
+    ];
+    for (const [provider, runtime_version] of current) {
+      expect(
+        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtime_version })], provider).type
+      ).toBe("check_branches");
+    }
   });
 
   it("defers a compatible image to branch-head comparison", () => {

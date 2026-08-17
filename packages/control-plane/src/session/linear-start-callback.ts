@@ -1,13 +1,14 @@
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
+import type { FetchClient } from "../platform-ports";
 
 interface LinearStartCallbackOptions {
   messageId: string;
   callbackContext: string;
   sessionId: string;
   secret: string;
-  binding: Fetcher;
+  binding: FetchClient;
   log: Logger;
   sleep: (ms: number) => Promise<void>;
 }

@@ -25,14 +25,14 @@ export function buildVncUrl(
   password: string | null | undefined
 ): string | null {
   const safeUrl = getSafeExternalUrl(url);
-  if (!safeUrl) return null;
+  if (!safeUrl || !password) return null;
 
   const parsed = new URL(safeUrl);
   parsed.pathname = `${parsed.pathname.replace(/\/?$/, "/")}vnc.html`;
   parsed.searchParams.set("autoconnect", "true");
   parsed.searchParams.set("resize", "scale");
   parsed.searchParams.delete("password");
-  parsed.hash = password ? new URLSearchParams({ password }).toString() : "";
+  parsed.hash = new URLSearchParams({ password }).toString();
   return parsed.toString();
 }
 

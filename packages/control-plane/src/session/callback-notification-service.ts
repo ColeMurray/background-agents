@@ -8,19 +8,22 @@
  */
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import {
+  linearCompletionCallbackPayloadSchema,
+  linearToolCallCallbackPayloadSchema,
+} from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
+import type { MessageRepository } from "./message-repository";
+import type { FetchClient } from "../platform-ports";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
  */
 export interface CallbackRepository {
-  getMessageCallbackContext(
-    messageId: string
-  ): { callback_context: string | null; source: string | null } | null;
   getSession(): SessionRow | null;
 }
 
@@ -33,9 +36,9 @@ export interface CallbackServiceEnv {
   // destination's own.
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
-  SLACK_BOT?: Fetcher;
-  LINEAR_BOT?: Fetcher;
-  SCHEDULER_CALLBACK?: Fetcher;
+  SLACK_BOT?: FetchClient;
+  LINEAR_BOT?: FetchClient;
+  SCHEDULER_CALLBACK?: FetchClient;
 }
 
 /**
@@ -43,6 +46,7 @@ export interface CallbackServiceEnv {
  */
 export interface CallbackServiceDeps {
   repository: CallbackRepository;
+  messageRepository: MessageRepository;
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
@@ -56,6 +60,7 @@ export interface CallbackServiceDeps {
  * single duplicate Linear/Slack activity, not data loss.
  */
 const NOTIFIED_CALL_IDS_CAP = 500;
+const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
 
 interface CallbackDeliveryResult {
   delivered: boolean;
@@ -66,6 +71,7 @@ interface CallbackDeliveryResult {
 
 export class CallbackNotificationService {
   private readonly repository: CallbackRepository;
+  private readonly messageRepository: MessageRepository;
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
@@ -75,6 +81,7 @@ export class CallbackNotificationService {
 
   constructor(deps: CallbackServiceDeps) {
     this.repository = deps.repository;
+    this.messageRepository = deps.messageRepository;
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
@@ -105,7 +112,7 @@ export class CallbackNotificationService {
    * sources, etc.).
    */
   private resolveCallbackRoute(source: string | null): {
-    binding: Fetcher | undefined;
+    binding: FetchClient | undefined;
     secret: string | undefined;
   } {
     const destination: CallbackDestination = source === "linear" ? "linear-bot" : "slack-bot";
@@ -117,7 +124,7 @@ export class CallbackNotificationService {
 
   /** Notify the Linear worker after a Linear message is dispatched to a live sandbox. */
   async notifyStarted(messageId: string): Promise<void> {
-    const message = this.repository.getMessageCallbackContext(messageId);
+    const message = this.messageRepository.getMessageCallbackContext(messageId);
     if (!message?.callback_context || message.source !== "linear") {
       this.log.debug("callback.started", {
         message_id: messageId,
@@ -157,12 +164,12 @@ export class CallbackNotificationService {
   }
 
   /**
-   * Notify the originating client of completion with retry.
+   * Best-effort notification of the originating client with retry.
    * Routes to the correct service binding based on the message source.
    */
   async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
-    const sessionId = this.getSessionId();
     const startedAt = Date.now();
+    let sessionId: string | null = null;
     let source: string | null = null;
     let result: CallbackDeliveryResult = {
       delivered: false,
@@ -172,18 +179,19 @@ export class CallbackNotificationService {
     let thrownError: unknown;
 
     try {
-      const message = this.repository.getMessageCallbackContext(messageId);
+      sessionId = this.getSessionId();
+      const message = this.messageRepository.getMessageCallbackContext(messageId);
       if (!message?.callback_context) {
         result.rejectReason = "no_callback_context";
         return;
       }
 
-      const context = JSON.parse(message.callback_context);
-      source = context.source === "automation" ? "automation" : (message.source ?? null);
+      const rawContext = JSON.parse(message.callback_context);
+      source = rawContext.source === "automation" ? "automation" : (message.source ?? null);
 
       // Route automation callbacks to SchedulerDO (different URL + payload).
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(context, success, error, messageId);
+        result = await this.notifyAutomationComplete(rawContext, success, error, messageId);
         return;
       }
 
@@ -198,14 +206,23 @@ export class CallbackNotificationService {
       }
 
       const timestamp = Date.now();
-      const payloadData = {
+      const callbackData = {
         sessionId,
         messageId,
         success,
         ...(error != null ? { error } : {}),
         timestamp,
-        context,
+        context: rawContext,
       };
+      const parsedCallback =
+        source === "linear"
+          ? linearCompletionCallbackPayloadSchema.safeParse(callbackData)
+          : undefined;
+      if (parsedCallback && !parsedCallback.success) {
+        result.rejectReason = "invalid_payload";
+        return;
+      }
+      const payloadData = parsedCallback?.data ?? callbackData;
       const signature = await this.signPayload(payloadData, secret);
       const payload = { ...payloadData, signature };
       result = await deliverWithRetry(
@@ -232,7 +249,6 @@ export class CallbackNotificationService {
       );
     } catch (caught) {
       thrownError = caught;
-      throw caught;
     } finally {
       const outcome =
         thrownError !== undefined
@@ -339,14 +355,12 @@ export class CallbackNotificationService {
     // a later event for the same callId can retry.
     if (callId && this.notifiedCallIds.has(callId)) return;
 
-    // Throttle: max 1 per 3 seconds
+    // Use one timestamp for validation, throttling, and the callback payload.
     const now = Date.now();
-    if (now - this._lastToolCallCallbackTs < 3000) return;
-    this._lastToolCallCallbackTs = now;
 
     const tool = event.tool ?? "unknown";
 
-    const message = this.repository.getMessageCallbackContext(messageId);
+    const message = this.messageRepository.getMessageCallbackContext(messageId);
     if (!message?.callback_context) {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
@@ -394,18 +408,36 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
-    const context = JSON.parse(message.callback_context);
+    const rawContext = JSON.parse(message.callback_context);
 
-    const payloadData = {
+    const callbackData = {
       sessionId,
       tool,
-      args: event.args ?? {},
+      args: source === "linear" ? event.args : (event.args ?? EMPTY_TOOL_ARGS),
       callId,
       status: event.status,
       timestamp: now,
-      context,
+      context: rawContext,
     };
+    const parsedPayload =
+      source === "linear" ? linearToolCallCallbackPayloadSchema.safeParse(callbackData) : undefined;
+    if (parsedPayload && !parsedPayload.success) {
+      this.log.warn("callback.tool_call", {
+        message_id: messageId,
+        session_id: sessionId,
+        source,
+        tool,
+        outcome: "skipped",
+        skip_reason: "invalid_payload",
+      });
+      return;
+    }
 
+    // Invalid callbacks must not consume the delivery throttle window.
+    if (now - this._lastToolCallCallbackTs < 3000) return;
+    this._lastToolCallCallbackTs = now;
+
+    const payloadData = parsedPayload?.data ?? callbackData;
     const signature = await this.signPayload(payloadData, secret);
     const payload = { ...payloadData, signature };
 

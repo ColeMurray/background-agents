@@ -175,6 +175,21 @@ describe("sessionSocketReducer", () => {
     expect(state.promptQueue).toEqual(queue);
   });
 
+  it("waits for the authoritative queue update after cancellation acknowledgement", () => {
+    const initial = subscribedState({
+      promptQueue: [{ messageId: "message-2", content: "Next", status: "pending" }],
+    });
+    const state = reduce(
+      initial,
+      serverMessage({
+        type: "prompt_cancelled",
+        clientRequestId: "request-1",
+        messageId: "message-2",
+      })
+    );
+    expect(state.promptQueue).toEqual(initial.promptQueue);
+  });
+
   describe("subscribed", () => {
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({

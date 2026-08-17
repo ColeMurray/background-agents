@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { evaluateImageBuildForSpawn, type ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
+import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 
 const SESSION_REPOSITORIES = [
   { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -22,7 +23,7 @@ async function readyImage(
       { repoOwner: "acme", repoName: "web", baseSha: "sha-web" },
       { repoOwner: "acme", repoName: "api", baseSha: "sha-api" },
     ]),
-    runtime_version: "v57-vnc-runtime",
+    runtime_version: COMPATIBLE_RUNTIME_VERSION,
     ...overrides,
   };
 }
@@ -37,7 +38,7 @@ describe("evaluateImageBuildForSpawn", () => {
         imageBuildId: "imgb-1",
         providerImageId: "im-abc123",
         primaryBaseSha: "sha-web",
-        runtimeVersion: "v57-vnc-runtime",
+        runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
       },
     });
   });

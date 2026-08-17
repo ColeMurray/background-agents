@@ -16,6 +16,7 @@ SNAPSHOT_RESERVE_FRACTION = 0.25
 # proxy fall back to these defaults. TTYD_PORT and VNC_PORT are localhost-only
 # and fixed; they are never exposed and have no env override.
 CODE_SERVER_PORT = 8080
+OPENCODE_PORT = 4096
 TTYD_PORT = 7681
 TTYD_PROXY_PORT = 7680
 NOVNC_PORT = 6080

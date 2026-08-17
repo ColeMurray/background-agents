@@ -15,6 +15,7 @@ import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildFinalizationQueue } from "./finalization-job";
 import type { ImageBuildPlan } from "./types";
+import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 import { ImageBuildWorkflow } from "./workflow";
 
 const ENV_SCOPE: ImageBuildScope = { kind: "environment", id: "env_1" };
@@ -159,7 +160,7 @@ function validCompletion(overrides: Record<string, unknown> = {}) {
     buildId: "imgb-env_1-1-abcd",
     providerSessionId: "vercel-session-1",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
-    runtimeVersion: "v57-vnc-runtime",
+    runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
     buildDurationSeconds: 12.5,
     ...overrides,
   };

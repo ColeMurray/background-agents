@@ -701,21 +701,13 @@ describe("VercelSandboxProvider", () => {
     const provider = new VercelSandboxProvider(client, providerConfig);
 
     await provider.triggerImageBuild({
-      buildId: "envimg-1",
-      scopeKind: "environment",
-      scopeId: "env_flagship",
+      ...environmentBuildConfig(),
       repositories: [
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ],
-      callbackUrl: "https://control-plane.test/environment-images/build-complete",
-      failureCallbackUrl: "https://control-plane.test/environment-images/build-failed",
-      callbackToken: "callback-token",
-      buildExecutionTimeoutSeconds: 1800,
-      providerSessionTimeoutSeconds: 2400,
       cloneToken: "clone-token",
       onProviderSessionCreated,
-      correlation: { trace_id: "trace-1", request_id: "request-1" },
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
@@ -751,11 +743,10 @@ describe("VercelSandboxProvider", () => {
           OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
           OI_REPO_IMAGE_PROVIDER_SESSION_ID: "vercel-session-1",
           OI_REPO_IMAGE_BUILD_ID: "envimg-1",
-          OI_REPO_IMAGE_CALLBACK_URL:
-            "https://control-plane.test/environment-images/build-complete",
+          OI_REPO_IMAGE_CALLBACK_URL: "https://control-plane.test/image-builds/build-complete",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
           OI_REPO_IMAGE_FAILURE_CALLBACK_URL:
-            "https://control-plane.test/environment-images/build-failed",
+            "https://control-plane.test/image-builds/build-failed",
         },
       }),
       { trace_id: "trace-1", request_id: "request-1" }

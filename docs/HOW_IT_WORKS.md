@@ -628,4 +628,5 @@ See [Secrets Management](./SECRETS.md) for setup instructions.
 ## What's Next
 
 - **[Getting Started](./GETTING_STARTED.md)**: Deploy your own instance
+- **[Managed Skills](./MANAGED_SKILLS.md)**: Create and select reusable agent instructions
 - **[Debugging Playbook](./DEBUGGING_PLAYBOOK.md)**: Troubleshoot issues with structured logs

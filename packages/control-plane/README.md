@@ -87,6 +87,12 @@ The control plane provides:
 When `headBranch` is omitted, control-plane resolves it from session state and finally falls back to
 the generated `open-inspect/<session>` branch.
 
+A session can hold multiple pull requests per repository — one open PR per head branch. Calling the
+endpoint again for a head branch that already carries an open PR force-pushes the branch and reuses
+that PR instead of creating a duplicate; the response marks this with `updated: true`. A merged or
+closed PR releases its head branch for a fresh PR. The success response is
+`{ prNumber, prUrl, state, headBranch, baseBranch, updated }`.
+
 ### SCM Credentials
 
 `POST /sessions/:id/scm-credentials` is a sandbox-authenticated endpoint used by the in-sandbox git

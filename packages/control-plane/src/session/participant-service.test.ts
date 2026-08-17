@@ -59,12 +59,12 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
   };
 }
 
-function createMockRepository(): ParticipantRepository {
+function createMockRepository() {
   return {
-    getParticipantByUserId: vi.fn(() => null),
-    getParticipantByWsTokenHash: vi.fn(() => null),
-    getParticipantById: vi.fn(() => null),
-    getProcessingMessageAuthor: vi.fn(() => null),
+    getParticipantByUserId: vi.fn<() => ParticipantRow | null>(() => null),
+    getParticipantByWsTokenHash: vi.fn<() => ParticipantRow | null>(() => null),
+    getParticipantById: vi.fn<() => ParticipantRow | null>(() => null),
+    getProcessingMessageAuthor: vi.fn<() => { author_id: string } | null>(() => null),
     createParticipant: vi.fn(),
     updateParticipantTokens: vi.fn(),
   };
@@ -124,7 +124,8 @@ function createTestHarness(overrides?: {
   };
 
   const deps: ParticipantServiceDeps = {
-    repository,
+    repository: repository as unknown as ParticipantRepository,
+    getProcessingMessageAuthor: repository.getProcessingMessageAuthor,
     env,
     log,
     generateId: () => `gen-id-${++idCounter}`,

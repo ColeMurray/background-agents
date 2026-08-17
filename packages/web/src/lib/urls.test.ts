@@ -60,10 +60,9 @@ describe("buildVncUrl", () => {
     );
   });
 
-  it("omits an absent password and rejects unsafe base URLs", () => {
-    expect(buildVncUrl("https://desktop.example", null)).toBe(
-      "https://desktop.example/vnc.html?autoconnect=true&resize=scale"
-    );
+  it("rejects missing passwords and unsafe base URLs", () => {
+    expect(buildVncUrl("https://desktop.example", null)).toBeNull();
+    expect(buildVncUrl("https://desktop.example", "")).toBeNull();
     expect(buildVncUrl("javascript:alert(1)", "secret")).toBeNull();
     expect(buildVncUrl("http://desktop.example", "secret")).toBeNull();
   });

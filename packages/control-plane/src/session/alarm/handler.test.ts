@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
 import { createAlarmHandler } from "./handler";
+import type { MessageRepository } from "../message-repository";
 import { createEarliestAlarmScheduler } from "./scheduler";
 
 function createHandler() {
@@ -27,7 +28,7 @@ function createHandler() {
   } as unknown as Logger;
 
   const handler = createAlarmHandler({
-    repository,
+    repository: repository as unknown as MessageRepository,
     messageQueue,
     lifecycleManager,
     alarmScheduler,
@@ -102,7 +103,7 @@ describe("createAlarmHandler", () => {
     };
 
     const handler = createAlarmHandler({
-      repository,
+      repository: repository as unknown as MessageRepository,
       messageQueue,
       lifecycleManager,
       alarmScheduler,

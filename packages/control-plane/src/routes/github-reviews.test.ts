@@ -122,6 +122,7 @@ function requestContext(db: SqlDatabase, principal?: Principal): RequestContext 
     metrics: {} as RequestContext["metrics"],
     request_id: "request-id",
     trace_id: "trace-id",
+    executionCtx: { submit: vi.fn() },
     principal,
   };
 }

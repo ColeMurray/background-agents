@@ -1,11 +1,18 @@
+import {
+  DEFAULT_SESSION_LIST_LIMIT,
+  DEFAULT_SESSION_LIST_OFFSET,
+  serializeSessionListQuery,
+  SESSION_LIST_CURRENT_USER,
+  type SessionListQuery,
+} from "@open-inspect/shared/session-list-query";
 import type { Session } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
-export const SESSIONS_PAGE_SIZE = 50;
+export const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
-export const SESSIONS_API_PATH = "/api/sessions";
-export const CURRENT_USER_CREATED_BY = "me";
+const SESSIONS_API_PATH = "/api/sessions";
+export const CURRENT_USER_CREATED_BY = SESSION_LIST_CURRENT_USER;
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",
   limit: SESSIONS_PAGE_SIZE,
@@ -21,41 +28,12 @@ export interface SessionListResponse {
   hasMore: boolean;
 }
 
-export function buildSessionsPageKey({
-  limit = SESSIONS_PAGE_SIZE,
-  offset = 0,
-  status,
-  excludeStatus,
-  excludeAutomationLineage,
-  createdBy,
-}: {
-  limit?: number;
-  offset?: number;
-  status?: string;
-  excludeStatus?: string;
-  excludeAutomationLineage?: boolean;
-  createdBy?: readonly string[];
-}): BrowserApiPath {
-  const searchParams = new URLSearchParams({
-    limit: String(limit),
-    offset: String(offset),
+export function buildSessionsPageKey(options: SessionListQuery = {}): BrowserApiPath {
+  const searchParams = serializeSessionListQuery({
+    ...options,
+    limit: options.limit ?? DEFAULT_SESSION_LIST_LIMIT,
+    offset: options.offset ?? DEFAULT_SESSION_LIST_OFFSET,
   });
-
-  if (status) {
-    searchParams.set("status", status);
-  }
-
-  if (excludeStatus) {
-    searchParams.set("excludeStatus", excludeStatus);
-  }
-
-  if (excludeAutomationLineage) {
-    searchParams.set("excludeAutomationLineage", "true");
-  }
-
-  for (const userId of createdBy ?? []) {
-    searchParams.append("createdBy", userId);
-  }
 
   return `${SESSIONS_API_PATH}?${searchParams.toString()}`;
 }
@@ -86,14 +64,13 @@ export function isArchivedSessionListKey(key: unknown): key is string {
 export function applyTitleUpdate(
   data: SessionListResponse | undefined,
   sessionId: string,
-  title: string,
-  updatedAt: number
+  title: string | null
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
     ...data,
     sessions: data.sessions.map((session) =>
-      session.id === sessionId ? { ...session, title, updatedAt } : session
+      session.id === sessionId ? { ...session, title } : session
     ),
   };
 }
@@ -153,7 +130,9 @@ export function buildSessionSearchValue(session: Session): string {
  * query params so the destination page can render its header before the
  * session payload loads.
  */
-export function buildSessionHref(session: Session) {
+export function buildSessionHref(
+  session: Pick<Session, "id" | "title" | "repoOwner" | "repoName">
+) {
   const query: Record<string, string> = {};
   if (session.repoOwner && session.repoName) {
     query.repoOwner = session.repoOwner;

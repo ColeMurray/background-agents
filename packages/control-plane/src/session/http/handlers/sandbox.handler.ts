@@ -17,7 +17,10 @@ import {
 import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
-import type { SessionRepository } from "../../repository";
+import type { MessageRepository } from "../../message-repository";
+import type { ArtifactRepository } from "../../artifact-repository";
+import type { EventRepository } from "../../event-repository";
+import type { ParticipantRepository } from "../../participant-repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
@@ -34,10 +37,10 @@ const addParticipantRequestSchema = z.object({
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    "createParticipant" | "createArtifact" | "createEvent" | "getProcessingMessage"
-  >;
+  messageRepository: MessageRepository;
+  eventRepository: EventRepository;
+  participantRepository: ParticipantRepository;
+  artifactRepository: ArtifactRepository;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
@@ -106,7 +109,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "artifactId and objectKey are required" }, { status: 400 });
       }
 
-      const processingMessage = deps.repository.getProcessingMessage();
+      const processingMessage = deps.messageRepository.getProcessingMessage();
       if (!processingMessage) {
         return Response.json({ error: "No active prompt" }, { status: 409 });
       }
@@ -123,7 +126,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         updatedAt: now,
       };
 
-      deps.repository.createArtifact({
+      deps.artifactRepository.createArtifact({
         id: artifact.id,
         type: artifact.type,
         url: artifact.url,
@@ -142,7 +145,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         timestamp: timestampSeconds,
       };
 
-      deps.repository.createEvent({
+      deps.eventRepository.createEvent({
         id: deps.generateId(),
         type: event.type,
         data: JSON.stringify(event),
@@ -174,7 +177,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       const id = deps.generateId();
       const now = deps.now();
 
-      deps.repository.createParticipant({
+      deps.participantRepository.createParticipant({
         id,
         userId: body.userId,
         scmLogin: body.scmLogin ?? null,

@@ -6,7 +6,7 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 
-export type InvalidSandboxSettingsBehavior = "throw" | "omit";
+type InvalidSandboxSettingsBehavior = "throw" | "omit";
 
 export interface NormalizeSandboxSettingsOptions {
   invalid?: InvalidSandboxSettingsBehavior;

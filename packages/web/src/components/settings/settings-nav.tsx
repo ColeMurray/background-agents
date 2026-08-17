@@ -13,6 +13,7 @@ import {
   TerminalIcon,
   GitPrIcon,
   ChevronRightIcon,
+  SparkleIcon,
 } from "@/components/ui/icons";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
@@ -66,6 +67,11 @@ const NAV_ITEMS = [
     id: "integrations",
     label: "Integrations",
     icon: IntegrationsIcon,
+  },
+  {
+    id: "skills",
+    label: "Skills",
+    icon: SparkleIcon,
   },
   {
     id: "mcp-servers",

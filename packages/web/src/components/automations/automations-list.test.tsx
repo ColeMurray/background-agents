@@ -57,6 +57,7 @@ describe("AutomationsList repository labels", () => {
     render(
       <AutomationsList
         automations={automations}
+        emptyState={{ kind: "no-automations" }}
         onPause={noop}
         onResume={noop}
         onTrigger={noop}
@@ -100,6 +101,7 @@ describe("AutomationsList schedule metadata", () => {
     render(
       <AutomationsList
         automations={[makeAutomation({ nextRunAt: Date.now() + 2 * 60 * 60 * 1000 })]}
+        emptyState={{ kind: "no-automations" }}
         onPause={noop}
         onResume={noop}
         onTrigger={noop}
@@ -116,6 +118,7 @@ describe("AutomationsList empty state", () => {
     render(
       <AutomationsList
         automations={[]}
+        emptyState={{ kind: "no-automations" }}
         onPause={noop}
         onResume={noop}
         onTrigger={noop}
@@ -131,5 +134,21 @@ describe("AutomationsList empty state", () => {
       "href",
       "/automations/new"
     );
+  });
+
+  it("describes an empty name search without showing creation prompts", () => {
+    render(
+      <AutomationsList
+        automations={[]}
+        emptyState={{ kind: "no-search-results", nameSearch: "release" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.getByText('No automations match "release".')).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create automation/i })).not.toBeInTheDocument();
   });
 });

@@ -12,6 +12,7 @@ import { HttpError, resolveRepoOrError, type RequestContext } from "./shared";
 import type { Principal } from "../auth/principal";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -137,6 +138,7 @@ function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
     request_id: "req-1",
     principal,
     db: { batch: mockBatch } as unknown as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},
@@ -149,13 +151,19 @@ function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
 async function callRoute(
   method: string,
   path: string,
-  options?: { body?: unknown; query?: Record<string, string>; principal?: Principal }
+  options?: {
+    body?: unknown;
+    query?: Record<string, string | string[]>;
+    principal?: Principal;
+  }
 ): Promise<Response> {
   const { handler, match } = getHandler(method, path);
   const url = new URL(`https://test.local${path}`);
   if (options?.query) {
     for (const [k, v] of Object.entries(options.query)) {
-      url.searchParams.set(k, v);
+      for (const value of Array.isArray(v) ? v : [v]) {
+        url.searchParams.append(k, value);
+      }
     }
   }
   const init: RequestInit = { method };
@@ -216,31 +224,73 @@ describe("automation route handlers", () => {
   });
 
   describe("GET /automations (list)", () => {
-    it("returns list of automations", async () => {
+    it("returns the first page with default pagination", async () => {
       mockStore.list.mockResolvedValue({
         automations: [sampleRow],
-        total: 1,
+        hasMore: false,
+        nextCursor: null,
       });
 
       const res = await callRoute("GET", "/automations");
       expect(res.status).toBe(200);
 
-      const body = await res.json<{ automations: unknown[]; total: number }>();
+      const body = await res.json<{
+        automations: unknown[];
+        hasMore: boolean;
+        nextCursor: string | null;
+      }>();
       expect(body.automations).toHaveLength(1);
-      expect(body.total).toBe(1);
+      expect(body.hasMore).toBe(false);
+      expect(body.nextCursor).toBeNull();
+      expect(mockStore.list).toHaveBeenCalledWith({ limit: 25, cursor: null });
     });
 
-    it("passes filter params to store", async () => {
-      mockStore.list.mockResolvedValue({ automations: [], total: 0 });
+    it("passes name search and pagination params to the store", async () => {
+      mockStore.list.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
+
+      await callRoute("GET", "/automations", {
+        query: { search: "  Daily sync  ", limit: "10", cursor: "123:auto-9" },
+      });
+
+      expect(mockStore.list).toHaveBeenCalledWith({
+        nameSearch: "Daily sync",
+        limit: 10,
+        cursor: { createdAt: 123, id: "auto-9" },
+      });
+    });
+
+    it("preserves explicit repository filters", async () => {
+      mockStore.list.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
 
       await callRoute("GET", "/automations", {
         query: { repoOwner: "acme", repoName: "web-app" },
       });
 
       expect(mockStore.list).toHaveBeenCalledWith({
+        limit: 25,
+        cursor: null,
         repoOwner: "acme",
         repoName: "web-app",
       });
+    });
+
+    it.each([
+      [{ limit: "0" }, "limit"],
+      [{ limit: "101" }, "limit"],
+      [{ limit: "ten" }, "limit"],
+      [{ limit: "1e1" }, "limit"],
+      [{ limit: " 10 " }, "limit"],
+      [{ limit: ["10", "20"] }, "limit"],
+      [{ cursor: "not-a-cursor" }, "cursor"],
+      [{ search: "a".repeat(201) }, "Search"],
+    ])("rejects invalid pagination params", async (query, expectedField) => {
+      const response = await callRoute("GET", "/automations", { query });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining(expectedField),
+      });
+      expect(mockStore.list).not.toHaveBeenCalled();
     });
   });
 
@@ -271,6 +321,26 @@ describe("automation route handlers", () => {
         expect.arrayContaining([{ sql: "insert-automation" }, { sql: "insert-repositories" }])
       );
     });
+
+    it.each([{ triggerConfig: {} }, { triggerConfig: { conditions: null } }])(
+      "rejects malformed trigger config before persistence",
+      async ({ triggerConfig }) => {
+        const response = await callRoute("POST", "/automations", {
+          body: {
+            name: "Webhook automation",
+            instructions: "Handle the event",
+            triggerType: "webhook",
+            triggerConfig,
+          },
+        });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({
+          error: expect.stringContaining("triggerConfig.conditions"),
+        });
+        expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      }
+    );
 
     it("creates a multi-repository automation from the repositories list", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
@@ -751,6 +821,40 @@ describe("automation route handlers", () => {
       expect(mockBatch).toHaveBeenCalledWith(
         expect.arrayContaining([{ sql: "update-automation" }])
       );
+    });
+
+    it.each([{ triggerConfig: {} }, { triggerConfig: { conditions: null } }])(
+      "rejects malformed trigger config before updating",
+      async ({ triggerConfig }) => {
+        mockStore.getById.mockResolvedValue({
+          ...sampleRow,
+          trigger_type: "webhook",
+          schedule_cron: null,
+        });
+
+        const response = await callRoute("PUT", "/automations/auto-1", {
+          body: { triggerConfig },
+        });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({
+          error: expect.stringContaining("triggerConfig.conditions"),
+        });
+        expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      }
+    );
+
+    it("rejects trigger config on schedule automations before shape validation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { triggerConfig: {} },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Cannot set triggerConfig on schedule automations",
+      });
     });
 
     it("updates reasoning effort when valid for the selected model", async () => {

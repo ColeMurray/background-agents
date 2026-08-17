@@ -7,6 +7,8 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import Home from "./page";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { isUnarchivedSessionListKey } from "@/lib/session-list";
 
 expect.extend(matchers);
 
@@ -38,6 +40,22 @@ const mocks = vi.hoisted(() => ({
       baseBranch: string;
     }>;
   }>,
+  skillPreview: {
+    skills: [
+      {
+        skillId: "skill-1",
+        revisionId: "revision-1",
+        name: "review-pr",
+        description: "Review a pull request",
+        revisionNumber: 1,
+        revisionSha256: "abc",
+        totalBytes: 10,
+        assignmentSources: [],
+      },
+    ],
+    totalBytes: 10,
+    ignoredProfileSkillIds: [],
+  },
 }));
 
 const repo = {
@@ -97,6 +115,16 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-managed-skills", () => ({
+  useSkillProfiles: () => ({ profiles: [], loading: false }),
+  useSkillResolutionPreview: () => ({
+    preview: mocks.skillPreview,
+    loading: false,
+    error: undefined,
+    suggestions: { status: "ready", skills: mocks.skillPreview.skills },
+  }),
+}));
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -146,6 +174,19 @@ describe("Home", () => {
     );
   });
 
+  it("completes skills from the current resolution preview", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+
+    await user.click(input);
+    await screen.findByText("(1)");
+    await user.type(input, "$rev");
+    await user.keyboard("{Enter}");
+
+    expect(input).toHaveValue("$review-pr ");
+  });
+
   it("keeps the attachment control anchored while the sandbox warms", async () => {
     let resolveCreate: ((response: Response) => void) | undefined;
     vi.mocked(fetch).mockImplementation(
@@ -173,6 +214,31 @@ describe("Home", () => {
     await waitFor(() => expect(screen.queryByText("Warming sandbox...")).not.toBeInTheDocument());
   });
 
+  it("invalidates a warmed session when the managed skill selection changes", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Use no skills");
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/sessions")
+      ).toHaveLength(1)
+    );
+
+    await user.click(screen.getByRole("button", { name: /all skills/i }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /^None/ }));
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const createCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([input]) => String(input) === "/api/sessions");
+    expect(createCalls).toHaveLength(2);
+    expect(JSON.parse(String(createCalls[1][1]?.body))).toMatchObject({
+      skillSelection: { mode: "none" },
+    });
+  });
+
   it("can start a new session without a repository from the primary selector", async () => {
     const user = userEvent.setup();
     render(<Home />);
@@ -186,6 +252,8 @@ describe("Home", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(mocks.mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
+    expect(mocks.mutateMock).toHaveBeenCalledWith(isSessionInboxKey);
     expect(sessionCreateBody()).toMatchObject({
       repoOwner: null,
       repoName: null,

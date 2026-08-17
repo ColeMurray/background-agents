@@ -13,17 +13,22 @@ import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
+import type { MessageRepository } from "./message-repository";
+import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
+import type { BackgroundJobDispatcher } from "../platform-ports";
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
 
 export class SessionStatusService {
   constructor(
-    private readonly ctx: DurableObjectState,
+    private readonly backgroundJobs: BackgroundJobDispatcher,
     private readonly log: Logger,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
+    private readonly messageRepository: MessageRepository,
+    private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly parentSessions: DurableObjectNamespace | null
@@ -59,6 +64,37 @@ export class SessionStatusService {
     await this.projectTransition(session, publicSessionId, status, updatedAt);
 
     return true;
+  }
+
+  /**
+   * Re-project this session's current status onto the index, for callers that
+   * already know the two disagree.
+   *
+   * A swallowed projection failure leaves D1 behind, and the stale row keeps
+   * being picked up by anything that scans on status. Unlike `transition`, this
+   * claims no new activity: the session did not do anything, its mirror was
+   * simply wrong, so `updated_at` is left alone.
+   */
+  async repairIndexStatus(): Promise<void> {
+    const session = this.repository.getSession();
+    if (!session || !this.sessionIndex) return;
+
+    const publicSessionId = this.getPublicSessionId(session);
+    const repaired = await this.sessionIndex
+      .repairStatus(publicSessionId, session.status)
+      .catch((error) => {
+        this.logSessionIndexStatusSyncError(
+          publicSessionId,
+          session.status,
+          session.updated_at,
+          error
+        );
+        throw error;
+      });
+
+    if (repaired && session.status === "active") {
+      await this.sessionIndex.finalizeChildAdmission(publicSessionId);
+    }
   }
 
   /**
@@ -104,10 +140,30 @@ export class SessionStatusService {
    * when more prompts are queued, otherwise completed/failed by outcome.
    */
   async reconcileAfterExecution(success: boolean): Promise<void> {
-    const pendingOrProcessing = this.repository.getPendingOrProcessingCount();
+    const pendingOrProcessing = this.messageRepository.getPendingOrProcessingCount();
     const nextStatus: SessionStatus =
       pendingOrProcessing > 0 ? "active" : success ? "completed" : "failed";
     await this.transition(nextStatus);
+  }
+
+  async reconcileAfterQueueRemoval(): Promise<void> {
+    if (this.messageRepository.getPendingOrProcessingCount() > 0) return;
+    const nextStatus = this.getIdleStatusFromTerminalMessages();
+    await this.transition(nextStatus);
+  }
+
+  async settleFromMessageState(): Promise<SessionStatus> {
+    const nextStatus: SessionStatus =
+      this.messageRepository.getPendingOrProcessingCount() > 0
+        ? "active"
+        : this.getIdleStatusFromTerminalMessages();
+    await this.transition(nextStatus);
+    return nextStatus;
+  }
+
+  private getIdleStatusFromTerminalMessages(): SessionStatus {
+    const latestMessage = this.messageRepository.getLatestTerminalMessage();
+    return latestMessage ? (latestMessage.status === "failed" ? "failed" : "completed") : "created";
   }
 
   /**
@@ -125,7 +181,7 @@ export class SessionStatusService {
     const parentDoId = this.parentSessions.idFromName(parentId);
     const parentStub = this.parentSessions.get(parentDoId);
 
-    this.ctx.waitUntil(
+    this.backgroundJobs.submit(
       parentStub
         .fetch(
           new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
@@ -161,7 +217,7 @@ export class SessionStatusService {
   }
 
   private getPublicSessionId(session: SessionRow): string {
-    return session.session_name || session.id || this.ctx.id.toString();
+    return session.session_name || session.id;
   }
 
   private async syncSessionIndexStatusAndAdmission(
@@ -196,12 +252,12 @@ export class SessionStatusService {
     const session = this.repository.getSession();
     if (!session) return;
 
-    const messageCount = this.repository.getMessageCount();
-    const activeDurationMs = this.repository.getActiveDurationMs();
-    const artifacts = this.repository.listArtifacts();
+    const messageCount = this.messageRepository.getMessageCount();
+    const activeDurationMs = this.messageRepository.getActiveDurationMs();
+    const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
-    this.ctx.waitUntil(
+    this.backgroundJobs.submit(
       this.sessionIndex
         .updateMetrics(sessionId, {
           totalCost: session.total_cost ?? 0,

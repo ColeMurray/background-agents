@@ -52,7 +52,7 @@ export function SessionDesktopLayout({
           </>
         )}
       </PanelGroup>
-      {!changes && sidebar}
+      {sidebar}
     </>
   );
 }

@@ -10,10 +10,14 @@ import {
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
-import { error, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
-export { parseByteRangeHeader } from "./requests/byte-range";
-
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(
@@ -137,10 +141,10 @@ async function handleMediaGet(
     : createStoredObjectResponse(body, metadata, contentType);
 }
 
-export const sessionMediaStreamRoutes: Route[] = [
+export const sessionMediaStreamRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/media/:artifactId"),
     handler: handleMediaGet,
   }),
-];
+]);

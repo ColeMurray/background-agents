@@ -28,7 +28,7 @@ const MAX_TRAJECTORY_EVENT_LIMIT = 1000;
 const NOISY_RECENT_EVENT_TYPES = new Set(["token", "heartbeat", "step_start", "step_finish"]);
 const CHILD_SUMMARY_INCLUDE_VALUES = new Set<string>(CHILD_SESSION_DETAIL_INCLUDES);
 
-export interface ChildSummaryOptions {
+interface ChildSummaryOptions {
   includeFinalResponse: boolean;
   includeTrajectory: boolean;
   trajectoryLimit: number;

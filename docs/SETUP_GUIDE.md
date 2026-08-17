@@ -240,6 +240,7 @@ configured/deployed.
 - Linear integration usage: [docs/integrations/LINEAR.md](./integrations/LINEAR.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - Available models: [docs/AVAILABLE_MODELS.md](./AVAILABLE_MODELS.md)
+- Managed skills: [docs/MANAGED_SKILLS.md](./MANAGED_SKILLS.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
 - SuperGrok model setup: [docs/GROK_MODELS.md](./GROK_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

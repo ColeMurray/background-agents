@@ -1,16 +1,16 @@
 /**
  * Unit tests for the stop-execution–related repository behavior.
  *
- * These tests exercise SessionRepository methods (e.g. getProcessingMessage()
- * and updateMessageCompletion()) that are used by stopExecution() and the
- * execution_complete guard in processSandboxEvent().
+ * These tests exercise MessageRepository processing-message lookup used by
+ * stopExecution() and the execution_complete guard in processSandboxEvent().
  *
  * We focus here on the repository-level interactions and state transitions
  * by directly calling the repository methods and verifying their effects.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionRepository } from "./repository";
+import { MessageRepository } from "./message-repository";
+import { EventRepository } from "./event-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 
@@ -52,14 +52,15 @@ function createMockSql() {
 
 describe("Stop execution - repository interactions", () => {
   let mock: ReturnType<typeof createMockSql>;
-  let repo: SessionRepository;
+  let repo: MessageRepository;
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(
+    repo = new MessageRepository(
       mock.sql,
       (closure) => closure(),
-      new SessionAttachmentRepository(mock.sql)
+      new SessionAttachmentRepository(mock.sql),
+      new EventRepository(mock.sql, (closure) => closure())
     );
   });
 
@@ -75,53 +76,6 @@ describe("Stop execution - repository interactions", () => {
     it("returns null when no message is processing", () => {
       mock.setData(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`, []);
       expect(repo.getProcessingMessage()).toBeNull();
-    });
-  });
-
-  describe("updateMessageCompletion", () => {
-    it("calls SQL with correct parameters for failed status", () => {
-      repo.updateMessageCompletion("msg-1", "failed", 1000);
-
-      const call = mock.calls.find((c) => c.query.includes("UPDATE messages SET status"));
-      expect(call).toBeDefined();
-      expect(call!.params).toContain("failed");
-      expect(call!.params).toContain("msg-1");
-      expect(call!.params).toContain(1000);
-    });
-
-    it("calls SQL with correct parameters for completed status", () => {
-      repo.updateMessageCompletion("msg-2", "completed", 2000);
-
-      const call = mock.calls.find((c) => c.query.includes("UPDATE messages SET status"));
-      expect(call).toBeDefined();
-      expect(call!.params).toContain("completed");
-      expect(call!.params).toContain("msg-2");
-    });
-  });
-
-  describe("stopExecution state machine", () => {
-    it("marks processing message as failed, then getProcessingMessage returns null", () => {
-      // First call: message is processing
-      mock.setData(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`, [
-        { id: "msg-1" },
-      ]);
-      const processing = repo.getProcessingMessage();
-      expect(processing).toEqual({ id: "msg-1" });
-
-      // Mark as failed
-      repo.updateMessageCompletion("msg-1", "failed", Date.now());
-
-      // After update, simulate no processing messages
-      mock.setData(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`, []);
-      expect(repo.getProcessingMessage()).toBeNull();
-    });
-
-    it("does not error when no processing message exists", () => {
-      mock.setData(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`, []);
-
-      const processing = repo.getProcessingMessage();
-      expect(processing).toBeNull();
-      // No updateMessageCompletion call needed - this is the idempotent case
     });
   });
 });

@@ -16,16 +16,27 @@ import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
 import {
+  defineRoute,
+  defineRoutes,
   error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   parseJsonBody,
   parsePattern,
   type RequestContext,
   type Route,
+  type RoutePolicy,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:github-reviews");
+const GITHUB_REVIEW_SANDBOX_ROUTE = {
+  authentication: {
+    kind: "sandbox",
+    getSessionId: (match: RegExpMatchArray) => match.groups?.id ?? null,
+  },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
 
 /**
  * Route guard mirroring requireWebService (routes/browser-auth.ts): rejects
@@ -394,24 +405,29 @@ export async function reapSupersededReviewSessions(
 }
 
 export const githubReviewRoutes: Route[] = [
-  {
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/internal/github-reviews/claim"),
     handler: requireGitHubBotService(handleClaimReviewGeneration),
-  },
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/internal/github-reviews/sweep"),
-    handler: requireGitHubBotService(handleSweepStaleReviews),
   }),
-  {
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/review-ownership"),
-    handler: handleReviewOwnership,
-  },
-  {
-    method: "DELETE",
-    pattern: parsePattern("/sessions/:id/review-ownership"),
-    handler: handleReviewLeaseRelease,
-  },
+  defineRoute(
+    GITHUB_USER_OR_SERVICE_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/internal/github-reviews/sweep"),
+      handler: requireGitHubBotService(handleSweepStaleReviews),
+    })
+  ),
+  ...defineRoutes(GITHUB_REVIEW_SANDBOX_ROUTE, [
+    {
+      method: "GET",
+      pattern: parsePattern("/sessions/:id/review-ownership"),
+      handler: handleReviewOwnership,
+    },
+    {
+      method: "DELETE",
+      pattern: parsePattern("/sessions/:id/review-ownership"),
+      handler: handleReviewLeaseRelease,
+    },
+  ]),
 ];

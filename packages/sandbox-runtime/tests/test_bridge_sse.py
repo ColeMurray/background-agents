@@ -99,20 +99,29 @@ def create_sse_event(event_type: str, properties: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+def created_after_prompt_start_ms() -> int:
+    """A message creation time comfortably after the boundary `_PromptState`
+    records when the stream starts, for post-compaction fixtures whose parentID
+    no longer matches the prompt's user message."""
+    return int(time.time() * 1000) + 60_000
+
+
 def make_prompt_state(
     message_id: str,
     opencode_message_id: str,
     *,
     cumulative_text: dict[str, str] | None = None,
     compaction_occurred: bool = False,
+    start_time: float = 0.0,
 ) -> _PromptState:
     """Per-prompt state as stream_prompt would build it, for direct
-    reconciliation calls."""
+    reconciliation calls. `start_time` is the boundary the compaction fallback
+    orders message creation times against."""
     state = _PromptState(
         opencode_session_id="oc-session-123",
         message_id=message_id,
         opencode_message_id=opencode_message_id,
-        start_time=0.0,
+        start_time=start_time,
     )
     if cumulative_text is not None:
         state.cumulative_text = cumulative_text
@@ -1090,6 +1099,7 @@ class TestFetchFinalMessageState:
                     "id": prior_assistant_id,
                     "role": "assistant",
                     "parentID": prior_user_id,
+                    "time": {"created": prompt_ts_ms - 60_000},
                 },
                 "parts": [{"id": "part-prior", "type": "text", "text": "Prior turn final report"}],
             },
@@ -1099,6 +1109,7 @@ class TestFetchFinalMessageState:
                     "role": "assistant",
                     "parentID": compaction_user_id,
                     "summary": True,
+                    "time": {"created": prompt_ts_ms + 1_000},
                 },
                 "parts": [{"id": "part-summary", "type": "text", "text": "Internal summary"}],
             },
@@ -1107,6 +1118,7 @@ class TestFetchFinalMessageState:
                     "id": continuation_id,
                     "role": "assistant",
                     "parentID": continue_user_id,
+                    "time": {"created": prompt_ts_ms + 2_000},
                 },
                 "parts": [
                     {
@@ -1129,6 +1141,7 @@ class TestFetchFinalMessageState:
             prompt_user_id,
             cumulative_text=cumulative_text,
             compaction_occurred=True,
+            start_time=prompt_ts_ms / 1000,
         )
         async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
             events.append(event)
@@ -2578,6 +2591,7 @@ class TestCompactionHandling:
                         "sessionID": "oc-session-123",
                         "parentID": "msg_compaction_user",
                         "summary": True,
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2590,6 +2604,7 @@ class TestCompactionHandling:
                         "role": "assistant",
                         "sessionID": "oc-session-123",
                         "parentID": "msg_synthetic_continue",
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2678,6 +2693,7 @@ class TestCompactionHandling:
                         "sessionID": "oc-session-123",
                         "parentID": "msg_compaction_user",
                         "summary": True,
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2702,6 +2718,7 @@ class TestCompactionHandling:
                         "role": "assistant",
                         "sessionID": "oc-session-123",
                         "parentID": "msg_synthetic_continue",
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2878,6 +2895,7 @@ class TestCompactionHandling:
                         "sessionID": "oc-session-123",
                         "parentID": "msg_compaction_user",
                         "summary": True,
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -2998,6 +3016,7 @@ class TestCompactionHandling:
                         "role": "assistant",
                         "sessionID": "oc-session-123",
                         "parentID": "msg_synthetic_continue",
+                        "time": {"created": created_after_prompt_start_ms()},
                     }
                 },
             ),
@@ -3024,6 +3043,8 @@ class TestCompactionHandling:
         bridge.opencode_session_id = "oc-session-123"
         wire_opencode_transport(bridge, AsyncMock())
 
+        prompt_ts_ms = 1_754_000_000_000
+
         # API returns: compaction summary + post-compaction response
         messages = [
             {
@@ -3032,6 +3053,7 @@ class TestCompactionHandling:
                     "role": "assistant",
                     "parentID": "msg_compaction_user",
                     "summary": True,
+                    "time": {"created": prompt_ts_ms + 1_000},
                 },
                 "parts": [
                     {"id": "summary-part", "type": "text", "text": "## Goal\nSummary..."},
@@ -3042,6 +3064,7 @@ class TestCompactionHandling:
                     "id": "oc-msg-post",
                     "role": "assistant",
                     "parentID": "msg_synthetic_continue",
+                    "time": {"created": prompt_ts_ms + 2_000},
                 },
                 "parts": [
                     {"id": "post-part", "type": "text", "text": "Here is the answer."},
@@ -3052,7 +3075,12 @@ class TestCompactionHandling:
         bridge.http_client.get = AsyncMock(return_value=MockResponse(200, messages))
 
         events = []
-        state = make_prompt_state("cp-msg-1", "msg_original_id", compaction_occurred=True)
+        state = make_prompt_state(
+            "cp-msg-1",
+            "msg_original_id",
+            compaction_occurred=True,
+            start_time=prompt_ts_ms / 1000,
+        )
         async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
             events.append(event)
 

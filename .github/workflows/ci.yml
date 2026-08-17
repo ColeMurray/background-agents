@@ -37,6 +37,9 @@ jobs:
       - name: Check Prettier formatting
         run: npm run format:check
 
+      - name: Run Knip (unused code detection)
+        run: npm run knip -- --no-exit-code
+
   typecheck-typescript:
     name: TypeCheck (TypeScript)
     runs-on: ubuntu-latest
@@ -112,12 +115,11 @@ jobs:
         run: ruff format --check src/ tests/
 
   lint-python:
-    name: Lint & Format (Python - modal-infra)
+    name: Lint & Format (Python - provider infra)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: packages/modal-infra
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -131,14 +133,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ../sandbox-runtime
-          pip install -e ".[dev]"
+          pip install -e packages/sandbox-runtime
+          pip install -e "packages/modal-infra[dev]"
 
       - name: Run Ruff linter
-        run: ruff check src/
+        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/
 
       - name: Run Ruff formatter check
-        run: ruff format --check src/
+        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/
 
   typecheck-python:
     name: TypeCheck (Python)

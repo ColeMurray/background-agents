@@ -5,8 +5,9 @@
 import { env } from "cloudflare:test";
 import { EnvironmentStore } from "../../src/db/environments";
 import type { ImageBuildScope } from "../../src/image-builds/model";
+import { COMPATIBLE_RUNTIME_VERSION } from "../../src/image-builds/test-helpers";
 
-export const RUNTIME_VERSION = "v57-vnc-runtime";
+export const RUNTIME_VERSION = COMPATIBLE_RUNTIME_VERSION;
 export const REPOSITORY_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
 
 export function environmentScope(id: string): ImageBuildScope {

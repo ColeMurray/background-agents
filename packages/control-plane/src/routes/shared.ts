@@ -9,12 +9,14 @@ import type { RequestMetrics } from "../db/instrumented-d1";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
+import type { BackgroundJobDispatcher } from "../platform-ports";
 import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
   type SourceControlProvider,
   type RepositoryAccessResult,
+  type SourceControlProviderName,
 } from "../source-control";
 
 /**
@@ -29,8 +31,8 @@ export type RequestContext = CorrelationContext & {
    * src/routes and src/webhooks.
    */
   db: SqlDatabase;
-  /** Worker ExecutionContext for waitUntil (background tasks). */
-  executionCtx?: ExecutionContext;
+  /** Request-scoped capability for scheduling background tasks. */
+  executionCtx: BackgroundJobDispatcher;
   /** Lazy runtime dependency used by user-session authentication and credential access. */
   getUserAuth?: () => BetterAuthRuntime;
   /** Lazy normalized auth runtime used by server-only authentication composition routes. */
@@ -47,15 +49,118 @@ export type RequestContext = CorrelationContext & {
 /**
  * Route configuration.
  */
-export interface Route {
+export interface RouteDefinition<Context extends RequestContext = RequestContext> {
   method: string;
   pattern: RegExp;
-  handler: (
-    request: Request,
-    env: Env,
-    match: RegExpMatchArray,
-    ctx: RequestContext
-  ) => Promise<Response>;
+  handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
+}
+
+type UserPrincipal = Extract<Principal, { kind: "user" }>;
+type SandboxPrincipal = Extract<Principal, { kind: "sandbox" }>;
+type ServicePrincipal = Extract<Principal, { kind: "service" }>;
+type WebServicePrincipal = Omit<ServicePrincipal, "service"> & { service: "web" };
+type UserOrServicePrincipal = Exclude<Principal, SandboxPrincipal>;
+
+type SandboxSessionBinding = {
+  getSessionId(match: RegExpMatchArray): string | null;
+};
+
+export type RouteAuthentication =
+  | { kind: "public" }
+  | { kind: "handler-authenticated" }
+  | { kind: "web-service" }
+  | { kind: "user" }
+  | { kind: "user-or-service" }
+  | ({ kind: "sandbox" } & SandboxSessionBinding)
+  | ({ kind: "user-or-service-with-sandbox-fallback" } & SandboxSessionBinding);
+
+export type RouteContext<Authentication extends RouteAuthentication> = RequestContext & {
+  principal: Authentication extends { kind: "user" }
+    ? UserPrincipal
+    : Authentication extends { kind: "sandbox" }
+      ? SandboxPrincipal
+      : Authentication extends { kind: "web-service" }
+        ? WebServicePrincipal
+        : Authentication extends { kind: "user-or-service" }
+          ? UserOrServicePrincipal
+          : Authentication extends { kind: "user-or-service-with-sandbox-fallback" }
+            ? Principal
+            : Principal | undefined;
+};
+
+export type UserRouteContext = RouteContext<{ kind: "user" }>;
+export type SandboxRouteContext = RouteContext<{ kind: "sandbox" } & SandboxSessionBinding>;
+
+export interface RoutePolicy {
+  authentication: RouteAuthentication;
+  supportedScmProviders: "all" | readonly SourceControlProviderName[];
+}
+
+export interface Route extends RouteDefinition, RoutePolicy {}
+
+const SESSION_ID_BINDING: SandboxSessionBinding = {
+  getSessionId: (match) => match.groups?.id ?? null,
+};
+
+export const GITHUB_USER_OR_SERVICE_ROUTE = {
+  authentication: { kind: "user-or-service" },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE = {
+  authentication: { kind: "user-or-service" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_HUMAN_USER_ROUTE = {
+  authentication: { kind: "user" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_WEB_SERVICE_ROUTE = {
+  authentication: { kind: "web-service" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE = {
+  authentication: { kind: "handler-authenticated" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const GITHUB_SANDBOX_FALLBACK_ROUTE = {
+  authentication: { kind: "user-or-service-with-sandbox-fallback", ...SESSION_ID_BINDING },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE = {
+  authentication: { kind: "user-or-service-with-sandbox-fallback", ...SESSION_ID_BINDING },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export const SCM_CREDENTIALS_ROUTE = {
+  authentication: { kind: "sandbox", ...SESSION_ID_BINDING },
+  supportedScmProviders: ["github", "gitlab"],
+} as const satisfies RoutePolicy;
+
+export const SCM_AGNOSTIC_SANDBOX_ROUTE = {
+  authentication: { kind: "sandbox", ...SESSION_ID_BINDING },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+export function defineRoutes<const Policy extends RoutePolicy>(
+  policy: Policy,
+  routes: RouteDefinition<RouteContext<Policy["authentication"]>>[]
+): Route[] {
+  return routes.map((route) => defineRoute(policy, route));
+}
+
+export function defineRoute<const Policy extends RoutePolicy>(
+  policy: Policy,
+  route: RouteDefinition<RouteContext<Policy["authentication"]>>
+): Route {
+  const handler: Route["handler"] = (request, env, match, ctx) =>
+    route.handler(request, env, match, ctx as RouteContext<Policy["authentication"]>);
+  return { ...route, ...policy, handler };
 }
 
 /**

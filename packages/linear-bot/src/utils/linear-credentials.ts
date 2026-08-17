@@ -17,12 +17,7 @@ import {
 } from "./linear-oauth";
 import type { StoredLinearClientCredentialsToken } from "./linear-credential-schemas";
 
-export {
-  LINEAR_CLIENT_CREDENTIALS_SCOPE,
-  LinearAuthError,
-  type LinearAuthFailure,
-  type LinearAuthFailureReason,
-} from "./linear-oauth";
+export { LINEAR_CLIENT_CREDENTIALS_SCOPE, LinearAuthError } from "./linear-oauth";
 
 const log = createLogger("linear-credentials");
 const credentialIssuanceByIdentity = new Map<string, Promise<string>>();

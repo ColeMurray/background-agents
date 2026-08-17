@@ -170,7 +170,7 @@ export interface SandboxRow {
 
 // Command types for sandbox communication
 
-export interface PromptCommand {
+interface PromptCommand {
   type: "prompt";
   messageId: string;
   content: string;
@@ -183,29 +183,29 @@ export interface PromptCommand {
   attachments?: ResolvedSessionAttachment[];
 }
 
-export interface StopCommand {
+interface StopCommand {
   type: "stop";
 }
 
-export interface SnapshotCommand {
+interface SnapshotCommand {
   type: "snapshot";
 }
 
-export interface ShutdownCommand {
+interface ShutdownCommand {
   type: "shutdown";
 }
 
-export interface AckCommand {
+interface AckCommand {
   type: "ack";
   ackId: string;
 }
 
-export interface PushCommand {
+interface PushCommand {
   type: "push";
   pushSpec: GitPushSpec;
 }
 
-export interface RefreshDiffCommand {
+interface RefreshDiffCommand {
   type: "refresh_diff";
 }
 

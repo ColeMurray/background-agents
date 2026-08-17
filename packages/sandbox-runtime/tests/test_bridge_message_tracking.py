@@ -287,6 +287,23 @@ class TestBuildPromptRequestBody:
             "outputConfig": {"effort": "high"},
         }
 
+    def test_with_sonnet_5_adaptive_thinking(self, bridge: AgentBridge):
+        """Sonnet 5 should use adaptive thinking instead of manual budgets."""
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "anthropic/claude-sonnet-5",
+            reasoning_effort="xhigh",
+        )
+
+        assert body["model"] == {
+            "providerID": "anthropic",
+            "modelID": "claude-sonnet-5",
+            "options": {
+                "thinking": {"type": "adaptive"},
+                "outputConfig": {"effort": "xhigh"},
+            },
+        }
+
     def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",
@@ -296,6 +313,16 @@ class TestBuildPromptRequestBody:
 
         assert body["variant"] == "high"
         assert "options" not in body["model"]
+
+    def test_with_grok_4_6_reasoning_effort(self, bridge: AgentBridge):
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "xai/grok-4.6",
+            reasoning_effort="medium",
+        )
+
+        assert body["variant"] == "medium"
+        assert body["model"] == {"providerID": "xai", "modelID": "grok-4.6"}
 
 
 class TestOpenCodeIdentifier:
@@ -311,8 +338,24 @@ class TestOpenCodeIdentifier:
         ids = [OpenCodeIdentifier.ascending("message") for _ in range(100)]
         assert len(set(ids)) == 100  # All unique
 
-    def test_ascending_ids_are_lexicographically_ordered(self):
-        """IDs generated later should be lexicographically greater."""
+    def test_ascending_ids_increase_within_one_rollover_window(self, monkeypatch):
+        """Consecutive IDs increase — but only inside a rollover window.
+
+        The encoded value is truncated to 48 bits and wraps roughly every 795
+        days, so this is not an ordering guarantee callers may rely on: nothing
+        may compare these IDs to order messages. The clock is pinned inside one
+        window so the assertion cannot straddle a rollover, and it ticks once so
+        both the same-millisecond counter and the millisecond advance are
+        covered.
+        """
+        pinned_epoch_seconds = 1_754_000_000.0
+        next_millisecond = pinned_epoch_seconds + 0.5
+        ticks = iter([pinned_epoch_seconds, pinned_epoch_seconds, next_millisecond])
+        monkeypatch.setattr(
+            "sandbox_runtime.opencode_identifier.time.time",
+            lambda: next(ticks, next_millisecond),
+        )
+
         id1 = OpenCodeIdentifier.ascending("message")
         id2 = OpenCodeIdentifier.ascending("message")
         id3 = OpenCodeIdentifier.ascending("message")

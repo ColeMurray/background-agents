@@ -59,9 +59,18 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
-        description: "Latest balanced, fast coding",
+        description: "Balanced, fast coding",
         default: true,
         reasoning: { efforts: ["low", "medium", "high", "max"], default: "high" },
+      },
+      {
+        id: "anthropic/claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        description: "Latest Sonnet, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
       },
       {
         id: "anthropic/claude-opus-4-5",
@@ -182,6 +191,7 @@ export const MODEL_CATALOG = [
     models: [
       { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
       { id: "opencode/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
+      { id: "opencode/kimi-k3", name: "Kimi K3", description: "Moonshot AI" },
       { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
       { id: "opencode/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
@@ -195,6 +205,12 @@ export const MODEL_CATALOG = [
       {
         id: "xai/grok-4.5",
         name: "Grok 4.5",
+        description: "Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+      },
+      {
+        id: "xai/grok-4.6",
+        name: "Grok 4.6",
         description: "Latest Grok for chat, coding, and agentic tools",
         reasoning: { efforts: ["low", "medium", "high"], default: "high" },
       },
@@ -208,7 +224,10 @@ export const MODEL_CATALOG = [
   {
     category: "Z.AI Coding Plan",
     enabledByDefault: false,
-    models: [{ id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" }],
+    models: [
+      { id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" },
+      { id: "zai-coding-plan/glm-5.3", name: "GLM 5.3", description: "Z.AI Coding Plan" },
+    ],
   },
   {
     category: "DeepSeek",

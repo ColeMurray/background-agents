@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from contextlib import AsyncExitStack
@@ -53,6 +54,7 @@ ANTHROPIC_ADAPTIVE_THINKING_MODELS: Final[frozenset[str]] = frozenset(
         "claude-opus-4-8",
         "claude-opus-5",
         "claude-sonnet-4-6",
+        "claude-sonnet-5",
     }
 )
 ANTHROPIC_ADAPTIVE_EFFORTS: Final[frozenset[str]] = frozenset(
@@ -95,7 +97,12 @@ class _PromptState:
     pending_overflow_error: str | None = None
 
     def __post_init__(self) -> None:
-        self.attribution = MessageAttribution(self.opencode_message_id)
+        self.attribution = MessageAttribution(
+            self.opencode_message_id,
+            # start_time is captured before the prompt is posted, so nothing
+            # OpenCode creates for this prompt can predate it.
+            int(self.start_time * 1000),
+        )
 
 
 class _Disposition(Enum):
@@ -118,6 +125,24 @@ class _StreamStep:
 
     events: list[dict[str, Any]]
     disposition: _Disposition
+
+
+def _message_created_epoch_ms(info: dict[str, Any]) -> int | None:
+    """Read `time.created` off an OpenCode message, or None when it is absent.
+
+    Non-finite values are treated as absent rather than converted: `int()`
+    raises on NaN and infinity, which would tear down the SSE loop over a
+    malformed payload.
+    """
+    time_info = info.get("time")
+    if not isinstance(time_info, dict):
+        return None
+    created = time_info.get("created")
+    if isinstance(created, bool) or not isinstance(created, (int, float)):
+        return None
+    if not math.isfinite(created):
+        return None
+    return int(created)
 
 
 class OpenCodePromptStream:
@@ -167,9 +192,10 @@ class OpenCodePromptStream:
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
-        The ascending ID ensures our user message ID is lexicographically
-        greater than any previous assistant message IDs, preventing the early
-        exit condition in OpenCode's prompt loop (lastUser.id < lastAssistant.id).
+        Supplying our own user message ID is what makes attribution possible:
+        OpenCode stamps the assistant messages it generates for this prompt
+        with `parentID` pointing at it. The ID's ordering carries no meaning —
+        see OpenCodeIdentifier on why these IDs must never be compared.
         """
         opencode_message_id = OpenCodeIdentifier.ascending("message")
         request_body = self._build_prompt_request_body(
@@ -398,7 +424,10 @@ class OpenCodePromptStream:
             events: list[dict[str, Any]] = []
             if role == "assistant" and oc_msg_id:
                 disposition = state.attribution.assistant_disposition(
-                    oc_msg_id, parent_id, is_summary=is_compaction_summary
+                    oc_msg_id,
+                    parent_id,
+                    is_summary=is_compaction_summary,
+                    created_epoch_ms=_message_created_epoch_ms(info),
                 )
                 if disposition is not AssistantMessageDisposition.REJECT and info.get("error"):
                     error_event = self._parent_error_event_once(state, info["error"])
@@ -942,7 +971,10 @@ class OpenCodePromptStream:
 
                 is_compaction_summary = info.get("summary") is True
                 disposition = state.attribution.assistant_disposition(
-                    msg_id, parent_id, is_summary=is_compaction_summary
+                    msg_id,
+                    parent_id,
+                    is_summary=is_compaction_summary,
+                    created_epoch_ms=_message_created_epoch_ms(info),
                 )
                 if disposition is not AssistantMessageDisposition.OUTPUT:
                     continue

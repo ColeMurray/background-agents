@@ -18,7 +18,7 @@ type OpenAITokenState =
 
 export type OpenAIToken = { accessToken: string; expiresIn?: number; accountId?: string };
 
-export class OpenAITokenBrokerError extends Error {}
+class OpenAITokenBrokerError extends Error {}
 export class OpenAITokenNotConfiguredError extends OpenAITokenBrokerError {}
 export class OpenAITokenStorageError extends OpenAITokenBrokerError {}
 export class OpenAITokenUnauthorizedError extends OpenAITokenBrokerError {}

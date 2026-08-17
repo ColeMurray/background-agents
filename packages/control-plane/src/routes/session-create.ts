@@ -17,6 +17,7 @@ import {
 } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
@@ -29,6 +30,8 @@ import {
   resolveRepoOrError,
   type RequestContext,
   type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -198,6 +201,22 @@ async function handleCreateSession(
 
   const sessionId = generateId();
 
+  let managedSkillsManifest;
+  try {
+    managedSkillsManifest = await resolveManagedSkills(
+      ctx.db,
+      {
+        repositories: scopeMembers,
+        environmentId,
+      },
+      body.skillSelection ?? { mode: "all" },
+      resolvedUserId
+    );
+  } catch (e) {
+    if (e instanceof SkillResolutionError) return error(e.message, e.status);
+    throw e;
+  }
+
   const input: SessionInitInput = {
     sessionId,
     repoOwner,
@@ -224,6 +243,7 @@ async function handleCreateSession(
     sandboxSettings,
     spawnSource,
     githubReview: body.githubReview,
+    managedSkillsManifest,
   };
 
   try {
@@ -248,10 +268,10 @@ async function handleCreateSession(
   return json(result, 201);
 }
 
-export const sessionCreateRoutes: Route[] = [
+export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "POST",
     pattern: parsePattern("/sessions"),
     handler: handleCreateSession,
   },
-];
+]);

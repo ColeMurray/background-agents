@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { automationEventSchema } from "./types";
+import { automationEventSchema, githubAutomationEventSchema } from "./types";
 
 describe("automationEventSchema", () => {
   it("parses a valid Slack automation event", () => {
@@ -49,6 +49,21 @@ describe("automationEventSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("exports source-specific schemas", () => {
+    const result = githubAutomationEventSchema.safeParse({
+      source: "github",
+      eventType: "pull_request.opened",
+      triggerKey: "github:pr:1",
+      concurrencyKey: "github:pr:1",
+      contextBlock: "A pull request was opened.",
+      meta: {},
+      repoOwner: "acme",
+      repoName: "web-app",
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it("rejects optional arrays with non-string values", () => {

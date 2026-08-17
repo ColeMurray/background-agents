@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { sentryAutomationEventSchema } from "../types";
 import { normalizeSentryEvent } from "./normalizer";
 
 const issueAlertPayload = {
@@ -165,6 +166,30 @@ describe("normalizeSentryEvent", () => {
     expect(event.triggerKey).toBe("sentry_metric:789:2026-03-23T14:30:00Z");
     expect(event.concurrencyKey).toBe("sentry_metric:789");
     expect(event.meta.alertRuleId).toBe("789");
+  });
+
+  it("produces schema-valid metric alert events without a project", () => {
+    const metricPayload = {
+      action: "critical",
+      data: {
+        metric_alert: {
+          id: 456,
+          title: "Error rate > 5%",
+          alert_rule: { id: 789, name: "High error rate" },
+          date_started: "2026-03-23T14:30:00Z",
+          current_trigger: { label: "critical" },
+        },
+        description_text: "Error rate exceeded 5%",
+        description_title: "Metric Alert",
+        web_url: "https://sentry.io/alerts/456/",
+      },
+    };
+    const event = expectNormalized(
+      normalizeSentryEvent(metricPayload, "automation-1", "metric_alert")
+    );
+
+    expect(event.sentryProject).toBeUndefined();
+    expect(sentryAutomationEventSchema.safeParse(event).success).toBe(true);
   });
 
   it("returns unsupported_action for non-critical metric alerts", () => {

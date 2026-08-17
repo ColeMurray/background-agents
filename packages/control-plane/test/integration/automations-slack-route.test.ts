@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
@@ -282,6 +282,7 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
 
 describe("GET /integration-settings/slack/channels (integration)", () => {
   beforeEach(cleanD1Tables);
+  afterEach(() => vi.unstubAllGlobals());
 
   async function getSlackChannels(auth = true): Promise<Response> {
     const url = "https://test.local/integration-settings/slack/channels";
@@ -294,14 +295,17 @@ describe("GET /integration-settings/slack/channels (integration)", () => {
   });
 
   it("degrades to an empty channel list (never a 500) when listing is unavailable", async () => {
-    // The integration env has no usable bot token, so the route returns an empty
-    // list with an error — `not_configured` when unset, or a Slack error such as
-    // `invalid_auth` when a placeholder token is present — rather than throwing.
+    const slackFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", slackFetch);
+
     const res = await getSlackChannels();
     expect(res.status).toBe(200);
     const body = await res.json<{ channels: string[]; error?: string }>();
     expect(body.channels).toEqual([]);
-    expect(typeof body.error).toBe("string");
-    expect(body.error).toBeTruthy();
+    expect(body.error).toBe("invalid_auth");
+    expect(slackFetch).toHaveBeenCalledOnce();
   });
 });

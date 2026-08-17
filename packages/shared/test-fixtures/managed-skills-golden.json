@@ -1,0 +1,39 @@
+{
+  "name": "acme-deploy",
+  "content": {
+    "description": "Deploy the service",
+    "body": "# Deploy\n\nFollow the runbook.\n",
+    "license": "MIT",
+    "compatibility": null,
+    "metadata": { "zeta": "last", "alpha": "first" },
+    "files": [{ "path": "scripts/deploy.sh", "content": "#!/bin/sh\n", "executable": true }]
+  },
+  "skillMarkdown": "---\nname: acme-deploy\ndescription: \"Deploy the service\"\nlicense: \"MIT\"\nmetadata:\n  \"alpha\": \"first\"\n  \"zeta\": \"last\"\n---\n# Deploy\n\nFollow the runbook.\n",
+  "revisionSha256": "c790a542b2ee5c4d5c0492c1caaff4f4278511dd796b0d3dbf903667e8935af9",
+  "manifestSha256": "1d5b45f528c2ae235df021faf63e045c7d9e03e83137b4c3decd705a09761eba",
+  "limits": {
+    "maxSkillFiles": 100,
+    "maxSkillFileBytes": 262144,
+    "maxSkillRevisionBytes": 1048576,
+    "maxSkillPathBytes": 240,
+    "maxSkillPathDepth": 10,
+    "maxManagedSkillsPerSession": 20,
+    "maxManagedSkillManifestBytes": 5242880
+  },
+  "files": [
+    {
+      "path": "SKILL.md",
+      "content": "---\nname: acme-deploy\ndescription: \"Deploy the service\"\nlicense: \"MIT\"\nmetadata:\n  \"alpha\": \"first\"\n  \"zeta\": \"last\"\n---\n# Deploy\n\nFollow the runbook.\n",
+      "sha256": "8c502bf4591f577f2c29b908be2a69ebfe4ad13887d539951029e6518a1e29d3",
+      "sizeBytes": 151,
+      "executable": false
+    },
+    {
+      "path": "scripts/deploy.sh",
+      "content": "#!/bin/sh\n",
+      "sha256": "a8076d3d28d21e02012b20eaf7dbf75409a6277134439025f282e368e3305abf",
+      "sizeBytes": 10,
+      "executable": true
+    }
+  ]
+}

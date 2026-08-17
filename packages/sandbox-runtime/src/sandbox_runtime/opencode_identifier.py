@@ -19,9 +19,10 @@ class OpenCodeIdentifier:
     - timestamp_hex: 12 hex chars encoding (timestamp_ms * 0x1000 + counter)
     - random_base62: 14 random base62 characters
 
-    IDs are monotonically increasing, ensuring new user messages always have
-    IDs greater than previous assistant messages (required for OpenCode's
-    prompt loop).
+    IDs increase monotonically only within a rollover window: the encoded value
+    is truncated to 48 bits, so it wraps roughly every 795 days and IDs minted
+    after a rollover sort BELOW every ID from the window before it. Never order
+    messages by comparing these IDs — order by their `time.created` instead.
 
     Note: Uses class-level state for monotonic generation. Safe for async code
     but NOT thread-safe.
@@ -59,11 +60,6 @@ class OpenCodeIdentifier:
         random_suffix = cls._random_base62(cls.RANDOM_LENGTH)
 
         return f"{prefix_str}_{timestamp_hex}{random_suffix}"
-
-    @staticmethod
-    def is_after(candidate: str, boundary: str) -> bool:
-        """Return whether an ascending ID was created after another ID."""
-        return candidate > boundary
 
     @classmethod
     def _random_base62(cls, length: int) -> str:
