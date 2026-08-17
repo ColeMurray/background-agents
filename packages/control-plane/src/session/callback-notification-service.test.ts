@@ -8,6 +8,11 @@ import {
 } from "./callback-notification-service";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
+import { verifyCallbackSignature } from "@open-inspect/shared/auth";
+import {
+  linearCompletionCallbackSchema,
+  linearToolCallCallbackSchema,
+} from "@open-inspect/shared/types/session-api";
 
 // ---- Mock factories ----
 
@@ -308,7 +313,13 @@ describe("CallbackNotificationService", () => {
 
     it("routes to LINEAR_BOT for linear source", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ issueId: "LIN-123" }),
+        callback_context: JSON.stringify({
+          source: "linear",
+          issueId: " issue-1 ",
+          issueIdentifier: "LIN-123",
+          issueUrl: "https://linear.app/acme/issue/LIN-123",
+          model: "anthropic/claude-haiku-4-5",
+        }),
         source: "linear",
       });
 
@@ -322,6 +333,10 @@ describe("CallbackNotificationService", () => {
 
       const slackFetch = harness.slackBot.fetch;
       expect(slackFetch).not.toHaveBeenCalled();
+
+      const body = JSON.parse(String(linearFetch.mock.calls[0][1]?.body));
+      expect(linearCompletionCallbackSchema.parse(body).context.issueId).toBe("issue-1");
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
     });
   });
 
@@ -498,11 +513,17 @@ describe("CallbackNotificationService", () => {
 
     it("fires callback on first call", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ channel: "C123" }),
-        source: "slack",
+        callback_context: JSON.stringify({
+          model: "anthropic/claude-haiku-4-5",
+          issueUrl: "https://linear.app/acme/issue/ENG-1",
+          issueIdentifier: "ENG-1",
+          issueId: "issue-1",
+          source: "linear",
+        }),
+        source: "linear",
       });
 
-      const fetchMock = vi.mocked(harness.slackBot.fetch);
+      const fetchMock = vi.mocked(harness.linearBot.fetch);
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       await harness.service.notifyToolCall("msg-1", {
@@ -526,9 +547,11 @@ describe("CallbackNotificationService", () => {
         args: { cmd: "ls" },
         callId: "call-1",
         status: "running",
-        context: { channel: "C123" },
+        context: expect.objectContaining({ source: "linear", issueId: "issue-1" }),
       });
       expect(body.signature).toEqual(expect.any(String));
+      expect(linearToolCallCallbackSchema.safeParse(body).success).toBe(true);
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
     });
 
     it("skips automation source — the SchedulerDO has no tool-call consumer", async () => {

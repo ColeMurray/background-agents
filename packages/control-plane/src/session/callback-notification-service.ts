@@ -8,6 +8,10 @@
  */
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import {
+  linearCompletionCallbackPayloadSchema,
+  linearToolCallCallbackPayloadSchema,
+} from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
@@ -181,12 +185,12 @@ export class CallbackNotificationService {
         return;
       }
 
-      const context = JSON.parse(message.callback_context);
-      source = context.source === "automation" ? "automation" : (message.source ?? null);
+      const rawContext = JSON.parse(message.callback_context);
+      source = rawContext.source === "automation" ? "automation" : (message.source ?? null);
 
       // Route automation callbacks to SchedulerDO (different URL + payload).
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(context, success, error, messageId);
+        result = await this.notifyAutomationComplete(rawContext, success, error, messageId);
         return;
       }
 
@@ -201,14 +205,23 @@ export class CallbackNotificationService {
       }
 
       const timestamp = Date.now();
-      const payloadData = {
+      const callbackData = {
         sessionId,
         messageId,
         success,
         ...(error != null ? { error } : {}),
         timestamp,
-        context,
+        context: rawContext,
       };
+      const parsedCallback =
+        source === "linear"
+          ? linearCompletionCallbackPayloadSchema.safeParse(callbackData)
+          : undefined;
+      if (parsedCallback && !parsedCallback.success) {
+        result.rejectReason = "invalid_payload";
+        return;
+      }
+      const payloadData = parsedCallback?.data ?? callbackData;
       const signature = await this.signPayload(payloadData, secret);
       const payload = { ...payloadData, signature };
       result = await deliverWithRetry(
@@ -396,18 +409,31 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
-    const context = JSON.parse(message.callback_context);
+    const rawContext = JSON.parse(message.callback_context);
 
-    const payloadData = {
+    const callbackData = {
       sessionId,
       tool,
       args: event.args ?? {},
       callId,
       status: event.status,
       timestamp: now,
-      context,
+      context: rawContext,
     };
-
+    const parsedPayload =
+      source === "linear" ? linearToolCallCallbackPayloadSchema.safeParse(callbackData) : undefined;
+    if (parsedPayload && !parsedPayload.success) {
+      this.log.warn("callback.tool_call", {
+        message_id: messageId,
+        session_id: sessionId,
+        source,
+        tool,
+        outcome: "skipped",
+        skip_reason: "invalid_payload",
+      });
+      return;
+    }
+    const payloadData = parsedPayload?.data ?? callbackData;
     const signature = await this.signPayload(payloadData, secret);
     const payload = { ...payloadData, signature };
 

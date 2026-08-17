@@ -82,6 +82,37 @@ export const linearStartCallbackSchema = z.strictObject({
 
 export type LinearStartCallback = z.infer<typeof linearStartCallbackSchema>;
 
+export const linearCompletionCallbackPayloadSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  messageId: nonEmptyStringSchema,
+  success: z.boolean(),
+  error: z.string().optional(),
+  timestamp: z.number().refine(Number.isFinite),
+  context: linearCallbackContextSchema,
+});
+
+export const linearCompletionCallbackSchema = linearCompletionCallbackPayloadSchema.extend({
+  signature: nonEmptyStringSchema,
+});
+
+export type LinearCompletionCallback = z.infer<typeof linearCompletionCallbackSchema>;
+
+export const linearToolCallCallbackPayloadSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  tool: z.string(),
+  args: z.record(z.string(), z.unknown()),
+  callId: nonEmptyStringSchema,
+  status: z.string().optional(),
+  timestamp: z.number().refine(Number.isFinite),
+  context: linearCallbackContextSchema,
+});
+
+export const linearToolCallCallbackSchema = linearToolCallCallbackPayloadSchema.extend({
+  signature: nonEmptyStringSchema,
+});
+
+export type LinearToolCallCallback = z.infer<typeof linearToolCallCallbackSchema>;
+
 export const automationCallbackContextSchema = z.object({
   source: z.literal("automation"),
   automationId: z.string(),

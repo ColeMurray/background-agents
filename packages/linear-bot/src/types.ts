@@ -2,7 +2,6 @@
  * Type definitions for the Linear bot.
  */
 
-import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
 
@@ -122,33 +121,6 @@ export const issueSessionSchema = z.object({
 });
 
 export type IssueSession = z.infer<typeof issueSessionSchema>;
-
-/**
- * Completion callback payload from control-plane.
- */
-export interface CompletionCallback {
-  sessionId: string;
-  messageId: string;
-  success: boolean;
-  error?: string;
-  timestamp: number;
-  signature: string;
-  context: LinearCallbackContext;
-}
-
-/**
- * Tool call callback payload from control-plane (ephemeral, best-effort).
- */
-export interface ToolCallCallback {
-  sessionId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  callId: string;
-  status?: string;
-  timestamp: number;
-  context: LinearCallbackContext;
-  signature: string;
-}
 
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 
