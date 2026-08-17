@@ -105,7 +105,7 @@ export interface SandboxStorage {
     preserveProviderObjectId?: boolean;
   }): void;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
-  updateSandboxForResume?(data: { status: SandboxStatus; createdAt: number }): void;
+  updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
   updateSandboxModalObjectId(modalObjectId: string | null): void;
   /** Update sandbox snapshot image ID */
@@ -433,14 +433,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const authTokenHash = await hashToken(sandboxAuthToken);
 
       // Store expected sandbox ID and auth token BEFORE calling provider
-      this.storage.updateSandboxForSpawn({
-        status: "spawning",
-        createdAt: now,
-        authTokenHash,
-        modalSandboxId: expectedSandboxId,
-        preserveProviderObjectId: true,
-      });
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
+      await this.enterProviderStartup("spawning", now, () =>
+        this.storage.updateSandboxForSpawn({
+          status: "spawning",
+          createdAt: now,
+          authTokenHash,
+          modalSandboxId: expectedSandboxId,
+          preserveProviderObjectId: true,
+        })
+      );
 
       await this.stopPriorProviderSandbox();
 
@@ -504,7 +505,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       };
 
       let result: CreateSandboxResult;
-      await this.armConnectingTimeout();
       try {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
@@ -525,15 +525,18 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         // indistinguishable here), and rotating the token hash and sandbox id
         // locks such an orphan out of this DO exactly like the next
         // user-initiated respawn would.
-        const retryNow = Math.max(Date.now(), now + 1);
         sandboxAuthToken = this.idGenerator.generateId();
+        const retryAuthTokenHash = await hashToken(sandboxAuthToken);
+        const retryNow = Math.max(Date.now(), now + 1);
         expectedSandboxId = buildSandboxIdForSession(session, retryNow);
-        this.storage.updateSandboxForSpawn({
-          status: "spawning",
-          createdAt: retryNow,
-          authTokenHash: await hashToken(sandboxAuthToken),
-          modalSandboxId: expectedSandboxId,
-        });
+        await this.enterProviderStartup("spawning", retryNow, () =>
+          this.storage.updateSandboxForSpawn({
+            status: "spawning",
+            createdAt: retryNow,
+            authTokenHash: retryAuthTokenHash,
+            modalSandboxId: expectedSandboxId,
+          })
+        );
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -752,14 +755,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const expectedSandboxId = buildSandboxIdForSession(session, now);
 
       // Store expected sandbox ID and auth token
-      this.storage.updateSandboxForSpawn({
-        status: "spawning",
-        createdAt: now,
-        authTokenHash: sandboxAuthTokenHash,
-        modalSandboxId: expectedSandboxId,
-        preserveProviderObjectId: true,
-      });
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "spawning" });
+      await this.enterProviderStartup("spawning", now, () =>
+        this.storage.updateSandboxForSpawn({
+          status: "spawning",
+          createdAt: now,
+          authTokenHash: sandboxAuthTokenHash,
+          modalSandboxId: expectedSandboxId,
+          preserveProviderObjectId: true,
+        })
+      );
 
       await this.stopPriorProviderSandbox();
 
@@ -773,7 +777,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
-      await this.armConnectingTimeout();
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -897,19 +900,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       const now = Date.now();
       this.storage.setLastSpawnError(null, null);
-      this.storage.updateSandboxForResume?.({
-        status: "connecting",
-        createdAt: now,
-      });
-      if (!this.storage.updateSandboxForResume) {
-        this.storage.updateSandboxStatus("connecting");
-      }
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+      await this.enterProviderStartup("connecting", now, () =>
+        this.storage.updateSandboxForResume({
+          status: "connecting",
+          createdAt: now,
+        })
+      );
 
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
 
-      await this.armConnectingTimeout();
       const result = await this.provider.resumeSandbox({
         providerObjectId,
         sessionId: session.session_name || session.id,
@@ -1545,9 +1545,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
-  private async armConnectingTimeout(): Promise<void> {
+  private async enterProviderStartup(
+    status: "spawning" | "connecting",
+    createdAt: number,
+    persist: () => void
+  ): Promise<void> {
+    persist();
+    this.broadcaster.broadcast({ type: "sandbox_status", status });
     // The bridge replaces this with its inactivity alarm when it connects.
-    await this.alarmScheduler.scheduleAlarm(Date.now() + this.config.connectingTimeout.timeoutMs);
+    await this.alarmScheduler.scheduleAlarm(createdAt + this.config.connectingTimeout.timeoutMs);
   }
 
   /**

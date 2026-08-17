@@ -149,6 +149,13 @@ function createMockStorage(
         if (!data.preserveProviderObjectId) sandbox.modal_object_id = null;
       }
     }),
+    updateSandboxForResume: vi.fn((data) => {
+      calls.push(`updateSandboxForResume:${data.status}`);
+      if (sandbox) {
+        sandbox.status = data.status;
+        sandbox.created_at = data.createdAt;
+      }
+    }),
     updateSandboxModalObjectId: vi.fn((id: string | null) => {
       calls.push(`updateSandboxModalObjectId:${id}`);
       if (sandbox) sandbox.modal_object_id = id;
@@ -389,6 +396,7 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
     }
   });
   const connectBridge = () => {
+    expect(alarmScheduler.alarms).toHaveLength(1);
     sandbox.status = "ready";
     vi.mocked(wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
     broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
@@ -432,7 +440,8 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
   await manager.spawnSandbox();
 
   expect(sandbox.status).toBe("ready");
-  expect(storage.calls.filter((call) => call === "updateSandboxStatus:connecting")).toHaveLength(
+  expect(storage.calls).not.toContain("updateSandboxStatus:connecting");
+  expect(storage.calls.filter((call) => call === "updateSandboxForResume:connecting")).toHaveLength(
     kind === "resume" ? 1 : 0
   );
   expect(alarmScheduler.alarms).toHaveLength(1);
@@ -505,6 +514,11 @@ describe("SandboxLifecycleManager", () => {
           created_at: Date.now() - 60000,
         });
         const storage = createMockStorage(createMockSession(), sandbox);
+        const alarmScheduler = createMockAlarmScheduler();
+        vi.mocked(alarmScheduler.scheduleAlarm).mockImplementation(async (timestamp) => {
+          calls.push("alarm");
+          alarmScheduler.alarms.push(timestamp);
+        });
         vi.mocked(storage.updateSandboxForSpawn).mockImplementation((data) => {
           calls.push("fence");
           sandbox.status = data.status;
@@ -529,14 +543,14 @@ describe("SandboxLifecycleManager", () => {
           storage,
           createMockBroadcaster(),
           createMockWebSocketManager(false),
-          createMockAlarmScheduler(),
+          alarmScheduler,
           createMockIdGenerator(),
           createTestConfig()
         );
 
         await manager.spawnSandbox();
 
-        expect(calls.slice(0, 3)).toEqual(["fence", "stop", "clear"]);
+        expect(calls.slice(0, 4)).toEqual(["fence", "alarm", "stop", "clear"]);
         expect(stopSandbox).toHaveBeenCalledWith(
           expect.objectContaining({
             providerObjectId: "modal-obj-123",
@@ -833,24 +847,14 @@ describe("SandboxLifecycleManager", () => {
       ).toBe(false);
     });
 
-    it("schedules connecting timeout alarm before spawn provider call", async () => {
+    it("schedules the connecting timeout from the persisted startup timestamp", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const alarmScheduler = createMockAlarmScheduler();
       const config = createTestConfig();
-      const provider = createMockProvider({
-        createSandbox: vi.fn(async (createConfig) => {
-          expect(alarmScheduler.alarms).toHaveLength(1);
-          return {
-            sandboxId: createConfig.sandboxId,
-            status: "connecting",
-            createdAt: Date.now(),
-          };
-        }),
-      });
 
       const manager = new SandboxLifecycleManager(
-        provider,
+        createMockProvider(),
         storage,
         createMockBroadcaster(),
         createMockWebSocketManager(false),
@@ -859,14 +863,11 @@ describe("SandboxLifecycleManager", () => {
         config
       );
 
-      const before = Date.now();
       await manager.spawnSandbox();
-      const after = Date.now();
 
-      expect(alarmScheduler.alarms.length).toBe(1);
-      const scheduledTime = alarmScheduler.alarms[0];
-      expect(scheduledTime).toBeGreaterThanOrEqual(before + config.connectingTimeout.timeoutMs);
-      expect(scheduledTime).toBeLessThanOrEqual(after + config.connectingTimeout.timeoutMs);
+      expect(alarmScheduler.alarms).toEqual([
+        sandbox.created_at + config.connectingTimeout.timeoutMs,
+      ]);
     });
 
     it("passes user env vars to provider", async () => {
@@ -1154,73 +1155,6 @@ describe("SandboxLifecycleManager", () => {
 
       expect(terminalLogs).toHaveLength(1);
       expect(terminalLogs[0]).toEqual(expect.objectContaining({ outcome: "error" }));
-    });
-
-    it("schedules connecting timeout alarm before restore provider call", async () => {
-      const sandbox = createMockSandbox({
-        status: "stopped",
-        snapshot_image_id: "img-abc123",
-      });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const alarmScheduler = createMockAlarmScheduler();
-      const config = createTestConfig();
-      const provider = createMockProvider({
-        restoreFromSnapshot: vi.fn(async (restoreConfig) => {
-          expect(alarmScheduler.alarms).toHaveLength(1);
-          return { success: true, sandboxId: restoreConfig.sandboxId };
-        }),
-      });
-
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        createMockBroadcaster(),
-        createMockWebSocketManager(false),
-        alarmScheduler,
-        createMockIdGenerator(),
-        config
-      );
-
-      const before = Date.now();
-      await manager.spawnSandbox();
-      const after = Date.now();
-
-      expect(alarmScheduler.alarms.length).toBe(1);
-      const scheduledTime = alarmScheduler.alarms[0];
-      expect(scheduledTime).toBeGreaterThanOrEqual(before + config.connectingTimeout.timeoutMs);
-      expect(scheduledTime).toBeLessThanOrEqual(after + config.connectingTimeout.timeoutMs);
-    });
-
-    it("schedules connecting timeout alarm before resume provider call", async () => {
-      const sandbox = createMockSandbox({
-        status: "stopped",
-        modal_object_id: "provider-obj",
-        snapshot_image_id: null,
-      });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const alarmScheduler = createMockAlarmScheduler();
-      const provider = createMockProvider({
-        capabilities: { supportsPersistentResume: true },
-        resumeSandbox: vi.fn(async () => {
-          expect(alarmScheduler.alarms).toHaveLength(1);
-          return { success: true };
-        }),
-      });
-
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        createMockBroadcaster(),
-        createMockWebSocketManager(false),
-        alarmScheduler,
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-
-      await manager.spawnSandbox();
-
-      expect(provider.resumeSandbox).toHaveBeenCalledOnce();
-      expect(alarmScheduler.alarms).toHaveLength(1);
     });
 
     it("stores providerObjectId after successful restore for future snapshots", async () => {
@@ -2629,6 +2563,7 @@ describe("SandboxLifecycleManager", () => {
       provider?: SandboxProvider;
       environmentImageLookup?: ImageBuildLookup;
       sessionRepositories?: SessionRepositoryInfo[];
+      alarmScheduler?: AlarmScheduler;
     }) {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(
@@ -2643,7 +2578,7 @@ describe("SandboxLifecycleManager", () => {
         storage,
         createMockBroadcaster(),
         createMockWebSocketManager(false),
-        createMockAlarmScheduler(),
+        overrides?.alarmScheduler ?? createMockAlarmScheduler(),
         createMockIdGenerator(),
         createTestConfig(),
         {},
@@ -2763,9 +2698,11 @@ describe("SandboxLifecycleManager", () => {
           status: "connecting",
           createdAt: Date.now(),
         }));
+      const alarmScheduler = createMockAlarmScheduler();
       const { manager, storage } = createEnvironmentSessionManager({
         environmentImageLookup,
         provider: createMockProvider({ createSandbox }),
+        alarmScheduler,
       });
 
       await manager.spawnSandbox();
@@ -2789,6 +2726,13 @@ describe("SandboxLifecycleManager", () => {
       expect(retryAttempt.sandboxAuthToken).not.toBe(firstAttempt.sandboxAuthToken);
       expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
       expect(vi.mocked(storage.updateSandboxForSpawn)).toHaveBeenCalledTimes(2);
+      expect(alarmScheduler.alarms).toEqual(
+        vi
+          .mocked(storage.updateSandboxForSpawn)
+          .mock.calls.map(
+            ([data]) => data.createdAt + DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs
+          )
+      );
       expect(storage.calls).toContain("updateSandboxStatus:connecting");
       expect(storage.calls).not.toContain("updateSandboxStatus:failed");
     });
