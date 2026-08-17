@@ -320,8 +320,9 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
 7. If GitHub sign-in uses `allowed_emails` or `allowed_email_domains`, set **Account permissions**:
    - Email addresses: **Read-only** _(without it the app cannot read verified emails and those
      allowlists deny every GitHub sign-in)_
-   - For existing GitHub Apps, republish each permission change and request installation updates. An
-     organization owner must accept the request before the new permission applies.
+   - For existing GitHub Apps, republish each permission change. **Account permissions** are
+     user-scoped: each signing-in user must reauthorize the app before the new permission applies —
+     an installation approval does not grant it.
 8. Click **"Create GitHub App"**
 9. Note the **App ID** (top of page). If enabling GitHub sign-in, also note the **Client ID**.
 10. If enabling GitHub sign-in, under **"Client secrets"**, click **"Generate a new client secret"**
@@ -781,8 +782,10 @@ Now that the GitHub bot worker is deployed, configure the GitHub App for webhook
    - **Pull request review comments**
 5. Click **Save changes**
 
-Changing an existing app's permissions creates an installation permission-review request. An
-organization owner must accept it before the bot can post commit statuses.
+**Commit statuses** is a repository permission, so changing it on an existing app creates an
+installation permission-review request. The owner of the account the app is installed on — an
+organization owner, or the user for a personal-account installation — must accept it before the bot
+can post commit statuses. Until then the installation keeps its previous, narrower permissions.
 
 ### Find Your Bot Username
 
