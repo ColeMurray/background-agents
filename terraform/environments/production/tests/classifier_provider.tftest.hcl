@@ -84,6 +84,15 @@ run "anthropic_classifier_by_default" {
     )
     error_message = "Both classifier bots must receive the configured classification model."
   }
+
+  # Backwards compatibility: an Anthropic classifier reuses the deployment-wide
+  # key, so an existing deployment needs no new variable.
+  assert {
+    condition = (
+      one([for b in local.classifier_secret_bindings : b.value]) == var.anthropic_api_key
+    )
+    error_message = "An Anthropic classifier must bind the deployment-wide anthropic_api_key."
+  }
 }
 
 run "openai_classifier_binds_openai_key" {

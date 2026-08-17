@@ -52,18 +52,10 @@ locals {
     startswith(var.classification_model, "gpt-")
   )
 
-  # A blank classifier-specific Anthropic key falls back to the deployment-wide
-  # one, so deployments predating these variables need no new value.
-  classification_anthropic_api_key = (
-    trimspace(var.classification_anthropic_api_key) != ""
-    ? var.classification_anthropic_api_key
-    : var.anthropic_api_key
-  )
-
   # Exactly one provider binding for the classifier bots.
   classifier_secret_bindings = (local.classifier_uses_openai
     ? [{ name = "OPENAI_API_KEY", value = var.classification_openai_api_key }]
-    : [{ name = "ANTHROPIC_API_KEY", value = local.classification_anthropic_api_key }]
+    : [{ name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key }]
   )
 
   # Host the Cloudflare web Worker is served from: custom domain when configured,
