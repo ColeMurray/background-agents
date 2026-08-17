@@ -14,6 +14,7 @@ interface SessionRepositoryRow {
   base_branch: string;
 }
 
+/** Load repository rows and PR summaries in parallel for one D1-safe ID chunk. */
 async function loadDecorationChunk(
   db: SqlDatabase,
   pullRequestStore: SessionPullRequestStore,
