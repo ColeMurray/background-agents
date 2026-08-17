@@ -96,6 +96,11 @@ describe("callOpenAIStructured", () => {
 
   it.each([
     {
+      label: "an empty choices array",
+      respond: () => Response.json({ choices: [] }),
+      message: /No choices in OpenAI response/,
+    },
+    {
       label: "a non-2xx response",
       respond: () => new Response("server exploded", { status: 500 }),
       message: /OpenAI API error 500: server exploded/,
