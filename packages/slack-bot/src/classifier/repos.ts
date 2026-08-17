@@ -221,8 +221,12 @@ const routingRules = createCachedResource<SlackRoutingRule[]>({
     );
   },
   deserialize: (cached) => {
-    const parsed = z.array(slackRoutingRuleSchema).safeParse(cached);
-    return parsed.success ? normalizeRoutingRules(parsed.data) : null;
+    if (!Array.isArray(cached)) return null;
+    const rules = cached.flatMap((entry) => {
+      const parsed = slackRoutingRuleSchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    });
+    return normalizeRoutingRules(rules);
   },
   fallback: [],
 });

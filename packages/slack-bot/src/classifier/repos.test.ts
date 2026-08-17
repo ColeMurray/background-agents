@@ -134,7 +134,7 @@ describe("getRoutingRules", () => {
     ]);
   });
 
-  it("rejects malformed routing rules read from the KV cache", async () => {
+  it("skips malformed routing rules read from the KV cache", async () => {
     const env = {
       SLACK_KV: {
         get: vi.fn().mockResolvedValue([
@@ -149,7 +149,9 @@ describe("getRoutingRules", () => {
       SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
-    expect(await getRoutingRules(env, "trace")).toEqual([]);
+    expect(await getRoutingRules(env, "trace")).toEqual([
+      { keyword: "frontend", target: "acme/web" },
+    ]);
   });
 });
 

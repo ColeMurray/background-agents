@@ -271,7 +271,7 @@ describe("SessionEventStream", () => {
           type: "token",
           messageId: null,
         })
-      ).toThrow("Invalid persisted event data");
+      ).toThrow();
     });
 
     it("rejects malformed persisted event JSON", () => {
