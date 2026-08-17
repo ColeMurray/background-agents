@@ -60,6 +60,7 @@ export interface CallbackServiceDeps {
  * single duplicate Linear/Slack activity, not data loss.
  */
 const NOTIFIED_CALL_IDS_CAP = 500;
+const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
 
 interface CallbackDeliveryResult {
   delivered: boolean;
@@ -354,10 +355,8 @@ export class CallbackNotificationService {
     // a later event for the same callId can retry.
     if (callId && this.notifiedCallIds.has(callId)) return;
 
-    // Throttle: max 1 per 3 seconds
+    // Use one timestamp for validation, throttling, and the callback payload.
     const now = Date.now();
-    if (now - this._lastToolCallCallbackTs < 3000) return;
-    this._lastToolCallCallbackTs = now;
 
     const tool = event.tool ?? "unknown";
 
@@ -414,7 +413,7 @@ export class CallbackNotificationService {
     const callbackData = {
       sessionId,
       tool,
-      args: event.args ?? {},
+      args: source === "linear" ? event.args : (event.args ?? EMPTY_TOOL_ARGS),
       callId,
       status: event.status,
       timestamp: now,
@@ -433,6 +432,11 @@ export class CallbackNotificationService {
       });
       return;
     }
+
+    // Invalid callbacks must not consume the delivery throttle window.
+    if (now - this._lastToolCallCallbackTs < 3000) return;
+    this._lastToolCallCallbackTs = now;
+
     const payloadData = parsedPayload?.data ?? callbackData;
     const signature = await this.signPayload(payloadData, secret);
     const payload = { ...payloadData, signature };

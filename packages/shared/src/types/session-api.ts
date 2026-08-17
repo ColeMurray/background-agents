@@ -99,7 +99,7 @@ export type LinearCompletionCallback = z.infer<typeof linearCompletionCallbackSc
 
 export const linearToolCallCallbackPayloadSchema = z.strictObject({
   sessionId: nonEmptyStringSchema,
-  tool: z.string(),
+  tool: nonEmptyStringSchema,
   args: z.record(z.string(), z.unknown()),
   callId: nonEmptyStringSchema,
   status: z.string().optional(),

@@ -14,6 +14,14 @@ import {
   linearToolCallCallbackSchema,
 } from "@open-inspect/shared/types/session-api";
 
+const LINEAR_CALLBACK_CONTEXT = {
+  source: "linear",
+  issueId: "issue-1",
+  issueIdentifier: "ENG-1",
+  issueUrl: "https://linear.app/acme/issue/ENG-1",
+  model: "anthropic/claude-haiku-4-5",
+};
+
 // ---- Mock factories ----
 
 function createMockLogger(): Logger {
@@ -335,7 +343,8 @@ describe("CallbackNotificationService", () => {
       expect(slackFetch).not.toHaveBeenCalled();
 
       const body = JSON.parse(String(linearFetch.mock.calls[0][1]?.body));
-      expect(linearCompletionCallbackSchema.parse(body).context.issueId).toBe("issue-1");
+      expect(body.context.issueId).toBe("issue-1");
+      expect(linearCompletionCallbackSchema.safeParse(body).success).toBe(true);
       expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
     });
   });
@@ -513,13 +522,7 @@ describe("CallbackNotificationService", () => {
 
     it("fires callback on first call", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({
-          model: "anthropic/claude-haiku-4-5",
-          issueUrl: "https://linear.app/acme/issue/ENG-1",
-          issueIdentifier: "ENG-1",
-          issueId: "issue-1",
-          source: "linear",
-        }),
+        callback_context: JSON.stringify(LINEAR_CALLBACK_CONTEXT),
         source: "linear",
       });
 
@@ -552,6 +555,25 @@ describe("CallbackNotificationService", () => {
       expect(body.signature).toEqual(expect.any(String));
       expect(linearToolCallCallbackSchema.safeParse(body).success).toBe(true);
       expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it("skips Linear callbacks whose tool arguments are missing", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(LINEAR_CALLBACK_CONTEXT),
+        source: "linear",
+      });
+
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "bash",
+        callId: "call-1",
+      });
+
+      expect(harness.linearBot.fetch).not.toHaveBeenCalled();
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "callback.tool_call",
+        expect.objectContaining({ outcome: "skipped", skip_reason: "invalid_payload" })
+      );
     });
 
     it("skips automation source — the SchedulerDO has no tool-call consumer", async () => {
@@ -643,6 +665,30 @@ describe("CallbackNotificationService", () => {
           status: "completed",
         });
         expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not throttle a valid Linear callback after rejecting an invalid one", async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_700_000_000_000);
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify(LINEAR_CALLBACK_CONTEXT),
+          source: "linear",
+        });
+        harness.linearBot.fetch.mockResolvedValue(new Response("ok", { status: 200 }));
+
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          args: { command: "invalid without callId" },
+        });
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "bash",
+          args: { command: "valid" },
+          callId: "call-valid",
+        });
+
+        expect(harness.linearBot.fetch).toHaveBeenCalledOnce();
       });
 
       it("fires once per distinct callId across many tool calls", async () => {

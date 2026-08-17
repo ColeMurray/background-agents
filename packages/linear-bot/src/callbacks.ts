@@ -103,9 +103,7 @@ export function formatToolAction(
     default: {
       const firstStringArg = Object.values(args).find((v) => typeof v === "string");
       return {
-        // Linear rejects activities with an empty `action`; the upstream
-        // validator allows tool === "" so guard here.
-        action: tool || "Tool",
+        action: tool,
         parameter: firstStringArg ? String(firstStringArg).slice(0, 200) : "(no args)",
       };
     }

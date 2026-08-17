@@ -465,6 +465,7 @@ describe("boundary schemas", () => {
       expect(linearToolCallCallbackSchema.safeParse({ ...callback, callId: "" }).success).toBe(
         false
       );
+      expect(linearToolCallCallbackSchema.safeParse({ ...callback, tool: "" }).success).toBe(false);
     });
   });
 
