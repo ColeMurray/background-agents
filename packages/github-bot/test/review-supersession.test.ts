@@ -22,7 +22,8 @@ function createMockEnv(fetchImpl: (url: string) => Promise<Response>): Env {
     GITHUB_KV: { get: vi.fn(), put: vi.fn() },
     CONTROL_PLANE: { fetch: vi.fn().mockImplementation(fetchImpl) },
     DEPLOYMENT_NAME: "test",
-    DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
+    // Deliberately non-default: these client tests do not exercise model selection.
+    DEFAULT_MODEL: "anthropic/test-review-model",
     GITHUB_BOT_USERNAME: "test-bot[bot]",
     GITHUB_APP_ID: "12345",
     GITHUB_APP_PRIVATE_KEY: "test-key",
