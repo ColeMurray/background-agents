@@ -85,6 +85,21 @@ class TestStartVnc:
         assert not password_path.exists()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(("name", "level"), [("fluxbox", "debug"), ("xvfb", "info")])
+    async def test_forwards_fluxbox_logs_at_debug_and_other_desktop_logs_at_info(self, name, level):
+        log = MagicMock()
+        desktop = BrowserDesktop(log, password="secret")
+        process = _process()
+        process.stdout = asyncio.StreamReader()
+        process.stdout.feed_data(b"child output\n")
+        process.stdout.feed_eof()
+
+        await desktop._forward_logs(name, process)
+
+        getattr(log, level).assert_called_once_with(f"{name}.stdout", line="child output")
+        getattr(log, "info" if level == "debug" else "debug").assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_starts_dependencies_in_order_with_internal_raw_vnc(self, tmp_path):
         supervisor = _make_browser_desktop("secret12")
         events: list[str] = []
