@@ -1341,12 +1341,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
               "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
           });
         }
-        await this.alarmScheduler.scheduleAlarm(now + inactivityDecision.extensionMs);
+        await this.alarmScheduler.schedule(now + inactivityDecision.extensionMs);
         return;
 
       case "schedule":
         this.log.debug("Scheduling next alarm", { next_check_ms: inactivityDecision.nextCheckMs });
-        await this.alarmScheduler.scheduleAlarm(now + inactivityDecision.nextCheckMs);
+        await this.alarmScheduler.schedule(now + inactivityDecision.nextCheckMs);
         return;
     }
   }
@@ -1419,7 +1419,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   async scheduleInactivityCheck(): Promise<void> {
     const alarmTime = Date.now() + this.config.inactivity.timeoutMs;
     this.log.debug("Scheduling inactivity check", { timeout_ms: this.config.inactivity.timeoutMs });
-    await this.alarmScheduler.scheduleAlarm(alarmTime);
+    await this.alarmScheduler.schedule(alarmTime);
   }
 
   /**
@@ -1431,7 +1431,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   async scheduleDisconnectCheck(): Promise<void> {
     const alarmTime = Date.now() + this.config.heartbeat.timeoutMs;
     this.log.debug("Scheduling disconnect check", { timeout_ms: this.config.heartbeat.timeoutMs });
-    await this.alarmScheduler.scheduleAlarm(alarmTime);
+    await this.alarmScheduler.schedule(alarmTime);
   }
 
   /**
@@ -1553,7 +1553,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     persist();
     this.broadcaster.broadcast({ type: "sandbox_status", status });
     // The bridge replaces this with its inactivity alarm when it connects.
-    await this.alarmScheduler.scheduleAlarm(createdAt + this.config.connectingTimeout.timeoutMs);
+    await this.alarmScheduler.schedule(createdAt + this.config.connectingTimeout.timeoutMs);
   }
 
   /**

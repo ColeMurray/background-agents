@@ -57,7 +57,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
           // An earlier lifecycle alarm has consumed the Durable Object's single
           // alarm slot. Reassert this message's deadline before lifecycle handling
           // schedules its next check so stuck-message recovery cannot be delayed.
-          await deps.alarmScheduler.scheduleAlarm(processing.started_at + deps.executionTimeoutMs);
+          await deps.alarmScheduler.schedule(processing.started_at + deps.executionTimeoutMs);
         }
       }
 

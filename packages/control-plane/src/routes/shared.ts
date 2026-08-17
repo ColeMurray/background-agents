@@ -9,7 +9,7 @@ import type { RequestMetrics } from "../db/instrumented-d1";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
-import type { BackgroundJobDispatcher } from "../platform-ports";
+import type { BackgroundTasks } from "../platform-ports";
 import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
 import {
   createSourceControlProviderFromEnv,
@@ -32,7 +32,7 @@ export type RequestContext = CorrelationContext & {
    */
   db: SqlDatabase;
   /** Request-scoped capability for scheduling background tasks. */
-  executionCtx: BackgroundJobDispatcher;
+  executionCtx: BackgroundTasks;
   /** Lazy runtime dependency used by user-session authentication and credential access. */
   getUserAuth?: () => BetterAuthRuntime;
   /** Lazy normalized auth runtime used by server-only authentication composition routes. */

@@ -54,7 +54,7 @@ import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
-import { createCloudflareBackgroundJobDispatcher } from "../cloudflare/background-job-dispatcher";
+import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills } from "../session/skill-resolution";
@@ -1339,7 +1339,7 @@ export class SchedulerDO extends DurableObject<Env> {
       request_id: run.id,
       metrics: createRequestMetrics(),
       db: this.db,
-      executionCtx: createCloudflareBackgroundJobDispatcher(this.ctx),
+      executionCtx: createCloudflareBackgroundTasks(this.ctx),
     };
 
     // What the session opens — the run's repository snapshot or, for

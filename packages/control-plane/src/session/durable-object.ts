@@ -93,8 +93,8 @@ import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
-import { createCloudflareBackgroundJobDispatcher } from "../cloudflare/background-job-dispatcher";
-import type { AlarmScheduler, BackgroundJobDispatcher } from "../platform-ports";
+import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
+import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
@@ -128,7 +128,12 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
-import { createEarliestAlarmScheduler } from "./alarm/scheduler";
+import {
+  createEarliestAlarmScheduler,
+  handleAlarmDelivery,
+  PersistedAlarmDeadlineStore,
+  rehydrateAlarmScheduler,
+} from "./alarm/scheduler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
@@ -171,7 +176,8 @@ export class SessionDO extends DurableObject<Env> {
    * binding at runtime. Distinct from `this.sql`, the DO-embedded SQLite.
    */
   private readonly db: SqlDatabase | null;
-  private readonly backgroundJobs: BackgroundJobDispatcher;
+  private readonly backgroundTasks: BackgroundTasks;
+  private readonly alarmDeadlines: PersistedAlarmDeadlineStore;
   private sessionCoreRepository: SessionCoreRepository;
   private sandboxRepository: SandboxRepository;
   private attachmentRepository: SessionAttachmentRepository;
@@ -290,8 +296,9 @@ export class SessionDO extends DurableObject<Env> {
     super(ctx, env);
     // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
     this.db = env.DB ?? null;
-    this.backgroundJobs = createCloudflareBackgroundJobDispatcher(ctx);
+    this.backgroundTasks = createCloudflareBackgroundTasks(ctx, () => this.log);
     this.sql = ctx.storage.sql;
+    this.alarmDeadlines = new PersistedAlarmDeadlineStore(this.sql);
     this.attachmentRepository = new SessionAttachmentRepository(this.sql);
     this.artifactRepository = new ArtifactRepository(this.sql);
     this.eventRepository = new EventRepository(this.sql, (closure) =>
@@ -310,7 +317,7 @@ export class SessionDO extends DurableObject<Env> {
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
-    const ensureInitialized = () => this.ensureInitialized();
+    const ensureInitialized = (rehydrateAlarm = true) => this.ensureInitialized(rehydrateAlarm);
     const clock: Clock = {
       nowMs: () => Date.now(),
       monotonicNowMs: () => performance.now(),
@@ -368,7 +375,8 @@ export class SessionDO extends DurableObject<Env> {
         sandbox: sandboxDisconnects,
         broadcaster,
       }),
-      handleScheduledDeadline: () => this.alarmHandler.handle(),
+      handleScheduledDeadline: () =>
+        handleAlarmDelivery(this.alarmDeadlines, () => this.alarmHandler.handle()),
     });
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -504,7 +512,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get alarmScheduler(): AlarmScheduler {
     if (!this._alarmScheduler) {
-      this._alarmScheduler = createEarliestAlarmScheduler(this.ctx.storage);
+      this._alarmScheduler = createEarliestAlarmScheduler(this.ctx.storage, this.alarmDeadlines);
     }
     return this._alarmScheduler;
   }
@@ -512,7 +520,7 @@ export class SessionDO extends DurableObject<Env> {
   private get messageQueue(): SessionMessageQueue {
     if (!this._messageQueue) {
       this._messageQueue = new SessionMessageQueue(
-        this.backgroundJobs,
+        this.backgroundTasks,
         this.log,
         this.sessionCoreRepository,
         this.messageRepository,
@@ -683,14 +691,7 @@ export class SessionDO extends DurableObject<Env> {
           validateReasoningEffort(model, effort, this.log),
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
-        scheduleWarmSandbox: () =>
-          this.backgroundJobs.submit(
-            this.warmSandbox().catch((error) => {
-              this.log.error("sandbox.warm.background_error", {
-                error: error instanceof Error ? error : String(error),
-              });
-            })
-          ),
+        scheduleWarmSandbox: () => this.backgroundTasks.spawn(this.warmSandbox()),
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
@@ -750,37 +751,30 @@ export class SessionDO extends DurableObject<Env> {
     return this._pullRequestHandler;
   }
 
-  /** Fire a background read-through refresh; failures only log. */
+  /** Fire a background read-through refresh. */
   private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
-    this.backgroundJobs.submit(
+    this.backgroundTasks.spawn(
       refreshSessionPullRequests(
         this.sessionCoreRepository,
         this.artifactRepository,
         this.sourceControlProvider,
         this.db ? new SessionPullRequestStore(this.db) : null
-      )
-        .then(({ updated, failures }) => {
-          for (const artifact of updated) {
-            this.broadcast({ type: "artifact_updated", artifact });
-          }
-          for (const failure of failures) {
-            this.log.error("Pull request refresh failed for artifact", {
-              trigger,
-              reason: failure.reason,
-              artifact_id: failure.artifactId,
-              pr_number: failure.prNumber,
-              repo_owner: failure.repoOwner,
-              repo_name: failure.repoName,
-              error: failure.error instanceof Error ? failure.error : String(failure.error),
-            });
-          }
-        })
-        .catch((error) => {
-          this.log.error("Pull request refresh failed", {
+      ).then(({ updated, failures }) => {
+        for (const artifact of updated) {
+          this.broadcast({ type: "artifact_updated", artifact });
+        }
+        for (const failure of failures) {
+          this.log.error("Pull request refresh failed for artifact", {
             trigger,
-            error: error instanceof Error ? error : String(error),
+            reason: failure.reason,
+            artifact_id: failure.artifactId,
+            pr_number: failure.prNumber,
+            repo_owner: failure.repoOwner,
+            repo_name: failure.repoName,
+            error: failure.error instanceof Error ? failure.error : String(failure.error),
           });
-        })
+        }
+      })
     );
   }
 
@@ -825,7 +819,7 @@ export class SessionDO extends DurableObject<Env> {
   private get sandboxEventProcessor(): SessionSandboxEventProcessor {
     if (!this._sandboxEventProcessor) {
       this._sandboxEventProcessor = new SessionSandboxEventProcessor(
-        this.backgroundJobs,
+        this.backgroundTasks,
         () => this.log,
         this.sessionCoreRepository,
         this.sandboxRepository,
@@ -863,7 +857,7 @@ export class SessionDO extends DurableObject<Env> {
   private get statusService(): SessionStatusService {
     if (!this._statusService) {
       this._statusService = new SessionStatusService(
-        this.backgroundJobs,
+        this.backgroundTasks,
         this.log,
         this.sessionCoreRepository,
         this.messageRepository,
@@ -1058,7 +1052,7 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Initialize the session with required data.
    */
-  private ensureInitialized(): void {
+  private ensureInitialized(rehydrateAlarm = true): void {
     if (this.initialized) return;
     initSchema(this.sql);
     this.initialized = true;
@@ -1080,6 +1074,9 @@ export class SessionDO extends DurableObject<Env> {
       this.log
     );
     this.diffsHandler = new SessionDiffsHandler(this.diffService);
+    if (rehydrateAlarm) {
+      this.backgroundTasks.spawn(rehydrateAlarmScheduler(this.alarmScheduler, this.alarmDeadlines));
+    }
   }
 
   /**
@@ -1194,17 +1191,11 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.backgroundJobs.submit(
-          this.processMessageQueue().catch((error) => {
-            log.error("message_queue.process.background_error", {
-              error: error instanceof Error ? error : String(error),
-            });
-          })
-        );
+        this.backgroundTasks.spawn(this.processMessageQueue());
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);
-        this.backgroundJobs.submit(this.wsManager.enforceAuthTimeout(server, wsId));
+        this.backgroundTasks.spawn(this.wsManager.enforceAuthTimeout(server, wsId));
       }
 
       return new Response(null, { status: 101, webSocket: client });
@@ -1530,16 +1521,7 @@ export class SessionDO extends DurableObject<Env> {
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     if (!this.db) return;
     const sessionStore = new SessionIndexStore(this.db);
-    this.backgroundJobs.submit(
-      sessionStore.updateTitleIfNewer(sessionId, title, updatedAt).catch((error) => {
-        this.log.error("session_index.update_title.background_error", {
-          session_id: sessionId,
-          title,
-          updated_at: updatedAt,
-          error,
-        });
-      })
-    );
+    this.backgroundTasks.spawn(sessionStore.updateTitleIfNewer(sessionId, title, updatedAt));
   }
 
   private applySessionTitleUpdate(

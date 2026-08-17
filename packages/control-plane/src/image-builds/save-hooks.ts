@@ -54,7 +54,7 @@ export function scheduleImageBuildOnSave(
       });
     });
 
-  ctx.executionCtx.submit(task);
+  ctx.executionCtx.spawn(task);
 }
 
 /**

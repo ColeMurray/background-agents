@@ -293,7 +293,7 @@ async function handleSpawnChild(
     return error("Failed to enqueue child session prompt", 500);
   }
 
-  ctx.executionCtx.submit(
+  ctx.executionCtx.spawn(
     ctx.sessionRuntime
       .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
         method: "POST",

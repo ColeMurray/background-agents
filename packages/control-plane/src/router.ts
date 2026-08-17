@@ -16,7 +16,7 @@ import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { createLogger } from "./logger";
-import type { BackgroundJobDispatcher } from "./platform-ports";
+import type { BackgroundTasks } from "./platform-ports";
 import {
   type Route,
   type RouteAuthentication,
@@ -333,7 +333,7 @@ export const routes: Route[] = [
 export async function handleRequest(
   request: Request,
   env: Env,
-  executionCtx: BackgroundJobDispatcher
+  executionCtx: BackgroundTasks
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;

@@ -15,7 +15,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
-import type { BackgroundJobDispatcher } from "../platform-ports";
+import type { BackgroundTasks } from "../platform-ports";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
@@ -37,7 +37,7 @@ export class SessionSandboxEventProcessor {
   private pendingPushResolvers = new Map<string, PushResolver>();
 
   constructor(
-    private readonly backgroundJobs: BackgroundJobDispatcher,
+    private readonly backgroundTasks: BackgroundTasks,
     // The DO swaps its logger for a request-scoped child during fetch();
     // a getter keeps this singleton reading the current logger instead of
     // capturing one by value at construction time.
@@ -187,14 +187,7 @@ export class SessionSandboxEventProcessor {
       this.messenger.broadcast({ type: "sandbox_event", event });
 
       if (messageId) {
-        this.backgroundJobs.submit(
-          this.callbackService.notifyToolCall(messageId, event).catch((error) => {
-            this.log.error("callback.tool_call.background_error", {
-              message_id: messageId,
-              error,
-            });
-          })
-        );
+        this.backgroundTasks.spawn(this.callbackService.notifyToolCall(messageId, event));
       }
       return;
     }
@@ -244,7 +237,7 @@ export class SessionSandboxEventProcessor {
           isProcessing: this.messageRepository.getProcessingMessage() !== null,
         });
         this.broadcastPromptQueue();
-        this.backgroundJobs.submit(
+        this.backgroundTasks.spawn(
           this.callbackService.notifyComplete(event.messageId, event.success, event.error)
         );
         await this.statusService.reconcileAfterExecution(event.success);
@@ -257,14 +250,7 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.backgroundJobs.submit(
-        this.triggerSnapshot("execution_complete").catch((error) => {
-          this.log.error("snapshot.trigger.background_error", {
-            reason: "execution_complete",
-            error,
-          });
-        })
-      );
+      this.backgroundTasks.spawn(this.triggerSnapshot("execution_complete"));
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
       await this.processMessageQueue();

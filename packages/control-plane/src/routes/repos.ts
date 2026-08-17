@@ -164,7 +164,7 @@ async function handleListRepos(
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.submit(refreshReposCache(env, ctx.db, ctx.trace_id));
+      ctx.executionCtx.spawn(refreshReposCache(env, ctx.db, ctx.trace_id));
     }
 
     return json({
@@ -183,7 +183,7 @@ async function handleListRepos(
   const refresh = refreshReposCache(env, ctx.db, ctx.trace_id, (fn) =>
     ctx.metrics.time("scm_api", fn)
   );
-  ctx.executionCtx.submit(refresh);
+  ctx.executionCtx.spawn(refresh);
 
   const result = await refresh;
   if (!result.ok) {

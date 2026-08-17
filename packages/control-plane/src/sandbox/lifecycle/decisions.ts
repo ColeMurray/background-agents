@@ -364,7 +364,7 @@ export type InactivityAction =
  * );
  * if (decision.action === "extend") {
  *   // Warn user and schedule next check
- *   await scheduleAlarm(now + decision.extensionMs);
+ *   await alarmScheduler.schedule(now + decision.extensionMs);
  * }
  * ```
  */

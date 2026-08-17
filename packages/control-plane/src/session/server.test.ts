@@ -354,6 +354,7 @@ describe("SessionServer", () => {
     await server.onScheduledDeadline();
 
     expect(ensureInitialized).toHaveBeenCalledOnce();
+    expect(ensureInitialized).toHaveBeenCalledWith(false);
     expect(handleScheduledDeadline).toHaveBeenCalledOnce();
   });
 });

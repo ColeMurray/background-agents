@@ -40,6 +40,11 @@ const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
   updated_at INTEGER NOT NULL
 );`;
 
+const SESSION_ALARM_DEADLINE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_alarm_deadline (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  deadline INTEGER NOT NULL
+);`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -180,6 +185,9 @@ ${SESSION_REPOSITORIES_TABLE_SQL};
 
 -- Latest durable checkout diff bundle. Source patches live only in this bounded row.
 ${SESSION_DIFF_TABLE_SQL}
+
+-- Runtime alarm recovery source for hosts that can be adopted by another process.
+${SESSION_ALARM_DEADLINE_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -559,6 +567,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
         ON messages(status) WHERE status = 'processing'`);
     },
+  },
+  {
+    id: 43,
+    description: "Persist the current session alarm deadline",
+    run: SESSION_ALARM_DEADLINE_TABLE_SQL,
   },
 ];
 

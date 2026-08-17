@@ -287,9 +287,11 @@ function createMockAlarmScheduler(): AlarmScheduler & { alarms: number[] } {
   const alarms: number[] = [];
   return {
     alarms,
-    scheduleAlarm: vi.fn(async (timestamp: number) => {
+    schedule: vi.fn(async (timestamp: number) => {
       alarms.push(timestamp);
     }),
+    cancel: vi.fn(async () => {}),
+    current: vi.fn(async () => alarms[alarms.length - 1] ?? null),
   };
 }
 
@@ -515,7 +517,7 @@ describe("SandboxLifecycleManager", () => {
         });
         const storage = createMockStorage(createMockSession(), sandbox);
         const alarmScheduler = createMockAlarmScheduler();
-        vi.mocked(alarmScheduler.scheduleAlarm).mockImplementation(async (timestamp) => {
+        vi.mocked(alarmScheduler.schedule).mockImplementation(async (timestamp) => {
           calls.push("alarm");
           alarmScheduler.alarms.push(timestamp);
         });
