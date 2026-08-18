@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { callbacksRouter } from "./callbacks";
-import { createStartCallbackRouter } from "./callbacks/start-callback";
+import {
+  createStartCallbackRouter,
+  START_CALLBACK_LINEAR_TIMEOUT_MS,
+} from "./callbacks/start-callback";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
 import type { LinearApiClient } from "./utils/linear-client";
@@ -69,7 +72,7 @@ describe("POST /start", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, outcome: "transitioned" });
     expect(getLinearClient).toHaveBeenCalledWith(expect.anything(), "org-1", "app-user-1");
-    expect(transitionIssueToStarted).toHaveBeenCalledWith(client, "issue-1");
+    expect(transitionIssueToStarted).toHaveBeenCalledWith(client, "issue-1", expect.anything());
   });
 
   it("verifies the original callback field order after schema validation", async () => {
@@ -187,6 +190,22 @@ describe("POST /start", () => {
     const response = await postStart(router);
 
     expect(response.status).toBe(503);
+  });
+
+  it("returns within the callback deadline when credential lookup stalls", async () => {
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    const router = createStartCallbackRouter({
+      getLinearClient: vi.fn(() => new Promise<LinearApiClient | null>(() => undefined)),
+      transitionIssueToStarted: vi.fn(),
+      now: () => NOW,
+    });
+
+    const response = await postStart(router);
+
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "Linear request timed out" });
+    expect(timeoutSpy).toHaveBeenCalledWith(START_CALLBACK_LINEAR_TIMEOUT_MS);
   });
 
   it("rejects malformed identity fields before credential lookup", async () => {
