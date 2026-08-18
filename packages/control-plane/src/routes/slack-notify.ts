@@ -266,6 +266,7 @@ function mapSlackError(slackError: string | undefined): SlackWireDenialReason {
     return "channel_not_found_or_forbidden";
   }
   if (slackError === "ratelimited") return "rate_limited";
+  if (slackError === "delivery_unknown") return "delivery_unknown";
   return "slack_api_error";
 }
 

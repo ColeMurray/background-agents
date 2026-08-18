@@ -20,8 +20,8 @@ export const SLACK_PAGINATION_TIMEOUT_MS = 30_000;
  *
  * The success arm is `{ ok: true } & T`; the failure arm carries an `error`
  * string (Slack's `error` field, or one of the synthesized values
- * `network_error` / `timeout` / `invalid_response` / `http_<status>` /
- * `ratelimited`).
+ * `network_error` / `timeout` / `cancelled` / `delivery_unknown` /
+ * `invalid_response` / `http_<status>` / `ratelimited`).
  *
  * `T` is never supplied by hand: each endpoint passes a schema for its success
  * payload and `T` is inferred from it, so the type a caller reads and the shape
@@ -76,10 +76,15 @@ function boundedSignal(signal?: AbortSignal, timeoutMs = SLACK_REQUEST_TIMEOUT_M
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
-function requestError(signal: AbortSignal): "timeout" | "network_error" {
+function requestError(
+  signal: AbortSignal,
+  method: "GET" | "POST"
+): "timeout" | "cancelled" | "delivery_unknown" | "network_error" {
+  if (!signal.aborted) return "network_error";
+  if (method === "POST") return "delivery_unknown";
   return signal.reason instanceof DOMException && signal.reason.name === "TimeoutError"
     ? "timeout"
-    : "network_error";
+    : "cancelled";
 }
 
 async function slackFetch<S extends z.ZodType<object>>(
@@ -107,7 +112,7 @@ async function slackFetch<S extends z.ZodType<object>>(
   try {
     response = await fetch(url, { method, headers, body, signal });
   } catch {
-    return { ok: false, error: requestError(signal) };
+    return { ok: false, error: requestError(signal, method) };
   }
 
   if (response.status === 429) {
@@ -128,7 +133,10 @@ async function slackFetch<S extends z.ZodType<object>>(
     const parsed = slackEnvelopeSchema(payload).safeParse(await response.json());
     return parsed.success ? parsed.data : { ok: false, error: "invalid_response" };
   } catch {
-    return { ok: false, error: signal.aborted ? requestError(signal) : "invalid_response" };
+    return {
+      ok: false,
+      error: signal.aborted ? requestError(signal, method) : "invalid_response",
+    };
   }
 }
 
@@ -187,7 +195,7 @@ export async function uploadToExternalUrl(
     });
     return response.ok ? { ok: true } : { ok: false, error: `http_${response.status}` };
   } catch {
-    return { ok: false, error: requestError(boundedRequestSignal) };
+    return { ok: false, error: requestError(boundedRequestSignal, "POST") };
   }
 }
 
@@ -502,9 +510,10 @@ export async function getThreadMessages(
   token: string,
   channelId: string,
   threadTs: string,
-  oldest?: string
+  oldest?: string,
+  options?: SlackRequestOptions
 ): Promise<SlackEnvelope<{ messages: SlackThreadMessage[] }>> {
-  const paginationSignal = AbortSignal.timeout(SLACK_PAGINATION_TIMEOUT_MS);
+  const paginationSignal = boundedSignal(options?.signal, SLACK_PAGINATION_TIMEOUT_MS);
   const messages: SlackThreadMessage[] = [];
   let cursor: string | undefined;
   // Bound the loop defensively: 200/page × 25 pages caps at 5k messages.

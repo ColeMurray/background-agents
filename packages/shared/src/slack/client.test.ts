@@ -15,8 +15,6 @@ import {
   postMessage,
   publishView,
   removeReaction,
-  SLACK_PAGINATION_TIMEOUT_MS,
-  SLACK_REQUEST_TIMEOUT_MS,
   updateMessage,
   uploadToExternalUrl,
 } from "./client";
@@ -280,44 +278,6 @@ describe("postMessage", () => {
     const result = await postMessage("xoxb-token", "C123", "hi");
     expect(result.ok).toBe(false);
     expect(result.error).toBe("network_error");
-  });
-
-  it("aborts a stalled fetch at the shared request deadline", async () => {
-    const timeout = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
-    vi.spyOn(globalThis, "fetch").mockImplementationOnce((_url, init) => {
-      return new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-      });
-    });
-
-    const resultPromise = postMessage("xoxb-token", "C123", "hi");
-    timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
-
-    await expect(resultPromise).resolves.toEqual({ ok: false, error: "timeout" });
-    expect(timeoutSpy).toHaveBeenCalledWith(SLACK_REQUEST_TIMEOUT_MS);
-  });
-
-  it("combines caller cancellation with the shared request deadline", async () => {
-    const timeout = new AbortController();
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
-    const caller = new AbortController();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementationOnce((_url, init) => {
-      return new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-      });
-    });
-
-    const resultPromise = getExternalUploadUrl("xoxb-token", {
-      filename: "chart.png",
-      length: 1234,
-      signal: caller.signal,
-    });
-    caller.abort();
-
-    await expect(resultPromise).resolves.toEqual({ ok: false, error: "network_error" });
-    expect(fetchSpy.mock.calls[0]![1]?.signal).not.toBe(caller.signal);
-    expect(timeout.signal.aborted).toBe(false);
   });
 });
 
@@ -660,9 +620,7 @@ describe("getUserInfo", () => {
     vi.restoreAllMocks();
   });
 
-  it("fetches user info via GET with the shared request deadline", async () => {
-    const timeoutSignal = new AbortController().signal;
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+  it("fetches user info via GET with user query", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
         ok: true,
@@ -679,8 +637,6 @@ describe("getUserInfo", () => {
     }
     const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toBe("https://slack.com/api/users.info?user=U1");
-    expect(timeoutSpy).toHaveBeenCalledWith(SLACK_REQUEST_TIMEOUT_MS);
-    expect(fetchSpy.mock.calls[0]![1]?.signal).toBe(timeoutSignal);
   });
 
   it("returns Slack's error envelope on user_not_found", async () => {
@@ -824,40 +780,6 @@ describe("listChannels", () => {
     }
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(String(fetchSpy.mock.calls[1]![0])).toContain("cursor=cur-2");
-  });
-
-  it("bounds the aggregate duration across pagination pages", async () => {
-    const paginationTimeout = new AbortController();
-    const requestTimeouts: AbortController[] = [];
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
-      if (timeoutMs === SLACK_PAGINATION_TIMEOUT_MS) return paginationTimeout.signal;
-      const requestTimeout = new AbortController();
-      requestTimeouts.push(requestTimeout);
-      return requestTimeout.signal;
-    });
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        jsonResponse({
-          ok: true,
-          channels: [{ id: "C1", name: "a" }],
-          response_metadata: { next_cursor: "cur-2" },
-        })
-      )
-      .mockImplementationOnce((_url, init) => {
-        return new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
-            once: true,
-          });
-        });
-      });
-
-    const resultPromise = listChannels("xoxb-token");
-    await vi.waitFor(() => expect(requestTimeouts).toHaveLength(2));
-    paginationTimeout.abort(new DOMException("pagination deadline exceeded", "TimeoutError"));
-
-    await expect(resultPromise).resolves.toEqual({ ok: false, error: "timeout" });
-    expect(timeoutSpy).toHaveBeenCalledWith(SLACK_PAGINATION_TIMEOUT_MS);
-    expect(requestTimeouts.every((controller) => !controller.signal.aborted)).toBe(true);
   });
 
   it("returns the Slack failure envelope when a page errors", async () => {

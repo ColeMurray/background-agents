@@ -624,7 +624,10 @@ describe("handleSlackNotify", () => {
 
     const res = await responsePromise;
     expect(res.status).toBe(502);
-    await expect(res.json()).resolves.toEqual({ error: "slack_api_error", message: "timeout" });
+    await expect(res.json()).resolves.toEqual({
+      error: "delivery_unknown",
+      message: "delivery_unknown",
+    });
   });
 
   it("rejects raw text longer than the input cap", async () => {
