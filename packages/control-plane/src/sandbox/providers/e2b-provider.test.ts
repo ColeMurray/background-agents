@@ -35,9 +35,16 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
       })
     ),
     pauseSandbox: vi.fn(async () => {}),
-    connectSandbox: vi.fn(async (): Promise<void> => {}),
+    connectSandbox: vi.fn(async () => ({
+      sandboxID: "e2b-id",
+      templateID: "tmpl",
+      envdAccessToken: "fresh-envd-token",
+    })),
+    updateSandboxNetwork: vi.fn(async () => {}),
     killSandbox: vi.fn(async () => {}),
     setSandboxTimeout: vi.fn(async () => {}),
+    createSnapshot: vi.fn(async () => ({ snapshotID: "snap-abc:default", names: ["oi/snap"] })),
+    deleteTemplate: vi.fn(async () => {}),
     getHostnameForPort: vi.fn((id: string, port: number) => `https://${port}-${id}.e2b.app`),
     ...overrides,
   } as unknown as E2BRestClient;
@@ -422,5 +429,229 @@ describe("E2BSandboxProvider", () => {
       timeoutSeconds: 7200,
     });
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("e2b-id", 7200);
+  });
+});
+
+describe("E2BSandboxProvider prebuilt images / snapshots", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("advertises snapshot + restore support", () => {
+    const provider = new E2BSandboxProvider(mockClient(), providerConfig);
+    expect(provider.capabilities.supportsSnapshots).toBe(true);
+    expect(provider.capabilities.supportsRestore).toBe(true);
+  });
+
+  it("createSandbox with no prebuilt image uses the base template and no repo-image markers", async () => {
+    const client = mockClient();
+    await new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig);
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ templateID: "tmpl" })
+    );
+    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    expect(env).not.toHaveProperty("FROM_REPO_IMAGE");
+    expect(env).not.toHaveProperty("REPO_IMAGE_SHA");
+  });
+
+  it("createSandbox with a prebuilt image spawns from it and marks the boot", async () => {
+    const client = mockClient();
+    await new E2BSandboxProvider(client, providerConfig).createSandbox({
+      ...baseCreateConfig,
+      prebuiltImageId: "snap-repo:default",
+      prebuiltImageSha: "abc123",
+    });
+    // The snapshot id is passed verbatim as the E2B templateID.
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ templateID: "snap-repo:default" })
+    );
+    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    expect(env.FROM_REPO_IMAGE).toBe("true");
+    expect(env.REPO_IMAGE_SHA).toBe("abc123");
+  });
+
+  it("restoreFromSnapshot quarantines captured memory, cold-boots, then delivers fresh env", async () => {
+    const client = mockClient();
+    const result = await new E2BSandboxProvider(client, providerConfig).restoreFromSnapshot({
+      ...baseCreateConfig,
+      snapshotImageId: "snap-restore:default",
+    });
+    expect(result.success).toBe(true);
+    expect(result.providerObjectId).toBe("e2b-id");
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        templateID: "snap-restore:default",
+        allowInternetAccess: false,
+        secure: true,
+      })
+    );
+    expect(client.pauseSandbox).toHaveBeenCalledWith("e2b-id", { memory: false });
+    expect(client.connectSandbox).toHaveBeenCalledWith("e2b-id", 1800);
+    expect(client.updateSandboxNetwork).toHaveBeenCalledWith("e2b-id", {
+      allowInternetAccess: true,
+    });
+    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    expect(env.RESTORED_FROM_SNAPSHOT).toBe("true");
+    expect(client.writeSessionEnv).toHaveBeenCalledWith(
+      "e2b-id",
+      expect.any(Object),
+      expect.objectContaining({ envdAccessToken: "fresh-envd-token" })
+    );
+    const pauseOrder = vi.mocked(client.pauseSandbox).mock.invocationCallOrder[0];
+    const connectOrder = vi.mocked(client.connectSandbox).mock.invocationCallOrder[0];
+    const networkOrder = vi.mocked(client.updateSandboxNetwork).mock.invocationCallOrder[0];
+    const envOrder = vi.mocked(client.writeSessionEnv).mock.invocationCallOrder[0];
+    expect(pauseOrder).toBeLessThan(connectOrder);
+    expect(connectOrder).toBeLessThan(networkOrder);
+    expect(networkOrder).toBeLessThan(envOrder);
+  });
+
+  it("takeSnapshot snapshots a live session without pausing or reconnecting it", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    const liveResult = await provider.takeSnapshot({
+      providerObjectId: "build-sbx",
+      sessionId: "build-1",
+      reason: "execution_complete",
+    });
+    expect(client.pauseSandbox).not.toHaveBeenCalled();
+    expect(client.connectSandbox).not.toHaveBeenCalled();
+    expect(client.createSnapshot).toHaveBeenCalledWith("build-sbx");
+    expect(liveResult).toEqual({ success: true, imageId: "snap-abc:default" });
+  });
+
+  it("takePrebuiltImageSnapshot sanitizes via pause(memory:false)+connect before snapshot", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    const result = await provider.takePrebuiltImageSnapshot({
+      providerObjectId: "build-sbx",
+      sessionId: "build-1",
+      reason: "environment_image_build",
+    });
+    expect(client.pauseSandbox).toHaveBeenCalledWith("build-sbx", { memory: false });
+    expect(client.connectSandbox).toHaveBeenCalledWith("build-sbx", expect.any(Number));
+    expect(client.createSnapshot).toHaveBeenCalledWith("build-sbx");
+    const pauseOrder = vi.mocked(client.pauseSandbox).mock.invocationCallOrder[0];
+    const connectOrder = vi.mocked(client.connectSandbox).mock.invocationCallOrder[0];
+    const snapOrder = vi.mocked(client.createSnapshot).mock.invocationCallOrder[0];
+    expect(pauseOrder).toBeLessThan(connectOrder);
+    expect(connectOrder).toBeLessThan(snapOrder);
+    expect(result).toEqual({ success: true, imageId: "snap-abc:default" });
+  });
+
+  it("takeSnapshot fails when the API returns no snapshot id", async () => {
+    const client = mockClient({
+      createSnapshot: vi.fn(async () => ({ snapshotID: "", names: [] })),
+    });
+    const result = await new E2BSandboxProvider(client, providerConfig).takeSnapshot({
+      providerObjectId: "build-sbx",
+      sessionId: "build-1",
+      reason: "environment_image_build",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("deleteProviderImage deletes the snapshot template and swallows a 404", async () => {
+    const client = mockClient();
+    await new E2BSandboxProvider(client, providerConfig).deleteProviderImage("snap-x:default");
+    expect(client.deleteTemplate).toHaveBeenCalledWith("snap-x:default");
+
+    const gone = mockClient({
+      deleteTemplate: vi.fn(async () => {
+        throw new E2BNotFoundError("already gone");
+      }),
+    });
+    await expect(
+      new E2BSandboxProvider(gone, providerConfig).deleteProviderImage("snap-x:default")
+    ).resolves.toBeUndefined();
+  });
+
+  it("deleteSandbox kills the build sandbox and swallows a 404", async () => {
+    const client = mockClient();
+    await new E2BSandboxProvider(client, providerConfig).deleteSandbox("build-sbx");
+    expect(client.killSandbox).toHaveBeenCalledWith("build-sbx");
+
+    const gone = mockClient({
+      killSandbox: vi.fn(async () => {
+        throw new E2BNotFoundError("already gone");
+      }),
+    });
+    await expect(
+      new E2BSandboxProvider(gone, providerConfig).deleteSandbox("build-sbx")
+    ).resolves.toBeUndefined();
+  });
+
+  it("triggerImageBuild boots a non-pausing build sandbox with build-mode env", async () => {
+    const client = mockClient();
+    const onProviderSessionCreated = vi.fn(async () => {});
+    await new E2BSandboxProvider(client, providerConfig).triggerImageBuild({
+      buildId: "build-1",
+      scopeKind: "environment",
+      scopeId: "env-1",
+      repositories: [
+        { repoOwner: "o", repoName: "r", baseBranch: "main" },
+        { repoOwner: "o2", repoName: "r2", baseBranch: "dev" },
+      ],
+      callbackUrl: "https://cp.test/cb",
+      failureCallbackUrl: "https://cp.test/cb/fail",
+      callbackToken: "cb-token",
+      cloneToken: "clone-token",
+      buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2100,
+      onProviderSessionCreated,
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    });
+
+    // Build sandbox uses the base template and must not auto-pause (it idles
+    // awaiting the snapshot), and lives for the adapter-resolved session budget.
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        templateID: "tmpl",
+        autoPause: false,
+        secure: true,
+        timeoutSeconds: 2100,
+      })
+    );
+
+    // The provider session is bound (with the real sandbox id) before env delivery.
+    expect(onProviderSessionCreated).toHaveBeenCalledWith("e2b-id");
+    const bindOrder = onProviderSessionCreated.mock.invocationCallOrder[0];
+    const writeOrder = vi.mocked(client.writeSessionEnv).mock.invocationCallOrder[0];
+    expect(bindOrder).toBeLessThan(writeOrder);
+
+    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    expect(env.IMAGE_BUILD_MODE).toBe("true");
+    expect(env.SANDBOX_VERSION).toMatch(/^v\d+/);
+    expect(env.OI_REPO_IMAGE_PROVIDER_SESSION_ID).toBe("e2b-id");
+    expect(env.OI_REPO_IMAGE_BUILD_ID).toBe("build-1");
+    expect(env.OI_REPO_IMAGE_CALLBACK_URL).toBe("https://cp.test/cb");
+    expect(env.OI_REPO_IMAGE_FAILURE_CALLBACK_URL).toBe("https://cp.test/cb/fail");
+    expect(env.OI_REPO_IMAGE_CALLBACK_TOKEN).toBe("cb-token");
+    expect(env.OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS).toBe("1800");
+    expect(env.VCS_CLONE_TOKEN).toBe("clone-token");
+    const sessionConfig = JSON.parse(env.SESSION_CONFIG);
+    expect(sessionConfig.repositories).toHaveLength(2);
+  });
+
+  it("triggerImageBuild kills the sandbox if binding the session fails", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    await expect(
+      provider.triggerImageBuild({
+        buildId: "build-1",
+        scopeKind: "environment",
+        scopeId: "env-1",
+        repositories: [{ repoOwner: "o", repoName: "r", baseBranch: "main" }],
+        callbackUrl: "https://cp.test/cb",
+        failureCallbackUrl: "https://cp.test/cb/fail",
+        callbackToken: "cb-token",
+        buildExecutionTimeoutSeconds: 1800,
+        providerSessionTimeoutSeconds: 2100,
+        onProviderSessionCreated: vi.fn(async () => {
+          throw new Error("bind failed");
+        }),
+        correlation: { request_id: "request-1", trace_id: "trace-1" },
+      })
+    ).rejects.toBeInstanceOf(SandboxProviderError);
+    expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
+    expect(client.writeSessionEnv).not.toHaveBeenCalled();
   });
 });

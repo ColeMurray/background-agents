@@ -26,5 +26,10 @@ export function getPublicSandboxProvider(): PublicSandboxProvider {
 
 export function supportsRepoImages(): boolean {
   const provider = getPublicSandboxProvider();
-  return provider === "modal" || provider === "vercel" || provider === "opencomputer";
+  return (
+    provider === "modal" ||
+    provider === "vercel" ||
+    provider === "opencomputer" ||
+    provider === "e2b"
+  );
 }

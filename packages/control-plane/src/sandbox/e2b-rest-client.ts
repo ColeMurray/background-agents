@@ -19,10 +19,15 @@ export interface E2BRestConfig {
 const TIMEOUT_CREATE_MS = 90_000;
 const TIMEOUT_CONNECT_MS = 60_000;
 const TIMEOUT_PAUSE_MS = 30_000;
+const TIMEOUT_NETWORK_UPDATE_MS = 15_000;
 const TIMEOUT_KILL_MS = 30_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_SETTTL_MS = 15_000;
 const TIMEOUT_WRITE_FILE_MS = 30_000;
+// A snapshot bakes the build sandbox's filesystem into a reusable template;
+// larger than the other calls because it copies the whole prebuilt filesystem.
+const TIMEOUT_SNAPSHOT_MS = 180_000;
+const TIMEOUT_DELETE_TEMPLATE_MS = 30_000;
 
 const e2bSandboxDetailSchema = z.object({
   sandboxID: z.string(),
@@ -56,6 +61,20 @@ const e2bErrorBodySchema = z.object({
 
 export type E2BErrorBody = z.infer<typeof e2bErrorBodySchema>;
 
+/**
+ * Response of `POST /sandboxes/{id}/snapshots`. E2B bakes the sandbox's current
+ * filesystem and live process state into a reusable "snapshot template" whose
+ * id doubles as a `templateID`. The E2B launcher is deliberately snapshotted
+ * while waiting for fresh session env, so many sandboxes can spawn from one
+ * snapshot. `snapshotID` includes the build tag (e.g. `abc123:default`).
+ */
+const e2bSnapshotInfoSchema = z.object({
+  snapshotID: z.string(),
+  names: z.array(z.string()).default([]),
+});
+
+export type E2BSnapshotInfo = z.infer<typeof e2bSnapshotInfoSchema>;
+
 /** Default port envd listens on inside every sandbox. */
 const ENVD_PORT = 49983;
 /** Default sandbox host suffix (overridden by the create response `domain`). */
@@ -80,6 +99,8 @@ export interface E2BCreateSandboxParams {
    * envd accepts unauthenticated reads/writes of the uploaded session env.
    */
   secure?: boolean;
+  /** Whether the sandbox may make outbound internet requests. */
+  allowInternetAccess?: boolean;
 }
 
 export class E2BNotFoundError extends Error {
@@ -132,6 +153,7 @@ export class E2BRestClient {
             metadata: params.metadata,
             timeout: params.timeoutSeconds,
             secure: params.secure ?? false,
+            allow_internet_access: params.allowInternetAccess,
             autoPause: params.autoPause ?? false,
             autoResume: { enabled: params.autoResume ?? false },
           },
@@ -217,8 +239,20 @@ export class E2BRestClient {
     return this.requestJson("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS, e2bSandboxDetailSchema);
   }
 
-  async pauseSandbox(id: string): Promise<void> {
-    await this.requestVoid("POST", `/sandboxes/${id}/pause`, TIMEOUT_PAUSE_MS);
+  /**
+   * Pause a sandbox. By default E2B persists filesystem + memory (a resumable
+   * freeze). Pass `{ memory: false }` for a filesystem-only pause: resuming it
+   * cold-boots (reboots) the sandbox from disk, dropping all process memory. The
+   * image-build path uses that to discard the build supervisor (and its secret
+   * env) before baking a reusable snapshot.
+   */
+  async pauseSandbox(id: string, opts?: { memory?: boolean }): Promise<void> {
+    await this.requestVoid(
+      "POST",
+      `/sandboxes/${id}/pause`,
+      TIMEOUT_PAUSE_MS,
+      opts?.memory === undefined ? undefined : { body: { memory: opts.memory } }
+    );
   }
 
   /**
@@ -226,12 +260,30 @@ export class E2BRestClient {
    *
    * Connect answers with the create-style `Sandbox` shape — `sandboxID`/`templateID`,
    * no `state`, which only `GET /sandboxes/{id}` returns. Callers re-read state
-   * through getSandbox when they need it, so this is a command: the success body
-   * carries nothing we act on and is discarded.
+   * through getSandbox when they need it. The body is returned rather than
+   * discarded because it carries the secure sandbox's current envd access token:
+   * the restore path connects a sandbox it did not create, so this is where it
+   * gets the token to write the per-session env with.
    */
-  async connectSandbox(id: string, timeoutSeconds: number): Promise<void> {
-    await this.requestVoid("POST", `/sandboxes/${id}/connect`, TIMEOUT_CONNECT_MS, {
-      body: { timeout: timeoutSeconds },
+  async connectSandbox(id: string, timeoutSeconds: number): Promise<E2BSandboxCreated> {
+    return this.requestJson(
+      "POST",
+      `/sandboxes/${id}/connect`,
+      TIMEOUT_CONNECT_MS,
+      e2bSandboxCreatedSchema,
+      { body: { timeout: timeoutSeconds } }
+    );
+  }
+
+  /**
+   * Toggle a running sandbox's outbound internet access
+   * (`PUT /sandboxes/{id}/network`). Session restores boot with the network off
+   * so a snapshotted supervisor cannot act on stale credentials, then re-enable
+   * it once the process memory has been dropped.
+   */
+  async updateSandboxNetwork(id: string, options: { allowInternetAccess: boolean }): Promise<void> {
+    await this.requestVoid("PUT", `/sandboxes/${id}/network`, TIMEOUT_NETWORK_UPDATE_MS, {
+      body: { allow_internet_access: options.allowInternetAccess },
     });
   }
 
@@ -243,6 +295,41 @@ export class E2BRestClient {
     await this.requestVoid("POST", `/sandboxes/${id}/timeout`, TIMEOUT_SETTTL_MS, {
       body: { timeout: timeoutSeconds },
     });
+  }
+
+  /**
+   * Bake the sandbox's current filesystem into a reusable snapshot template
+   * (`POST /sandboxes/{id}/snapshots`). The returned `snapshotID` is passed
+   * verbatim as `templateID` to {@link createSandbox} to spawn a prebuilt-image
+   * sandbox. Used by the image-build workflow after `.openinspect/setup.sh` has
+   * run once in the build sandbox.
+   */
+  async createSnapshot(id: string, name?: string): Promise<E2BSnapshotInfo> {
+    const startMs = Date.now();
+    try {
+      return await this.requestJson(
+        "POST",
+        `/sandboxes/${id}/snapshots`,
+        TIMEOUT_SNAPSHOT_MS,
+        e2bSnapshotInfoSchema,
+        { body: name ? { name } : {} }
+      );
+    } finally {
+      log.info("e2b.create_snapshot", { duration_ms: Date.now() - startMs, sandbox_id: id });
+    }
+  }
+
+  /**
+   * Delete a snapshot template (`DELETE /templates/{templateID}`). Snapshot ids,
+   * build tag included, are passed verbatim as the E2B API requires. Used by the
+   * image-build reaper to reclaim superseded prebuilt images.
+   */
+  async deleteTemplate(templateId: string): Promise<void> {
+    await this.requestVoid(
+      "DELETE",
+      `/templates/${encodeURIComponent(templateId)}`,
+      TIMEOUT_DELETE_TEMPLATE_MS
+    );
   }
 
   getHostnameForPort(sandboxId: string, port: number, domain?: string | null): string {
@@ -261,7 +348,7 @@ export class E2BRestClient {
    * `schema`, otherwise the call fails as an invalid response.
    */
   private requestJson<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     schema: z.ZodType<T>,
@@ -286,7 +373,7 @@ export class E2BRestClient {
    * can fail the call.
    */
   private requestVoid(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     options?: { body?: unknown; signal?: AbortSignal }
@@ -300,7 +387,7 @@ export class E2BRestClient {
    * abort raised there is translated like any other (see the catch below).
    */
   private async send<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     options: { body?: unknown; signal?: AbortSignal } | undefined,
