@@ -6,10 +6,13 @@ import type {
   DisconnectReason,
   SandboxConnection,
   SessionConnections,
-} from "./connections";
-import { projectConnectedParticipants, SandboxDeliveryUnavailableError } from "./connections";
-import type { SandboxCommand } from "./types";
-import type { ConnectionClassification } from "./ports";
+} from "../session/connections";
+import {
+  projectConnectedParticipants,
+  SandboxDeliveryUnavailableError,
+} from "../session/connections";
+import type { SandboxCommand } from "../session/types";
+import type { ConnectionClassification } from "../session/ports";
 
 export interface DurableObjectSessionConnectionSockets {
   configureAutoPing(request: string, response: string): void;

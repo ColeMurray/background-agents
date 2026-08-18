@@ -12,12 +12,12 @@ import {
 } from "./durable-object-socket-registry";
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxRepository } from "../session/sandbox-repository";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
-} from "./ws-client-mapping-repository";
-import type { SandboxRow } from "./types";
+} from "../session/ws-client-mapping-repository";
+import type { SandboxRow } from "../session/types";
 
 // ---------------------------------------------------------------------------
 // Fakes & Helpers

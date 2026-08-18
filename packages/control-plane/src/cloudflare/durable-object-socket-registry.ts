@@ -7,12 +7,12 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { ConnectionClassification } from "./ports";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { ConnectionClassification } from "../session/ports";
+import type { SandboxRepository } from "../session/sandbox-repository";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
-} from "./ws-client-mapping-repository";
+} from "../session/ws-client-mapping-repository";
 
 export interface SocketRegistryConfig {
   authTimeoutMs: number;
