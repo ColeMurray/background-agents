@@ -31,6 +31,7 @@ from .app import (
 )
 from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
+from .sandbox.modal_call import ModalCallTimeoutError
 
 configure_logging()
 log = get_logger("web_api")
@@ -42,6 +43,16 @@ class _ModalRequestModel(BaseModel):
 
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
+
+
+def _modal_deadline_http_exception(error: ModalCallTimeoutError) -> HTTPException:
+    return HTTPException(
+        status_code=504,
+        detail={
+            "code": "MODAL_SDK_DEADLINE_EXCEEDED",
+            "message": str(error),
+        },
+    )
 
 
 class SnapshotBuildSandboxRequest(_ModalRequestModel):
@@ -314,6 +325,10 @@ async def api_create_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
+    except ModalCallTimeoutError as e:
+        outcome = "error"
+        http_status = 504
+        raise _modal_deadline_http_exception(e) from e
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
@@ -417,6 +432,10 @@ async def api_snapshot_sandbox(
                 "reason": reason,
             },
         }
+    except ModalCallTimeoutError as e:
+        outcome = "error"
+        http_status = 504
+        raise _modal_deadline_http_exception(e) from e
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
@@ -485,6 +504,10 @@ async def api_snapshot_build_sandbox(
         outcome = "error"
         http_status = 404
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ModalCallTimeoutError as e:
+        outcome = "error"
+        http_status = 504
+        raise _modal_deadline_http_exception(e) from e
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
@@ -627,6 +650,10 @@ async def api_restore_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
+    except ModalCallTimeoutError as e:
+        outcome = "error"
+        http_status = 504
+        raise _modal_deadline_http_exception(e) from e
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
@@ -728,6 +755,10 @@ async def api_create_build_sandbox(
             "success": True,
             "data": {"provider_session_id": provider_session_id},
         }
+    except ModalCallTimeoutError as e:
+        outcome = "error"
+        http_status = 504
+        raise _modal_deadline_http_exception(e) from e
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
@@ -780,6 +811,10 @@ async def api_start_build_sandbox(
             callback_token=parsed_request.callback_token,
         )
         return {"success": True, "data": {"started": True}}
+    except ModalCallTimeoutError as e:
+        outcome = "error"
+        http_status = 504
+        raise _modal_deadline_http_exception(e) from e
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code
@@ -832,6 +867,10 @@ async def api_terminate_build_sandbox(
             reason=parsed_request.reason,
         )
         return {"success": True, "data": {"terminated": True}}
+    except ModalCallTimeoutError as e:
+        outcome = "error"
+        http_status = 504
+        raise _modal_deadline_http_exception(e) from e
     except HTTPException as e:
         outcome = "error"
         http_status = e.status_code

@@ -30,7 +30,7 @@ class TestResolveCodeServerTunnel:
         tunnel.url = "https://tunnel.example.com"
 
         sandbox = MagicMock()
-        sandbox.tunnels.return_value = {CODE_SERVER_PORT: tunnel}
+        sandbox.tunnels.aio = AsyncMock(return_value={CODE_SERVER_PORT: tunnel})
 
         resolved = await SandboxManager._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
         assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
@@ -38,19 +38,19 @@ class TestResolveCodeServerTunnel:
     @pytest.mark.asyncio
     async def test_returns_empty_on_exception_after_retries(self):
         sandbox = MagicMock()
-        sandbox.tunnels.side_effect = Exception("tunnel unavailable")
+        sandbox.tunnels.aio = AsyncMock(side_effect=Exception("tunnel unavailable"))
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
             resolved = await SandboxManager._resolve_tunnels(
                 sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
             )
         assert resolved == {}
-        assert sandbox.tunnels.call_count == 2
+        assert sandbox.tunnels.aio.await_count == 2
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_port_missing_after_retries(self):
         sandbox = MagicMock()
-        sandbox.tunnels.return_value = {}  # no entry for CODE_SERVER_PORT
+        sandbox.tunnels.aio = AsyncMock(return_value={})  # no entry for CODE_SERVER_PORT
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
             resolved = await SandboxManager._resolve_tunnels(
@@ -64,17 +64,19 @@ class TestResolveCodeServerTunnel:
         tunnel.url = "https://tunnel.example.com"
 
         sandbox = MagicMock()
-        sandbox.tunnels.side_effect = [
-            Exception("not ready"),
-            {CODE_SERVER_PORT: tunnel},
-        ]
+        sandbox.tunnels.aio = AsyncMock(
+            side_effect=[
+                Exception("not ready"),
+                {CODE_SERVER_PORT: tunnel},
+            ]
+        )
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
             resolved = await SandboxManager._resolve_tunnels(
                 sandbox, "sb-123", [CODE_SERVER_PORT], retries=3, backoff=0.0
             )
         assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
-        assert sandbox.tunnels.call_count == 2
+        assert sandbox.tunnels.aio.await_count == 2
 
 
 class TestCreateSandboxCodeServer:

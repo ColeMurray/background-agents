@@ -1,5 +1,6 @@
 """Tests for tunnel port features in SandboxManager."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +27,13 @@ def _mock_sandbox_with_filesystem() -> tuple[MagicMock, AsyncMock]:
     return sandbox, write_text
 
 
+def _mock_sandbox_tunnels(*, return_value=None, side_effect=None) -> MagicMock:
+    sandbox = MagicMock()
+    sandbox.tunnels = MagicMock()
+    sandbox.tunnels.aio = AsyncMock(return_value=return_value, side_effect=side_effect)
+    return sandbox
+
+
 class TestResolveTunnels:
     """SandboxManager._resolve_tunnels tests."""
 
@@ -36,8 +44,7 @@ class TestResolveTunnels:
         tunnel_3001 = MagicMock()
         tunnel_3001.url = "https://tunnel-3001.example.com"
 
-        sandbox = MagicMock()
-        sandbox.tunnels.return_value = {3000: tunnel_3000, 3001: tunnel_3001}
+        sandbox = _mock_sandbox_tunnels(return_value={3000: tunnel_3000, 3001: tunnel_3001})
 
         result = await SandboxManager._resolve_tunnels(sandbox, "sb-1", [3000, 3001])
         assert result == {
@@ -50,8 +57,7 @@ class TestResolveTunnels:
         tunnel_3000 = MagicMock()
         tunnel_3000.url = "https://tunnel-3000.example.com"
 
-        sandbox = MagicMock()
-        sandbox.tunnels.return_value = {3000: tunnel_3000}
+        sandbox = _mock_sandbox_tunnels(return_value={3000: tunnel_3000})
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
             result = await SandboxManager._resolve_tunnels(
@@ -61,8 +67,7 @@ class TestResolveTunnels:
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_exception_after_retries(self):
-        sandbox = MagicMock()
-        sandbox.tunnels.side_effect = Exception("tunnel unavailable")
+        sandbox = _mock_sandbox_tunnels(side_effect=Exception("tunnel unavailable"))
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
             result = await SandboxManager._resolve_tunnels(
@@ -77,11 +82,12 @@ class TestResolveTunnels:
         tunnel_3001 = MagicMock()
         tunnel_3001.url = "https://tunnel-3001.example.com"
 
-        sandbox = MagicMock()
-        sandbox.tunnels.side_effect = [
-            {3000: tunnel_3000},
-            {3000: tunnel_3000, 3001: tunnel_3001},
-        ]
+        sandbox = _mock_sandbox_tunnels(
+            side_effect=[
+                {3000: tunnel_3000},
+                {3000: tunnel_3000, 3001: tunnel_3001},
+            ]
+        )
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
             result = await SandboxManager._resolve_tunnels(
@@ -91,7 +97,21 @@ class TestResolveTunnels:
             3000: "https://tunnel-3000.example.com",
             3001: "https://tunnel-3001.example.com",
         }
-        assert sandbox.tunnels.call_count == 2
+        assert sandbox.tunnels.aio.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_returns_after_tunnel_sdk_deadline(self, monkeypatch):
+        async def never_settles(**_kwargs):
+            await asyncio.Event().wait()
+
+        sandbox = _mock_sandbox_tunnels(side_effect=never_settles)
+        monkeypatch.setattr("src.sandbox.manager.MODAL_SANDBOX_RPC_TIMEOUT_SECONDS", 0.01)
+
+        result = await SandboxManager._resolve_tunnels(
+            sandbox, "sb-1", [3000], retries=1, backoff=0.0
+        )
+
+        assert result == {}
 
 
 class TestResolveAndSetupTunnels:

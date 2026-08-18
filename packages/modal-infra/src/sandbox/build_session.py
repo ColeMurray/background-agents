@@ -1,6 +1,7 @@
 """Modal provider-session lifecycle for environment image builds."""
 
 import json
+import secrets
 import time
 from typing import cast
 
@@ -29,6 +30,7 @@ from .modal_call import (
     MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
     MODAL_SANDBOX_TERMINATE_TIMEOUT_SECONDS,
     await_modal_call,
+    create_modal_sandbox,
 )
 from .vcs_env import inject_vcs_env_vars
 
@@ -115,9 +117,10 @@ class ModalBuildSessionService:
             "openinspect_scope_kind": scope_kind,
             "openinspect_scope_id": scope_id,
             LAUNCH_PROTOCOL_TAG: MODAL_IMAGE_BUILD_START_PROTOCOL,
+            "openinspect_create_id": secrets.token_hex(16),
         }
 
-        sandbox = await await_modal_call(
+        sandbox = await create_modal_sandbox(
             modal.Sandbox.create.aio(
                 *command,
                 image=base_image,
@@ -129,6 +132,7 @@ class ModalBuildSessionService:
                 tags=tags,
             ),
             operation="build sandbox creation",
+            tags=tags,
             timeout_seconds=MODAL_SANDBOX_CREATE_TIMEOUT_SECONDS,
         )
         log.info(
