@@ -1,4 +1,5 @@
 import { escapeRegExp } from "@open-inspect/shared/regex";
+import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import {
   createSessionResponseSchema,
   sendPromptResponseSchema,
@@ -190,6 +191,7 @@ export async function handleReviewRequested(
   const { pull_request: pr, repository: repo, requested_reviewer, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (requested_reviewer?.login !== env.GITHUB_BOT_USERNAME) {
@@ -224,7 +226,7 @@ export async function handleReviewRequested(
   return withReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
+    `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
     resolveAppName(env),
     meta,
     async () => {
@@ -291,6 +293,7 @@ export async function handlePullRequestOpened(
   const { pull_request: pr, repository: repo, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (pr.draft) {
@@ -327,7 +330,7 @@ export async function handlePullRequestOpened(
   return withReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
+    `https://api.github.com/repos/${repositoryPath}/issues/${pr.number}/reactions`,
     resolveAppName(env),
     meta,
     async () => {
@@ -395,6 +398,7 @@ export async function handleIssueComment(
   const { issue, comment, repository: repo, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (!issue.pull_request) {
@@ -442,7 +446,7 @@ export async function handleIssueComment(
   return withReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/issues/comments/${comment.id}/reactions`,
+    `https://api.github.com/repos/${repositoryPath}/issues/comments/${comment.id}/reactions`,
     resolveAppName(env),
     meta,
     async () => {
@@ -507,6 +511,7 @@ export async function handleReviewComment(
   const { pull_request: pr, comment, repository: repo, sender } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
   if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
@@ -549,7 +554,7 @@ export async function handleReviewComment(
   return withReaction(
     log,
     ghToken,
-    `https://api.github.com/repos/${owner}/${repoName}/pulls/comments/${comment.id}/reactions`,
+    `https://api.github.com/repos/${repositoryPath}/pulls/comments/${comment.id}/reactions`,
     resolveAppName(env),
     meta,
     async () => {

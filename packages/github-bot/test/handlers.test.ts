@@ -483,6 +483,27 @@ describe("handleReviewRequested", () => {
     );
   });
 
+  it("encodes nested repository owners in the reaction URL", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload = {
+      ...reviewRequestedPayload,
+      repository: {
+        ...reviewRequestedPayload.repository,
+        owner: { login: "group/platform" },
+      },
+    };
+
+    await handleReviewRequested(env, log, payload, "trace-nested-owner");
+
+    expect(postReaction).toHaveBeenCalledWith(
+      "test-installation-token",
+      "https://api.github.com/repos/group%2Fplatform/widgets/issues/42/reactions",
+      "eyes",
+      "Open-Inspect"
+    );
+  });
+
   it("returns early if reviewer is not the bot", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
