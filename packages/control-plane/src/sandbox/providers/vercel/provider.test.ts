@@ -14,6 +14,7 @@ import type {
   VercelSnapshotResponse,
 } from "./client";
 import { VercelSandboxApiError } from "./client";
+import { RequestDeadlineError } from "../../request-deadline";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
@@ -145,7 +146,7 @@ describe("VercelSandboxProvider", () => {
   it("classifies request deadline failures as transient", async () => {
     const client = createMockClient({
       createSandbox: vi.fn(async () => {
-        throw new Error("Vercel Sandbox request timeout after 60000ms (createSandbox)");
+        throw new RequestDeadlineError("Vercel Sandbox", "createSandbox", 60_000);
       }),
     });
     const provider = new VercelSandboxProvider(client, providerConfig);

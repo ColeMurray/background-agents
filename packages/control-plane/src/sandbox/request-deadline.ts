@@ -1,3 +1,15 @@
+export class RequestDeadlineError extends Error {
+  constructor(
+    public readonly provider: string,
+    public readonly endpoint: string,
+    public readonly timeoutMs: number,
+    cause?: unknown
+  ) {
+    super(`${provider} request timeout after ${timeoutMs}ms (${endpoint})`, { cause });
+    this.name = "RequestDeadlineError";
+  }
+}
+
 export async function withRequestDeadline<T>(
   provider: string,
   endpoint: string,
@@ -16,9 +28,7 @@ export async function withRequestDeadline<T>(
     return await operation(signal);
   } catch (error) {
     if (signal.reason === deadlineReason) {
-      throw new Error(`${provider} request timeout after ${timeoutMs}ms (${endpoint})`, {
-        cause: error,
-      });
+      throw new RequestDeadlineError(provider, endpoint, timeoutMs, error);
     }
     throw error;
   } finally {

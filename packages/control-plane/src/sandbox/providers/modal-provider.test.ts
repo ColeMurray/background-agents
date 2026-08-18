@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
 import { SandboxProviderError } from "../provider";
 import { ModalApiError } from "../client";
+import { RequestDeadlineError } from "../request-deadline";
 import type {
   ModalClient,
   CreateSandboxRequest,
@@ -194,10 +195,10 @@ describe("ModalSandboxProvider", () => {
         }
       });
 
-      it("classifies 'timeout' errors as transient", async () => {
+      it("classifies typed request deadline errors as transient", async () => {
         const client = createMockModalClient({
           createSandbox: vi.fn(async () => {
-            throw new Error("Request timeout after 30000ms");
+            throw new RequestDeadlineError("Modal", "createSandbox", 30_000);
           }),
         });
         const provider = new ModalSandboxProvider(client);

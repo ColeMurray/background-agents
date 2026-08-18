@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_MODAL_REQUEST_DEADLINE_MS,
+  MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+  MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
   buildModalSandboxDashboardUrl,
   buildModalWorkspaceSlug,
   createModalClient,
 } from "./client";
+import { RequestDeadlineError } from "./request-deadline";
 
 function rejectWhenAborted(signal: AbortSignal): Promise<Response> {
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -117,11 +119,14 @@ describe("ModalClient", () => {
       providerSessionTimeoutSeconds: 2400,
     });
 
-    const rejection = expect(request).rejects.toThrow(
-      `Modal request timeout after ${DEFAULT_MODAL_REQUEST_DEADLINE_MS}ms (createImageBuildSandbox)`
-    );
+    const rejection = expect(request).rejects.toMatchObject({
+      name: RequestDeadlineError.name,
+      provider: "Modal",
+      endpoint: "createImageBuildSandbox",
+      timeoutMs: MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+    });
     await fetchStarted;
-    await vi.advanceTimersByTimeAsync(DEFAULT_MODAL_REQUEST_DEADLINE_MS);
+    await vi.advanceTimersByTimeAsync(MODAL_SANDBOX_START_REQUEST_DEADLINE_MS);
     await rejection;
   });
 
@@ -129,7 +134,7 @@ describe("ModalClient", () => {
     vi.useFakeTimers();
     let markFetchStarted!: () => void;
     const fetchStarted = new Promise<void>((resolve) => (markFetchStarted = resolve));
-    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
       markFetchStarted();
       return Promise.resolve(stalledBodyResponse(init?.signal as AbortSignal));
     });
@@ -141,10 +146,12 @@ describe("ModalClient", () => {
     });
 
     const rejection = expect(request).rejects.toThrow(
-      `Modal request timeout after ${DEFAULT_MODAL_REQUEST_DEADLINE_MS}ms (snapshotSandbox)`
+      `Modal request timeout after ${MODAL_SNAPSHOT_REQUEST_DEADLINE_MS}ms (snapshotSandbox)`
     );
     await fetchStarted;
-    await vi.advanceTimersByTimeAsync(DEFAULT_MODAL_REQUEST_DEADLINE_MS);
+    await vi.advanceTimersByTimeAsync(MODAL_SNAPSHOT_REQUEST_DEADLINE_MS - 10_000);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
     await rejection;
   });
 

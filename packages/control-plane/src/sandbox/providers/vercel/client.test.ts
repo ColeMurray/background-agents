@@ -4,11 +4,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_VERCEL_REQUEST_DEADLINE_MS,
+  VERCEL_CLEANUP_REQUEST_DEADLINE_MS,
+  VERCEL_COMMAND_REQUEST_DEADLINE_MS,
   VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS,
+  VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS,
+  VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS,
   VercelSandboxApiError,
   VercelSandboxClient,
 } from "./client";
+import { RequestDeadlineError } from "../../request-deadline";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -91,10 +95,13 @@ describe("VercelSandboxClient", () => {
     );
 
     const request = createClient().createSandbox({ name: "sandbox-1" });
-    const rejection = expect(request).rejects.toThrow(
-      `Vercel Sandbox request timeout after ${DEFAULT_VERCEL_REQUEST_DEADLINE_MS}ms (createSandbox)`
-    );
-    await vi.advanceTimersByTimeAsync(DEFAULT_VERCEL_REQUEST_DEADLINE_MS);
+    const rejection = expect(request).rejects.toMatchObject({
+      name: RequestDeadlineError.name,
+      provider: "Vercel Sandbox",
+      endpoint: "createSandbox",
+      timeoutMs: VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS,
+    });
+    await vi.advanceTimersByTimeAsync(VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS);
     await rejection;
   });
 
@@ -109,9 +116,9 @@ describe("VercelSandboxClient", () => {
       command: "bash",
     });
     const rejection = expect(request).rejects.toThrow(
-      `Vercel Sandbox request timeout after ${DEFAULT_VERCEL_REQUEST_DEADLINE_MS}ms (runCommandAndWait)`
+      `Vercel Sandbox request timeout after ${VERCEL_COMMAND_REQUEST_DEADLINE_MS}ms (runCommandAndWait)`
     );
-    await vi.advanceTimersByTimeAsync(DEFAULT_VERCEL_REQUEST_DEADLINE_MS);
+    await vi.advanceTimersByTimeAsync(VERCEL_COMMAND_REQUEST_DEADLINE_MS);
     await rejection;
   });
 
@@ -120,7 +127,7 @@ describe("VercelSandboxClient", () => {
     fetchSpy.mockImplementation((_url, init) =>
       Promise.resolve(stalledStreamResponse((init as RequestInit).signal as AbortSignal))
     );
-    const commandTimeoutMs = DEFAULT_VERCEL_REQUEST_DEADLINE_MS * 2;
+    const commandTimeoutMs = VERCEL_COMMAND_REQUEST_DEADLINE_MS * 2;
 
     const request = createClient().runCommandAndWait({
       sessionId: "session-1",
@@ -145,7 +152,7 @@ describe("VercelSandboxClient", () => {
     );
 
     const request = createClient().snapshotSession("session-1", { signal: caller.signal });
-    await vi.advanceTimersByTimeAsync(DEFAULT_VERCEL_REQUEST_DEADLINE_MS - 1);
+    await vi.advanceTimersByTimeAsync(VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS - 1);
     caller.abort(callerReason);
     vi.advanceTimersByTime(1);
 
@@ -163,9 +170,9 @@ describe("VercelSandboxClient", () => {
 
     const request = createClient().deleteSnapshot("snapshot-1");
     const rejection = expect(request).rejects.toThrow(
-      `Vercel Sandbox request timeout after ${DEFAULT_VERCEL_REQUEST_DEADLINE_MS}ms (deleteSnapshot)`
+      `Vercel Sandbox request timeout after ${VERCEL_CLEANUP_REQUEST_DEADLINE_MS}ms (deleteSnapshot)`
     );
-    await vi.advanceTimersByTimeAsync(DEFAULT_VERCEL_REQUEST_DEADLINE_MS);
+    await vi.advanceTimersByTimeAsync(VERCEL_CLEANUP_REQUEST_DEADLINE_MS);
     await rejection;
   });
 

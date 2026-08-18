@@ -23,7 +23,10 @@ const MODAL_APP_NAME = "open-inspect";
 // Modal's default environment name; unrelated to the git branch named "main".
 const DEFAULT_MODAL_ENVIRONMENT = "main";
 
-export const DEFAULT_MODAL_REQUEST_DEADLINE_MS = 60_000;
+export const MODAL_SANDBOX_START_REQUEST_DEADLINE_MS = 60_000;
+// Allows Modal's provider-side snapshot timeout to settle before the client deadline.
+export const MODAL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
+export const MODAL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
 
 const modalErrorResponseSchema = z.object({
   success: z.literal(false),
@@ -326,6 +329,7 @@ export class ModalClient {
   private async postJson<T>(
     url: string,
     endpoint: string,
+    deadlineMs: number,
     body: unknown,
     schema: z.ZodType<T>,
     correlation: CorrelationContext | undefined,
@@ -333,26 +337,20 @@ export class ModalClient {
     onResponse: (status: number) => void
   ): Promise<T> {
     const headers = await this.getPostHeaders(correlation);
-    return withRequestDeadline(
-      "Modal",
-      endpoint,
-      DEFAULT_MODAL_REQUEST_DEADLINE_MS,
-      callerSignal,
-      async (signal) => {
-        const response = await fetch(url, {
-          method: "POST",
-          headers,
-          signal,
-          body: JSON.stringify(body),
-        });
-        onResponse(response.status);
-        if (!response.ok) {
-          const text = await response.text();
-          throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-        }
-        return parseModalApiResponse(schema, await response.json());
+    return withRequestDeadline("Modal", endpoint, deadlineMs, callerSignal, async (signal) => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        signal,
+        body: JSON.stringify(body),
+      });
+      onResponse(response.status);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
-    );
+      return parseModalApiResponse(schema, await response.json());
+    });
   }
 
   constructor(secret: string, workspace: string, environmentWebSuffix?: string) {
@@ -406,6 +404,7 @@ export class ModalClient {
       const result = await this.postJson(
         this.createSandboxUrl,
         endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
         {
           session_id: request.sessionId,
           sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
@@ -487,6 +486,7 @@ export class ModalClient {
       const result = await this.postJson(
         this.restoreSandboxUrl,
         endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
         {
           snapshot_image_id: request.snapshotImageId,
           session_config: buildSessionConfig(request),
@@ -553,6 +553,7 @@ export class ModalClient {
       const result = await this.postJson(
         this.snapshotSandboxUrl,
         endpoint,
+        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
         {
           sandbox_id: request.providerObjectId,
           session_id: request.sessionId,
@@ -604,6 +605,7 @@ export class ModalClient {
       const result = await this.postJson(
         this.snapshotBuildSandboxUrl,
         endpoint,
+        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
         {
           build_id: request.buildId,
           provider_session_id: request.providerSessionId,
@@ -650,6 +652,7 @@ export class ModalClient {
       const result = await this.postJson(
         this.createImageBuildSandboxUrl,
         endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
         {
           scope_kind: request.scopeKind,
           scope_id: request.scopeId,
@@ -701,6 +704,7 @@ export class ModalClient {
     await this.postImageBuildOperation(
       this.startImageBuildSandboxUrl,
       "startImageBuildSandbox",
+      MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
       request,
       {
         build_id: request.buildId,
@@ -718,6 +722,7 @@ export class ModalClient {
     await this.postImageBuildOperation(
       this.terminateImageBuildSandboxUrl,
       "terminateImageBuildSandbox",
+      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
       request,
       {
         build_id: request.buildId,
@@ -731,6 +736,7 @@ export class ModalClient {
   private async postImageBuildOperation(
     url: string,
     endpoint: string,
+    deadlineMs: number,
     request: { buildId: string; providerSessionId: string; signal?: AbortSignal },
     body: Record<string, unknown>,
     correlation?: CorrelationContext
@@ -742,6 +748,7 @@ export class ModalClient {
       const result = await this.postJson(
         url,
         endpoint,
+        deadlineMs,
         body,
         imageBuildOperationModalResponseSchema,
         correlation,
@@ -783,6 +790,7 @@ export class ModalClient {
       const result = await this.postJson(
         this.deleteProviderImageUrl,
         endpoint,
+        MODAL_CLEANUP_REQUEST_DEADLINE_MS,
         {
           provider_image_id: request.providerImageId,
         },
