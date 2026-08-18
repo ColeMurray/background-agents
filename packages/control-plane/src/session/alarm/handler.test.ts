@@ -93,10 +93,14 @@ describe("createAlarmHandler", () => {
       }),
     };
     const alarmScheduler = createEarliestAlarmScheduler(storage, {
-      current: vi.fn(() => null),
-      set: vi.fn(),
+      pending: vi.fn(() => null),
+      earliest: vi.fn(() => null),
+      cancelled: vi.fn(() => false),
+      setPending: vi.fn(),
+      activate: vi.fn(),
       clear: vi.fn(),
-      clearIf: vi.fn(),
+      beginDelivery: vi.fn(() => null),
+      completeDelivery: vi.fn(),
     });
     const lifecycleManager = {
       handleAlarm: vi.fn(async () => alarmScheduler.schedule(5000)),

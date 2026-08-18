@@ -187,7 +187,10 @@ export class SessionSandboxEventProcessor {
       this.messenger.broadcast({ type: "sandbox_event", event });
 
       if (messageId) {
-        this.backgroundTasks.spawn(this.callbackService.notifyToolCall(messageId, event));
+        this.backgroundTasks.spawn(this.callbackService.notifyToolCall(messageId, event), {
+          name: "callback.notify_tool_call",
+          context: { message_id: messageId },
+        });
       }
       return;
     }
@@ -238,7 +241,11 @@ export class SessionSandboxEventProcessor {
         });
         this.broadcastPromptQueue();
         this.backgroundTasks.spawn(
-          this.callbackService.notifyComplete(event.messageId, event.success, event.error)
+          this.callbackService.notifyComplete(event.messageId, event.success, event.error),
+          {
+            name: "callback.notify_complete",
+            context: { message_id: event.messageId },
+          }
         );
         await this.statusService.reconcileAfterExecution(event.success);
       } else {
@@ -250,7 +257,10 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.backgroundTasks.spawn(this.triggerSnapshot("execution_complete"));
+      this.backgroundTasks.spawn(this.triggerSnapshot("execution_complete"), {
+        name: "snapshot.trigger",
+        context: { reason: "execution_complete", message_id: event.messageId },
+      });
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
       await this.processMessageQueue();

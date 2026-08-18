@@ -94,7 +94,7 @@ import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
-import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
+import type { BackgroundTasks } from "../platform-ports";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
@@ -132,7 +132,7 @@ import {
   createEarliestAlarmScheduler,
   handleAlarmDelivery,
   PersistedAlarmDeadlineStore,
-  rehydrateAlarmScheduler,
+  type RehydratableAlarmScheduler,
 } from "./alarm/scheduler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
@@ -234,7 +234,7 @@ export class SessionDO extends DurableObject<Env> {
   private _participantsHandler: ParticipantsHandler | null = null;
   // Alarm handler (lazily initialized)
   private _alarmHandler: AlarmHandler | null = null;
-  private _alarmScheduler: AlarmScheduler | null = null;
+  private _alarmScheduler: RehydratableAlarmScheduler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
   // Session status service (lazily initialized)
@@ -376,7 +376,11 @@ export class SessionDO extends DurableObject<Env> {
         broadcaster,
       }),
       handleScheduledDeadline: () =>
-        handleAlarmDelivery(this.alarmDeadlines, () => this.alarmHandler.handle()),
+        handleAlarmDelivery(
+          this.alarmDeadlines,
+          () => this.alarmHandler.handle(),
+          () => this.alarmScheduler.rearmPending()
+        ),
     });
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -510,7 +514,7 @@ export class SessionDO extends DurableObject<Env> {
     );
   }
 
-  private get alarmScheduler(): AlarmScheduler {
+  private get alarmScheduler(): RehydratableAlarmScheduler {
     if (!this._alarmScheduler) {
       this._alarmScheduler = createEarliestAlarmScheduler(this.ctx.storage, this.alarmDeadlines);
     }
@@ -691,7 +695,8 @@ export class SessionDO extends DurableObject<Env> {
           validateReasoningEffort(model, effort, this.log),
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
-        scheduleWarmSandbox: () => this.backgroundTasks.spawn(this.warmSandbox()),
+        scheduleWarmSandbox: () =>
+          this.backgroundTasks.spawn(this.warmSandbox(), { name: "sandbox.warm" }),
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
@@ -774,7 +779,11 @@ export class SessionDO extends DurableObject<Env> {
             error: failure.error instanceof Error ? failure.error : String(failure.error),
           });
         }
-      })
+      }),
+      {
+        name: "pull_request.refresh",
+        context: { trigger },
+      }
     );
   }
 
@@ -1075,7 +1084,9 @@ export class SessionDO extends DurableObject<Env> {
     );
     this.diffsHandler = new SessionDiffsHandler(this.diffService);
     if (rehydrateAlarm) {
-      this.backgroundTasks.spawn(rehydrateAlarmScheduler(this.alarmScheduler, this.alarmDeadlines));
+      this.backgroundTasks.spawn(this.alarmScheduler.rehydrate(), {
+        name: "alarm.rehydrate",
+      });
     }
   }
 
@@ -1191,11 +1202,16 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.backgroundTasks.spawn(this.processMessageQueue());
+        this.backgroundTasks.spawn(this.processMessageQueue(), {
+          name: "message_queue.process",
+        });
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);
-        this.backgroundTasks.spawn(this.wsManager.enforceAuthTimeout(server, wsId));
+        this.backgroundTasks.spawn(this.wsManager.enforceAuthTimeout(server, wsId), {
+          name: "websocket.enforce_auth_timeout",
+          context: { ws_id: wsId },
+        });
       }
 
       return new Response(null, { status: 101, webSocket: client });
@@ -1521,7 +1537,10 @@ export class SessionDO extends DurableObject<Env> {
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     if (!this.db) return;
     const sessionStore = new SessionIndexStore(this.db);
-    this.backgroundTasks.spawn(sessionStore.updateTitleIfNewer(sessionId, title, updatedAt));
+    this.backgroundTasks.spawn(sessionStore.updateTitleIfNewer(sessionId, title, updatedAt), {
+      name: "session_index.update_title",
+      context: { session_id: sessionId, updated_at: updatedAt },
+    });
   }
 
   private applySessionTitleUpdate(

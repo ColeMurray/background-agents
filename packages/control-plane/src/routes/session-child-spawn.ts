@@ -306,7 +306,11 @@ async function handleSpawnChild(
       })
       .catch((err: unknown) => {
         logger.error("session.notify_parent_spawn.failed", { error: err });
-      })
+      }),
+    {
+      name: "session.notify_parent_spawn",
+      context: { parent_id: parentId, child_id: childId, trace_id: ctx.trace_id },
+    }
   );
 
   return json({ sessionId: childId, status: "created" }, 201);

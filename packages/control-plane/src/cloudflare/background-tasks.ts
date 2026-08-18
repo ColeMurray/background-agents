@@ -10,10 +10,12 @@ export function createCloudflareBackgroundTasks(
   getLogger: () => Logger = () => log
 ): BackgroundTasks {
   return {
-    spawn(task): void {
+    spawn(task, metadata): void {
       context.waitUntil(
         task.catch((error) => {
           getLogger().error("background_task.failed", {
+            task_name: metadata.name,
+            ...metadata.context,
             error: error instanceof Error ? error : String(error),
           });
         })

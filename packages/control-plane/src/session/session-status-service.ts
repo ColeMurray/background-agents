@@ -192,7 +192,15 @@ export class SessionStatusService {
             title: update.title,
           }),
         })
-      )
+      ),
+      {
+        name: "session.notify_parent",
+        context: {
+          parent_id: parentId,
+          child_id: childSessionId,
+          status: update.status,
+        },
+      }
     );
   }
 
@@ -254,7 +262,11 @@ export class SessionStatusService {
         activeDurationMs,
         messageCount,
         prCount,
-      })
+      }),
+      {
+        name: "session_index.update_metrics",
+        context: { session_id: sessionId },
+      }
     );
   }
 }

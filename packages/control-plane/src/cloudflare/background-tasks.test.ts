@@ -7,7 +7,7 @@ describe("createCloudflareBackgroundTasks", () => {
     const background = createCloudflareBackgroundTasks({ waitUntil });
     const job = Promise.resolve();
 
-    background.spawn(job);
+    background.spawn(job, { name: "test.task" });
 
     expect(waitUntil).toHaveBeenCalledOnce();
     expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise));
@@ -18,10 +18,15 @@ describe("createCloudflareBackgroundTasks", () => {
     const logger = { error: vi.fn() };
     const background = createCloudflareBackgroundTasks({ waitUntil }, () => logger as never);
 
-    background.spawn(Promise.reject(new Error("task failed")));
+    background.spawn(Promise.reject(new Error("task failed")), {
+      name: "test.task",
+      context: { session_id: "session-1" },
+    });
     await waitUntil.mock.calls[0]![0];
 
     expect(logger.error).toHaveBeenCalledWith("background_task.failed", {
+      task_name: "test.task",
+      session_id: "session-1",
       error: expect.objectContaining({ message: "task failed" }),
     });
   });

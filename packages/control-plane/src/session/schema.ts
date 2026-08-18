@@ -40,9 +40,11 @@ const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
   updated_at INTEGER NOT NULL
 );`;
 
-const SESSION_ALARM_DEADLINE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_alarm_deadline (
+const SESSION_ALARM_STATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_alarm_state (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  deadline INTEGER NOT NULL
+  pending_deadline INTEGER,
+  in_flight_deadline INTEGER,
+  cancelled INTEGER NOT NULL DEFAULT 0
 );`;
 
 export const SCHEMA_SQL = `
@@ -187,7 +189,7 @@ ${SESSION_REPOSITORIES_TABLE_SQL};
 ${SESSION_DIFF_TABLE_SQL}
 
 -- Runtime alarm recovery source for hosts that can be adopted by another process.
-${SESSION_ALARM_DEADLINE_TABLE_SQL}
+${SESSION_ALARM_STATE_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -570,8 +572,8 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 43,
-    description: "Persist the current session alarm deadline",
-    run: SESSION_ALARM_DEADLINE_TABLE_SQL,
+    description: "Persist session alarm scheduling state",
+    run: SESSION_ALARM_STATE_TABLE_SQL,
   },
 ];
 

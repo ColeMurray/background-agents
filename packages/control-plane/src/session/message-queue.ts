@@ -233,7 +233,10 @@ export class SessionMessageQueue {
       const session = this.repository.getSession();
       const sessionId = session?.session_name || session?.id;
       if (sessionId) {
-        this.backgroundTasks.spawn(sessionIndex.touchUpdatedAt(sessionId));
+        this.backgroundTasks.spawn(sessionIndex.touchUpdatedAt(sessionId), {
+          name: "session_index.touch_updated_at",
+          context: { session_id: sessionId },
+        });
       }
     }
 
@@ -325,7 +328,11 @@ export class SessionMessageQueue {
             error: error instanceof Error ? error.message : "Failed to spawn sandbox",
           });
           throw error;
-        })
+        }),
+        {
+          name: "sandbox.spawn",
+          context: { message_id: message.id },
+        }
       );
       return;
     }
@@ -393,7 +400,10 @@ export class SessionMessageQueue {
       const deadline = now + this.executionTimeoutMs;
       await this.alarmScheduler.schedule(deadline);
 
-      this.backgroundTasks.spawn(this.callbackService.notifyStarted(message.id));
+      this.backgroundTasks.spawn(this.callbackService.notifyStarted(message.id), {
+        name: "callback.notify_started",
+        context: { message_id: message.id },
+      });
     }
 
     this.log.info("prompt.dispatch", {
@@ -542,8 +552,14 @@ export class SessionMessageQueue {
         });
       })
       .then(() => this.messenger.broadcast({ type: "sandbox_event", event }));
-    this.backgroundTasks.spawn(projection);
-    this.backgroundTasks.spawn(this.callbackService.notifyComplete(message.id, false, error));
+    this.backgroundTasks.spawn(projection, {
+      name: "terminal_message.project",
+      context: { message_id: message.id },
+    });
+    this.backgroundTasks.spawn(this.callbackService.notifyComplete(message.id, false, error), {
+      name: "callback.notify_complete",
+      context: { message_id: message.id },
+    });
     return true;
   }
 

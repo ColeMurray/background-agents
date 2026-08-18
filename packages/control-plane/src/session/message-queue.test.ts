@@ -219,7 +219,16 @@ function buildQueue() {
     "github",
     createEarliestAlarmScheduler(
       { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
-      { current: vi.fn(() => null), set: vi.fn(), clear: vi.fn(), clearIf: vi.fn() }
+      {
+        pending: vi.fn(() => null),
+        earliest: vi.fn(() => null),
+        cancelled: vi.fn(() => false),
+        setPending: vi.fn(),
+        activate: vi.fn(),
+        clear: vi.fn(),
+        beginDelivery: vi.fn(() => null),
+        completeDelivery: vi.fn(),
+      }
     ),
     EXECUTION_TIMEOUT_MS
   );
