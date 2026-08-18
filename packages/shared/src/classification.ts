@@ -21,7 +21,7 @@ export const DEFAULT_CLASSIFICATION_MODEL = "claude-haiku-4-5";
  * Bound on a single classification request to either provider, so a stalled
  * model call can't hang message handling indefinitely.
  */
-export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 15_000;
+export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * Cap on an OpenAI classification response.

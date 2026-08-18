@@ -21,7 +21,6 @@ import { createLogger } from "../logger";
 const log = createLogger("classifier");
 
 const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
-export const CLASSIFIER_REQUEST_TIMEOUT_MS = 10_000;
 
 export const classifyToolInputSchema = z.object({
   repoId: z.string().nullable(),
@@ -163,7 +162,7 @@ async function callAnthropic(
       tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
       messages: [{ role: "user", content: prompt }],
     }),
-    signal: AbortSignal.timeout(CLASSIFIER_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {

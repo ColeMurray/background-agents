@@ -230,6 +230,28 @@ describe("classifyRepo provider dispatch", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("falls back to clarification when the classifier request times out", async () => {
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        expect(init?.signal).toBe(timeoutSignal);
+        throw timeoutSignal.reason;
+      })
+    );
+    const { kv } = createFakeKV();
+
+    const result = await classify(makeLinearBotEnv(kv, { CONTROL_PLANE: twoRepoControlPlane() }));
+
+    expect(result).toMatchObject({
+      repo: null,
+      confidence: "low",
+      needsClarification: true,
+    });
+    expect(result.alternatives).toHaveLength(2);
+  });
+
   it("fires the Anthropic default path when CLASSIFICATION_MODEL is unset", async () => {
     const { kv } = createFakeKV();
     const env = makeLinearBotEnv(kv, { CONTROL_PLANE: twoRepoControlPlane() });
