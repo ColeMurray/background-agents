@@ -583,13 +583,13 @@ variable "enable_durable_object_bindings" {
 variable "control_plane_migration_tag" {
   description = "Current migration tag for control plane DO migrations"
   type        = string
-  default     = "v3"
+  default     = "v1"
 }
 
 variable "control_plane_migration_old_tag" {
   description = "Previous migration tag for control plane DO migrations (null for fresh deployments)"
   type        = string
-  default     = "v2"
+  default     = null
 }
 
 variable "control_plane_new_sqlite_classes" {
@@ -601,7 +601,7 @@ variable "control_plane_new_sqlite_classes" {
 variable "control_plane_deleted_classes" {
   description = "DO classes deleted in this control plane migration step"
   type        = list(string)
-  default     = ["SchedulerDO"]
+  default     = []
 }
 
 variable "enable_service_bindings" {

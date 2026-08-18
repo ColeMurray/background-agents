@@ -425,6 +425,8 @@ Use the built-in two-phase flags instead of editing Terraform modules:
 Class removal does not disable surviving bindings. Remove the retired binding, set a new migration
 tag and previous tag, list the class in `control_plane_deleted_classes`, and apply with
 `enable_durable_object_bindings = true`. The migration and surviving bindings are emitted together.
+The production workflow stages the `SchedulerDO` v2-to-v3 deletion only when Terraform state still
+reports v2, so the release-specific migration is not a permanent default for fresh deployments.
 
 See
 [Cloudflare's documentation](https://developers.cloudflare.com/workers/platform/infrastructure-as-code/)

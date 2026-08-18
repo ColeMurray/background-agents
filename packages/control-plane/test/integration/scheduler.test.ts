@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { cleanD1Tables } from "./cleanup";
@@ -9,8 +9,8 @@ import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts"
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import type { Env } from "../../src/types";
 
-function getSchedulerStub() {
-  const scheduler = new Scheduler(env.DB, env as Env, { submit() {} });
+function getSchedulerStub(schedulerEnv = env as Env) {
+  const scheduler = new Scheduler(env.DB, schedulerEnv, { submit() {} });
   return {
     fetch(input: RequestInfo | URL, init?: RequestInit) {
       return scheduler.dispatch(new Request(input, init));
@@ -559,13 +559,34 @@ describe("Scheduler (integration)", () => {
   describe("/internal/trigger", () => {
     it("admits exactly one run across two triggers and a concurrent tick", async () => {
       const store = new AutomationStore(env.DB);
+      const dueAt = Date.now() - 60_000;
       await store.create(
         makeAutomation({
           id: "auto-concurrent-admission",
           schedule_cron: "* * * * *",
-          next_run_at: Date.now() - 60_000,
+          next_run_at: dueAt,
         })
       );
+
+      const requestPath = (input: RequestInfo | URL) =>
+        new URL(
+          typeof input === "string" ? input : input instanceof Request ? input.url : input.href
+        ).pathname;
+      const sessionFetch = vi.fn(async (input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        if (path === "/internal/init") return Response.json({ status: "ok" });
+        if (path === "/internal/prompt") {
+          return Response.json({ messageId: "msg-concurrent", status: "queued" });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+      const schedulerEnv = {
+        ...(env as Env),
+        SESSION: {
+          idFromName: vi.fn((name: string) => name),
+          get: vi.fn(() => ({ fetch: sessionFetch })),
+        } as unknown as DurableObjectNamespace,
+      };
 
       const triggerRequest = () =>
         new Request("http://internal/internal/trigger", {
@@ -573,15 +594,52 @@ describe("Scheduler (integration)", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ automationId: "auto-concurrent-admission" }),
         });
-      const schedulers = [getSchedulerStub(), getSchedulerStub(), getSchedulerStub()];
+      const schedulers = [
+        getSchedulerStub(schedulerEnv),
+        getSchedulerStub(schedulerEnv),
+        getSchedulerStub(schedulerEnv),
+      ];
 
-      await Promise.allSettled([
+      const results = await Promise.allSettled([
         schedulers[0]!.fetch(triggerRequest()),
         schedulers[1]!.fetch(triggerRequest()),
         schedulers[2]!.fetch("http://internal/internal/tick", { method: "POST" }),
       ]);
 
-      expect(await fetchRuns("auto-concurrent-admission")).toHaveLength(1);
+      const responses = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : []
+      );
+      const tickResponse = results[2];
+      const tickSummary =
+        tickResponse?.status === "fulfilled"
+          ? await tickResponse.value.json<{ processed: number }>()
+          : null;
+      expect(
+        responses.some((response) => response.status === 201) || tickSummary?.processed === 1
+      ).toBe(true);
+
+      const runs = await fetchRuns("auto-concurrent-admission");
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: "running", session_id: expect.any(String) });
+
+      const initCalls = sessionFetch.mock.calls.filter(([input]) =>
+        requestPath(input).endsWith("/internal/init")
+      );
+      const promptCalls = sessionFetch.mock.calls.filter(([input]) =>
+        requestPath(input).endsWith("/internal/prompt")
+      );
+      expect(initCalls).toHaveLength(1);
+      expect(promptCalls).toHaveLength(1);
+
+      const sessionCount = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE automation_id = ?"
+      )
+        .bind("auto-concurrent-admission")
+        .first<{ count: number }>();
+      expect(sessionCount?.count).toBe(1);
+
+      const automation = await store.getById("auto-concurrent-admission");
+      expect(automation!.next_run_at).toBeGreaterThan(dueAt);
     });
 
     it("returns 400 when automationId is missing", async () => {
