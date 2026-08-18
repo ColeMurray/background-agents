@@ -7,9 +7,9 @@
  */
 
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
-import type { BackgroundJobDispatcher } from "./platform-ports";
+import type { BackgroundTasks } from "./platform-ports";
 
-export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundJobDispatcher = {
+export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTasks = {
   submit: () => {},
 };
 

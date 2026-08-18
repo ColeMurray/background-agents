@@ -326,11 +326,21 @@ describe("applyMigrations", () => {
     expect(SCHEMA_SQL).toContain("bundle_json TEXT");
     expect(SCHEMA_SQL).not.toContain("diff_objects");
     expect(SCHEMA_SQL).not.toContain("diff_capture_triggers");
-    expect(SCHEMA_SQL).not.toContain("session_alarm_deadlines");
 
     const migration = MIGRATIONS.find((item) => item.id === 36);
     expect(migration).toBeDefined();
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_diff");
+  });
+
+  it("persists pending and in-flight alarm state for fresh and migrated sessions", () => {
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_alarm_state");
+    expect(SCHEMA_SQL).toContain("singleton INTEGER PRIMARY KEY CHECK (singleton = 1)");
+    expect(SCHEMA_SQL).toContain("pending_deadline INTEGER");
+    expect(SCHEMA_SQL).toContain("in_flight_deadline INTEGER");
+    expect(SCHEMA_SQL).toContain("cancelled INTEGER NOT NULL DEFAULT 0");
+
+    const migration = MIGRATIONS.find((item) => item.id === 43);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_alarm_state");
   });
 
   it("adds prompt idempotency columns and index for fresh and migrated sessions", () => {

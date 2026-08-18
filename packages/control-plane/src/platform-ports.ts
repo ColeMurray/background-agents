@@ -2,14 +2,19 @@ import type { FetchClient } from "@open-inspect/shared/service-auth";
 
 export type { FetchClient } from "@open-inspect/shared/service-auth";
 
-/** Capability consumed by application services that schedule background work. */
-export interface BackgroundJobDispatcher {
-  submit(job: Promise<unknown>): void;
+/** Capability consumed by application services that defer background work. */
+export interface BackgroundTasks {
+  submit(
+    task: Promise<unknown>,
+    metadata: { name: string; context?: Record<string, unknown> }
+  ): void;
 }
 
-/** Schedule the runtime's wake-up no later than the given timestamp. */
+/** Access the runtime's single scheduled wake-up. */
 export interface AlarmScheduler {
-  scheduleAlarm(timestamp: number): Promise<void>;
+  schedule(at: number): Promise<void>;
+  cancel(): Promise<void>;
+  current(): Promise<number | null>;
 }
 
 // Keep platform compatibility checked at the boundary rather than widening every consumer.

@@ -156,7 +156,16 @@ export async function handlePromptChild(
           trace_id: ctx.trace_id,
           error,
         });
-      })
+      }),
+      {
+        name: "session_index.touch_updated_at",
+        context: {
+          parent_id: parentId,
+          child_id: childId,
+          trace_id: ctx.trace_id,
+          request_id: ctx.request_id,
+        },
+      }
     );
   } else {
     if (admissionLease) await sessionStore.releaseChildAdmissionLease(admissionLease);

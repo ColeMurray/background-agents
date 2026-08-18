@@ -74,8 +74,6 @@ function createProcessor() {
   const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
-  const waitUntil = vi.fn();
-  const backgroundJobs = { submit: waitUntil };
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -83,9 +81,13 @@ function createProcessor() {
     error: vi.fn(),
     child: vi.fn(),
   };
+  const waitUntil = vi.fn((task: Promise<unknown>) =>
+    task.catch((error) => log.error("background_task.failed", { error }))
+  );
+  const backgroundTasks = { submit: waitUntil };
 
   const processor = new SessionSandboxEventProcessor(
-    backgroundJobs,
+    backgroundTasks,
     () => log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as SandboxRepository,
@@ -158,10 +160,9 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2000,
     });
 
-    const settled = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
+    const settled = await Promise.allSettled(h.waitUntil.mock.results.map(({ value }) => value));
     expect(settled.every(({ status }) => status === "fulfilled")).toBe(true);
-    expect(h.log.error).toHaveBeenCalledWith("snapshot.trigger.background_error", {
-      reason: "execution_complete",
+    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
       error: expect.any(Error),
     });
   });

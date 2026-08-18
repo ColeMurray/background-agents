@@ -604,6 +604,32 @@ describe("handleSlackNotify", () => {
     expect(sessionFetchMock).not.toHaveBeenCalled();
   });
 
+  it("returns a deterministic Slack API error when posting times out", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+    const timeout = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    fetchMock.mockImplementationOnce((_url, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+
+    const responsePromise = callHandler({ channel: "#ops", text: "hello" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
+
+    const res = await responsePromise;
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({
+      error: "delivery_unknown",
+      message: "delivery_unknown",
+    });
+  });
+
   it("rejects raw text longer than the input cap", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({

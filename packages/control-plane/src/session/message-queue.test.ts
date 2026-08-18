@@ -193,14 +193,16 @@ function buildQueue() {
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
   };
-  const waitUntil = vi.fn();
-  const backgroundJobs = { submit: waitUntil };
+  const waitUntil = vi.fn((task: Promise<unknown>) =>
+    task.catch((error) => log.error("background_task.failed", { error }))
+  );
+  const backgroundTasks = { submit: waitUntil };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
-    backgroundJobs,
+    backgroundTasks,
     log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
@@ -215,7 +217,19 @@ function buildQueue() {
     sandboxLifecycle,
     null,
     "github",
-    createEarliestAlarmScheduler({ getAlarm, setAlarm }),
+    createEarliestAlarmScheduler(
+      { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
+      {
+        pending: vi.fn(() => null),
+        earliest: vi.fn(() => null),
+        cancelled: vi.fn(() => false),
+        setPending: vi.fn(),
+        activate: vi.fn(),
+        clear: vi.fn(),
+        beginDelivery: vi.fn(() => null),
+        completeDelivery: vi.fn(),
+      }
+    ),
     EXECUTION_TIMEOUT_MS
   );
 
@@ -332,7 +346,7 @@ describe("SessionMessageQueue", () => {
 
     expect(h.waitUntil).toHaveBeenCalledTimes(1);
     resolveSpawn();
-    await h.waitUntil.mock.calls[0][0];
+    await h.waitUntil.mock.results[0]!.value;
   });
 
   it("broadcasts sandbox_error when the background spawn throws", async () => {
@@ -341,11 +355,14 @@ describe("SessionMessageQueue", () => {
     h.sandboxLifecycle.spawnSandbox.mockRejectedValue(new Error("modal exploded"));
 
     await h.queue.processMessageQueue();
-    await h.waitUntil.mock.calls[0][0];
+    await h.waitUntil.mock.results[0]!.value;
 
     expect(h.broadcast).toHaveBeenCalledWith({
       type: "sandbox_error",
       error: "modal exploded",
+    });
+    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
+      error: expect.any(Error),
     });
   });
 

@@ -128,6 +128,7 @@ export async function handleSlackNotify(
   // Without top-level text, Slack derives screen-reader text from the blocks.
   const post = await postBlocks(token, parsed.channel, blocks, {
     thread_ts: parsed.threadTs,
+    signal: request.signal,
   });
 
   if (!post.ok) {
@@ -138,7 +139,7 @@ export async function handleSlackNotify(
 
   const channelId = post.channel;
   const messageTs = post.ts;
-  const permalinkResp = await getPermalink(token, channelId, messageTs);
+  const permalinkResp = await getPermalink(token, channelId, messageTs, { signal: request.signal });
   const permalink = permalinkResp.ok ? permalinkResp.permalink : "";
 
   const result: SlackNotifySuccessOutput = {
@@ -265,6 +266,7 @@ function mapSlackError(slackError: string | undefined): SlackWireDenialReason {
     return "channel_not_found_or_forbidden";
   }
   if (slackError === "ratelimited") return "rate_limited";
+  if (slackError === "delivery_unknown") return "delivery_unknown";
   return "slack_api_error";
 }
 

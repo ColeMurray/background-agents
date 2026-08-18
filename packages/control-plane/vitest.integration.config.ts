@@ -49,6 +49,13 @@ export default defineConfig({
           // otherwise defaults its runner to today's compatibility date.
           compatibilityDate: "2024-09-23",
           compatibilityFlags: ["nodejs_compat"],
+          outboundService(request) {
+            const url = new URL(request.url);
+            if (url.hostname.endsWith(".modal.run")) {
+              return new Response("Modal is unavailable in integration tests", { status: 404 });
+            }
+            throw new Error(`Unexpected outbound request: ${request.url}`);
+          },
           queueProducers: ["IMAGE_BUILD_FINALIZATION_QUEUE"],
           bindings: {
             IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",

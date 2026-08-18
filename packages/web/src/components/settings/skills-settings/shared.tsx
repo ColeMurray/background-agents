@@ -1,10 +1,6 @@
 import type { ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Request failed";
-}
-
 export function ScopeCheckbox({
   checked,
   onChange,

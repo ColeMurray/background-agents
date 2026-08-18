@@ -166,7 +166,11 @@ async function handleSessionPrompt(
         request_id: ctx.request_id,
         error,
       });
-    })
+    }),
+    {
+      name: "session_index.touch_updated_at",
+      context: { session_id: sessionId, trace_id: ctx.trace_id, request_id: ctx.request_id },
+    }
   );
 
   return response;

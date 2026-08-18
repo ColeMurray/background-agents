@@ -4,7 +4,7 @@ import type { SessionMessageRouter } from "./message-router";
 import type { ConnectedClient } from "./ports";
 
 export interface SessionServerDeps<Connection, Client extends ConnectedClient> {
-  ensureInitialized: () => void;
+  ensureInitialized: (rehydrateAlarm?: boolean) => void;
   http: SessionHttpDispatcher;
   messages: SessionMessageRouter<Connection, Client>;
   disconnects: SessionDisconnectHandler<Connection, Client>;
@@ -49,7 +49,7 @@ export class SessionServer<Connection, Client extends ConnectedClient> {
 
   async onScheduledDeadline(): Promise<void> {
     // Scheduled work shares the same lazy repositories and services as request callbacks.
-    this.deps.ensureInitialized();
+    this.deps.ensureInitialized(false);
     await this.deps.handleScheduledDeadline();
   }
 }

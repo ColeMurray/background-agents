@@ -118,7 +118,7 @@ async function handleGitHubAutomationEvent(
   }
 
   const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
-  ctx.executionCtx.submit(lifecycleWork);
+  ctx.executionCtx.submit(lifecycleWork, { name: "github_webhook.lifecycle" });
 
   return forwardAutomationEventToScheduler(env, validated.event);
 }

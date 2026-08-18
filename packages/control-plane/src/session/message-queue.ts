@@ -33,7 +33,7 @@ import type { SessionStatusService } from "./session-status-service";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import type { AlarmScheduler, BackgroundJobDispatcher } from "../platform-ports";
+import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -141,7 +141,7 @@ function resolveParticipantGitIdentity(
 
 export class SessionMessageQueue {
   constructor(
-    private readonly backgroundJobs: BackgroundJobDispatcher,
+    private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
@@ -233,14 +233,10 @@ export class SessionMessageQueue {
       const session = this.repository.getSession();
       const sessionId = session?.session_name || session?.id;
       if (sessionId) {
-        this.backgroundJobs.submit(
-          sessionIndex.touchUpdatedAt(sessionId).catch((error) => {
-            this.log.error("session_index.touch_updated_at.background_error", {
-              session_id: sessionId,
-              error,
-            });
-          })
-        );
+        this.backgroundTasks.submit(sessionIndex.touchUpdatedAt(sessionId), {
+          name: "session_index.touch_updated_at",
+          context: { session_id: sessionId },
+        });
       }
     }
 
@@ -292,7 +288,7 @@ export class SessionMessageQueue {
       if (awaitingStop.deadline <= Date.now()) {
         await this.recoverStopConfirmationTimeout();
       } else {
-        await this.alarmScheduler.scheduleAlarm(awaitingStop.deadline);
+        await this.alarmScheduler.schedule(awaitingStop.deadline);
       }
       this.log.debug("processMessageQueue: waiting for sandbox stop confirmation");
       return;
@@ -321,21 +317,22 @@ export class SessionMessageQueue {
       // and awaiting it here holds the prompt HTTP response open past bot
       // callers' request timeouts. The message is already persisted as
       // pending and dispatches when the sandbox WebSocket connects.
-      this.backgroundJobs.submit(
+      this.backgroundTasks.submit(
         this.sandboxLifecycle.spawnSandbox().catch((error) => {
           // Expected provider failures broadcast sandbox_error inside the
           // lifecycle manager; this catch only sees throws from before those
           // handlers. Surface them the same way so clients aren't left
           // watching a silent "sandbox_spawning" forever.
-          this.log.error("prompt.spawn.background_error", {
-            message_id: message.id,
-            error: error instanceof Error ? error : String(error),
-          });
           this.messenger.broadcast({
             type: "sandbox_error",
             error: error instanceof Error ? error.message : "Failed to spawn sandbox",
           });
-        })
+          throw error;
+        }),
+        {
+          name: "sandbox.spawn",
+          context: { message_id: message.id },
+        }
       );
       return;
     }
@@ -401,16 +398,12 @@ export class SessionMessageQueue {
 
       // Execution timeout shares the DO's single alarm slot with lifecycle checks.
       const deadline = now + this.executionTimeoutMs;
-      await this.alarmScheduler.scheduleAlarm(deadline);
+      await this.alarmScheduler.schedule(deadline);
 
-      this.backgroundJobs.submit(
-        this.callbackService.notifyStarted(message.id).catch((error) => {
-          this.log.error("callback.started.background_error", {
-            message_id: message.id,
-            error,
-          });
-        })
-      );
+      this.backgroundTasks.submit(this.callbackService.notifyStarted(message.id), {
+        name: "callback.notify_started",
+        context: { message_id: message.id },
+      });
     }
 
     this.log.info("prompt.dispatch", {
@@ -444,7 +437,7 @@ export class SessionMessageQueue {
         processingMessage.id,
         stopConfirmationDeadline
       );
-      await this.alarmScheduler.scheduleAlarm(stopConfirmationDeadline);
+      await this.alarmScheduler.schedule(stopConfirmationDeadline);
       this.broadcastPromptQueue();
       this.log.info("prompt.stopped", {
         event: "prompt.stopped",
@@ -559,8 +552,14 @@ export class SessionMessageQueue {
         });
       })
       .then(() => this.messenger.broadcast({ type: "sandbox_event", event }));
-    this.backgroundJobs.submit(projection);
-    this.backgroundJobs.submit(this.callbackService.notifyComplete(message.id, false, error));
+    this.backgroundTasks.submit(projection, {
+      name: "terminal_message.project",
+      context: { message_id: message.id },
+    });
+    this.backgroundTasks.submit(this.callbackService.notifyComplete(message.id, false, error), {
+      name: "callback.notify_complete",
+      context: { message_id: message.id },
+    });
     return true;
   }
 

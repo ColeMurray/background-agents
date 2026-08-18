@@ -17,14 +17,14 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
-import type { BackgroundJobDispatcher } from "../platform-ports";
+import type { BackgroundTasks } from "../platform-ports";
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
 
 export class SessionStatusService {
   constructor(
-    private readonly backgroundJobs: BackgroundJobDispatcher,
+    private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
@@ -181,27 +181,26 @@ export class SessionStatusService {
     const parentDoId = this.parentSessions.idFromName(parentId);
     const parentStub = this.parentSessions.get(parentDoId);
 
-    this.backgroundJobs.submit(
-      parentStub
-        .fetch(
-          new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              childSessionId,
-              status: update.status,
-              title: update.title,
-            }),
-          })
-        )
-        .catch((error) => {
-          this.log.error("notify_parent.failed", {
-            parent_id: parentId,
-            child_id: childSessionId,
+    this.backgroundTasks.submit(
+      parentStub.fetch(
+        new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            childSessionId,
             status: update.status,
-            error,
-          });
+            title: update.title,
+          }),
         })
+      ),
+      {
+        name: "session.notify_parent",
+        context: {
+          parent_id: parentId,
+          child_id: childSessionId,
+          status: update.status,
+        },
+      }
     );
   }
 
@@ -257,20 +256,17 @@ export class SessionStatusService {
     const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
-    this.backgroundJobs.submit(
-      this.sessionIndex
-        .updateMetrics(sessionId, {
-          totalCost: session.total_cost ?? 0,
-          activeDurationMs,
-          messageCount,
-          prCount,
-        })
-        .catch((error) => {
-          this.log.error("session_index.update_metrics.background_error", {
-            session_id: sessionId,
-            error,
-          });
-        })
+    this.backgroundTasks.submit(
+      this.sessionIndex.updateMetrics(sessionId, {
+        totalCost: session.total_cost ?? 0,
+        activeDurationMs,
+        messageCount,
+        prCount,
+      }),
+      {
+        name: "session_index.update_metrics",
+        context: { session_id: sessionId },
+      }
     );
   }
 }

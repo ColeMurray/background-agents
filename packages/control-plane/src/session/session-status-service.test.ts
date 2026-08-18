@@ -69,9 +69,6 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
           updateMetrics: vi.fn(async () => true),
         };
 
-  const waitUntil = vi.fn();
-  const backgroundJobs = { submit: waitUntil };
-
   const parentFetch = vi.fn(async (_request: Request) => new Response(null, { status: 200 }));
   const parentStub = { fetch: parentFetch };
   const parentSessions = {
@@ -86,9 +83,13 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     error: vi.fn(),
     child: vi.fn(),
   };
+  const waitUntil = vi.fn((task: Promise<unknown>) =>
+    task.catch((error) => log.error("background_task.failed", { error }))
+  );
+  const backgroundTasks = { submit: waitUntil };
 
   const service = new SessionStatusService(
-    backgroundJobs,
+    backgroundTasks,
     log as unknown as Logger,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
@@ -420,17 +421,11 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
     );
 
     // Drain the fire-and-forget promise handed to waitUntil.
-    await h.waitUntil.mock.calls[0][0];
+    await h.waitUntil.mock.results[0]!.value;
 
-    expect(h.log.error).toHaveBeenCalledWith(
-      "notify_parent.failed",
-      expect.objectContaining({
-        parent_id: "parent-1",
-        child_id: "public-session-1",
-        status: "failed",
-        error: expect.any(Error),
-      })
-    );
+    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
+      error: expect.any(Error),
+    });
   });
 
   it("is a no-op without a parent session id", () => {
