@@ -4,12 +4,12 @@ import type {
   ConnectedClient,
   SandboxDisconnectMonitor,
   SessionBroadcaster,
-  SocketRegistry,
+  RoutedSocketRegistry,
 } from "./ports";
 
 export interface SessionDisconnectHandlerDeps<Connection, Client extends ConnectedClient> {
   getLogger: () => Logger;
-  sockets: SocketRegistry<Connection, Client>;
+  sockets: RoutedSocketRegistry<Connection, Client>;
   sandbox: SandboxDisconnectMonitor;
   broadcaster: SessionBroadcaster;
 }

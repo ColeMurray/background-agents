@@ -8,7 +8,12 @@ import {
   type SessionClientCommands,
   type SessionMessageRouterDeps,
 } from "./message-router";
-import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
+import type {
+  Clock,
+  RoutedSocketRegistry,
+  SandboxDisconnectMonitor,
+  SessionBroadcaster,
+} from "./ports";
 import { SessionServer } from "./server";
 
 interface TestClient {
@@ -40,7 +45,7 @@ function createHarness() {
       ? { kind: "sandbox" as const, sandboxId: "sandbox-1" }
       : { kind: "client" as const, wsId: "ws-1" }
   );
-  const sockets: SocketRegistry<string, TestClient> = {
+  const sockets: RoutedSocketRegistry<string, TestClient> = {
     classify: classifyConnection,
     send: vi.fn(() => true),
     getClient: vi.fn(() => currentClient),

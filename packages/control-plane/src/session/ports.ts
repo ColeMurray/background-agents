@@ -17,7 +17,7 @@ export interface Clock {
 }
 
 /** Registry and transport operations over opaque runtime connections. */
-export interface SocketRegistry<Connection, Client extends ConnectedClient> {
+export interface RoutedSocketRegistry<Connection, Client extends ConnectedClient> {
   classify(connection: Connection): ConnectionClassification;
   send(connection: Connection, message: ServerMessage): boolean;
   getClient(connection: Connection): Client | null;

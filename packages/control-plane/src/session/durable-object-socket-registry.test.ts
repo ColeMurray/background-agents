@@ -1,13 +1,15 @@
 /**
- * Unit tests for SessionWebSocketManagerImpl.
+ * Unit tests for DurableObjectSocketRegistry.
  *
  * Uses fake DurableObjectState and mock repositories to test
  * all WebSocket mechanics in isolation from the full DO.
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { SessionWebSocketManagerImpl } from "./websocket-manager";
-import type { WebSocketManagerConfig } from "./websocket-manager";
+import {
+  DurableObjectSocketRegistry,
+  type SocketRegistryConfig,
+} from "./durable-object-socket-registry";
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
 import type { SandboxRepository } from "./sandbox-repository";
@@ -70,8 +72,10 @@ function createFakeCtx(): FakeCtx {
     getTags(ws: WebSocket): string[] {
       return sockets.get(ws) ?? [];
     },
-    getWebSockets(): WebSocket[] {
-      return Array.from(sockets.keys());
+    getWebSockets(tag?: string): WebSocket[] {
+      return Array.from(sockets, ([ws, tags]) => ({ ws, tags }))
+        .filter(({ tags }) => !tag || tags.includes(tag))
+        .map(({ ws }) => ws);
     },
     setWebSocketAutoResponse: vi.fn(),
     storage: { setAlarm: vi.fn() },
@@ -180,7 +184,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
   };
 }
 
-const TEST_CONFIG: WebSocketManagerConfig = { authTimeoutMs: 100 };
+const TEST_CONFIG: SocketRegistryConfig = { authTimeoutMs: 100 };
 
 /** Create a fresh manager with all dependencies. */
 function createManager() {
@@ -188,7 +192,7 @@ function createManager() {
   const mockRepo = createMockRepository();
   const log = createMockLogger();
 
-  const manager = new SessionWebSocketManagerImpl(
+  const manager = new DurableObjectSocketRegistry(
     fakeCtx.state,
     mockRepo.repo,
     mockRepo.repo as unknown as WsClientMappingRepository,
@@ -203,7 +207,7 @@ function createManager() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("SessionWebSocketManagerImpl", () => {
+describe("DurableObjectSocketRegistry", () => {
   describe("classify", () => {
     it("classifies sandbox socket with sandbox ID", () => {
       const { manager, sockets } = createManager();

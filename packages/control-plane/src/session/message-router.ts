@@ -3,7 +3,7 @@ import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
 import type { SessionHistoryPage } from "./event-stream";
-import type { Clock, ConnectedClient, SocketRegistry } from "./ports";
+import type { Clock, ConnectedClient, RoutedSocketRegistry } from "./ports";
 
 const FETCH_HISTORY_MIN_INTERVAL_MS = 200;
 
@@ -37,7 +37,7 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
 
 export interface SessionMessageRouterDeps<Connection, Client extends ConnectedClient> {
   getLogger: () => Logger;
-  sockets: SocketRegistry<Connection, Client>;
+  sockets: RoutedSocketRegistry<Connection, Client>;
   clientCommands: SessionClientCommands<Connection, Client>;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   clock: Clock;

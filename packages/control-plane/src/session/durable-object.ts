@@ -68,7 +68,7 @@ import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 import { resolveParticipantName } from "./participant-name";
 import { validateReasoningEffort } from "./reasoning-effort";
 import { parseTunnelUrls } from "./tunnel-urls";
-import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { DurableObjectSocketRegistry } from "./durable-object-socket-registry";
 import { DurableObjectSessionConnections } from "./durable-object-session-connections";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
@@ -144,7 +144,12 @@ import { SessionServer } from "./server";
 import { SessionHttpDispatcher } from "./http/dispatcher";
 import { SessionMessageRouter, type SessionClientCommands } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
-import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
+import type {
+  Clock,
+  RoutedSocketRegistry,
+  SandboxDisconnectMonitor,
+  SessionBroadcaster,
+} from "./ports";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -192,7 +197,7 @@ export class SessionDO extends DurableObject<Env> {
   // (with trace_id / request_id) threaded explicitly from fetch().
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
-  private _wsManager: SessionWebSocketManager | null = null;
+  private _wsManager: DurableObjectSocketRegistry | null = null;
   private _connections: DurableObjectSessionConnections | null = null;
   // Session messenger (constructed in ensureInitialized once the session logger exists)
   private messenger!: SessionMessenger;
@@ -211,7 +216,7 @@ export class SessionDO extends DurableObject<Env> {
   // Presence service (lazily initialized)
   private _presenceService: PresenceService | null = null;
   // Message queue service (lazily initialized)
-  private _messageQueue: SessionMessageQueue | null = null;
+  private _messageQueue: SessionMessageQueue<WebSocket> | null = null;
   // Message service (lazily initialized)
   private _messageService: MessageService | null = null;
   private _eventStream: SessionEventStream | null = null;
@@ -236,7 +241,7 @@ export class SessionDO extends DurableObject<Env> {
   private _alarmHandler: AlarmHandler | null = null;
   private _alarmScheduler: RehydratableAlarmScheduler | null = null;
   // Sandbox event processor (lazily initialized)
-  private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
+  private _sandboxEventProcessor: SessionSandboxEventProcessor<WebSocket> | null = null;
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
   private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
@@ -322,7 +327,7 @@ export class SessionDO extends DurableObject<Env> {
       nowMs: () => Date.now(),
       monotonicNowMs: () => performance.now(),
     };
-    const sockets: SocketRegistry<WebSocket, ClientInfo> = {
+    const sockets: RoutedSocketRegistry<WebSocket, ClientInfo> = {
       classify: (ws) => this.wsManager.classify(ws),
       send: (ws, message) => this.safeSend(ws, message),
       getClient: (ws) => this.getClientInfo(ws),
@@ -477,9 +482,9 @@ export class SessionDO extends DurableObject<Env> {
    * Lazy initialization ensures the logger has session_id context
    * (set by ensureInitialized()) by the time the manager is created.
    */
-  private get wsManager(): SessionWebSocketManager {
+  private get wsManager(): DurableObjectSocketRegistry {
     if (!this._wsManager) {
-      this._wsManager = new SessionWebSocketManagerImpl(
+      this._wsManager = new DurableObjectSocketRegistry(
         this.ctx,
         this.sandboxRepository,
         this.wsClientMappingRepository,
@@ -492,7 +497,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get connections(): DurableObjectSessionConnections {
     if (!this._connections) {
-      this._connections = new DurableObjectSessionConnections(this.ctx, this.wsManager);
+      this._connections = new DurableObjectSessionConnections(this.wsManager);
     }
     return this._connections;
   }
@@ -521,7 +526,7 @@ export class SessionDO extends DurableObject<Env> {
     return this._alarmScheduler;
   }
 
-  private get messageQueue(): SessionMessageQueue {
+  private get messageQueue(): SessionMessageQueue<WebSocket> {
     if (!this._messageQueue) {
       this._messageQueue = new SessionMessageQueue(
         this.backgroundTasks,
@@ -825,7 +830,7 @@ export class SessionDO extends DurableObject<Env> {
     return this._alarmHandler;
   }
 
-  private get sandboxEventProcessor(): SessionSandboxEventProcessor {
+  private get sandboxEventProcessor(): SessionSandboxEventProcessor<WebSocket> {
     if (!this._sandboxEventProcessor) {
       this._sandboxEventProcessor = new SessionSandboxEventProcessor(
         this.backgroundTasks,

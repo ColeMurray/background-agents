@@ -1,16 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DurableObjectSessionConnections } from "./durable-object-session-connections";
-import type { SessionWebSocketManager } from "./websocket-manager";
-
-vi.stubGlobal(
-  "WebSocketRequestResponsePair",
-  class WebSocketRequestResponsePair {
-    constructor(
-      readonly request: string,
-      readonly response: string
-    ) {}
-  }
-);
+import type { DurableObjectSocketRegistry } from "./durable-object-socket-registry";
 
 function harness() {
   const browser = { readyState: WebSocket.OPEN } as WebSocket;
@@ -40,12 +30,12 @@ function harness() {
     detachSandboxSocket: vi.fn(),
     getAuthenticatedClients: vi.fn(() => [clientInfo].values()),
     recoverClientMapping: vi.fn(() => null),
-  } as unknown as SessionWebSocketManager;
-  const state = { setWebSocketAutoResponse: vi.fn() } as unknown as DurableObjectState;
+    configureAutoPing: vi.fn(),
+    createUpgradeSockets: vi.fn(),
+  } as unknown as DurableObjectSocketRegistry;
   return {
-    connections: new DurableObjectSessionConnections(state, manager),
+    connections: new DurableObjectSessionConnections(manager),
     manager,
-    state,
     browser,
     sandbox,
   };
@@ -53,9 +43,9 @@ function harness() {
 
 describe("DurableObjectSessionConnections", () => {
   it("owns Cloudflare auto-response configuration", () => {
-    const { state } = harness();
+    const { manager } = harness();
 
-    expect(state.setWebSocketAutoResponse).toHaveBeenCalledTimes(1);
+    expect(manager.configureAutoPing).toHaveBeenCalledTimes(1);
   });
 
   it("registers and broadcasts to a browser through the WebSocket registry", async () => {

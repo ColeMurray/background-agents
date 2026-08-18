@@ -13,7 +13,7 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SocketRegistry } from "./socket-registry";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
 import type { BackgroundTasks } from "../platform-ports";
 
@@ -33,7 +33,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "push_error",
 ]);
 
-export class SessionSandboxEventProcessor {
+export class SessionSandboxEventProcessor<Connection = unknown> {
   private pendingPushResolvers = new Map<string, PushResolver>();
 
   constructor(
@@ -48,7 +48,7 @@ export class SessionSandboxEventProcessor {
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly callbackService: CallbackNotificationService,
-    private readonly wsManager: SessionWebSocketManager,
+    private readonly wsManager: SocketRegistry<Connection>,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
     private readonly applySessionTitleUpdate: (

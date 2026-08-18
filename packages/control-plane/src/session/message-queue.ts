@@ -26,7 +26,7 @@ import {
   type SessionAttachmentRepository,
 } from "./session-attachment-repository";
 import type { SessionMessenger } from "./messenger";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SocketRegistry } from "./socket-registry";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionStatusService } from "./session-status-service";
@@ -139,7 +139,7 @@ function resolveParticipantGitIdentity(
     : { mode: "agent-only" };
 }
 
-export class SessionMessageQueue {
+export class SessionMessageQueue<Connection = unknown> {
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
@@ -147,7 +147,7 @@ export class SessionMessageQueue {
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
-    private readonly wsManager: SessionWebSocketManager,
+    private readonly wsManager: SocketRegistry<Connection>,
     private readonly messenger: SessionMessenger,
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
@@ -165,7 +165,7 @@ export class SessionMessageQueue {
   ) {}
 
   async handlePromptMessage(
-    ws: WebSocket,
+    ws: Connection,
     client: ClientInfo,
     data: PromptMessageData
   ): Promise<void> {
@@ -251,7 +251,7 @@ export class SessionMessageQueue {
   }
 
   async cancelQueuedPrompt(
-    ws: WebSocket,
+    ws: Connection,
     data: { messageId: string; clientRequestId: string }
   ): Promise<void> {
     if (!this.messageRepository.cancelPendingMessage(data.messageId)) {
@@ -416,7 +416,6 @@ export class SessionMessageQueue {
       user_id: author?.user_id ?? "unknown",
       source: message.source,
       has_sandbox_ws: true,
-      sandbox_ready_state: sandboxWs.readyState,
       queue_wait_ms: now - message.created_at,
       has_attachments: !!message.attachments,
     });

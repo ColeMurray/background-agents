@@ -8,32 +8,25 @@ import type {
 } from "./connections";
 import { projectConnectedParticipants, SandboxDeliveryUnavailableError } from "./connections";
 import type { SandboxCommand } from "./types";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { DurableObjectSocketRegistry } from "./durable-object-socket-registry";
 
 /** Cloudflare Durable Object implementation of the session connection port. */
 export class DurableObjectSessionConnections implements SessionConnections {
-  constructor(
-    private readonly ctx: DurableObjectState,
-    private readonly wsManager: SessionWebSocketManager
-  ) {
-    this.ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair(
-        JSON.stringify({ type: "ping" }),
-        JSON.stringify({ type: "pong", timestamp: Date.now() })
-      )
+  constructor(private readonly sockets: DurableObjectSocketRegistry) {
+    this.sockets.configureAutoPing(
+      JSON.stringify({ type: "ping" }),
+      JSON.stringify({ type: "pong", timestamp: Date.now() })
     );
   }
 
   createUpgradeSockets(): { client: WebSocket; server: WebSocket } {
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-    return { client, server };
+    return this.sockets.createUpgradeSockets();
   }
 
   registerBrowser(input: BrowserConnection): Promise<void> {
     let matchedSocket: WebSocket | null = null;
-    this.wsManager.forEachClientSocket("all_clients", (ws) => {
-      const connection = this.wsManager.classify(ws);
+    this.sockets.forEachClientSocket("all_clients", (ws) => {
+      const connection = this.sockets.classify(ws);
       if (connection.kind === "client" && connection.wsId === input.connectionId) {
         matchedSocket = ws;
       }
@@ -42,12 +35,12 @@ export class DurableObjectSessionConnections implements SessionConnections {
       return Promise.reject(new Error(`Browser connection ${input.connectionId} not found`));
     }
 
-    this.wsManager.setClient(matchedSocket, {
+    this.sockets.setClient(matchedSocket, {
       ...input.participant,
       clientId: input.clientId,
       ws: matchedSocket,
     });
-    this.wsManager.persistClientMapping(
+    this.sockets.persistClientMapping(
       input.connectionId,
       input.participant.participantId,
       input.clientId
@@ -56,9 +49,9 @@ export class DurableObjectSessionConnections implements SessionConnections {
   }
 
   registerSandbox(input: SandboxConnection): Promise<void> {
-    const ws = this.wsManager.getSandboxSocket();
+    const ws = this.sockets.getSandboxSocket();
     if (!ws) return Promise.reject(new Error(`Sandbox connection ${input.connectionId} not found`));
-    const connection = this.wsManager.classify(ws);
+    const connection = this.sockets.classify(ws);
     if (
       connection.kind !== "sandbox" ||
       (input.sandboxId !== undefined && connection.sandboxId !== input.sandboxId)
@@ -69,26 +62,26 @@ export class DurableObjectSessionConnections implements SessionConnections {
   }
 
   sendToSandbox(message: SandboxCommand): Promise<void> {
-    const ws = this.wsManager.getSandboxSocket();
+    const ws = this.sockets.getSandboxSocket();
     if (!ws) return Promise.reject(new SandboxDeliveryUnavailableError());
-    return this.wsManager.send(ws, message)
+    return this.sockets.send(ws, message)
       ? Promise.resolve()
       : Promise.reject(new SandboxDeliveryUnavailableError("Failed to send message to sandbox"));
   }
 
   broadcastToBrowsers(message: ServerMessage): Promise<void> {
-    this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
-      this.wsManager.send(ws, message);
+    this.sockets.forEachClientSocket("authenticated_only", (ws) => {
+      this.sockets.send(ws, message);
     });
     return Promise.resolve();
   }
 
   disconnectSandbox(reason: DisconnectReason): Promise<void> {
-    this.wsManager.detachSandboxSocket(reason.code, reason.reason);
+    this.sockets.detachSandboxSocket(reason.code, reason.reason);
     return Promise.resolve();
   }
 
   listParticipants(): Promise<ConnectedParticipant[]> {
-    return Promise.resolve(projectConnectedParticipants(this.wsManager.getAuthenticatedClients()));
+    return Promise.resolve(projectConnectedParticipants(this.sockets.getAuthenticatedClients()));
   }
 }
