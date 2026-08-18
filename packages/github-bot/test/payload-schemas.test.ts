@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   issueCommentPayloadSchema,
-  pullRequestOpenedPayloadSchema,
+  pullRequestReviewTriggerPayloadSchema,
   requestedReviewerPayloadSchema,
   reviewCommentPayloadSchema,
   reviewRequestedPayloadSchema,
@@ -11,7 +11,12 @@ import {
 } from "../src/payload-schemas";
 
 const sender = { login: "octocat", id: 123, avatar_url: "https://example.com/avatar.png" };
-const repository = { owner: { login: "open-inspect" }, name: "background-agents", private: false };
+const repository = {
+  id: 555,
+  owner: { login: "open-inspect" },
+  name: "background-agents",
+  private: false,
+};
 const pullRequest = {
   number: 42,
   title: "Add validation",
@@ -22,15 +27,54 @@ const pullRequest = {
 };
 
 describe("GitHub bot payload schemas", () => {
-  it("parses a valid pull request opened payload", () => {
-    const result = pullRequestOpenedPayloadSchema.safeParse({
-      action: "opened",
+  it.each(["opened", "reopened", "synchronize", "ready_for_review"] as const)(
+    "parses the %s pull request review trigger",
+    (action) => {
+      const result = pullRequestReviewTriggerPayloadSchema.safeParse({
+        action,
+        pull_request: { ...pullRequest, draft: false },
+        repository,
+        sender,
+      });
+
+      expect(result.success).toBe(true);
+    }
+  );
+
+  it.each(["closed", "converted_to_draft"] as const)(
+    "rejects the %s pull request action (lifecycle events are not review triggers)",
+    (action) => {
+      const result = pullRequestReviewTriggerPayloadSchema.safeParse({
+        action,
+        pull_request: { ...pullRequest, draft: false },
+        repository,
+        sender,
+      });
+
+      expect(result.success).toBe(false);
+    }
+  );
+
+  it("rejects a pull request action that does not trigger a review", () => {
+    const result = pullRequestReviewTriggerPayloadSchema.safeParse({
+      action: "labeled",
       pull_request: { ...pullRequest, draft: false },
       repository,
       sender,
     });
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a repository payload missing the numeric id", () => {
+    const result = pullRequestReviewTriggerPayloadSchema.safeParse({
+      action: "opened",
+      pull_request: { ...pullRequest, draft: false },
+      repository: { owner: { login: "open-inspect" }, name: "background-agents", private: false },
+      sender,
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it("rejects a malformed partial issue comment payload", () => {

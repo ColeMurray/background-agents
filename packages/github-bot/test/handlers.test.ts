@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   Env,
-  PullRequestOpenedPayload,
+  PullRequestReviewTriggerPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
@@ -10,9 +10,18 @@ import type { Logger } from "../src/logger";
 import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
 
 vi.mock("../src/github-auth", () => ({
+  REVIEW_COMPLETED_DESCRIPTION: "Review completed",
+  REVIEW_PENDING_DESCRIPTION: "Review in progress",
+  REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
+  REVIEW_STALE_DESCRIPTION: "Review skipped: PR changed before submission",
+  REVIEW_STATUS_CONTEXT: "open-inspect",
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
+  postCommitStatus: vi.fn().mockResolvedValue({ ok: true }),
   postReaction: vi.fn().mockResolvedValue(true),
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
+  getPullRequestSnapshot: vi
+    .fn()
+    .mockResolvedValue({ ok: true, headSha: "abc123", state: "open", draft: false }),
 }));
 
 vi.mock("../src/utils/integration-config", () => ({
@@ -38,12 +47,18 @@ const defaultConfig: ResolvedGitHubConfig = {
 };
 
 import {
-  handlePullRequestOpened,
+  handlePullRequestReviewTrigger,
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
 } from "../src/handlers";
-import { generateInstallationToken, postReaction, checkSenderPermission } from "../src/github-auth";
+import {
+  generateInstallationToken,
+  postCommitStatus,
+  postReaction,
+  checkSenderPermission,
+  getPullRequestSnapshot,
+} from "../src/github-auth";
 import { getGitHubConfig } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
@@ -56,8 +71,30 @@ function createMockLogger(): Logger {
   };
 }
 
+/**
+ * Default 200 responses for the review-supersession claim/sweep routes.
+ * Shared by every custom control-plane fetch mock below so new-session
+ * fencing never derails a test whose focus is elsewhere.
+ */
+function defaultReviewSupersessionResponse(url: string): Response | null {
+  if (url === "https://internal/internal/github-reviews/claim") {
+    return new Response(JSON.stringify({ generation: 1 }), { status: 200 });
+  }
+  if (url === "https://internal/internal/github-reviews/release-claim") {
+    return new Response(JSON.stringify({ released: true }), { status: 200 });
+  }
+  if (url === "https://internal/internal/github-reviews/sweep") {
+    return new Response(JSON.stringify({ cancelledSessionIds: [], failedSessionIds: [] }), {
+      status: 200,
+    });
+  }
+  return null;
+}
+
 function createMockEnv(): Env {
   const controlPlaneFetch = vi.fn().mockImplementation((url: string) => {
+    const supersession = defaultReviewSupersessionResponse(url);
+    if (supersession) return Promise.resolve(supersession);
     if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
       return Promise.resolve(
         new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
@@ -115,7 +152,7 @@ function promptSendBody(cpFetch: ReturnType<typeof vi.fn>) {
   return findCallBody(cpFetch, /\/sessions\/.+\/prompt$/);
 }
 
-const pullRequestOpenedPayload: PullRequestOpenedPayload = {
+const pullRequestReviewTriggerPayload: PullRequestReviewTriggerPayload = {
   action: "opened",
   pull_request: {
     number: 42,
@@ -126,7 +163,7 @@ const pullRequestOpenedPayload: PullRequestOpenedPayload = {
     base: { ref: "main" },
     draft: false,
   },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 501, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "alice", id: 1001, avatar_url: "https://avatars.githubusercontent.com/u/1001" },
 };
 
@@ -141,7 +178,7 @@ const reviewRequestedPayload: ReviewRequestedPayload = {
     base: { ref: "main" },
   },
   requested_reviewer: { login: "test-bot[bot]" },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 501, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "alice", id: 1001, avatar_url: "https://avatars.githubusercontent.com/u/1001" },
 };
 
@@ -157,7 +194,7 @@ const issueCommentPayload: IssueCommentPayload = {
     body: "@test-bot[bot] please fix the error handling",
     user: { login: "bob" },
   },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 501, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "bob", id: 1002, avatar_url: "https://avatars.githubusercontent.com/u/1002" },
 };
 
@@ -177,24 +214,35 @@ const reviewCommentPayload: ReviewCommentPayload = {
     position: 5,
     user: { login: "carol" },
   },
-  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  repository: { id: 501, owner: { login: "acme" }, name: "widgets", private: false },
   sender: { login: "carol", id: 1003, avatar_url: "https://avatars.githubusercontent.com/u/1003" },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(generateInstallationToken).mockResolvedValue("test-installation-token");
+  vi.mocked(postCommitStatus).mockResolvedValue({ ok: true });
   vi.mocked(postReaction).mockResolvedValue(true);
   vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: true });
+  vi.mocked(getPullRequestSnapshot).mockResolvedValue({
+    ok: true,
+    headSha: "abc123",
+    state: "open",
+    draft: false,
+  });
   vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
 });
 
-describe("handlePullRequestOpened", () => {
-  it("creates session, posts reaction, and sends code review prompt", async () => {
+describe("handlePullRequestReviewTrigger", () => {
+  it("posts a pending status for the synchronized head and starts a review", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+    };
 
-    const result = await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
 
     expect(result).toEqual({
       outcome: "processed",
@@ -203,6 +251,18 @@ describe("handlePullRequestOpened", () => {
       handler_action: "auto_review",
     });
     expect(generateInstallationToken).toHaveBeenCalled();
+    expect(postCommitStatus).toHaveBeenCalledWith(
+      "test-installation-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "pending",
+        context: "open-inspect",
+        description: "Review in progress",
+      },
+      "Open-Inspect"
+    );
     expect(postReaction).toHaveBeenCalledWith(
       "test-installation-token",
       "https://api.github.com/repos/acme/widgets/issues/42/reactions",
@@ -211,7 +271,7 @@ describe("handlePullRequestOpened", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(5);
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.repoOwner).toBe("acme");
@@ -227,6 +287,8 @@ describe("handlePullRequestOpened", () => {
     expect(promptBody.source).toBe("github");
     expect(promptBody).not.toHaveProperty("authorId");
     expect(promptBody.content).toContain("Pull Request #42");
+    expect(promptBody.content).toContain("repos/acme/widgets/statuses/abc123");
+    expect(promptBody.content).toContain('-f target_url="$review_url"');
 
     expect(log.info).toHaveBeenCalledWith(
       "session.created",
@@ -234,10 +296,40 @@ describe("handlePullRequestOpened", () => {
     );
   });
 
+  it("continues the review and logs why the installation cannot post statuses", async () => {
+    vi.mocked(postCommitStatus).mockResolvedValue({
+      ok: false,
+      status: 403,
+      error: "GitHub API returned 403",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    const result = await handlePullRequestReviewTrigger(
+      env,
+      log,
+      pullRequestReviewTriggerPayload,
+      "trace-permission-pending"
+    );
+
+    expect(result.outcome).toBe("processed");
+    expect(log.warn).toHaveBeenCalledWith("review_status.failed", {
+      trace_id: "trace-permission-pending",
+      repo: "acme/widgets",
+      pull_number: 42,
+      head_sha: "abc123",
+      state: "pending",
+      github_status: 403,
+      error: "GitHub API returned 403",
+    });
+  });
+
   it("rejects a malformed session creation response before sending a prompt", async () => {
     const env = createMockEnv();
     const cpFetch = getControlPlaneFetch(env);
     cpFetch.mockImplementation((url: string) => {
+      const supersession = defaultReviewSupersessionResponse(url);
+      if (supersession) return Promise.resolve(supersession);
       if (url === "https://internal/sessions") {
         return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
       }
@@ -251,21 +343,87 @@ describe("handlePullRequestOpened", () => {
     const log = createMockLogger();
 
     await expect(
-      handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0")
+      handlePullRequestReviewTrigger(env, log, pullRequestReviewTriggerPayload, "trace-0")
     ).rejects.toThrow("Session creation failed: invalid response");
 
-    expect(cpFetch).toHaveBeenCalledTimes(2);
+    // The claim bumped the fence but no session carries it, so the handler
+    // must release it — conditionally, on exactly the generation it claimed —
+    // before rethrowing. Without this a review still running on the previous
+    // generation would be permanently locked out of submitting.
+    const releaseCalls = cpFetch.mock.calls.filter(
+      ([url]: [string]) => url === "https://internal/internal/github-reviews/release-claim"
+    );
+    expect(releaseCalls).toHaveLength(1);
+    expect(JSON.parse(releaseCalls[0][1].body)).toEqual({
+      repoId: 501,
+      prNumber: 42,
+      generation: 1,
+    });
+    // No sweep ran: the superseding session never existed.
+    expect(
+      cpFetch.mock.calls.filter(
+        ([url]: [string]) => url === "https://internal/internal/github-reviews/sweep"
+      )
+    ).toHaveLength(0);
+    expect(postCommitStatus).not.toHaveBeenCalled();
+  });
+
+  it("replaces pending with error when prompt delivery fails", async () => {
+    const env = createMockEnv();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      const supersession = defaultReviewSupersessionResponse(url);
+      if (supersession) return Promise.resolve(supersession);
+      if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
+        );
+      }
+      if (url === "https://internal/sessions") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ sessionId: "session-123", status: "created" }), {
+            status: 200,
+          })
+        );
+      }
+      if (/\/sessions\/.+\/prompt$/.test(url)) {
+        return Promise.resolve(new Response("Unavailable", { status: 503 }));
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+
+    await expect(
+      handlePullRequestReviewTrigger(
+        env,
+        createMockLogger(),
+        pullRequestReviewTriggerPayload,
+        "trace-prompt-failed"
+      )
+    ).rejects.toThrow("Prompt delivery failed: 503 Unavailable");
+
+    expect(postCommitStatus).toHaveBeenLastCalledWith(
+      "test-installation-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "error",
+        context: "open-inspect",
+        description: "Review failed to start",
+      },
+      "Open-Inspect"
+    );
   });
 
   it("returns early for draft PRs", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
-    const payload: PullRequestOpenedPayload = {
-      ...pullRequestOpenedPayload,
-      pull_request: { ...pullRequestOpenedPayload.pull_request, draft: true },
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      pull_request: { ...pullRequestReviewTriggerPayload.pull_request, draft: true },
     };
 
-    const result = await handlePullRequestOpened(env, log, payload, "trace-0");
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
 
     expect(result).toEqual({ outcome: "skipped", skip_reason: "draft_pr" });
     expect(generateInstallationToken).not.toHaveBeenCalled();
@@ -280,10 +438,10 @@ describe("handlePullRequestOpened", () => {
     });
     const env = createMockEnv();
     const log = createMockLogger();
-    const payload: PullRequestOpenedPayload = {
-      ...pullRequestOpenedPayload,
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
       pull_request: {
-        ...pullRequestOpenedPayload.pull_request,
+        ...pullRequestReviewTriggerPayload.pull_request,
         user: { login: "test-bot[bot]" },
       },
       sender: {
@@ -293,7 +451,7 @@ describe("handlePullRequestOpened", () => {
       },
     };
 
-    const result = await handlePullRequestOpened(env, log, payload, "trace-0");
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
 
     expect(result).toEqual({
       outcome: "processed",
@@ -302,7 +460,7 @@ describe("handlePullRequestOpened", () => {
       handler_action: "auto_review",
     });
     expect(sessionCreateBody(getControlPlaneFetch(env)).scmLogin).toBe("test-bot[bot]");
-    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('-f event="COMMENT"');
+    expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('"event": "COMMENT"');
   });
 
   it("rejects a bot-authored PR when the bot is not an allowed trigger user", async () => {
@@ -312,10 +470,10 @@ describe("handlePullRequestOpened", () => {
     });
     const env = createMockEnv();
     const log = createMockLogger();
-    const payload: PullRequestOpenedPayload = {
-      ...pullRequestOpenedPayload,
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
       pull_request: {
-        ...pullRequestOpenedPayload.pull_request,
+        ...pullRequestReviewTriggerPayload.pull_request,
         user: { login: "test-bot[bot]" },
       },
       sender: {
@@ -325,7 +483,7 @@ describe("handlePullRequestOpened", () => {
       },
     };
 
-    const result = await handlePullRequestOpened(env, log, payload, "trace-0");
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
 
     expect(result).toEqual({ outcome: "skipped", skip_reason: "sender_not_allowed" });
     expect(generateInstallationToken).not.toHaveBeenCalled();
@@ -340,7 +498,12 @@ describe("handlePullRequestOpened", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    const result = await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+    const result = await handlePullRequestReviewTrigger(
+      env,
+      log,
+      pullRequestReviewTriggerPayload,
+      "trace-0"
+    );
 
     expect(result).toEqual({ outcome: "skipped", skip_reason: "auto_review_disabled" });
     expect(generateInstallationToken).not.toHaveBeenCalled();
@@ -356,7 +519,12 @@ describe("handlePullRequestOpened", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    const result = await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+    const result = await handlePullRequestReviewTrigger(
+      env,
+      log,
+      pullRequestReviewTriggerPayload,
+      "trace-0"
+    );
 
     expect(result).toEqual({ outcome: "skipped", skip_reason: "repo_not_enabled" });
     expect(generateInstallationToken).not.toHaveBeenCalled();
@@ -373,10 +541,10 @@ describe("handlePullRequestOpened", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    const result = await handlePullRequestOpened(
+    const result = await handlePullRequestReviewTrigger(
       env,
       log,
-      pullRequestOpenedPayload,
+      pullRequestReviewTriggerPayload,
       "trace-failclosed"
     );
 
@@ -393,7 +561,7 @@ describe("handlePullRequestOpened", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+    await handlePullRequestReviewTrigger(env, log, pullRequestReviewTriggerPayload, "trace-0");
 
     const cpFetch = getControlPlaneFetch(env);
     const sessionBody = sessionCreateBody(cpFetch);
@@ -409,11 +577,123 @@ describe("handlePullRequestOpened", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-0");
+    await handlePullRequestReviewTrigger(env, log, pullRequestReviewTriggerPayload, "trace-0");
 
     const cpFetch = getControlPlaneFetch(env);
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.reasoningEffort).toBe("high");
+  });
+
+  it("skips when the live PR head sha no longer matches the webhook payload", async () => {
+    vi.mocked(getPullRequestSnapshot).mockResolvedValue({
+      ok: true,
+      headSha: "def456",
+      state: "open",
+      draft: false,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    const result = await handlePullRequestReviewTrigger(
+      env,
+      log,
+      pullRequestReviewTriggerPayload,
+      "trace-stale"
+    );
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "stale_head_sha" });
+    // Target resolution may already have hit the control plane; the contract
+    // is that a stale snapshot never claims a generation or creates a session.
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/internal/github-reviews/claim",
+      expect.anything()
+    );
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+    expect(log.debug).toHaveBeenCalledWith("handler.stale_head_sha", expect.anything());
+  });
+
+  it("returns skipped superseded when session creation loses the generation race (409)", async () => {
+    const env = createMockEnv();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      const supersession = defaultReviewSupersessionResponse(url);
+      if (supersession) return Promise.resolve(supersession);
+      if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
+        );
+      }
+      if (url === "https://internal/sessions") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: "review generation superseded" }), { status: 409 })
+        );
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+    const log = createMockLogger();
+
+    const result = await handlePullRequestReviewTrigger(
+      env,
+      log,
+      pullRequestReviewTriggerPayload,
+      "trace-superseded"
+    );
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "superseded" });
+    expect(postCommitStatus).not.toHaveBeenCalled();
+  });
+
+  it("still returns processed when the stale-review sweep fails", async () => {
+    const env = createMockEnv();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      if (url === "https://internal/internal/github-reviews/claim") {
+        return Promise.resolve(new Response(JSON.stringify({ generation: 2 }), { status: 200 }));
+      }
+      if (url === "https://internal/internal/github-reviews/sweep") {
+        return Promise.resolve(new Response("Internal Server Error", { status: 500 }));
+      }
+      if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
+        );
+      }
+      if (url === "https://internal/sessions") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ sessionId: "session-123", status: "created" }), {
+            status: 200,
+          })
+        );
+      }
+      if (/\/sessions\/.+\/prompt$/.test(url)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ messageId: "msg-456" }), { status: 200 })
+        );
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+    const log = createMockLogger();
+
+    const result = await handlePullRequestReviewTrigger(
+      env,
+      log,
+      pullRequestReviewTriggerPayload,
+      "trace-sweep-fail"
+    );
+
+    expect(result).toEqual({
+      outcome: "processed",
+      session_id: "session-123",
+      message_id: "msg-456",
+      handler_action: "auto_review",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      "review_sweep.request_failed",
+      expect.objectContaining({ status: 500 })
+    );
   });
 });
 
@@ -445,7 +725,7 @@ describe("handleReviewRequested", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(5);
 
     // Verify session creation
     const sessionBody = sessionCreateBody(cpFetch);
@@ -480,6 +760,61 @@ describe("handleReviewRequested", () => {
         session_id: "session-123",
         message_id: "msg-456",
       })
+    );
+  });
+
+  it("posts pending and error statuses when prompt delivery fails", async () => {
+    const env = createMockEnv();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      const supersession = defaultReviewSupersessionResponse(url);
+      if (supersession) return Promise.resolve(supersession);
+      if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
+        );
+      }
+      if (url === "https://internal/sessions") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ sessionId: "session-123", status: "created" }), {
+            status: 200,
+          })
+        );
+      }
+      if (/\/sessions\/.+\/prompt$/.test(url)) {
+        return Promise.resolve(new Response("Unavailable", { status: 503 }));
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+
+    await expect(
+      handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-review-failed")
+    ).rejects.toThrow("Prompt delivery failed: 503 Unavailable");
+
+    expect(postCommitStatus).toHaveBeenNthCalledWith(
+      1,
+      "test-installation-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "pending",
+        context: "open-inspect",
+        description: "Review in progress",
+      },
+      "Open-Inspect"
+    );
+    expect(postCommitStatus).toHaveBeenLastCalledWith(
+      "test-installation-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "error",
+        context: "open-inspect",
+        description: "Review failed to start",
+      },
+      "Open-Inspect"
     );
   });
 
@@ -521,6 +856,53 @@ describe("handleReviewRequested", () => {
     expect(generateInstallationToken).not.toHaveBeenCalled();
     expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith("handler.repo_not_enabled", expect.anything());
+  });
+
+  it("skips when the live PR head sha no longer matches the webhook payload", async () => {
+    vi.mocked(getPullRequestSnapshot).mockResolvedValue({
+      ok: true,
+      headSha: "def456",
+      state: "open",
+      draft: false,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    const result = await handleReviewRequested(env, log, reviewRequestedPayload, "trace-stale");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "stale_head_sha" });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/internal/github-reviews/claim",
+      expect.anything()
+    );
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+    expect(log.debug).toHaveBeenCalledWith("handler.stale_head_sha", expect.anything());
+  });
+
+  it("skips when the PR has already closed by the time of the freshness check", async () => {
+    vi.mocked(getPullRequestSnapshot).mockResolvedValue({
+      ok: true,
+      headSha: "abc123",
+      state: "closed",
+      draft: false,
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    const result = await handleReviewRequested(env, log, reviewRequestedPayload, "trace-closed");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "stale_head_sha" });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/internal/github-reviews/claim",
+      expect.anything()
+    );
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
   });
 });
 
@@ -709,7 +1091,7 @@ describe("handleReviewComment", () => {
 });
 
 describe("error handling", () => {
-  it("throws when session creation fails", async () => {
+  it("throws when the control plane is unreachable (fails at the claim step)", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
     getControlPlaneFetch(env).mockResolvedValue(
@@ -718,7 +1100,7 @@ describe("error handling", () => {
 
     await expect(
       handleReviewRequested(env, log, reviewRequestedPayload, "trace-err")
-    ).rejects.toThrow("Session creation failed: 500");
+    ).rejects.toThrow("Review generation claim failed: 500");
   });
 
   it("proceeds with session even if reaction fails", async () => {
@@ -729,7 +1111,7 @@ describe("error handling", () => {
     await handleReviewRequested(env, log, reviewRequestedPayload, "trace-reaction");
 
     // Session should still be created despite reaction failure
-    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(3);
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -801,7 +1183,7 @@ describe("integration config", () => {
 
     // Should proceed normally — null means all repos allowed
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(5);
   });
 
   it("rejects sender not in allowedTriggerUsers (handleIssueComment)", async () => {
@@ -897,7 +1279,7 @@ describe("integration config", () => {
     );
   });
 
-  it("handlePullRequestOpened rejects sender not in allowedTriggerUsers", async () => {
+  it("handlePullRequestReviewTrigger rejects sender not in allowedTriggerUsers", async () => {
     vi.mocked(getGitHubConfig).mockResolvedValue({
       ...defaultConfig,
       allowedTriggerUsers: ["someone-else"],
@@ -905,10 +1287,10 @@ describe("integration config", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    const result = await handlePullRequestOpened(
+    const result = await handlePullRequestReviewTrigger(
       env,
       log,
-      pullRequestOpenedPayload,
+      pullRequestReviewTriggerPayload,
       "trace-pr-gating"
     );
 
@@ -965,7 +1347,7 @@ describe("integration config", () => {
     expect(promptBody.content).toContain("Run tests first.");
   });
 
-  it("codeReviewInstructions flows into review prompt (handlePullRequestOpened)", async () => {
+  it("codeReviewInstructions flows into review prompt (handlePullRequestReviewTrigger)", async () => {
     vi.mocked(getGitHubConfig).mockResolvedValue({
       ...defaultConfig,
       codeReviewInstructions: "Check for SQL injection.",
@@ -973,7 +1355,12 @@ describe("integration config", () => {
     const env = createMockEnv();
     const log = createMockLogger();
 
-    await handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-pr-instr");
+    await handlePullRequestReviewTrigger(
+      env,
+      log,
+      pullRequestReviewTriggerPayload,
+      "trace-pr-instr"
+    );
 
     const cpFetch = getControlPlaneFetch(env);
     const promptBody = promptSendBody(cpFetch);
@@ -1033,6 +1420,8 @@ describe("default environment targets", () => {
     }
   ) {
     getControlPlaneFetch(env).mockImplementation((url: string) => {
+      const supersession = defaultReviewSupersessionResponse(url);
+      if (supersession) return Promise.resolve(supersession);
       if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
         if (opts.metadataStatus) {
           return Promise.resolve(new Response("Error", { status: opts.metadataStatus }));
@@ -1199,10 +1588,10 @@ describe("default environment targets", () => {
       },
     });
 
-    const result = await handlePullRequestOpened(
+    const result = await handlePullRequestReviewTrigger(
       env,
       log,
-      pullRequestOpenedPayload,
+      pullRequestReviewTriggerPayload,
       "trace-env-nm"
     );
 

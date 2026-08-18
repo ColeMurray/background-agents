@@ -163,7 +163,7 @@ describe("POST /webhooks/github", () => {
 
   it("allows redelivery after async processing failure clears the marker", async () => {
     const body = JSON.stringify({
-      action: "opened",
+      action: "synchronize",
       pull_request: {
         number: 42,
         title: "Broken payload",
@@ -236,8 +236,8 @@ describe("POST /webhooks/github", () => {
   it("forwards closed pull request lifecycle fields to the control plane", async () => {
     const body = JSON.stringify({
       action: "closed",
-      repository: { owner: { login: "test" }, name: "repo" },
-      sender: { login: "alice" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+      sender: { login: "alice", id: 1, avatar_url: "https://avatars.githubusercontent.com/u/1" },
       pull_request: {
         number: 42,
         title: "Ship lifecycle updates",
@@ -279,11 +279,17 @@ describe("POST /webhooks/github", () => {
 
     const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
       .fetch;
-    expect(controlPlaneFetch).toHaveBeenCalledOnce();
-    const [url, init] = controlPlaneFetch.mock.calls[0];
+    // closed is not a bot review action (unsupported_action skip); the only
+    // control-plane call is the normalized lifecycle-event forward.
+    expect(controlPlaneFetch).toHaveBeenCalledTimes(1);
+    const forwardCall = controlPlaneFetch.mock.calls.find(
+      ([callUrl]) => callUrl === "https://internal/internal/github-event"
+    );
+    if (!forwardCall) throw new Error("github-event forward call not found");
+    const [url, init] = forwardCall;
     expect(url).toBe("https://internal/internal/github-event");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toMatchObject({
+    expect(JSON.parse(init.body)).toMatchObject({
       eventType: "pull_request.closed",
       repoOwner: "test",
       repoName: "repo",

@@ -5,10 +5,21 @@ const collaboratorPermissionResponseSchema = z.object({
   permission: z.string(),
 });
 
+const pullRequestSnapshotResponseSchema = z.object({
+  head: z.object({ sha: z.string() }),
+  state: z.string(),
+  draft: z.boolean(),
+});
+
 const installationTokenResponseSchema = z.object({
   token: z.string(),
 });
 
+export const REVIEW_STATUS_CONTEXT = "open-inspect";
+export const REVIEW_PENDING_DESCRIPTION = "Review in progress";
+export const REVIEW_COMPLETED_DESCRIPTION = "Review completed";
+export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
+export const REVIEW_STALE_DESCRIPTION = "Review skipped: PR changed before submission";
 export interface GitHubAppConfig {
   appId: string;
   privateKey: string;
@@ -16,6 +27,8 @@ export interface GitHubAppConfig {
   /** User-Agent header sent on outbound GitHub API requests. */
   userAgent?: string;
 }
+
+export type CommitStatusPostResult = { ok: true } | { ok: false; status?: number; error: string };
 
 function base64UrlEncode(input: Uint8Array | string): string {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
@@ -172,5 +185,99 @@ export async function postReaction(
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+export async function postCommitStatus(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+  status: {
+    state: "error" | "failure" | "pending" | "success";
+    context: string;
+    description: string;
+    targetUrl?: string;
+  },
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<CommitStatusPostResult> {
+  const body = {
+    state: status.state,
+    context: status.context,
+    description: status.description,
+    ...(status.targetUrl ? { target_url: status.targetUrl } : {}),
+  };
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/statuses/${encodeURIComponent(sha)}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": userAgent,
+        },
+        body: JSON.stringify(body),
+      }
+    );
+    if (response.ok) return { ok: true };
+    return {
+      ok: false,
+      status: response.status,
+      error: `GitHub API returned ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export type PullRequestSnapshotResult =
+  | { ok: true; headSha: string; state: string; draft: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Fetch the PR's current head sha, state, and draft flag directly from
+ * GitHub — used as a freshness check immediately before starting (or
+ * re-verifying) a review, since the webhook payload can lag reality.
+ */
+export async function getPullRequestSnapshot(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<PullRequestSnapshotResult> {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": userAgent,
+        },
+      }
+    );
+    if (!response.ok) {
+      return { ok: false, error: `GitHub API returned ${response.status}` };
+    }
+    const parsed = pullRequestSnapshotResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return { ok: false, error: "invalid response" };
+    }
+    return {
+      ok: true,
+      headSha: parsed.data.head.sha,
+      state: parsed.data.state,
+      draft: parsed.data.draft,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }

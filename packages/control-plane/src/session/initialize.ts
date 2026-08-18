@@ -15,6 +15,19 @@ function hasBranchContext(value: string | null | undefined): boolean {
 }
 
 /**
+ * Thrown when a GitHub-review session-create fence loses the race: a newer
+ * claim already moved `github_review_state.latest_generation` past the
+ * generation this create was fenced on. The caller (routes/session-create.ts)
+ * maps this to a 409 without creating any D1 session row or DO.
+ */
+export class ReviewGenerationSupersededError extends Error {
+  constructor() {
+    super("review generation superseded");
+    this.name = "ReviewGenerationSupersededError";
+  }
+}
+
+/**
  * All data needed to initialize a new session (create or spawn).
  * Shared between the router and the DO init handler to prevent type drift.
  */
@@ -71,6 +84,16 @@ export interface SessionInitInput {
   automationRunId?: string | null;
   managedSkillsManifest?: SessionSkillManifestInput;
   managedSkillsSourceSessionId?: string;
+
+  // GitHub review-generation fence (design: review-supersede). Present only
+  // for github-bot-created review sessions; routes/session-create.ts rejects
+  // it from any other caller.
+  githubReview?: {
+    repoId: number;
+    prNumber: number;
+    generation: number;
+    headSha: string;
+  };
 }
 
 /**
@@ -129,7 +152,40 @@ export async function initializeSession(
         ]
       : [];
 
-  // Step 1: D1 index (must succeed before DO init starts sandbox warming)
+  // Step 1: GitHub review-generation fence. Runs before the D1 session row
+  // and DO exist at all — a stale generation here means a newer review
+  // already claimed this PR, so this create must leave no trace. Run as its
+  // own statement rather than batched with the session insert below (D1
+  // batch would work, but sessionStore.create() already owns its own
+  // multi-statement batch and threading a foreign statement through it would
+  // obscure that boundary for one call site); on a later init failure the
+  // orphaned review row is swept by the next claim's sweep (404 rule).
+  if (input.githubReview) {
+    const { repoId, prNumber, generation, headSha } = input.githubReview;
+    const fenceResult = await ctx.db
+      .prepare(
+        `INSERT INTO github_review_sessions (repo_id, pr_number, generation, session_id, head_sha, created_at)
+         SELECT ?, ?, ?, ?, ?, ? FROM github_review_state
+         WHERE repo_id = ? AND pr_number = ? AND latest_generation = ?`
+      )
+      .bind(
+        repoId,
+        prNumber,
+        generation,
+        input.sessionId,
+        headSha,
+        now,
+        repoId,
+        prNumber,
+        generation
+      )
+      .run();
+    if ((fenceResult.meta?.changes ?? 0) === 0) {
+      throw new ReviewGenerationSupersededError();
+    }
+  }
+
+  // Step 2: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
   await sessionStore.create({
     id: input.sessionId,
@@ -155,7 +211,7 @@ export async function initializeSession(
     skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
   });
 
-  // Step 2: DO init
+  // Step 3: DO init
   const doId = env.SESSION.idFromName(input.sessionId);
   const stub = env.SESSION.get(doId);
 
@@ -216,6 +272,61 @@ export async function initializeSession(
       trace_id: ctx.trace_id,
     });
     throw new Error(`Failed to initialize session DO: ${initResponse.status}`);
+  }
+
+  // Step 4: re-verify the review generation now that the DO exists. Between
+  // the fence insert (Step 1) and DO init (Step 3), a newer generation's
+  // sweep may have hit this session's not-yet-initialized DO, received a
+  // 404, and deleted our fence row as an orphan — leaving this session live
+  // but invisible to every future sweep. Re-checking after init closes that
+  // window: either the sweep arrived post-init (its cancel landed on a live
+  // DO), or we observe the newer generation here and tear ourselves down.
+  if (input.githubReview) {
+    const { repoId, prNumber, generation } = input.githubReview;
+    const state = await ctx.db
+      .prepare(
+        "SELECT latest_generation FROM github_review_state WHERE repo_id = ? AND pr_number = ?"
+      )
+      .bind(repoId, prNumber)
+      .first<{ latest_generation: number }>();
+    if (!state || state.latest_generation !== generation) {
+      // Delete our fence row only after a confirmed-terminal cancel
+      // (2xx / 409 already-terminal). On any other outcome retain the row —
+      // it is the only pointer a future sweep has to this session. If the
+      // newer generation's sweep already 404-deleted the row AND this cancel
+      // fails, the session leaks until its sandbox timeout: log it loudly.
+      let cancelConfirmed = false;
+      try {
+        const cancelResponse = await stub.fetch(
+          new Request(buildSessionInternalUrl(SessionInternalPaths.cancel), {
+            method: "POST",
+            headers,
+          })
+        );
+        cancelConfirmed = cancelResponse.ok || cancelResponse.status === 409;
+      } catch {
+        cancelConfirmed = false;
+      }
+      if (cancelConfirmed) {
+        await ctx.db
+          .prepare(
+            "DELETE FROM github_review_sessions WHERE repo_id = ? AND pr_number = ? AND generation = ?"
+          )
+          .bind(repoId, prNumber, generation)
+          .run();
+      } else {
+        logger.error("Superseded review session teardown failed; possible leak", {
+          event: "review_supersede.leak",
+          session_id: input.sessionId,
+          repo_id: repoId,
+          pr_number: prNumber,
+          generation,
+          trace_id: ctx.trace_id,
+        });
+      }
+      await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
+      throw new ReviewGenerationSupersededError();
+    }
   }
 
   return { sessionId: input.sessionId, status: "created" };
