@@ -27,7 +27,6 @@ import {
   handleIssueComment,
   handleReviewComment,
   isReviewRequestedForBot,
-  type BackgroundTaskScheduler,
   type HandlerResult,
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
@@ -100,9 +99,8 @@ app.post("/webhooks/github", async (c) => {
     action,
   });
 
-  const scheduleBackgroundTask: BackgroundTaskScheduler = (task) => c.executionCtx.waitUntil(task);
-  scheduleBackgroundTask(
-    handleWebhook(c.env, log, event, payload, traceId, deliveryId, scheduleBackgroundTask)
+  c.executionCtx.waitUntil(
+    handleWebhook(c.env, log, event, payload, traceId, deliveryId)
       .then(async () => {
         if (!dedupeKey) return;
 
@@ -148,8 +146,7 @@ async function handleWebhook(
   event: string | undefined,
   payload: unknown,
   traceId: string,
-  deliveryId: string | undefined,
-  scheduleBackgroundTask: BackgroundTaskScheduler
+  deliveryId: string | undefined
 ): Promise<void> {
   const parsed = webhookSummaryPayloadSchema.safeParse(payload);
   const actionResult = webhookActionPayloadSchema.safeParse(payload);
@@ -174,7 +171,7 @@ async function handleWebhook(
   let result: HandlerResult;
 
   try {
-    result = await dispatchHandler(env, log, event, p, payload, traceId, scheduleBackgroundTask);
+    result = await dispatchHandler(env, log, event, p, payload, traceId);
   } catch (err) {
     log.info("webhook.handled", {
       ...wideEventBase,
@@ -236,15 +233,14 @@ function dispatchHandler(
   event: string | undefined,
   p: WebhookSummaryPayload,
   payload: unknown,
-  traceId: string,
-  scheduleBackgroundTask: BackgroundTaskScheduler
+  traceId: string
 ): Promise<HandlerResult> {
   switch (event) {
     case "pull_request":
       if (p.action === "opened") {
         const parsed = pullRequestOpenedPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed pull_request opened payload");
-        return handlePullRequestOpened(env, log, parsed.data, traceId, scheduleBackgroundTask);
+        return handlePullRequestOpened(env, log, parsed.data, traceId);
       }
       if (p.action === "review_requested") {
         if (!isReviewRequestedForBot(payload, env.GITHUB_BOT_USERNAME)) {
@@ -252,7 +248,7 @@ function dispatchHandler(
         }
         const parsed = reviewRequestedPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed pull_request review_requested payload");
-        return handleReviewRequested(env, log, parsed.data, traceId, scheduleBackgroundTask);
+        return handleReviewRequested(env, log, parsed.data, traceId);
       }
       return Promise.resolve({
         outcome: "skipped",
@@ -262,7 +258,7 @@ function dispatchHandler(
       if (p.action === "created") {
         const parsed = issueCommentPayloadSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Malformed issue_comment created payload");
-        return handleIssueComment(env, log, parsed.data, traceId, scheduleBackgroundTask);
+        return handleIssueComment(env, log, parsed.data, traceId);
       }
       return Promise.resolve({
         outcome: "skipped",
@@ -273,7 +269,7 @@ function dispatchHandler(
         const parsed = reviewCommentPayloadSchema.safeParse(payload);
         if (!parsed.success)
           throw new Error("Malformed pull_request_review_comment created payload");
-        return handleReviewComment(env, log, parsed.data, traceId, scheduleBackgroundTask);
+        return handleReviewComment(env, log, parsed.data, traceId);
       }
       return Promise.resolve({
         outcome: "skipped",

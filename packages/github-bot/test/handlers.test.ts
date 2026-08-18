@@ -712,13 +712,28 @@ describe("error handling", () => {
   it("throws when session creation fails", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
+    let finishReaction!: (ok: boolean) => void;
+    vi.mocked(postReaction).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishReaction = resolve;
+      })
+    );
     getControlPlaneFetch(env).mockResolvedValue(
       new Response("Internal Server Error", { status: 500 })
     );
 
-    await expect(
-      handleReviewRequested(env, log, reviewRequestedPayload, "trace-err")
-    ).rejects.toThrow("Session creation failed: 500");
+    const handlerPromise = handleReviewRequested(env, log, reviewRequestedPayload, "trace-err");
+    let handlerSettled = false;
+    void handlerPromise
+      .finally(() => {
+        handlerSettled = true;
+      })
+      .catch(() => {});
+    await vi.waitFor(() => expect(getControlPlaneFetch(env)).toHaveBeenCalled());
+    expect(handlerSettled).toBe(false);
+
+    finishReaction(true);
+    await expect(handlerPromise).rejects.toThrow("Session creation failed: 500");
   });
 
   it("proceeds with session even if reaction fails", async () => {
@@ -726,15 +741,10 @@ describe("error handling", () => {
     const log = createMockLogger();
     vi.mocked(postReaction).mockResolvedValue(false);
 
-    const backgroundTasks: Promise<unknown>[] = [];
-    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-reaction", (task) =>
-      backgroundTasks.push(task)
-    );
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-reaction");
 
     // Session should still be created despite reaction failure
     expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(3);
-    expect(backgroundTasks).toHaveLength(1);
-    await backgroundTasks[0];
     expect(log.warn).toHaveBeenCalledWith("acknowledgment.failed", expect.any(Object));
   });
 });

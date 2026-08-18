@@ -8,6 +8,7 @@ vi.mock("../src/github-auth", () => ({
 }));
 
 import app from "../src/index";
+import { postReaction } from "../src/github-auth";
 
 /** Generate a valid GitHub webhook signature for a given secret and body. */
 async function sign(secret: string, body: string): Promise<string> {
@@ -130,7 +131,13 @@ describe("POST /webhooks/github", () => {
     await flushWaitUntil(ctx);
   });
 
-  it("registers reaction work with the Worker lifecycle", async () => {
+  it("keeps reaction work in the root Worker lifecycle task", async () => {
+    let finishReaction!: (ok: boolean) => void;
+    vi.mocked(postReaction).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishReaction = resolve;
+      })
+    );
     const body = JSON.stringify({
       action: "review_requested",
       pull_request: {
@@ -185,8 +192,23 @@ describe("POST /webhooks/github", () => {
     );
 
     expect(res.status).toBe(200);
-    await vi.waitFor(() => expect(ctx.waitUntil).toHaveBeenCalledTimes(2));
-    await Promise.all(ctx.waitUntil.mock.calls.map(([task]: [Promise<unknown>]) => task));
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    const rootTask = ctx.waitUntil.mock.calls[0][0] as Promise<void>;
+    let rootSettled = false;
+    void rootTask.finally(() => {
+      rootSettled = true;
+    });
+    await vi.waitFor(() =>
+      expect(controlPlaneFetch).toHaveBeenCalledWith(
+        "https://internal/sessions/session-123/prompt",
+        expect.any(Object)
+      )
+    );
+    expect(rootSettled).toBe(false);
+
+    finishReaction(true);
+    await rootTask;
+    expect(rootSettled).toBe(true);
   });
 
   it("deduplicates repeated deliveries by X-GitHub-Delivery", async () => {
