@@ -10,7 +10,7 @@ import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/
 import type { BackgroundTasks } from "./platform-ports";
 
 export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTasks = {
-  spawn: () => {},
+  submit: () => {},
 };
 
 /** Per-service secrets for unit-test env fixtures, mirrored by signedServiceRequest. */

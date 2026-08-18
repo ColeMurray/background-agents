@@ -696,7 +696,7 @@ export class SessionDO extends DurableObject<Env> {
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
         scheduleWarmSandbox: () =>
-          this.backgroundTasks.spawn(this.warmSandbox(), { name: "sandbox.warm" }),
+          this.backgroundTasks.submit(this.warmSandbox(), { name: "sandbox.warm" }),
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
@@ -758,7 +758,7 @@ export class SessionDO extends DurableObject<Env> {
 
   /** Fire a background read-through refresh. */
   private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
-    this.backgroundTasks.spawn(
+    this.backgroundTasks.submit(
       refreshSessionPullRequests(
         this.sessionCoreRepository,
         this.artifactRepository,
@@ -1084,7 +1084,7 @@ export class SessionDO extends DurableObject<Env> {
     );
     this.diffsHandler = new SessionDiffsHandler(this.diffService);
     if (rehydrateAlarm) {
-      this.backgroundTasks.spawn(this.alarmScheduler.rehydrate(), {
+      this.backgroundTasks.submit(this.alarmScheduler.rehydrate(), {
         name: "alarm.rehydrate",
       });
     }
@@ -1202,13 +1202,13 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.backgroundTasks.spawn(this.processMessageQueue(), {
+        this.backgroundTasks.submit(this.processMessageQueue(), {
           name: "message_queue.process",
         });
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);
-        this.backgroundTasks.spawn(this.wsManager.enforceAuthTimeout(server, wsId), {
+        this.backgroundTasks.submit(this.wsManager.enforceAuthTimeout(server, wsId), {
           name: "websocket.enforce_auth_timeout",
           context: { ws_id: wsId },
         });
@@ -1537,7 +1537,7 @@ export class SessionDO extends DurableObject<Env> {
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     if (!this.db) return;
     const sessionStore = new SessionIndexStore(this.db);
-    this.backgroundTasks.spawn(sessionStore.updateTitleIfNewer(sessionId, title, updatedAt), {
+    this.backgroundTasks.submit(sessionStore.updateTitleIfNewer(sessionId, title, updatedAt), {
       name: "session_index.update_title",
       context: { session_id: sessionId, updated_at: updatedAt },
     });

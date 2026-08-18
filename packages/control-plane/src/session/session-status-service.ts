@@ -181,7 +181,7 @@ export class SessionStatusService {
     const parentDoId = this.parentSessions.idFromName(parentId);
     const parentStub = this.parentSessions.get(parentDoId);
 
-    this.backgroundTasks.spawn(
+    this.backgroundTasks.submit(
       parentStub.fetch(
         new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
           method: "POST",
@@ -256,7 +256,7 @@ export class SessionStatusService {
     const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
-    this.backgroundTasks.spawn(
+    this.backgroundTasks.submit(
       this.sessionIndex.updateMetrics(sessionId, {
         totalCost: session.total_cost ?? 0,
         activeDurationMs,

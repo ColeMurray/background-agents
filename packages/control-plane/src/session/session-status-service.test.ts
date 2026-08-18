@@ -86,7 +86,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   const waitUntil = vi.fn((task: Promise<unknown>) =>
     task.catch((error) => log.error("background_task.failed", { error }))
   );
-  const backgroundTasks = { spawn: waitUntil };
+  const backgroundTasks = { submit: waitUntil };
 
   const service = new SessionStatusService(
     backgroundTasks,

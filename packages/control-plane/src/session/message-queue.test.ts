@@ -196,7 +196,7 @@ function buildQueue() {
   const waitUntil = vi.fn((task: Promise<unknown>) =>
     task.catch((error) => log.error("background_task.failed", { error }))
   );
-  const backgroundTasks = { spawn: waitUntil };
+  const backgroundTasks = { submit: waitUntil };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});

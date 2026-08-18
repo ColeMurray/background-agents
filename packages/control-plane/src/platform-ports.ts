@@ -4,7 +4,7 @@ export type { FetchClient } from "@open-inspect/shared/service-auth";
 
 /** Capability consumed by application services that defer background work. */
 export interface BackgroundTasks {
-  spawn(
+  submit(
     task: Promise<unknown>,
     metadata: { name: string; context?: Record<string, unknown> }
   ): void;

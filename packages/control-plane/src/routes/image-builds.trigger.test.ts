@@ -132,7 +132,7 @@ function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
     db: {} as SqlDatabase,
     metrics: createRequestMetrics(),
     executionCtx: {
-      spawn: (task: Promise<unknown>) => {
+      submit: (task: Promise<unknown>) => {
         waitUntilTasks?.push(task);
       },
     },

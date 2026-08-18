@@ -126,7 +126,7 @@ describe("repository list route", () => {
       match,
       {
         ...ctx,
-        executionCtx: { spawn: waitUntil },
+        executionCtx: { submit: waitUntil },
       }
     );
 
