@@ -113,12 +113,29 @@ describe("SandboxRepository", () => {
   });
 
   describe("updateSandboxSnapshotImageId", () => {
-    it("updates snapshot image ID for specific sandbox", () => {
-      repository.updateSandboxSnapshotImageId("sb-1", "img-123");
+    it("stamps the snapshot with the runtime that produced it", () => {
+      repository.updateSandboxSnapshotImageId("sb-1", "img-123", "v59-runtime");
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET snapshot_image_id");
-      expect(mock.calls[0].params).toEqual(["img-123", "sb-1"]);
+      expect(mock.calls[0].query).toContain("snapshot_runtime_version");
+      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "sb-1"]);
+    });
+
+    it("records a null runtime when the sandbox never reported one", () => {
+      repository.updateSandboxSnapshotImageId("sb-1", "img-123", null);
+
+      expect(mock.calls[0].params).toEqual(["img-123", null, "sb-1"]);
+    });
+  });
+
+  describe("updateSandboxRuntimeVersion", () => {
+    it("records the running sandbox's runtime version", () => {
+      repository.updateSandboxRuntimeVersion("v59-runtime");
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET runtime_version");
+      expect(mock.calls[0].params).toEqual(["v59-runtime"]);
     });
   });
 

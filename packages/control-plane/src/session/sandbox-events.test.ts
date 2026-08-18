@@ -29,6 +29,7 @@ function createProcessor() {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
+    updateSandboxRuntimeVersion: vi.fn(),
     getProcessingMessage,
     addSessionCost: vi.fn(),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
@@ -212,6 +213,31 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
 
     expect(h.diffService.pinBaselines).toHaveBeenCalledWith(event);
+  });
+
+  it("records the reported runtime version on ready", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent({
+      type: "ready",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      runtimeVersion: "v59-opencode-1-18-18",
+    });
+
+    expect(h.repository.updateSandboxRuntimeVersion).toHaveBeenCalledWith("v59-opencode-1-18-18");
+  });
+
+  it("leaves the recorded runtime version alone when the sandbox reports none", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent({
+      type: "ready",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+    });
+
+    expect(h.repository.updateSandboxRuntimeVersion).not.toHaveBeenCalled();
   });
 
   it("persists token event and broadcasts it", async () => {

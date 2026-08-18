@@ -9,6 +9,7 @@ export interface SandboxCircuitBreakerState {
   created_at: number;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
+  snapshot_runtime_version: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
 }
@@ -52,7 +53,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, modal_object_id, snapshot_image_id, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<SandboxCircuitBreakerState>(result);
     return rows[0] ?? null;
@@ -119,8 +120,25 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxSnapshotImageId(sandboxId: string, imageId: string): void {
-    this.sql.exec(`UPDATE sandbox SET snapshot_image_id = ? WHERE id = ?`, imageId, sandboxId);
+  updateSandboxSnapshotImageId(
+    sandboxId: string,
+    imageId: string,
+    runtimeVersion: string | null
+  ): void {
+    this.sql.exec(
+      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ? WHERE id = ?`,
+      imageId,
+      runtimeVersion,
+      sandboxId
+    );
+  }
+
+  /** Record the SANDBOX_VERSION the running sandbox reported when it came up. */
+  updateSandboxRuntimeVersion(runtimeVersion: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET runtime_version = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      runtimeVersion
+    );
   }
 
   updateSandboxHeartbeat(timestamp: number): void {

@@ -95,6 +95,9 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "ready") {
       this.diffService.pinBaselines(event);
+      if (event.runtimeVersion) {
+        this.sandboxRepository.updateSandboxRuntimeVersion(event.runtimeVersion);
+      }
     }
 
     const eventMessageId = "messageId" in event ? event.messageId : null;
