@@ -38,6 +38,11 @@ from sandbox_runtime.types import SandboxStatus, SessionConfig
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
+from .modal_call import (
+    MODAL_SANDBOX_CREATE_TIMEOUT_SECONDS,
+    MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+    await_modal_call,
+)
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
@@ -346,7 +351,11 @@ class SandboxManager:
         lines += [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
         content = "\n".join(lines) + "\n"
         try:
-            await sandbox.filesystem.write_text.aio(content, TUNNEL_ENV_FILE_PATH)
+            await await_modal_call(
+                sandbox.filesystem.write_text.aio(content, TUNNEL_ENV_FILE_PATH),
+                operation="tunnel metadata write",
+                timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+            )
             log.info(
                 "tunnel.urls_written",
                 sandbox_id=sandbox_id,
@@ -466,11 +475,15 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
-        sandbox = await modal.Sandbox.create.aio(
-            "python",
-            "-m",
-            "sandbox_runtime.entrypoint",
-            **create_kwargs,
+        sandbox = await await_modal_call(
+            modal.Sandbox.create.aio(
+                "python",
+                "-m",
+                "sandbox_runtime.entrypoint",
+                **create_kwargs,
+            ),
+            operation="sandbox creation",
+            timeout_seconds=MODAL_SANDBOX_CREATE_TIMEOUT_SECONDS,
         )
         modal_object_id = sandbox.object_id
         (
@@ -608,7 +621,11 @@ class SandboxManager:
             SandboxHandle if found, None otherwise
         """
         try:
-            modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+            modal_sandbox = await await_modal_call(
+                modal.Sandbox.from_id.aio(sandbox_id),
+                operation="sandbox lookup",
+                timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+            )
             return SandboxHandle(
                 sandbox_id=sandbox_id,
                 modal_sandbox=modal_sandbox,

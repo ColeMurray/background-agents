@@ -24,6 +24,12 @@ from sandbox_runtime.repo_image_callback import (
 from ..app import app
 from ..images.base import base_image
 from .manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from .modal_call import (
+    MODAL_SANDBOX_CREATE_TIMEOUT_SECONDS,
+    MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+    MODAL_SANDBOX_TERMINATE_TIMEOUT_SECONDS,
+    await_modal_call,
+)
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("build_session")
@@ -111,15 +117,19 @@ class ModalBuildSessionService:
             LAUNCH_PROTOCOL_TAG: MODAL_IMAGE_BUILD_START_PROTOCOL,
         }
 
-        sandbox = await modal.Sandbox.create.aio(
-            *command,
-            image=base_image,
-            app=app,
-            secrets=[],
-            timeout=timeout_seconds,
-            workdir="/workspace",
-            env=cast("dict[str, str | None]", env_vars),
-            tags=tags,
+        sandbox = await await_modal_call(
+            modal.Sandbox.create.aio(
+                *command,
+                image=base_image,
+                app=app,
+                secrets=[],
+                timeout=timeout_seconds,
+                workdir="/workspace",
+                env=cast("dict[str, str | None]", env_vars),
+                tags=tags,
+            ),
+            operation="build sandbox creation",
+            timeout_seconds=MODAL_SANDBOX_CREATE_TIMEOUT_SECONDS,
         )
         log.info(
             "sandbox.create_build",
@@ -144,7 +154,11 @@ class ModalBuildSessionService:
         if launch_protocol != MODAL_IMAGE_BUILD_START_PROTOCOL:
             raise ValueError(f"unsupported image-build launch protocol: {launch_protocol}")
         sandbox.stdin.write(callback_token + "\n")
-        await sandbox.stdin.drain.aio()
+        await await_modal_call(
+            sandbox.stdin.drain.aio(),
+            operation="build sandbox stdin drain",
+            timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+        )
         log.info(
             "sandbox.start_build",
             build_id=build_id,
@@ -162,7 +176,11 @@ class ModalBuildSessionService:
         try:
             sandbox, _tags = await self._resolve(build_id, provider_session_id)
             termination_start = time.time()
-            exit_code = await sandbox.terminate.aio(wait=True)
+            exit_code = await await_modal_call(
+                sandbox.terminate.aio(wait=True),
+                operation="build sandbox termination",
+                timeout_seconds=MODAL_SANDBOX_TERMINATE_TIMEOUT_SECONDS,
+            )
         except BuildSessionNotFoundError:
             log.info(
                 "sandbox.terminate_build_not_found",
@@ -196,8 +214,16 @@ class ModalBuildSessionService:
         build_id: str, provider_session_id: str
     ) -> tuple[modal.Sandbox, dict[str, str]]:
         try:
-            sandbox = await modal.Sandbox.from_id.aio(provider_session_id)
-            tags = await sandbox.get_tags.aio()
+            sandbox = await await_modal_call(
+                modal.Sandbox.from_id.aio(provider_session_id),
+                operation="build sandbox lookup",
+                timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+            )
+            tags = await await_modal_call(
+                sandbox.get_tags.aio(),
+                operation="build sandbox tag lookup",
+                timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+            )
         except modal.exception.NotFoundError as e:
             raise BuildSessionNotFoundError("build session not found") from e
         if (
