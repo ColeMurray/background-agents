@@ -345,6 +345,17 @@ describe("IntegrationSettingsStore", () => {
         })
       ).resolves.not.toThrow();
     });
+
+    it("rejects malformed stored global settings", async () => {
+      (db as unknown as { globalRows: Map<string, GlobalRow> }).globalRows.set("github", {
+        integration_id: "github",
+        settings: JSON.stringify({ enabledRepos: [42] }),
+        created_at: 1,
+        updated_at: 1,
+      });
+
+      await expect(store.getGlobal("github")).rejects.toThrow(IntegrationSettingsValidationError);
+    });
   });
 
   describe("per-repo CRUD", () => {
@@ -463,6 +474,20 @@ describe("IntegrationSettingsStore", () => {
           commentActionInstructions: true as unknown as string,
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects malformed stored repo settings", async () => {
+      (db as unknown as { repoRows: Map<string, RepoRow> }).repoRows.set("github:acme/widgets", {
+        integration_id: "github",
+        repo: "acme/widgets",
+        settings: JSON.stringify({ autoReviewOnOpen: "false" }),
+        created_at: 1,
+        updated_at: 1,
+      });
+
+      await expect(store.getRepoSettings("github", "acme/widgets")).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
     });
   });
 
@@ -670,6 +695,23 @@ describe("IntegrationSettingsStore", () => {
           tunnelPorts: [70000],
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects malformed stored environment settings", async () => {
+      (db as unknown as { environmentRows: Map<string, EnvironmentRow> }).environmentRows.set(
+        "sandbox:env_1",
+        {
+          integration_id: "sandbox",
+          environment_id: "env_1",
+          settings: JSON.stringify({ buildTimeoutSeconds: "3600" }),
+          created_at: 1,
+          updated_at: 1,
+        }
+      );
+
+      await expect(store.getEnvironmentSettings("sandbox", "env_1")).rejects.toThrow(
+        IntegrationSettingsValidationError
+      );
     });
 
     it("layers environment overrides on top of repo overrides and global defaults", async () => {
