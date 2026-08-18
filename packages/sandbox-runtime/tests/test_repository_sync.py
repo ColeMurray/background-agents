@@ -10,6 +10,8 @@ from sandbox_runtime.repository_sync import (
     DEFAULT_GIT_CLONE_TIMEOUT_SECONDS,
     DEFAULT_GIT_FETCH_TIMEOUT_SECONDS,
     RepositorySynchronizer,
+    RepositorySyncOutcome,
+    RepositorySyncStatus,
     RepositorySyncTimeout,
 )
 from sandbox_runtime.runtime_config import BootMode
@@ -110,6 +112,10 @@ async def test_multi_repository_sync_identifies_timed_out_member(tmp_path: Path)
 
     result = await synchronizer.sync(repositories, BootMode.FRESH)
 
+    assert result.outcomes == (
+        RepositorySyncOutcome(repositories[0], RepositorySyncStatus.SUCCEEDED),
+        RepositorySyncOutcome(repositories[1], RepositorySyncStatus.TIMED_OUT),
+    )
     assert result.failures == (repositories[1],)
     assert result.timed_out == (repositories[1],)
     assert synchronizer._sync_repo.await_count == 2

@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -25,11 +26,46 @@ class RepositorySyncTimeout(TimeoutError):
     pass
 
 
+class RepositorySyncStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+
+
+@dataclass(frozen=True)
+class RepositorySyncOutcome:
+    repository: RepoEntry
+    status: RepositorySyncStatus
+
+
 @dataclass(frozen=True)
 class RepositorySyncResult:
     repositories: tuple[RepoEntry, ...]
-    failures: tuple[RepoEntry, ...]
-    timed_out: tuple[RepoEntry, ...] = ()
+    outcomes: tuple[RepositorySyncOutcome, ...]
+
+    @property
+    def failures(self) -> tuple[RepoEntry, ...]:
+        return tuple(
+            outcome.repository
+            for outcome in self.outcomes
+            if outcome.status is not RepositorySyncStatus.SUCCEEDED
+        )
+
+    @property
+    def non_timeout_failures(self) -> tuple[RepoEntry, ...]:
+        return tuple(
+            outcome.repository
+            for outcome in self.outcomes
+            if outcome.status is RepositorySyncStatus.FAILED
+        )
+
+    @property
+    def timed_out(self) -> tuple[RepoEntry, ...]:
+        return tuple(
+            outcome.repository
+            for outcome in self.outcomes
+            if outcome.status is RepositorySyncStatus.TIMED_OUT
+        )
 
 
 class RepositorySynchronizer:
@@ -306,11 +342,12 @@ class RepositorySynchronizer:
             return False
         return await self._update_existing_repo(repo, boot_mode)
 
-    async def _sync_repo_result(self, repo: RepoEntry, boot_mode: BootMode) -> tuple[bool, bool]:
+    async def _sync_repo_status(self, repo: RepoEntry, boot_mode: BootMode) -> RepositorySyncStatus:
         try:
-            return await self._sync_repo(repo, boot_mode), False
+            succeeded = await self._sync_repo(repo, boot_mode)
         except RepositorySyncTimeout:
-            return False, True
+            return RepositorySyncStatus.TIMED_OUT
+        return RepositorySyncStatus.SUCCEEDED if succeeded else RepositorySyncStatus.FAILED
 
     async def sync(
         self, repositories: list[RepoEntry], boot_mode: BootMode
@@ -318,22 +355,16 @@ class RepositorySynchronizer:
         if not repositories:
             self.log.info("git.skip_clone", reason="no_repo_configured")
             return RepositorySyncResult((), ())
-        results = await asyncio.gather(
-            *(self._sync_repo_result(repo, boot_mode) for repo in repositories)
+        statuses = await asyncio.gather(
+            *(self._sync_repo_status(repo, boot_mode) for repo in repositories)
         )
-        failures = tuple(
-            repo
-            for repo, (succeeded, _timed_out) in zip(repositories, results, strict=True)
-            if not succeeded
-        )
-        timed_out = tuple(
-            repo
-            for repo, (_succeeded, did_time_out) in zip(repositories, results, strict=True)
-            if did_time_out
+        outcomes = tuple(
+            RepositorySyncOutcome(repo, status)
+            for repo, status in zip(repositories, statuses, strict=True)
         )
         resolved = await resolve_session_diff_baselines(
             repositories,
             discover_missing=boot_mode is not BootMode.SNAPSHOT_RESTORE,
             get_head_sha=self._get_head_sha,
         )
-        return RepositorySyncResult(tuple(resolved), failures, timed_out)
+        return RepositorySyncResult(tuple(resolved), outcomes)

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from .constants import REPO_MANIFEST_FILE_PATH
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
+from .repository_sync import RepositorySyncStatus
 from .runtime_config import BootMode, RepositoryConfig
 
 if TYPE_CHECKING:
@@ -164,16 +165,18 @@ class RepositoryBoot:
                         f"{repo.owner}/{repo.name}" for repo in sync_result.timed_out
                     )
                     messages.append(f"git sync timed out for {timed_out_names}")
-                failed = tuple(
-                    repo for repo in sync_result.failures if repo not in sync_result.timed_out
-                )
-                if failed:
-                    failed_names = ", ".join(f"{repo.owner}/{repo.name}" for repo in failed)
+                if sync_result.non_timeout_failures:
+                    failed_names = ", ".join(
+                        f"{repo.owner}/{repo.name}" for repo in sync_result.non_timeout_failures
+                    )
                     messages.append(f"git sync failed for {failed_names}")
                 raise RuntimeError("; ".join(messages))
-            if boot_mode in (BootMode.SNAPSHOT_RESTORE, BootMode.REPO_IMAGE):
-                for repo in sync_result.failures:
-                    if repo in sync_result.timed_out:
+            else:
+                for outcome in sync_result.outcomes:
+                    repo = outcome.repository
+                    if outcome.status is RepositorySyncStatus.SUCCEEDED:
+                        continue
+                    if outcome.status is RepositorySyncStatus.TIMED_OUT:
                         message = (
                             f"Timed out updating {repo.owner}/{repo.name} from origin; "
                             "the checkout may be stale."
