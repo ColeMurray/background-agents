@@ -158,16 +158,32 @@ class RepositoryBoot:
         git_sync_success = not sync_result.failures
         if sync_result.failures:
             if boot_mode in (BootMode.FRESH, BootMode.BUILD):
-                failed_names = ", ".join(
-                    f"{repo.owner}/{repo.name}" for repo in sync_result.failures
+                messages = []
+                if sync_result.timed_out:
+                    timed_out_names = ", ".join(
+                        f"{repo.owner}/{repo.name}" for repo in sync_result.timed_out
+                    )
+                    messages.append(f"git sync timed out for {timed_out_names}")
+                failed = tuple(
+                    repo for repo in sync_result.failures if repo not in sync_result.timed_out
                 )
-                raise RuntimeError(f"git sync failed for {failed_names}")
-            for repo in sync_result.failures:
-                self.warnings.record(
-                    "sync",
-                    f"Could not update {repo.owner}/{repo.name} from origin; the checkout may be stale.",
-                    repo,
-                )
+                if failed:
+                    failed_names = ", ".join(f"{repo.owner}/{repo.name}" for repo in failed)
+                    messages.append(f"git sync failed for {failed_names}")
+                raise RuntimeError("; ".join(messages))
+            if boot_mode in (BootMode.SNAPSHOT_RESTORE, BootMode.REPO_IMAGE):
+                for repo in sync_result.failures:
+                    if repo in sync_result.timed_out:
+                        message = (
+                            f"Timed out updating {repo.owner}/{repo.name} from origin; "
+                            "the checkout may be stale."
+                        )
+                    else:
+                        message = (
+                            f"Could not update {repo.owner}/{repo.name} from origin; "
+                            "the checkout may be stale."
+                        )
+                    self.warnings.record("sync", message, repo)
         self._write_repo_manifest()
 
         repository_shas: list[dict[str, str]] = []

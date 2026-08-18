@@ -17,20 +17,36 @@ if TYPE_CHECKING:
 GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
 GH_WRAPPER_INSTALL_PATH = Path("/usr/local/bin/gh")
 GH_WRAPPER_BODY = Path(__file__).with_name("gh-wrapper.sh").read_text()
+DEFAULT_GIT_CLONE_TIMEOUT_SECONDS = 300.0
+DEFAULT_GIT_FETCH_TIMEOUT_SECONDS = 120.0
+
+
+class RepositorySyncTimeout(TimeoutError):
+    pass
 
 
 @dataclass(frozen=True)
 class RepositorySyncResult:
     repositories: tuple[RepoEntry, ...]
     failures: tuple[RepoEntry, ...]
+    timed_out: tuple[RepoEntry, ...] = ()
 
 
 class RepositorySynchronizer:
     CLONE_DEPTH_COMMITS = 100
 
-    def __init__(self, vcs_host: str, log: Any) -> None:
+    def __init__(
+        self,
+        vcs_host: str,
+        log: Any,
+        *,
+        clone_timeout_seconds: float = DEFAULT_GIT_CLONE_TIMEOUT_SECONDS,
+        fetch_timeout_seconds: float = DEFAULT_GIT_FETCH_TIMEOUT_SECONDS,
+    ) -> None:
         self.vcs_host = vcs_host
         self.log = log
+        self.clone_timeout_seconds = clone_timeout_seconds
+        self.fetch_timeout_seconds = fetch_timeout_seconds
 
     def _build_repo_url(self, repo: RepoEntry) -> str:
         return f"https://{self.vcs_host}/{repo.owner}/{repo.name}.git"
@@ -62,7 +78,18 @@ class RepositorySynchronizer:
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
             )
-            _stdout, stderr = await self._communicate_owned_subprocess(result)
+            _stdout, stderr = await asyncio.wait_for(
+                self._communicate_owned_subprocess(result),
+                timeout=self.clone_timeout_seconds,
+            )
+        except TimeoutError as error:
+            self.log.error(
+                "git.clone_timeout",
+                repo_owner=repo.owner,
+                repo_name=repo.name,
+                timeout_seconds=self.clone_timeout_seconds,
+            )
+            raise RepositorySyncTimeout from error
         except Exception as error:
             self.log.error("git.clone_error", exc=error, repo_owner=repo.owner, repo_name=repo.name)
             return False
@@ -169,7 +196,19 @@ class RepositorySynchronizer:
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
-        _stdout, stderr = await self._communicate_owned_subprocess(process)
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                self._communicate_owned_subprocess(process),
+                timeout=self.fetch_timeout_seconds,
+            )
+        except TimeoutError as error:
+            self.log.error(
+                "git.fetch_timeout",
+                repo_owner=repo.owner,
+                repo_name=repo.name,
+                timeout_seconds=self.fetch_timeout_seconds,
+            )
+            raise RepositorySyncTimeout from error
         if process.returncode != 0:
             self.log.error(
                 "git.fetch_error",
@@ -220,6 +259,8 @@ class RepositorySynchronizer:
             if preserve_checkout:
                 return True
             return await self._checkout_branch(repo, repo.branch)
+        except RepositorySyncTimeout:
+            raise
         except Exception as error:
             if preserve_checkout:
                 self.log.warn(
@@ -265,19 +306,34 @@ class RepositorySynchronizer:
             return False
         return await self._update_existing_repo(repo, boot_mode)
 
+    async def _sync_repo_result(self, repo: RepoEntry, boot_mode: BootMode) -> tuple[bool, bool]:
+        try:
+            return await self._sync_repo(repo, boot_mode), False
+        except RepositorySyncTimeout:
+            return False, True
+
     async def sync(
         self, repositories: list[RepoEntry], boot_mode: BootMode
     ) -> RepositorySyncResult:
         if not repositories:
             self.log.info("git.skip_clone", reason="no_repo_configured")
             return RepositorySyncResult((), ())
-        results = await asyncio.gather(*(self._sync_repo(repo, boot_mode) for repo in repositories))
+        results = await asyncio.gather(
+            *(self._sync_repo_result(repo, boot_mode) for repo in repositories)
+        )
         failures = tuple(
-            repo for repo, succeeded in zip(repositories, results, strict=True) if not succeeded
+            repo
+            for repo, (succeeded, _timed_out) in zip(repositories, results, strict=True)
+            if not succeeded
+        )
+        timed_out = tuple(
+            repo
+            for repo, (_succeeded, did_time_out) in zip(repositories, results, strict=True)
+            if did_time_out
         )
         resolved = await resolve_session_diff_baselines(
             repositories,
             discover_missing=boot_mode is not BootMode.SNAPSHOT_RESTORE,
             get_head_sha=self._get_head_sha,
         )
-        return RepositorySyncResult(tuple(resolved), failures)
+        return RepositorySyncResult(tuple(resolved), failures, timed_out)
