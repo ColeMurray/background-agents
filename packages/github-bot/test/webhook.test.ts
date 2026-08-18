@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Env } from "../src/types";
+
+vi.mock("../src/github-auth", () => ({
+  generateInstallationToken: vi.fn().mockResolvedValue("installation-token"),
+  postReaction: vi.fn().mockResolvedValue(true),
+  checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
+}));
+
 import app from "../src/index";
 
 /** Generate a valid GitHub webhook signature for a given secret and body. */
@@ -121,6 +128,65 @@ describe("POST /webhooks/github", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(ctx.waitUntil).toHaveBeenCalledOnce();
     await flushWaitUntil(ctx);
+  });
+
+  it("registers reaction work with the Worker lifecycle", async () => {
+    const body = JSON.stringify({
+      action: "review_requested",
+      pull_request: {
+        number: 42,
+        title: "Bound GitHub requests",
+        body: null,
+        user: { login: "alice" },
+        head: { ref: "feature/timeouts", sha: "abc123" },
+        base: { ref: "main" },
+      },
+      requested_reviewer: { login: "test-bot[bot]" },
+      repository: { owner: { login: "test" }, name: "repo", private: false },
+      sender: {
+        login: "alice",
+        id: 1001,
+        avatar_url: "https://avatars.githubusercontent.com/u/1001",
+      },
+    });
+    const signature = await sign(SECRET, body);
+    const ctx = makeCtx();
+    const env = makeEnv();
+    const controlPlaneFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    controlPlaneFetch.mockImplementation(async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.includes("/integration-settings/github/resolved/")) {
+        return new Response(JSON.stringify({ config: null }));
+      }
+      if (requestUrl.endsWith("/metadata")) {
+        return new Response(JSON.stringify({ repo: "test/repo", metadata: null }));
+      }
+      if (requestUrl === "https://internal/sessions") {
+        return new Response(JSON.stringify({ sessionId: "session-123", status: "created" }));
+      }
+      if (requestUrl.endsWith("/prompt")) {
+        return new Response(JSON.stringify({ messageId: "message-123" }));
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "pull_request",
+          "X-GitHub-Delivery": "delivery-reaction",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(ctx.waitUntil).toHaveBeenCalledTimes(2));
+    await Promise.all(ctx.waitUntil.mock.calls.map(([task]: [Promise<unknown>]) => task));
   });
 
   it("deduplicates repeated deliveries by X-GitHub-Delivery", async () => {

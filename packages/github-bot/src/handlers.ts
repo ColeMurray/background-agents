@@ -23,6 +23,8 @@ export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
   | { outcome: "skipped"; skip_reason: string };
 
+export type BackgroundTaskScheduler = (task: Promise<unknown>) => void;
+
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
   if (!parsed.success) return false;
@@ -102,20 +104,22 @@ function stripMention(body: string, botUsername: string): string {
   return body.replace(new RegExp(`@${escapeRegExp(botUsername)}`, "gi"), "").trim();
 }
 
-function fireAndForgetReaction(
+function scheduleReaction(
   log: Logger,
   token: string,
   url: string,
   userAgent: string,
-  meta: Record<string, unknown>
+  meta: Record<string, unknown>,
+  scheduleBackgroundTask?: BackgroundTaskScheduler
 ): void {
-  postReaction(token, url, "eyes", userAgent).then(
+  const task = postReaction(token, url, "eyes", userAgent).then(
     (ok) => {
       if (ok) log.debug("acknowledgment.posted", meta);
       else log.warn("acknowledgment.failed", meta);
     },
     () => log.warn("acknowledgment.failed", meta)
   );
+  if (scheduleBackgroundTask) scheduleBackgroundTask(task);
 }
 
 type CallerGatingResult =
@@ -179,7 +183,8 @@ export async function handleReviewRequested(
   env: Env,
   log: Logger,
   payload: ReviewRequestedPayload,
-  traceId: string
+  traceId: string,
+  scheduleBackgroundTask?: BackgroundTaskScheduler
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, requested_reviewer, sender } = payload;
   const owner = repo.owner.login;
@@ -215,12 +220,13 @@ export async function handleReviewRequested(
   const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
-  fireAndForgetReaction(
+  scheduleReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
     resolveAppName(env),
-    meta
+    meta,
+    scheduleBackgroundTask
   );
 
   const target = await resolveSessionTarget(env, log, {
@@ -279,7 +285,8 @@ export async function handlePullRequestOpened(
   env: Env,
   log: Logger,
   payload: PullRequestOpenedPayload,
-  traceId: string
+  traceId: string,
+  scheduleBackgroundTask?: BackgroundTaskScheduler
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, sender } = payload;
   const owner = repo.owner.login;
@@ -317,12 +324,13 @@ export async function handlePullRequestOpened(
   const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
-  fireAndForgetReaction(
+  scheduleReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
     resolveAppName(env),
-    meta
+    meta,
+    scheduleBackgroundTask
   );
 
   const target = await resolveSessionTarget(env, log, {
@@ -382,7 +390,8 @@ export async function handleIssueComment(
   env: Env,
   log: Logger,
   payload: IssueCommentPayload,
-  traceId: string
+  traceId: string,
+  scheduleBackgroundTask?: BackgroundTaskScheduler
 ): Promise<HandlerResult> {
   const { issue, comment, repository: repo, sender } = payload;
   const owner = repo.owner.login;
@@ -431,12 +440,13 @@ export async function handleIssueComment(
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
-  fireAndForgetReaction(
+  scheduleReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/comments/${comment.id}/reactions`,
     resolveAppName(env),
-    meta
+    meta,
+    scheduleBackgroundTask
   );
 
   const target = await resolveSessionTarget(env, log, {
@@ -493,7 +503,8 @@ export async function handleReviewComment(
   env: Env,
   log: Logger,
   payload: ReviewCommentPayload,
-  traceId: string
+  traceId: string,
+  scheduleBackgroundTask?: BackgroundTaskScheduler
 ): Promise<HandlerResult> {
   const { pull_request: pr, comment, repository: repo, sender } = payload;
   const owner = repo.owner.login;
@@ -537,12 +548,13 @@ export async function handleReviewComment(
   const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
-  fireAndForgetReaction(
+  scheduleReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/pulls/comments/${comment.id}/reactions`,
     resolveAppName(env),
-    meta
+    meta,
+    scheduleBackgroundTask
   );
 
   const target = await resolveSessionTarget(env, log, {

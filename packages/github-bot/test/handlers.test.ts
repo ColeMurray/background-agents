@@ -726,10 +726,16 @@ describe("error handling", () => {
     const log = createMockLogger();
     vi.mocked(postReaction).mockResolvedValue(false);
 
-    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-reaction");
+    const backgroundTasks: Promise<unknown>[] = [];
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-reaction", (task) =>
+      backgroundTasks.push(task)
+    );
 
     // Session should still be created despite reaction failure
     expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(3);
+    expect(backgroundTasks).toHaveLength(1);
+    await backgroundTasks[0];
+    expect(log.warn).toHaveBeenCalledWith("acknowledgment.failed", expect.any(Object));
   });
 });
 
