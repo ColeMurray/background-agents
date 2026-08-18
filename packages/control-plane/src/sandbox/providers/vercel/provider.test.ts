@@ -142,6 +142,19 @@ function environmentBuildConfig() {
 }
 
 describe("VercelSandboxProvider", () => {
+  it("classifies request deadline failures as transient", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        throw new Error("Vercel Sandbox request timeout after 60000ms (createSandbox)");
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
+      errorType: "transient",
+    });
+  });
+
   it("reports Vercel capabilities", () => {
     const provider = new VercelSandboxProvider(createMockClient(), providerConfig);
 
