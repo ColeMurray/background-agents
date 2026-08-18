@@ -1,4 +1,5 @@
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type { ClientInfo } from "../types";
 import type {
   BrowserConnection,
   ConnectedParticipant,
@@ -8,11 +9,27 @@ import type {
 } from "./connections";
 import { projectConnectedParticipants, SandboxDeliveryUnavailableError } from "./connections";
 import type { SandboxCommand } from "./types";
-import type { DurableObjectSocketRegistry } from "./durable-object-socket-registry";
+import type { ConnectionClassification } from "./ports";
+
+export interface DurableObjectSessionConnectionSockets {
+  configureAutoPing(request: string, response: string): void;
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket };
+  forEachClientSocket(
+    mode: "all_clients" | "authenticated_only",
+    fn: (ws: WebSocket) => void
+  ): void;
+  classify(ws: WebSocket): ConnectionClassification;
+  setClient(ws: WebSocket, info: ClientInfo): void;
+  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
+  getSandboxSocket(): WebSocket | null;
+  send(ws: WebSocket, message: string | object): boolean;
+  detachSandboxSocket(code: number, reason: string): void;
+  getAuthenticatedClients(): IterableIterator<ClientInfo>;
+}
 
 /** Cloudflare Durable Object implementation of the session connection port. */
 export class DurableObjectSessionConnections implements SessionConnections {
-  constructor(private readonly sockets: DurableObjectSocketRegistry) {
+  constructor(private readonly sockets: DurableObjectSessionConnectionSockets) {
     this.sockets.configureAutoPing(
       JSON.stringify({ type: "ping" }),
       JSON.stringify({ type: "pong", timestamp: Date.now() })

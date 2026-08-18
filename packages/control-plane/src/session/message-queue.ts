@@ -26,7 +26,6 @@ import {
   type SessionAttachmentRepository,
 } from "./session-attachment-repository";
 import type { SessionMessenger } from "./messenger";
-import type { SocketRegistry } from "./socket-registry";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionStatusService } from "./session-status-service";
@@ -69,6 +68,11 @@ interface EnqueuePromptCoreData {
 interface EnqueuedPrompt {
   messageId: string;
   position: number | null;
+}
+
+interface MessageQueueSockets<Connection> {
+  getSandboxSocket(): Connection | null;
+  send(connection: Connection, message: string | object): boolean;
 }
 
 export class SessionNotPromptableError extends Error {
@@ -147,7 +151,7 @@ export class SessionMessageQueue<Connection = unknown> {
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
-    private readonly wsManager: SocketRegistry<Connection>,
+    private readonly wsManager: MessageQueueSockets<Connection>,
     private readonly messenger: SessionMessenger,
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,

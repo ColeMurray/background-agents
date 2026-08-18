@@ -9,7 +9,6 @@ import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } fro
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
-import type { SocketRegistry } from "./socket-registry";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
@@ -208,7 +207,7 @@ function buildQueue() {
     repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,
-    wsManager as unknown as SocketRegistry<WebSocket>,
+    wsManager,
     messenger,
     participantService as unknown as ParticipantService,
     callbackService as unknown as CallbackNotificationService,

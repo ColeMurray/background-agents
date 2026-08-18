@@ -13,13 +13,17 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
-import type { SocketRegistry } from "./socket-registry";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
 import type { BackgroundTasks } from "../platform-ports";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
 type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
+
+interface SandboxEventSockets<Connection> {
+  getSandboxSocket(): Connection | null;
+  send(connection: Connection, message: string | object): boolean;
+}
 
 /** How long a pending push waits for its terminal event before rejecting. */
 const PUSH_TIMEOUT_MS = 360_000;
@@ -48,7 +52,7 @@ export class SessionSandboxEventProcessor<Connection = unknown> {
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly callbackService: CallbackNotificationService,
-    private readonly wsManager: SocketRegistry<Connection>,
+    private readonly wsManager: SandboxEventSockets<Connection>,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
     private readonly applySessionTitleUpdate: (

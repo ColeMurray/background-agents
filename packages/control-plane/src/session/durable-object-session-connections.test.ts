@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { DurableObjectSessionConnections } from "./durable-object-session-connections";
-import type { DurableObjectSocketRegistry } from "./durable-object-socket-registry";
+import {
+  DurableObjectSessionConnections,
+  type DurableObjectSessionConnectionSockets,
+} from "./durable-object-session-connections";
 
 function harness() {
   const browser = { readyState: WebSocket.OPEN } as WebSocket;
@@ -14,7 +16,7 @@ function harness() {
     clientId: "client-1",
     ws: browser,
   };
-  const manager = {
+  const manager: DurableObjectSessionConnectionSockets = {
     classify: vi.fn((ws: WebSocket) =>
       ws === sandbox
         ? ({ kind: "sandbox" as const, sandboxId: "sb-1" } as const)
@@ -29,10 +31,9 @@ function harness() {
     send: vi.fn(() => true),
     detachSandboxSocket: vi.fn(),
     getAuthenticatedClients: vi.fn(() => [clientInfo].values()),
-    recoverClientMapping: vi.fn(() => null),
     configureAutoPing: vi.fn(),
     createUpgradeSockets: vi.fn(),
-  } as unknown as DurableObjectSocketRegistry;
+  };
   return {
     connections: new DurableObjectSessionConnections(manager),
     manager,

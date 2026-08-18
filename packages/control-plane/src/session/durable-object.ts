@@ -144,12 +144,7 @@ import { SessionServer } from "./server";
 import { SessionHttpDispatcher } from "./http/dispatcher";
 import { SessionMessageRouter, type SessionClientCommands } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
-import type {
-  Clock,
-  RoutedSocketRegistry,
-  SandboxDisconnectMonitor,
-  SessionBroadcaster,
-} from "./ports";
+import type { Clock, SocketRegistry, SandboxDisconnectMonitor, SessionBroadcaster } from "./ports";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -327,7 +322,7 @@ export class SessionDO extends DurableObject<Env> {
       nowMs: () => Date.now(),
       monotonicNowMs: () => performance.now(),
     };
-    const sockets: RoutedSocketRegistry<WebSocket, ClientInfo> = {
+    const sockets: SocketRegistry<WebSocket, ClientInfo> = {
       classify: (ws) => this.wsManager.classify(ws),
       send: (ws, message) => this.safeSend(ws, message),
       getClient: (ws) => this.getClientInfo(ws),

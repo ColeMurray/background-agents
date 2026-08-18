@@ -11,7 +11,6 @@ import type { ArtifactRepository } from "./artifact-repository";
 import type { EventRepository } from "./event-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SessionStatusService } from "./session-status-service";
-import type { SocketRegistry } from "./socket-registry";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -95,7 +94,7 @@ function createProcessor() {
     eventRepository,
     artifactRepository,
     callbackService as unknown as CallbackNotificationService,
-    wsManager as unknown as SocketRegistry<WebSocket>,
+    wsManager,
     messenger,
     diffService as unknown as SessionDiffService,
     applySessionTitleUpdate,

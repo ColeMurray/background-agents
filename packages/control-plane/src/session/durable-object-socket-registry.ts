@@ -9,7 +9,6 @@ import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
 import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
-import type { SocketRegistry } from "./socket-registry";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
@@ -23,7 +22,7 @@ export interface SocketRegistryConfig {
 // Implementation
 // ---------------------------------------------------------------------------
 
-export class DurableObjectSocketRegistry implements SocketRegistry<WebSocket> {
+export class DurableObjectSocketRegistry {
   private clients = new Map<WebSocket, ClientInfo>();
   private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
