@@ -192,15 +192,31 @@ function createManager() {
   const mockRepo = createMockRepository();
   const log = createMockLogger();
 
+  const createRecoveredClient = vi.fn((ws: WebSocket, mapping: WsClientMappingResult) =>
+    createClientInfo({
+      ws,
+      participantId: mapping.participant_id,
+      userId: mapping.user_id,
+      clientId: mapping.client_id,
+    })
+  );
   const manager = new DurableObjectSocketRegistry(
     fakeCtx.state,
     mockRepo.repo,
     mockRepo.repo as unknown as WsClientMappingRepository,
-    log,
+    () => log,
+    createRecoveredClient,
     TEST_CONFIG
   );
 
-  return { manager, sockets: fakeCtx.sockets, state: fakeCtx.state, mockRepo, log };
+  return {
+    manager,
+    sockets: fakeCtx.sockets,
+    state: fakeCtx.state,
+    mockRepo,
+    log,
+    createRecoveredClient,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -443,13 +459,13 @@ describe("DurableObjectSocketRegistry", () => {
     });
   });
 
-  describe("clearSandboxSocketIfMatch", () => {
+  describe("clearSandboxIfMatch", () => {
     it("clears and returns true when ws matches", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
-      const result = manager.clearSandboxSocketIfMatch(ws);
+      const result = manager.clearSandboxIfMatch(ws);
 
       expect(result).toBe(true);
       // Verify it was actually cleared
@@ -466,7 +482,7 @@ describe("DurableObjectSocketRegistry", () => {
       manager.acceptAndSetSandboxSocket(newWs, "sb-2");
 
       // Try to clear with old socket — should not affect new socket
-      const result = manager.clearSandboxSocketIfMatch(oldWs);
+      const result = manager.clearSandboxIfMatch(oldWs);
 
       expect(result).toBe(false);
       expect(manager.getSandboxSocket()).toBe(newWs);
@@ -478,7 +494,7 @@ describe("DurableObjectSocketRegistry", () => {
 
       // When sandboxWs is null (e.g., post-hibernation), the closing socket
       // is treated as active since there's no replacement to compare against.
-      expect(manager.clearSandboxSocketIfMatch(ws)).toBe(true);
+      expect(manager.clearSandboxIfMatch(ws)).toBe(true);
     });
   });
 
@@ -498,6 +514,37 @@ describe("DurableObjectSocketRegistry", () => {
       const ws = createFakeWebSocket();
 
       expect(manager.getClient(ws)).toBeNull();
+    });
+
+    it("reconstructs and caches client identity after hibernation", () => {
+      const { manager, sockets, mockRepo, createRecoveredClient } = createManager();
+      const ws = createFakeWebSocket();
+      const mapping: WsClientMappingResult = {
+        participant_id: "part-recovered",
+        client_id: "client-recovered",
+        user_id: "user-recovered",
+        scm_name: null,
+        auth_name: null,
+        scm_login: null,
+      };
+      sockets.set(ws, ["wsid:ws-recovered"]);
+      mockRepo.addMapping("ws-recovered", mapping);
+
+      const recovered = manager.getClient(ws);
+
+      expect(createRecoveredClient).toHaveBeenCalledWith(ws, mapping);
+      expect(recovered).toMatchObject({ participantId: "part-recovered" });
+      expect(manager.getClient(ws)).toBe(recovered);
+      expect(createRecoveredClient).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports whether an authenticated participant is connected", () => {
+      const { manager } = createManager();
+      const ws = createFakeWebSocket();
+      manager.setClient(ws, createClientInfo({ ws, participantId: "part-1" }));
+
+      expect(manager.hasParticipant("part-1")).toBe(true);
+      expect(manager.hasParticipant("part-2")).toBe(false);
     });
 
     it("removeClient returns and removes the client", () => {

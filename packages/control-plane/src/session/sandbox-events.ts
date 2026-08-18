@@ -15,15 +15,11 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
 import type { BackgroundTasks } from "../platform-ports";
+import { SandboxDeliveryUnavailableError } from "./connections";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
 type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
-
-interface SandboxEventSockets<Connection> {
-  getSandboxSocket(): Connection | null;
-  send(connection: Connection, message: string | object): boolean;
-}
 
 /** How long a pending push waits for its terminal event before rejecting. */
 const PUSH_TIMEOUT_MS = 360_000;
@@ -37,7 +33,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "push_error",
 ]);
 
-export class SessionSandboxEventProcessor<Connection = unknown> {
+export class SessionSandboxEventProcessor {
   private pendingPushResolvers = new Map<string, PushResolver>();
 
   constructor(
@@ -52,7 +48,6 @@ export class SessionSandboxEventProcessor<Connection = unknown> {
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly callbackService: CallbackNotificationService,
-    private readonly wsManager: SandboxEventSockets<Connection>,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
     private readonly applySessionTitleUpdate: (
@@ -302,13 +297,6 @@ export class SessionSandboxEventProcessor<Connection = unknown> {
   async pushBranchToRemote(
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    const sandboxWs = this.wsManager.getSandboxSocket();
-
-    if (!sandboxWs) {
-      this.log.info("No sandbox connected, assuming branch was pushed manually");
-      return { success: true };
-    }
-
     const resolverKey = this.pushResolverKey(
       pushSpec.repoOwner,
       pushSpec.repoName,
@@ -332,10 +320,21 @@ export class SessionSandboxEventProcessor<Connection = unknown> {
       repo_owner: pushSpec.repoOwner,
       repo_name: pushSpec.repoName,
     });
-    this.wsManager.send(sandboxWs, {
-      type: "push",
-      pushSpec,
-    });
+    try {
+      await this.messenger.sendToSandbox({ type: "push", pushSpec });
+    } catch (error) {
+      this.pendingPushResolvers.delete(resolverKey);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (error instanceof SandboxDeliveryUnavailableError && error.reason === "not_connected") {
+        this.log.info("No sandbox connected, assuming branch was pushed manually");
+        return { success: true };
+      }
+      this.log.error("Failed to send push command", {
+        branch_name: pushSpec.targetBranch,
+        error: error instanceof Error ? error : String(error),
+      });
+      return { success: false, error: `Failed to push branch: ${error}` };
+    }
 
     try {
       await pushPromise;
@@ -410,15 +409,23 @@ export class SessionSandboxEventProcessor<Connection = unknown> {
 
   private sendAck(ackId: string | undefined): void {
     if (!ackId) return;
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) {
-      this.wsManager.send(sandboxWs, { type: "ack", ackId });
-    } else {
-      this.log.debug("Cannot send ACK: no sandbox socket", { ack_id: ackId });
-    }
+    void this.messenger.sendToSandbox({ type: "ack", ackId }).catch((error) => {
+      if (error instanceof SandboxDeliveryUnavailableError && error.reason === "not_connected") {
+        this.log.debug("Cannot send ACK: no sandbox socket", { ack_id: ackId });
+        return;
+      }
+      this.log.warn("Failed to send sandbox event ACK", {
+        ack_id: ackId,
+        error: error instanceof Error ? error : String(error),
+      });
+    });
   }
 
-  private pushResolverKey(repoOwner: string, repoName: string, branchName: string): string {
-    return `${repoOwner.toLowerCase()}/${repoName.toLowerCase()}::${branchName.trim().toLowerCase()}`;
+  private pushResolverKey(
+    repoOwner: string | undefined,
+    repoName: string | undefined,
+    branchName: string
+  ): string {
+    return `${repoOwner?.toLowerCase() ?? ""}/${repoName?.toLowerCase() ?? ""}::${branchName.trim().toLowerCase()}`;
   }
 }

@@ -33,6 +33,8 @@ import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
+import { SandboxDeliveryUnavailableError } from "./connections";
+import type { ClientResponder } from "./ports";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -68,11 +70,6 @@ interface EnqueuePromptCoreData {
 interface EnqueuedPrompt {
   messageId: string;
   position: number | null;
-}
-
-interface MessageQueueSockets<Connection> {
-  getSandboxSocket(): Connection | null;
-  send(connection: Connection, message: string | object): boolean;
 }
 
 export class SessionNotPromptableError extends Error {
@@ -151,7 +148,7 @@ export class SessionMessageQueue<Connection = unknown> {
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
-    private readonly wsManager: MessageQueueSockets<Connection>,
+    private readonly clientResponder: ClientResponder<Connection>,
     private readonly messenger: SessionMessenger,
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
@@ -194,7 +191,7 @@ export class SessionMessageQueue<Connection = unknown> {
       });
     } catch (error) {
       if (error instanceof SessionAttachmentError) {
-        this.wsManager.send(ws, {
+        this.clientResponder.send(ws, {
           type: "error",
           code: "INVALID_ATTACHMENTS",
           message: error.message,
@@ -203,7 +200,7 @@ export class SessionMessageQueue<Connection = unknown> {
         return;
       }
       if (error instanceof SessionNotPromptableError) {
-        this.wsManager.send(ws, {
+        this.clientResponder.send(ws, {
           type: "error",
           code: "SESSION_NOT_PROMPTABLE",
           message: error.message,
@@ -212,7 +209,7 @@ export class SessionMessageQueue<Connection = unknown> {
         return;
       }
       if (error instanceof PromptQueueFullError) {
-        this.wsManager.send(ws, {
+        this.clientResponder.send(ws, {
           type: "error",
           code: "PROMPT_QUEUE_FULL",
           message: error.message,
@@ -221,7 +218,7 @@ export class SessionMessageQueue<Connection = unknown> {
         return;
       }
       if (error instanceof PromptRequestConflictError) {
-        this.wsManager.send(ws, {
+        this.clientResponder.send(ws, {
           type: "error",
           code: "PROMPT_REQUEST_CONFLICT",
           message: error.message,
@@ -244,12 +241,14 @@ export class SessionMessageQueue<Connection = unknown> {
       }
     }
 
-    this.wsManager.send(ws, {
-      type: "prompt_queued",
-      clientRequestId: data.clientRequestId,
-      messageId: enqueued.messageId,
-      position: enqueued.position,
-    });
+    if (data.clientRequestId) {
+      this.clientResponder.send(ws, {
+        type: "prompt_queued",
+        clientRequestId: data.clientRequestId,
+        messageId: enqueued.messageId,
+        position: enqueued.position,
+      });
+    }
 
     await this.processMessageQueue();
   }
@@ -259,7 +258,7 @@ export class SessionMessageQueue<Connection = unknown> {
     data: { messageId: string; clientRequestId: string }
   ): Promise<void> {
     if (!this.messageRepository.cancelPendingMessage(data.messageId)) {
-      this.wsManager.send(ws, {
+      this.clientResponder.send(ws, {
         type: "error",
         code: "PROMPT_NOT_CANCELLABLE",
         message: "This prompt is no longer pending and cannot be removed",
@@ -268,7 +267,7 @@ export class SessionMessageQueue<Connection = unknown> {
       return;
     }
 
-    this.wsManager.send(ws, {
+    this.clientResponder.send(ws, {
       type: "prompt_cancelled",
       clientRequestId: data.clientRequestId,
       messageId: data.messageId,
@@ -307,39 +306,6 @@ export class SessionMessageQueue<Connection = unknown> {
       return;
     }
     const now = Date.now();
-
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (!sandboxWs) {
-      this.log.info("prompt.dispatch", {
-        event: "prompt.dispatch",
-        message_id: message.id,
-        outcome: "deferred",
-        reason: "no_sandbox",
-      });
-      this.messenger.broadcast({ type: "sandbox_spawning" });
-      // Spawn in the background: a snapshot restore can take tens of seconds,
-      // and awaiting it here holds the prompt HTTP response open past bot
-      // callers' request timeouts. The message is already persisted as
-      // pending and dispatches when the sandbox WebSocket connects.
-      this.backgroundTasks.submit(
-        this.sandboxLifecycle.spawnSandbox().catch((error) => {
-          // Expected provider failures broadcast sandbox_error inside the
-          // lifecycle manager; this catch only sees throws from before those
-          // handlers. Surface them the same way so clients aren't left
-          // watching a silent "sandbox_spawning" forever.
-          this.messenger.broadcast({
-            type: "sandbox_error",
-            error: error instanceof Error ? error.message : "Failed to spawn sandbox",
-          });
-          throw error;
-        }),
-        {
-          name: "sandbox.spawn",
-          context: { message_id: message.id },
-        }
-      );
-      return;
-    }
 
     const author = this.participantRepository.getParticipantById(message.author_id);
     if (!author) {
@@ -389,12 +355,20 @@ export class SessionMessageQueue<Connection = unknown> {
       return;
     }
 
-    const sent = this.wsManager.send(sandboxWs, command);
-
-    if (!sent) {
+    let sent = false;
+    try {
+      await this.messenger.sendToSandbox(command);
+      sent = true;
+    } catch (error) {
       this.messageRepository.updateMessageToPending(message.id);
+      if (error instanceof SandboxDeliveryUnavailableError && error.reason === "not_connected") {
+        this.deferUntilSandboxConnects(message.id);
+        return;
+      }
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
-    } else {
+    }
+
+    if (sent) {
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
       this.broadcastPromptQueue();
@@ -453,9 +427,12 @@ export class SessionMessageQueue<Connection = unknown> {
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
 
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (stoppedMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
-      await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
+    if (stoppedMessageId) {
+      try {
+        await this.messenger.sendToSandbox({ type: "stop" });
+      } catch {
+        await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
+      }
     }
   }
 
@@ -491,8 +468,33 @@ export class SessionMessageQueue<Connection = unknown> {
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.broadcastPromptQueue();
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
+    void this.messenger.sendToSandbox({ type: "stop" }).catch(() => {
+      // Cancellation is synchronous and sandbox termination owns eventual cleanup.
+    });
+  }
+
+  private deferUntilSandboxConnects(messageId: string): void {
+    this.log.info("prompt.dispatch", {
+      event: "prompt.dispatch",
+      message_id: messageId,
+      outcome: "deferred",
+      reason: "no_sandbox",
+    });
+    this.messenger.broadcast({ type: "sandbox_spawning" });
+    // Keep the caller responsive while a snapshot restore runs in the background.
+    this.backgroundTasks.submit(
+      this.sandboxLifecycle.spawnSandbox().catch((error) => {
+        this.messenger.broadcast({
+          type: "sandbox_error",
+          error: error instanceof Error ? error.message : "Failed to spawn sandbox",
+        });
+        throw error;
+      }),
+      {
+        name: "sandbox.spawn",
+        context: { message_id: messageId },
+      }
+    );
   }
 
   /**

@@ -7,7 +7,7 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { ConnectionClassification } from "../session/ports";
+import type { ConnectionClassification, SocketRegistry } from "../session/ports";
 import type { SandboxRepository } from "../session/sandbox-repository";
 import type {
   WsClientMappingRepository,
@@ -22,7 +22,7 @@ export interface SocketRegistryConfig {
 // Implementation
 // ---------------------------------------------------------------------------
 
-export class DurableObjectSocketRegistry {
+export class DurableObjectSocketRegistry implements SocketRegistry<WebSocket, ClientInfo> {
   private clients = new Map<WebSocket, ClientInfo>();
   private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
@@ -31,9 +31,17 @@ export class DurableObjectSocketRegistry {
     private readonly ctx: DurableObjectState,
     private readonly sandboxRepository: SandboxRepository,
     private readonly wsClientMappingRepository: WsClientMappingRepository,
-    private readonly log: Logger,
+    private readonly getLog: () => Logger,
+    private readonly createRecoveredClient: (
+      ws: WebSocket,
+      mapping: WsClientMappingResult
+    ) => ClientInfo,
     private readonly config: SocketRegistryConfig
   ) {}
+
+  private get log(): Logger {
+    return this.getLog();
+  }
 
   createUpgradeSockets(): { client: WebSocket; server: WebSocket } {
     const pair = new WebSocketPair();
@@ -147,7 +155,7 @@ export class DurableObjectSocketRegistry {
     for (const ws of sockets) this.close(ws, code, reason);
   }
 
-  clearSandboxSocketIfMatch(ws: WebSocket): boolean {
+  clearSandboxIfMatch(ws: WebSocket): boolean {
     if (this.sandboxWs === ws) {
       this.sandboxWs = null;
       return true;
@@ -166,7 +174,20 @@ export class DurableObjectSocketRegistry {
   }
 
   getClient(ws: WebSocket): ClientInfo | null {
-    return this.clients.get(ws) ?? null;
+    const cached = this.clients.get(ws);
+    if (cached) return cached;
+
+    const mapping = this.recoverClientMapping(ws);
+    if (!mapping) {
+      this.log.warn("No client mapping found after hibernation, closing WebSocket");
+      this.close(ws, 4002, "Session expired, please reconnect");
+      return null;
+    }
+
+    this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
+    const client = this.createRecoveredClient(ws, mapping);
+    this.clients.set(ws, client);
+    return client;
   }
 
   removeClient(ws: WebSocket): ClientInfo | null {
@@ -294,6 +315,13 @@ export class DurableObjectSocketRegistry {
 
   getAuthenticatedClients(): IterableIterator<ClientInfo> {
     return this.clients.values();
+  }
+
+  hasParticipant(participantId: string): boolean {
+    for (const client of this.clients.values()) {
+      if (client.participantId === participantId) return true;
+    }
+    return false;
   }
 
   getConnectedClientCount(): number {

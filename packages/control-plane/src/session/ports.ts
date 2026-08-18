@@ -1,3 +1,7 @@
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type { SandboxCommand } from "./types";
+
 /** Mutable state associated with one authenticated browser connection. */
 export interface ConnectedClient {
   participantId: string;
@@ -27,6 +31,16 @@ export interface SocketRegistry<Connection, Client extends ConnectedClient> {
   hasParticipant(participantId: string): boolean;
 }
 
+/** Typed command delivery to the active sandbox. */
+export interface SandboxCommandSender {
+  sendToSandbox(command: SandboxCommand): Promise<void>;
+}
+
+/** Typed replies to one browser connection. */
+export interface ClientResponder<Connection> {
+  send(connection: Connection, message: ServerMessage): boolean;
+}
+
 /** Participant-facing notifications emitted by disconnect policy. */
 export interface SessionBroadcaster {
   broadcast(message: ServerMessage): void;
@@ -38,5 +52,3 @@ export interface SandboxDisconnectMonitor {
   getStatus(): SandboxStatus | undefined;
   scheduleCheck(): Promise<void>;
 }
-import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
