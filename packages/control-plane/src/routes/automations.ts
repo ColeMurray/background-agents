@@ -1256,7 +1256,7 @@ async function handleGetWatchedSlackChannels(
  * by the router (non-public route).
  */
 async function handleGetSlackChannels(
-  _request: Request,
+  request: Request,
   env: Env,
   _match: RegExpMatchArray,
   _ctx: RequestContext
@@ -1264,7 +1264,7 @@ async function handleGetSlackChannels(
   if (!env.SLACK_BOT_TOKEN) {
     return json({ channels: [], error: "not_configured" });
   }
-  const result = await listChannels(env.SLACK_BOT_TOKEN);
+  const result = await listChannels(env.SLACK_BOT_TOKEN, { signal: request.signal });
   if (!result.ok) {
     logger.warn("slack.channels.list_failed", { slack_error: result.error });
     return json({ channels: [], error: result.error });
