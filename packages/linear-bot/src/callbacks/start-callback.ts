@@ -124,7 +124,9 @@ export function createStartCallbackRouter(
         error: error instanceof Error ? error : new Error(String(error)),
         duration_ms: dependencies.now() - requestStartedAt,
       });
-      return linearSignal.aborted
+      const timedOut =
+        linearSignal.aborted || (error instanceof DOMException && error.name === "TimeoutError");
+      return timedOut
         ? c.json({ error: "Linear request timed out" }, 504)
         : c.json({ error: "Linear issue transition failed" }, 502);
     }

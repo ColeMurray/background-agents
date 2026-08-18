@@ -133,6 +133,7 @@ export async function linearGraphQL(
     try {
       renewedToken = await abortable(client.renewAccessToken(), signal);
     } catch (error) {
+      if (signal.aborted) throw signal.reason;
       if (error instanceof LinearAuthError) throw error;
       throw new LinearAuthError({ reason: "client_credentials_error" });
     }

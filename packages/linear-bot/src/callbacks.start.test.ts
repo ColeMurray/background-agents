@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { callbacksRouter } from "./callbacks";
 import {
   createStartCallbackRouter,
@@ -16,6 +16,10 @@ const client: LinearApiClient = {
   organizationId: "org-1",
   renewAccessToken: vi.fn(async () => "renewed-token"),
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 async function signedPayload(overrides: Record<string, unknown> = {}) {
   const data = {
@@ -148,6 +152,21 @@ describe("POST /start", () => {
     const response = await postStart(router);
 
     expect(response.status).toBe(502);
+  });
+
+  it("returns a timeout response when the transition GraphQL request times out", async () => {
+    const router = createStartCallbackRouter({
+      getLinearClient: vi.fn(async () => client),
+      transitionIssueToStarted: vi.fn(async () => {
+        throw new DOMException("timed out", "TimeoutError");
+      }),
+      now: () => NOW,
+    });
+
+    const response = await postStart(router);
+
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "Linear request timed out" });
   });
 
   it("acknowledges a message that did not opt into the transition", async () => {
