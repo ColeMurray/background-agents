@@ -241,15 +241,43 @@ describe("managed skills persistence and resolution", () => {
 
   it("paginates catalogs and hydrates assignments beyond D1's parameter limit", async () => {
     const skills = new SkillStore(env.DB);
-    for (let index = 0; index < 101; index++) {
-      await skills.create(
-        {
-          name: `catalog-skill-${String(index).padStart(3, "0")}`,
-          content,
-          assignments: [{ type: "global" }],
-        },
-        "user_1"
-      );
+    const catalog = Array.from({ length: 101 }, (_, index) => ({
+      id: `catalog-skill-${String(index).padStart(3, "0")}`,
+      revisionId: `catalog-revision-${String(index).padStart(3, "0")}`,
+    }));
+    const phases = [
+      catalog.map(({ id }) =>
+        env.DB.prepare(
+          `INSERT INTO skills
+           (id, name, enabled, created_by, updated_by, created_at, updated_at)
+           VALUES (?, ?, 1, 'user_1', 'user_1', 1, 1)`
+        ).bind(id, id)
+      ),
+      catalog.map(({ id, revisionId }) =>
+        env.DB.prepare(
+          `INSERT INTO skill_revisions
+           (id, skill_id, revision_number, revision_sha256, description, body,
+            metadata_json, total_bytes, created_by, created_at)
+           VALUES (?, ?, 1, ?, 'Catalog fixture', '', '{}', 0, 'user_1', 1)`
+        ).bind(revisionId, id, revisionId)
+      ),
+      catalog.map(({ id, revisionId }) =>
+        env.DB.prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?").bind(
+          revisionId,
+          id
+        )
+      ),
+      catalog.map(({ id }) =>
+        env.DB.prepare(
+          `INSERT INTO skill_assignments
+           (id, skill_id, scope_type, created_by, created_at)
+           VALUES (?, ?, 'global', 'user_1', 1)`
+        ).bind(`catalog-assignment-${id}`, id)
+      ),
+    ];
+    for (const phase of phases) {
+      await env.DB.batch(phase.slice(0, 100));
+      await env.DB.batch(phase.slice(100));
     }
 
     const applicable = await skills.listApplicable({ repositories: [], environmentId: null });
