@@ -317,7 +317,7 @@ export class SessionDO extends DurableObject<Env> {
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
-    const ensureInitialized = (rehydrateAlarm = true) => this.ensureInitialized(rehydrateAlarm);
+    const ensureInitialized = (rehydrateAlarm?: boolean) => this.ensureInitialized(rehydrateAlarm);
     const clock: Clock = {
       nowMs: () => Date.now(),
       monotonicNowMs: () => performance.now(),
