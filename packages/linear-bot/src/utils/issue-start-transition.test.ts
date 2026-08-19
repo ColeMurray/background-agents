@@ -32,6 +32,7 @@ describe("transitionIssueToStarted", () => {
   });
 
   it("moves an unstarted issue to the team's first started state", async () => {
+    const signal = new AbortController().signal;
     mockLinearGraphQL
       .mockResolvedValueOnce(
         transitionContext("unstarted", [
@@ -41,7 +42,7 @@ describe("transitionIssueToStarted", () => {
       )
       .mockResolvedValueOnce({ data: { issueUpdate: { success: true } } });
 
-    await expect(transitionIssueToStarted(client, "issue-1")).resolves.toEqual({
+    await expect(transitionIssueToStarted(client, "issue-1", signal)).resolves.toEqual({
       outcome: "transitioned",
       previousStateType: "unstarted",
       stateId: "progress",
@@ -51,6 +52,8 @@ describe("transitionIssueToStarted", () => {
       issueId: "issue-1",
       stateId: "progress",
     });
+    expect(mockLinearGraphQL.mock.calls[0][3]).toBe(signal);
+    expect(mockLinearGraphQL.mock.calls[1][3]).toBe(signal);
   });
 
   it.each([

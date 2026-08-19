@@ -287,10 +287,20 @@ class TestSetupInRepositoryBoot:
         sup._write_repo_manifest = MagicMock()
         sup._write_workspace_manifest = MagicMock()
         sup.synchronizer.ensure_credentials_configured = AsyncMock()
-        from sandbox_runtime.repository_sync import RepositorySyncResult
+        from sandbox_runtime.repository_sync import (
+            RepositorySyncOutcome,
+            RepositorySyncResult,
+            RepositorySyncStatus,
+        )
 
         sup.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(tuple(sup.repositories), ())
+            return_value=RepositorySyncResult(
+                tuple(sup.repositories),
+                tuple(
+                    RepositorySyncOutcome(repo, RepositorySyncStatus.SUCCEEDED)
+                    for repo in sup.repositories
+                ),
+            )
         )
         sup.hooks.run_setup = AsyncMock(return_value=True)
         sup.hooks.run_start = AsyncMock(return_value=True)

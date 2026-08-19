@@ -8,6 +8,7 @@
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
+import { RequestDeadlineError } from "./request-deadline";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 
 /** Default sandbox lifetime in seconds (2 hours). */
@@ -393,6 +394,7 @@ export class SandboxProviderError extends Error {
    * Check if an error is likely a transient network error.
    */
   static isTransientNetworkError(error: unknown): boolean {
+    if (error instanceof RequestDeadlineError) return true;
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
       return (

@@ -9,7 +9,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from sandbox_runtime.repository_sync import RepositorySyncResult
+from sandbox_runtime.repository_sync import (
+    RepositorySyncOutcome,
+    RepositorySyncResult,
+    RepositorySyncStatus,
+)
 from sandbox_runtime.runtime_config import BootMode
 from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
 
@@ -89,8 +93,16 @@ def _completion_callback(supervisor):
     return callback
 
 
+def _sync_result(repositories, status=RepositorySyncStatus.SUCCEEDED):
+    repositories = tuple(repositories)
+    return RepositorySyncResult(
+        repositories,
+        tuple(RepositorySyncOutcome(repo, status) for repo in repositories),
+    )
+
+
 def _successful_sync(repository_boot):
-    return RepositorySyncResult(tuple(repository_boot.repositories), ())
+    return _sync_result(repository_boot.repositories)
 
 
 class TestImageBuildMode:
@@ -137,12 +149,11 @@ class TestImageBuildMode:
     async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
         supervisor = _make_supervisor(build_env)
         supervisor.repository_boot.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(
+            return_value=_sync_result(
                 tuple(
                     replace(repo, base_sha="a" * 40)
                     for repo in supervisor.repository_boot.repositories
-                ),
-                (),
+                )
             )
         )
         observed_baselines = []
@@ -283,12 +294,11 @@ class TestImageBuildMode:
         _repoint_primary(supervisor.repository_boot)
 
         supervisor.repository_boot.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(
+            return_value=_sync_result(
                 tuple(
                     replace(repo, base_sha="abc123def456")
                     for repo in supervisor.repository_boot.repositories
-                ),
-                (),
+                )
             )
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
@@ -344,12 +354,11 @@ class TestImageBuildMode:
             repo.path.mkdir(parents=True, exist_ok=True)
 
         supervisor.repository_boot.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(
+            return_value=_sync_result(
                 (
                     replace(supervisor.repository_boot.repositories[0], base_sha="aaa111"),
                     replace(supervisor.repository_boot.repositories[1], base_sha="bbb222"),
-                ),
-                (),
+                )
             )
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
@@ -395,12 +404,11 @@ class TestImageBuildMode:
         _repoint_primary(supervisor.repository_boot)
 
         supervisor.repository_boot.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(
+            return_value=_sync_result(
                 tuple(
                     replace(repo, base_sha="abc123def456")
                     for repo in supervisor.repository_boot.repositories
-                ),
-                (),
+                )
             )
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
@@ -952,9 +960,9 @@ class TestSnapshotRestoreMode:
         supervisor.repository_boot.warnings.log = shared_log
 
         supervisor.repository_boot.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(
+            return_value=_sync_result(
                 tuple(supervisor.repository_boot.repositories),
-                tuple(supervisor.repository_boot.repositories),
+                RepositorySyncStatus.FAILED,
             )
         )
         supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)

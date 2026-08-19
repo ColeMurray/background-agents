@@ -6,6 +6,7 @@ import { SessionSkillStore } from "../../src/db/session-skills";
 import { SkillConflictError, SkillStore } from "../../src/db/skills";
 import { EnvironmentStore } from "../../src/db/environments";
 import { resolveManagedSkills } from "../../src/session/skill-resolution";
+import { buildSkillRevision } from "../../src/skills/content-addressing";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch } from "./helpers";
 
@@ -241,15 +242,75 @@ describe("managed skills persistence and resolution", () => {
 
   it("paginates catalogs and hydrates assignments beyond D1's parameter limit", async () => {
     const skills = new SkillStore(env.DB);
-    for (let index = 0; index < 101; index++) {
-      await skills.create(
-        {
-          name: `catalog-skill-${String(index).padStart(3, "0")}`,
-          content,
-          assignments: [{ type: "global" }],
-        },
-        "user_1"
-      );
+    const catalog = await Promise.all(
+      Array.from({ length: 101 }, async (_, index) => {
+        const suffix = String(index).padStart(3, "0");
+        const id = `catalog-skill-${suffix}`;
+        return {
+          id,
+          revisionId: `catalog-revision-${suffix}`,
+          revision: await buildSkillRevision(id, content),
+        };
+      })
+    );
+    const phases = [
+      catalog.map(({ id }) =>
+        env.DB.prepare(
+          `INSERT INTO skills
+           (id, name, enabled, created_by, updated_by, created_at, updated_at)
+           VALUES (?, ?, 1, 'user_1', 'user_1', 1, 1)`
+        ).bind(id, id)
+      ),
+      catalog.map(({ id, revisionId, revision }) =>
+        env.DB.prepare(
+          `INSERT INTO skill_revisions
+           (id, skill_id, revision_number, revision_sha256, description, body,
+            metadata_json, total_bytes, created_by, created_at)
+           VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'user_1', 1)`
+        ).bind(
+          revisionId,
+          id,
+          revision.revisionSha256,
+          content.description,
+          content.body,
+          JSON.stringify(content.metadata),
+          revision.totalBytes
+        )
+      ),
+      catalog.flatMap(({ revisionId, revision }) =>
+        revision.files.map((file) =>
+          env.DB.prepare(
+            `INSERT INTO skill_revision_files
+             (revision_id, path, content, content_sha256, size_bytes, executable)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          ).bind(
+            revisionId,
+            file.path,
+            file.content,
+            file.sha256,
+            file.sizeBytes,
+            file.executable ? 1 : 0
+          )
+        )
+      ),
+      catalog.map(({ id, revisionId }) =>
+        env.DB.prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?").bind(
+          revisionId,
+          id
+        )
+      ),
+      catalog.map(({ id }) =>
+        env.DB.prepare(
+          `INSERT INTO skill_assignments
+           (id, skill_id, scope_type, created_by, created_at)
+           VALUES (?, ?, 'global', 'user_1', 1)`
+        ).bind(`catalog-assignment-${id}`, id)
+      ),
+    ];
+    for (const phase of phases) {
+      for (let start = 0; start < phase.length; start += 100) {
+        await env.DB.batch(phase.slice(start, start + 100));
+      }
     }
 
     const applicable = await skills.listApplicable({ repositories: [], environmentId: null });

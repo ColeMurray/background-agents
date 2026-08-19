@@ -1,6 +1,24 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Env } from "../src/types";
+
+vi.mock("../src/github-auth", () => ({
+  generateInstallationToken: vi.fn().mockResolvedValue("installation-token"),
+  postReaction: vi.fn().mockResolvedValue(true),
+  checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
+  postCommitStatus: vi.fn().mockResolvedValue({ ok: true }),
+  getPullRequestSnapshot: vi
+    .fn()
+    .mockResolvedValue({ ok: true, headSha: "abc123", state: "open", draft: false }),
+  generateAppJwt: vi.fn().mockResolvedValue("app-jwt"),
+  GITHUB_API_REQUEST_TIMEOUT_MS: 10_000,
+  REVIEW_STATUS_CONTEXT: "open-inspect",
+  REVIEW_PENDING_DESCRIPTION: "Review in progress",
+  REVIEW_COMPLETED_DESCRIPTION: "Review completed",
+  REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
+}));
+
 import app from "../src/index";
+import { postReaction } from "../src/github-auth";
 
 /** Generate a valid GitHub webhook signature for a given secret and body. */
 async function sign(secret: string, body: string): Promise<string> {
@@ -123,6 +141,92 @@ describe("POST /webhooks/github", () => {
     await flushWaitUntil(ctx);
   });
 
+  it("keeps reaction work in the root Worker lifecycle task", async () => {
+    let finishReaction!: (ok: boolean) => void;
+    vi.mocked(postReaction).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishReaction = resolve;
+      })
+    );
+    const body = JSON.stringify({
+      action: "review_requested",
+      pull_request: {
+        number: 42,
+        title: "Bound GitHub requests",
+        body: null,
+        user: { login: "alice" },
+        head: { ref: "feature/timeouts", sha: "abc123" },
+        base: { ref: "main" },
+      },
+      requested_reviewer: { login: "test-bot[bot]" },
+      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
+      sender: {
+        login: "alice",
+        id: 1001,
+        avatar_url: "https://avatars.githubusercontent.com/u/1001",
+      },
+    });
+    const signature = await sign(SECRET, body);
+    const ctx = makeCtx();
+    const env = makeEnv();
+    const controlPlaneFetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    controlPlaneFetch.mockImplementation(async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.includes("/integration-settings/github/resolved/")) {
+        return new Response(JSON.stringify({ config: null }));
+      }
+      if (requestUrl.endsWith("/metadata")) {
+        return new Response(JSON.stringify({ repo: "test/repo", metadata: null }));
+      }
+      if (requestUrl.endsWith("/internal/github-reviews/claim")) {
+        return new Response(JSON.stringify({ generation: 1 }));
+      }
+      if (requestUrl.endsWith("/internal/github-reviews/sweep")) {
+        return new Response(JSON.stringify({ cancelledSessionIds: [], failedSessionIds: [] }));
+      }
+      if (requestUrl === "https://internal/sessions") {
+        return new Response(JSON.stringify({ sessionId: "session-123", status: "created" }));
+      }
+      if (requestUrl.endsWith("/prompt")) {
+        return new Response(JSON.stringify({ messageId: "message-123" }));
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "pull_request",
+          "X-GitHub-Delivery": "delivery-reaction",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    const rootTask = ctx.waitUntil.mock.calls[0][0] as Promise<void>;
+    let rootSettled = false;
+    void rootTask.finally(() => {
+      rootSettled = true;
+    });
+    await vi.waitFor(() =>
+      expect(controlPlaneFetch).toHaveBeenCalledWith(
+        "https://internal/sessions/session-123/prompt",
+        expect.any(Object)
+      )
+    );
+    expect(rootSettled).toBe(false);
+
+    finishReaction(true);
+    await rootTask;
+    expect(rootSettled).toBe(true);
+  });
+
   it("deduplicates repeated deliveries by X-GitHub-Delivery", async () => {
     const body = JSON.stringify({
       action: "review_requested",
@@ -163,7 +267,7 @@ describe("POST /webhooks/github", () => {
 
   it("allows redelivery after async processing failure clears the marker", async () => {
     const body = JSON.stringify({
-      action: "synchronize",
+      action: "opened",
       pull_request: {
         number: 42,
         title: "Broken payload",
@@ -173,7 +277,7 @@ describe("POST /webhooks/github", () => {
         base: { ref: "main" },
         draft: false,
       },
-      repository: null,
+      repository: { owner: { login: "test" }, name: "repo" },
       sender: { login: "alice" },
     });
     const signature = await sign(SECRET, body);
@@ -202,6 +306,18 @@ describe("POST /webhooks/github", () => {
     await flushWaitUntil(ctx, 1);
 
     expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    expect(controlPlaneFetch).toHaveBeenCalledTimes(2);
+    for (const [url, init] of controlPlaneFetch.mock.calls) {
+      expect(url).toBe("https://internal/internal/github-event");
+      expect(JSON.parse(init.body as string)).toMatchObject({
+        eventType: "pull_request.opened",
+        repoOwner: "test",
+        repoName: "repo",
+        pullRequest: { number: 42 },
+      });
+    }
     const githubKv = env.GITHUB_KV as unknown as {
       get: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;

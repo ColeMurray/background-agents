@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sandbox_runtime.repository_boot import RepositoryBoot
-from sandbox_runtime.repository_sync import RepositorySyncResult
+from sandbox_runtime.repository_sync import (
+    RepositorySyncOutcome,
+    RepositorySyncResult,
+    RepositorySyncStatus,
+)
 from sandbox_runtime.runtime_config import BootMode
 from tests.runtime_helpers import make_repository_boot
 
@@ -221,7 +225,13 @@ class TestStartInRepositoryBootStrict:
         sup = _make_repository_boot(tmp_path)
 
         sup.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(tuple(sup.repositories), ())
+            return_value=RepositorySyncResult(
+                tuple(sup.repositories),
+                tuple(
+                    RepositorySyncOutcome(repo, RepositorySyncStatus.SUCCEEDED)
+                    for repo in sup.repositories
+                ),
+            )
         )
         sup._write_repo_manifest = MagicMock()
         sup.synchronizer.ensure_credentials_configured = AsyncMock()
