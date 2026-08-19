@@ -246,36 +246,6 @@ jobs:
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
 
-      # apt-get update on the hosted runners regularly stalls for minutes when
-      # the Azure mirror is unreachable and apt falls back to archive.ubuntu.com,
-      # which silently burns the whole job budget. Skip the network entirely when
-      # the runner image already ships libc++, and otherwise bound every apt call
-      # so a degraded mirror costs a retry instead of the integration suite.
-      - name: Install workerd runtime dependency
-        timeout-minutes: 4
-        run: |
-          set -euo pipefail
-          if ldconfig -p | grep -q 'libc++\.so\.1'; then
-            echo "libc++ already present; skipping apt"
-            exit 0
-          fi
-          apt_opts=(
-            -o Acquire::Retries=2
-            -o Acquire::http::Timeout=15
-            -o Acquire::https::Timeout=15
-          )
-          for attempt in 1 2 3; do
-            if timeout 60 sudo apt-get update "${apt_opts[@]}"; then
-              break
-            fi
-            echo "apt-get update attempt ${attempt} failed"
-            if [ "${attempt}" = "3" ]; then
-              exit 1
-            fi
-            sleep 5
-          done
-          timeout 120 sudo apt-get install -y --no-install-recommends "${apt_opts[@]}" libc++1
-
       - name: Run control-plane integration tests
         run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}
 
