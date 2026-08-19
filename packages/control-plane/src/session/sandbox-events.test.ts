@@ -228,16 +228,19 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.updateSandboxRuntimeVersion).toHaveBeenCalledWith("v59-opencode-1-18-18");
   });
 
-  it("leaves the recorded runtime version alone when the sandbox reports none", async () => {
+  it("clears the recorded runtime version when the sandbox reports none", async () => {
     const h = createProcessor();
 
+    // A replacement sandbox that reports nothing must not inherit its
+    // predecessor's version, or a snapshot it takes is stamped with a runtime
+    // that never produced it.
     await h.processor.processSandboxEvent({
       type: "ready",
       sandboxId: "sb-1",
       timestamp: 1000,
     });
 
-    expect(h.repository.updateSandboxRuntimeVersion).not.toHaveBeenCalled();
+    expect(h.repository.updateSandboxRuntimeVersion).toHaveBeenCalledWith(null);
   });
 
   it("persists token event and broadcasts it", async () => {

@@ -86,6 +86,8 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("modal_object_id = NULL");
       expect(mock.calls[0].query).toContain("vnc_url = NULL");
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
+      // A replacement sandbox must not inherit the predecessor's runtime.
+      expect(mock.calls[0].query).toContain("runtime_version = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
 
@@ -136,6 +138,12 @@ describe("SandboxRepository", () => {
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET runtime_version");
       expect(mock.calls[0].params).toEqual(["v59-runtime"]);
+    });
+
+    it("clears the recorded version when the sandbox reports none", () => {
+      repository.updateSandboxRuntimeVersion(null);
+
+      expect(mock.calls[0].params).toEqual([null]);
     });
   });
 

@@ -95,9 +95,9 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "ready") {
       this.diffService.pinBaselines(event);
-      if (event.runtimeVersion) {
-        this.sandboxRepository.updateSandboxRuntimeVersion(event.runtimeVersion);
-      }
+      // Always write, including null: a sandbox that reports no version must
+      // not inherit the one its predecessor recorded on this row.
+      this.sandboxRepository.updateSandboxRuntimeVersion(event.runtimeVersion ?? null);
     }
 
     const eventMessageId = "messageId" in event ? event.messageId : null;

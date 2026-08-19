@@ -148,6 +148,7 @@ function createMockStorage(
         sandbox.auth_token_hash = data.authTokenHash;
         sandbox.auth_token = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
+        sandbox.runtime_version = null;
         if (!data.preserveProviderObjectId) sandbox.modal_object_id = null;
       }
     }),
@@ -1335,6 +1336,33 @@ describe("SandboxLifecycleManager", () => {
           url: "https://provider.example/same-provider-obj",
         },
       ]);
+    });
+
+    it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
+      // The row starts out describing a sandbox that reported a compatible
+      // runtime. Once it is replaced, a snapshot the replacement takes must be
+      // stamped unknown until the new sandbox reports for itself — otherwise a
+      // downgraded or silent runtime inherits a clean bill of health.
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      expect(sandbox.runtime_version).toBe(COMPATIBLE_RUNTIME_VERSION);
+
+      await manager.spawnSandbox();
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(sandbox.runtime_version).toBeNull();
+      expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123:null");
     });
 
     it("spawns fresh instead of restoring a snapshot taken by a retired runtime", async () => {

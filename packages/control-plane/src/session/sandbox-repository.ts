@@ -92,7 +92,8 @@ export class SandboxRepository {
          vnc_password = NULL,
          tunnel_urls = NULL,
          ttyd_url = NULL,
-         ttyd_token = NULL
+         ttyd_token = NULL,
+         runtime_version = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -133,8 +134,13 @@ export class SandboxRepository {
     );
   }
 
-  /** Record the SANDBOX_VERSION the running sandbox reported when it came up. */
-  updateSandboxRuntimeVersion(runtimeVersion: string): void {
+  /**
+   * Record the SANDBOX_VERSION the running sandbox reported when it came up,
+   * or null when it reported none — never leave a predecessor's version in
+   * place, or a snapshot taken by this sandbox inherits a version it did not
+   * produce.
+   */
+  updateSandboxRuntimeVersion(runtimeVersion: string | null): void {
     this.sql.exec(
       `UPDATE sandbox SET runtime_version = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       runtimeVersion

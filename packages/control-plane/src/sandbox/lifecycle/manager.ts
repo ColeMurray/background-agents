@@ -97,7 +97,11 @@ export interface SandboxStorage {
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
-  /** Update sandbox for spawn (status, auth token, sandbox ID, created_at) */
+  /**
+   * Update sandbox for spawn (status, auth token, sandbox ID, created_at).
+   * Clears every field describing the previous sandbox instance, runtime
+   * version included.
+   */
   updateSandboxForSpawn(data: {
     status: SandboxStatus;
     createdAt: number;
