@@ -15,6 +15,20 @@ describe("buildCodeReviewPrompt", () => {
     isPublic: true,
   };
 
+  it("requires a terminal status when the guarded chain does not publish", () => {
+    // The pending status is written when the review starts and only the success path replaced it,
+    // so an agent that exits after a failed fence used to leave "Review in progress" on the head
+    // forever — indistinguishable from a review still running, and cleared by nothing.
+    const prompt = buildCodeReviewPrompt(baseParams);
+
+    expect(prompt).toContain('-f state="error"');
+    expect(prompt).toContain("Review did not publish — push again to retry");
+    expect(prompt).toContain("statuses/abc123");
+    // The instruction has to be mandatory, not advisory: the old wording told the agent to exit
+    // without a status update by any other means, which is what made the hang silent.
+    expect(prompt).not.toContain("or status update by any other means");
+  });
+
   it("includes all fields in the prompt", () => {
     const prompt = buildCodeReviewPrompt(baseParams);
     expect(prompt).toContain("Pull Request #42");

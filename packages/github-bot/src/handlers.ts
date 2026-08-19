@@ -23,6 +23,7 @@ import {
   REVIEW_PENDING_DESCRIPTION,
   REVIEW_START_FAILED_DESCRIPTION,
   REVIEW_STATUS_CONTEXT,
+  REVIEW_SUPERSEDED_DESCRIPTION,
 } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
@@ -206,6 +207,29 @@ async function postPendingReviewStatus(
     description: REVIEW_PENDING_DESCRIPTION,
   });
   return statusTarget;
+}
+
+/**
+ * Close out the review status on the head a push replaced.
+ *
+ * The review for that commit is cancelled by the sweep above, and nothing else ever returns to its
+ * status — so without this it keeps "Review in progress" forever. Harmless on its own commit, but
+ * it is how a repository accumulates permanently-pending checks, and it hides the one case that
+ * matters: a status still pending on the *current* head.
+ *
+ * Best-effort by the same logic as the sweep: failing to tidy a superseded commit must never stop
+ * the review that replaced it.
+ */
+async function closeOutSupersededHeadStatus(
+  target: ReviewStatusTarget,
+  previousHeadSha: string | undefined
+): Promise<void> {
+  if (!previousHeadSha || previousHeadSha === target.headSha) return;
+  if (/^0+$/.test(previousHeadSha)) return; // the all-zero sha GitHub sends when there is no prior head
+  await postReviewStatus(
+    { ...target, headSha: previousHeadSha },
+    { state: "error", description: REVIEW_SUPERSEDED_DESCRIPTION }
+  );
 }
 
 async function sendReviewPrompt(
@@ -397,7 +421,6 @@ export async function handleReviewRequested(
         prNumber: pr.number,
         generation,
       });
-
       const statusTarget = await postPendingReviewStatus(
         log,
         ghToken,
@@ -567,6 +590,11 @@ export async function handlePullRequestReviewTrigger(
         prNumber: pr.number,
         generation,
       });
+      await closeOutSupersededHeadStatus(
+        { log, token: ghToken, owner, repo: repoName, headSha: pr.head.sha, userAgent, meta },
+        // Present only on `synchronize`; the other trigger actions carry no prior head.
+        payload.before
+      );
 
       const statusTarget = await postPendingReviewStatus(
         log,

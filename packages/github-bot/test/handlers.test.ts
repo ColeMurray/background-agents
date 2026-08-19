@@ -13,6 +13,8 @@ vi.mock("../src/github-auth", () => ({
   REVIEW_COMPLETED_DESCRIPTION: "Review completed",
   REVIEW_PENDING_DESCRIPTION: "Review in progress",
   REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
+  REVIEW_NOT_PUBLISHED_DESCRIPTION: "Review did not publish — push again to retry",
+  REVIEW_SUPERSEDED_DESCRIPTION: "Superseded by a newer commit",
   REVIEW_STATUS_CONTEXT: "open-inspect",
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postCommitStatus: vi.fn().mockResolvedValue({ ok: true }),
@@ -230,6 +232,68 @@ beforeEach(() => {
 });
 
 describe("handlePullRequestReviewTrigger", () => {
+  it("closes out the replaced head's status so it cannot stay pending forever", async () => {
+    // The review for the previous head is cancelled by the sweep, and nothing else ever returns to
+    // its status — so without this it keeps "Review in progress" on that commit permanently.
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+      before: "oldsha1",
+    };
+
+    await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    expect(postCommitStatus).toHaveBeenCalledWith(
+      "test-installation-token",
+      "acme",
+      "widgets",
+      "oldsha1",
+      {
+        state: "error",
+        context: "open-inspect",
+        description: "Superseded by a newer commit",
+      },
+      "Open-Inspect"
+    );
+  });
+
+  it("does not close out a replaced head when GitHub sends none", async () => {
+    // `review_requested` and the opened/reopened triggers carry no `before`; there is nothing to
+    // tidy and no commit to post against.
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "opened",
+    };
+
+    await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    const errorStatuses = vi
+      .mocked(postCommitStatus)
+      .mock.calls.filter(([, , , , status]) => status.state === "error");
+    expect(errorStatuses).toEqual([]);
+  });
+
+  it("ignores the all-zero sha GitHub sends when there was no prior head", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+      before: "0000000000000000000000000000000000000000",
+    };
+
+    await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    const errorStatuses = vi
+      .mocked(postCommitStatus)
+      .mock.calls.filter(([, , , , status]) => status.state === "error");
+    expect(errorStatuses).toEqual([]);
+  });
+
   it("posts a pending status for the synchronized head and starts a review", async () => {
     const env = createMockEnv();
     const log = createMockLogger();

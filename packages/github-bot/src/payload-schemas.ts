@@ -46,6 +46,9 @@ export const pullRequestReviewTriggerPayloadSchema = z.object({
   pull_request: pullRequestSchema.extend({ draft: z.boolean() }),
   repository: repositorySchema,
   sender: githubSenderSchema,
+  // Only GitHub's `synchronize` carries it: the head this push replaced. Used to close out that
+  // commit's review status, which nothing else ever revisits.
+  before: z.string().optional(),
 });
 
 export const reviewRequestedPayloadSchema = z.object({
