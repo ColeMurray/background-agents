@@ -5,6 +5,10 @@ import { parsePullRequestArtifactMetadata } from "./pull-request-snapshot";
 import type { RepoIdentity } from "./repository-target";
 import type { ArtifactRow } from "./types";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Repo identity from a PR artifact's metadata. Null when the metadata carries
  * no identity — artifacts written before multi-repo support, which by
@@ -16,8 +20,8 @@ function parsePrArtifactRepo(metadata: string | null): RepoIdentity | null {
   if (!metadata) return null;
   try {
     const parsed: unknown = JSON.parse(metadata);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const { repoOwner, repoName } = parsed as { repoOwner?: unknown; repoName?: unknown };
+    if (!isRecord(parsed)) return null;
+    const { repoOwner, repoName } = parsed;
     if (typeof repoOwner !== "string" || typeof repoName !== "string") return null;
     return { repoOwner, repoName };
   } catch {
