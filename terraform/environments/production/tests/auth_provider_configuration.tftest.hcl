@@ -199,10 +199,24 @@ run "anthropic_api_key_blank" {
     enable_slack_bot     = true
     slack_bot_token      = "test-slack-token"
     slack_signing_secret = "test-slack-signing-secret"
+    openai_api_key       = "test-openai-key"
     anthropic_api_key    = ""
   }
 
   expect_failures = [var.anthropic_api_key]
+}
+
+run "openai_api_key_blank_with_bot_enabled" {
+  command = plan
+
+  variables {
+    enable_slack_bot     = true
+    slack_bot_token      = "test-slack-token"
+    slack_signing_secret = "test-slack-signing-secret"
+    openai_api_key       = ""
+  }
+
+  expect_failures = [var.openai_api_key]
 }
 
 run "operator_user_id_malformed" {
