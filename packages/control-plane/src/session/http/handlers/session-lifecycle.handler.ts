@@ -19,6 +19,11 @@ import {
   type SessionTitleUpdateResult,
 } from "../../title";
 import { z } from "zod";
+import {
+  OPERATOR_ARCHIVE_HTTP_STATUS,
+  operatorArchiveRequestSchema,
+  type OperatorArchiveOutcome,
+} from "../../operator-archive";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
@@ -67,6 +72,7 @@ export interface SessionLifecycleHandler {
   getState: () => Response;
   updateTitle: (request: Request) => Promise<Response>;
   archive: (request: Request) => Promise<Response>;
+  operatorArchive: (request: Request, log: Logger) => Promise<Response>;
   unarchive: (request: Request) => Promise<Response>;
   expireDraft: () => Promise<Response>;
   cancel: () => Promise<Response>;
@@ -150,6 +156,23 @@ const titleUpdateBodySchema = z.object({
 });
 
 type TitleUpdateBody = z.infer<typeof titleUpdateBodySchema>;
+
+async function getArchiveOutcome(
+  deps: SessionLifecycleHandlerDeps,
+  session: SessionRow
+): Promise<OperatorArchiveOutcome> {
+  if (session.status === "archived") {
+    await deps.statusService.transition("archived");
+    return "already_archived";
+  }
+  if (session.status === "cancelled") return "skipped_cancelled";
+  if (deps.messageRepository.getPendingOrProcessingCount() > 0) {
+    return "skipped_queued_work";
+  }
+
+  await deps.statusService.transition("archived");
+  return "archived";
+}
 
 export function createSessionLifecycleHandler(
   deps: SessionLifecycleHandlerDeps
@@ -416,20 +439,49 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
       }
 
-      if (session.status === "cancelled") {
+      const outcome = await getArchiveOutcome(deps, session);
+      if (outcome === "skipped_cancelled") {
         return Response.json({ error: "Cancelled sessions cannot be archived" }, { status: 409 });
       }
-
-      if (deps.messageRepository.getPendingOrProcessingCount() > 0) {
+      if (outcome === "skipped_queued_work") {
         return Response.json(
           { error: "Cannot archive a session with queued work" },
           { status: 409 }
         );
       }
 
-      await deps.statusService.transition("archived");
-
       return Response.json({ status: "archived" });
+    },
+
+    async operatorArchive(request: Request, log: Logger): Promise<Response> {
+      const session = deps.getSession();
+      if (!session) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+      const parsed = operatorArchiveRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const outcome = await getArchiveOutcome(deps, session);
+      log.info("Operator session archive evaluated", {
+        event: "operator.session_archive",
+        operator_user_id: parsed.data.operatorUserId,
+        session_id: deps.getPublicSessionId(session),
+        outcome,
+      });
+
+      return Response.json(
+        { outcome, status: outcome === "archived" ? "archived" : session.status },
+        { status: OPERATOR_ARCHIVE_HTTP_STATUS[outcome] }
+      );
     },
 
     /**

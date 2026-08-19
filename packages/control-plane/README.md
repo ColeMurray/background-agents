@@ -74,6 +74,7 @@ The control plane provides:
 | `/sessions/:id/ws-token`        | POST      | Generate WebSocket token       |
 | `/sessions/:id/archive`         | POST      | Archive session                |
 | `/sessions/:id/unarchive`       | POST      | Unarchive session              |
+| `/operator/sessions/archive`    | POST      | Archive one operator batch     |
 
 ### Create PR Payload
 
@@ -380,6 +381,12 @@ as interchangeable during an incident:
 
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
+
+`POST /operator/sessions/archive` is maintenance-only. The caller must be an authenticated human
+whose canonical ID is listed in `OPERATOR_USER_IDS`. The endpoint scans a bounded, cursor-paged
+snapshot and asks each Session Durable Object to archive itself; cancelled sessions and sessions
+with queued work are reported as skipped. Ordinary `/sessions/:id/archive` authorization remains
+participant-only.
 
 ### GitHub App Token Flow
 

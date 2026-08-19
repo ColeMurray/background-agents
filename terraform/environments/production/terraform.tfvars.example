@@ -366,3 +366,7 @@ allowed_github_orgs = ""
 # Explicitly bypass the Terraform access-control safety check and allow any
 # authenticated user to sign in when all allowlists are empty.
 unsafe_allow_all_users = false
+
+# Canonical user IDs allowed to invoke operator-only maintenance endpoints.
+# Leave empty to disable operator access.
+operator_user_ids = []

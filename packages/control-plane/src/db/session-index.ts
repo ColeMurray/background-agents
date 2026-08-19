@@ -44,6 +44,20 @@ export interface ChildAdmissionLease {
   expiresAt: number;
 }
 
+export interface OperatorArchiveCandidateCursor {
+  createdAt: number;
+  id: string;
+}
+
+export interface OperatorArchiveCandidate extends OperatorArchiveCandidateCursor {
+  indexStatus: SessionStatus;
+}
+
+export interface OperatorArchiveCandidatePage {
+  candidates: OperatorArchiveCandidate[];
+  hasMore: boolean;
+}
+
 /**
  * Insurance against a corrupt parent_session_id cycle making the recursive
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
@@ -685,6 +699,38 @@ export class SessionIndexStore {
       .bind(metrics.totalCost, metrics.activeDurationMs, metrics.messageCount, metrics.prCount, id)
       .run();
     return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async listOperatorArchiveCandidates(options: {
+    cutoffCreatedAt: number;
+    cursor: OperatorArchiveCandidateCursor | null;
+    limit: number;
+  }): Promise<OperatorArchiveCandidatePage> {
+    const { cutoffCreatedAt, cursor, limit } = options;
+    const cursorClause = cursor ? "AND (created_at > ? OR (created_at = ? AND id > ?))" : "";
+    const params = cursor
+      ? [cutoffCreatedAt, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1]
+      : [cutoffCreatedAt, limit + 1];
+    const result = await this.db
+      .prepare(
+        `SELECT id, created_at, status FROM sessions
+         WHERE created_at <= ?
+         ${cursorClause}
+         ORDER BY created_at ASC, id ASC
+         LIMIT ?`
+      )
+      .bind(...params)
+      .all<{ id: string; created_at: number; status: SessionStatus }>();
+    const rows = result.results ?? [];
+
+    return {
+      candidates: rows.slice(0, limit).map((row) => ({
+        id: row.id,
+        createdAt: row.created_at,
+        indexStatus: row.status,
+      })),
+      hasMore: rows.length > limit,
+    };
   }
 
   /**

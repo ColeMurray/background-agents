@@ -204,3 +204,13 @@ run "anthropic_api_key_blank" {
 
   expect_failures = [var.anthropic_api_key]
 }
+
+run "operator_user_id_malformed" {
+  command = plan
+
+  variables {
+    operator_user_ids = ["not-a-canonical-user-id"]
+  }
+
+  expect_failures = [var.operator_user_ids]
+}

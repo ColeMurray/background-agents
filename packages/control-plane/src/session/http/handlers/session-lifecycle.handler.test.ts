@@ -864,6 +864,78 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
+  it("archives for an authorized operator without impersonating a participant", async () => {
+    const { handler, log, getSession, getPublicSessionId, getParticipantByUserId, transition } =
+      createHandler();
+    getSession.mockReturnValue(createSession());
+    getPublicSessionId.mockReturnValue("session-1");
+    transition.mockResolvedValue(true);
+
+    const response = await handler.operatorArchive(
+      new Request("http://internal/internal/operator-archive", {
+        method: "POST",
+        body: JSON.stringify({ operatorUserId: "0123456789abcdef0123456789abcdef" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "archived", status: "archived" });
+    expect(getParticipantByUserId).not.toHaveBeenCalled();
+    expect(transition).toHaveBeenCalledWith("archived");
+    expect(log.info).toHaveBeenCalledWith(
+      "Operator session archive evaluated",
+      expect.objectContaining({
+        event: "operator.session_archive",
+        operator_user_id: "0123456789abcdef0123456789abcdef",
+        session_id: "session-1",
+        outcome: "archived",
+      })
+    );
+  });
+
+  it("repairs the index projection for an already archived operator target", async () => {
+    const { handler, log, getSession, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "archived" }));
+    transition.mockResolvedValue(true);
+
+    const response = await handler.operatorArchive(
+      new Request("http://internal/internal/operator-archive", {
+        method: "POST",
+        body: JSON.stringify({ operatorUserId: "0123456789abcdef0123456789abcdef" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      outcome: "already_archived",
+      status: "archived",
+    });
+    expect(transition).toHaveBeenCalledWith("archived");
+  });
+
+  it.each([
+    ["cancelled", "skipped_cancelled"],
+    ["active", "skipped_queued_work"],
+  ] as const)("preserves the %s operator archive invariant", async (status, outcome) => {
+    const { handler, log, getSession, repository, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status }));
+    if (status === "active") repository.getPendingOrProcessingCount.mockReturnValue(1);
+
+    const response = await handler.operatorArchive(
+      new Request("http://internal/internal/operator-archive", {
+        method: "POST",
+        body: JSON.stringify({ operatorUserId: "0123456789abcdef0123456789abcdef" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ outcome, status });
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("archives a draft that was never prompted", async () => {
     const { handler, getSession, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "created" }));

@@ -48,6 +48,8 @@ const QUERY_PATTERNS = {
   SELECT_EXISTS: /^SELECT 1 AS ok FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
+  SELECT_OPERATOR_ARCHIVE_CANDIDATES:
+    /^SELECT id, created_at, status FROM sessions WHERE created_at <= \?/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
   UPDATE_TITLE: /^UPDATE sessions SET title = \?/,
@@ -122,6 +124,27 @@ class FakeD1Database {
 
   all(query: string, args: unknown[]) {
     const normalized = normalizeQuery(query);
+
+    if (QUERY_PATTERNS.SELECT_OPERATOR_ARCHIVE_CANDIDATES.test(normalized)) {
+      const cutoffCreatedAt = args[0] as number;
+      const hasCursor = normalized.includes("created_at > ?");
+      const cursorCreatedAt = hasCursor ? (args[1] as number) : null;
+      const cursorId = hasCursor ? (args[3] as string) : null;
+      const limit = args[hasCursor ? 4 : 1] as number;
+      return Array.from(this.rows.values())
+        .filter((row) => row.created_at <= cutoffCreatedAt)
+        .filter(
+          (row) =>
+            cursorCreatedAt === null ||
+            row.created_at > cursorCreatedAt ||
+            (row.created_at === cursorCreatedAt && row.id > (cursorId ?? ""))
+        )
+        .sort(
+          (left, right) => left.created_at - right.created_at || left.id.localeCompare(right.id)
+        )
+        .slice(0, limit)
+        .map((row) => ({ id: row.id, created_at: row.created_at, status: row.status }));
+    }
 
     if (QUERY_PATTERNS.SELECT_LIST.test(normalized)) {
       // Parse WHERE conditions and LIMIT/OFFSET from args
@@ -790,6 +813,40 @@ describe("SessionIndexStore", () => {
       expect(db.preparedQueries.some((query) => QUERY_PATTERNS.SELECT_COUNT.test(query))).toBe(
         false
       );
+    });
+  });
+
+  describe("listOperatorArchiveCandidates", () => {
+    it("pages by immutable creation coordinates across status and update mutations", async () => {
+      await store.create(makeSession({ id: "a", createdAt: 100, updatedAt: 100 }));
+      await store.create(makeSession({ id: "b", createdAt: 100, updatedAt: 100 }));
+      await store.create(makeSession({ id: "c", createdAt: 200, updatedAt: 200 }));
+      await store.create(makeSession({ id: "future", createdAt: 600, updatedAt: 600 }));
+
+      const first = await store.listOperatorArchiveCandidates({
+        cutoffCreatedAt: 500,
+        cursor: null,
+        limit: 2,
+      });
+      expect(first).toEqual({
+        candidates: [
+          { id: "a", createdAt: 100, indexStatus: "created" },
+          { id: "b", createdAt: 100, indexStatus: "created" },
+        ],
+        hasMore: true,
+      });
+
+      await store.updateStatus("a", "archived");
+      await store.updateStatus("b", "created", 900);
+      const second = await store.listOperatorArchiveCandidates({
+        cutoffCreatedAt: 500,
+        cursor: first.candidates[1],
+        limit: 2,
+      });
+      expect(second).toEqual({
+        candidates: [{ id: "c", createdAt: 200, indexStatus: "created" }],
+        hasMore: false,
+      });
     });
   });
 

@@ -271,6 +271,8 @@ export class SessionDO extends DurableObject<Env> {
     wsToken: (request, _url, log) => this.wsTokenHandler.generateWsToken(request, log),
     updateTitle: (request) => this.sessionLifecycleHandler.updateTitle(request),
     archive: (request) => this.sessionLifecycleHandler.archive(request),
+    operatorArchive: (request, _url, log) =>
+      this.sessionLifecycleHandler.operatorArchive(request, log),
     unarchive: (request) => this.sessionLifecycleHandler.unarchive(request),
     expireDraft: () => this.sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, log) =>

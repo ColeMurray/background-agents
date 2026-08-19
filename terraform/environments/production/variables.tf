@@ -665,3 +665,16 @@ variable "unsafe_allow_all_users" {
   type        = bool
   default     = false
 }
+
+variable "operator_user_ids" {
+  description = "Canonical user IDs authorized for operator-only maintenance actions. Empty disables operator access."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for user_id in var.operator_user_ids : can(regex("^[0-9a-f]{32}$", user_id))
+    ])
+    error_message = "operator_user_ids must contain only 32-character lowercase hexadecimal canonical user IDs."
+  }
+}
