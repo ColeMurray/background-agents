@@ -101,8 +101,10 @@ export function useSessionRename({
   const { mutate } = useSWRConfig();
   const currentTitleRef = useRef(currentTitle);
   const authoritativeTitleRef = useRef(authoritativeTitle);
-  currentTitleRef.current = currentTitle;
-  authoritativeTitleRef.current = authoritativeTitle;
+  useEffect(() => {
+    currentTitleRef.current = currentTitle;
+    authoritativeTitleRef.current = authoritativeTitle;
+  }, [authoritativeTitle, currentTitle]);
 
   const subscribe = useCallback(
     (listener: () => void) => {
