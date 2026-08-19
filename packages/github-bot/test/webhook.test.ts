@@ -222,6 +222,74 @@ describe("POST /webhooks/github", () => {
     expect(githubKv.delete).toHaveBeenCalledTimes(2);
   });
 
+  it("starts automation forwarding before built-in dispatch settles", async () => {
+    let resolveConfigFetch!: (response: Response) => void;
+    const configFetch = new Promise<Response>((resolve) => {
+      resolveConfigFetch = resolve;
+    });
+    const env = makeEnv();
+    const controlPlaneFetch = vi.fn((input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/integration-settings/github/resolved/")) return configFetch;
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    env.CONTROL_PLANE = { fetch: controlPlaneFetch };
+
+    const body = JSON.stringify({
+      action: "opened",
+      pull_request: {
+        number: 42,
+        title: "Independent automation forwarding",
+        body: null,
+        user: { login: "alice" },
+        head: { ref: "feature/test", sha: "abc123" },
+        base: { ref: "main" },
+        draft: false,
+      },
+      repository: { owner: { login: "test" }, name: "repo", private: false },
+      sender: { login: "alice", id: 7, avatar_url: "https://example.com/alice.png" },
+    });
+    const signature = await sign(SECRET, body);
+    const ctx = makeCtx();
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "pull_request",
+          "X-GitHub-Delivery": "delivery-pending-dispatch",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          controlPlaneFetch.mock.calls.some(
+            ([url]) =>
+              typeof url === "string" &&
+              url.includes("/integration-settings/github/resolved/test/repo")
+          )
+        ).toBe(true)
+      );
+      await vi.waitFor(() =>
+        expect(
+          controlPlaneFetch.mock.calls.some(
+            ([url]) => url === "https://internal/internal/github-event"
+          )
+        ).toBe(true)
+      );
+    } finally {
+      resolveConfigFetch(new Response(null, { status: 500 }));
+      await flushWaitUntil(ctx);
+    }
+  });
+
   it("returns 200 for unhandled event type", async () => {
     const body = '{"action":"opened"}';
     const signature = await sign(SECRET, body);
