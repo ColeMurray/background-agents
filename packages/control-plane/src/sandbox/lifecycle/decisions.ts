@@ -218,7 +218,7 @@ export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | nul
 export type SpawnAction =
   | { action: "spawn"; reason?: string }
   | { action: "resume"; providerObjectId: string }
-  | { action: "restore"; snapshotImageId: string }
+  | { action: "restore"; snapshotImageId: string; snapshotRuntimeVersion: string }
   | { action: "skip"; reason: string }
   | { action: "wait"; reason: string };
 
@@ -292,7 +292,12 @@ export function evaluateSpawnDecision(
     (state.status === "stopped" || state.status === "stale" || state.status === "failed")
   ) {
     if (isSnapshotRuntimeCompatible(state.snapshotRuntimeVersion)) {
-      return { action: "restore", snapshotImageId: state.snapshotImageId };
+      return {
+        action: "restore",
+        snapshotImageId: state.snapshotImageId,
+        // Non-null: the compatibility check above rejects a missing version.
+        snapshotRuntimeVersion: state.snapshotRuntimeVersion as string,
+      };
     }
     // Fall through to a fresh spawn rather than booting a retired runtime.
     return {

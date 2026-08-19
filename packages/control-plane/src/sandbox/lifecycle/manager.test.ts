@@ -163,6 +163,10 @@ function createMockStorage(
       calls.push(`updateSandboxModalObjectId:${id}`);
       if (sandbox) sandbox.modal_object_id = id;
     }),
+    updateSandboxRuntimeVersion: vi.fn((runtimeVersion: string | null) => {
+      calls.push(`updateSandboxRuntimeVersion:${runtimeVersion}`);
+      if (sandbox) sandbox.runtime_version = runtimeVersion;
+    }),
     updateSandboxSnapshotImageId: vi.fn(
       (sandboxId: string, imageId: string, runtimeVersion: string | null) => {
         calls.push(`updateSandboxSnapshotImageId:${imageId}:${runtimeVersion}`);
@@ -1363,6 +1367,34 @@ describe("SandboxLifecycleManager", () => {
 
       expect(sandbox.runtime_version).toBeNull();
       expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123:null");
+    });
+
+    it("seeds the restored sandbox's runtime version from the snapshot", async () => {
+      // OpenComputer and Vercel export the current SANDBOX_VERSION into every
+      // sandbox they start, including ones forked from an old checkpoint, so
+      // the snapshot's own version has to win.
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalled();
+      expect(storage.calls).toContain(`updateSandboxRuntimeVersion:${COMPATIBLE_RUNTIME_VERSION}`);
+      expect(sandbox.runtime_version).toBe(COMPATIBLE_RUNTIME_VERSION);
     });
 
     it("spawns fresh instead of restoring a snapshot taken by a retired runtime", async () => {

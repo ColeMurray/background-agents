@@ -113,6 +113,8 @@ export interface SandboxStorage {
   updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
   updateSandboxModalObjectId(modalObjectId: string | null): void;
+  /** Set the runtime version describing the sandbox's current filesystem. */
+  updateSandboxRuntimeVersion(runtimeVersion: string | null): void;
   /**
    * Update sandbox snapshot image ID and the runtime version that produced it
    * (null when the sandbox never reported one).
@@ -403,8 +405,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       case "restore":
         this.log.info("Spawn decision: restore", {
           snapshot_image_id: spawnDecision.snapshotImageId,
+          snapshot_runtime_version: spawnDecision.snapshotRuntimeVersion,
         });
-        await this.restoreFromSnapshot(spawnDecision.snapshotImageId);
+        await this.restoreFromSnapshot(
+          spawnDecision.snapshotImageId,
+          spawnDecision.snapshotRuntimeVersion
+        );
         return;
 
       case "resume":
@@ -747,7 +753,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Restore a sandbox from a filesystem snapshot.
    */
-  private async restoreFromSnapshot(snapshotImageId: string): Promise<void> {
+  private async restoreFromSnapshot(
+    snapshotImageId: string,
+    snapshotRuntimeVersion: string
+  ): Promise<void> {
     if (!this.provider.restoreFromSnapshot) {
       this.log.info("Provider does not support restore, falling back to fresh spawn");
       // Fall back to fresh spawn
@@ -784,6 +793,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           preserveProviderObjectId: true,
         })
       );
+
+      // A restored sandbox runs the snapshot's binaries whatever the provider
+      // exports at launch, so the snapshot's version is the authoritative one.
+      // Seeding it here also makes the sandbox's own report a no-op, since the
+      // ready handler only fills a row with nothing recorded yet.
+      this.storage.updateSandboxRuntimeVersion(snapshotRuntimeVersion);
 
       await this.stopPriorProviderSandbox();
 

@@ -140,10 +140,23 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].params).toEqual(["v59-runtime"]);
     });
 
-    it("clears the recorded version when the sandbox reports none", () => {
+    it("clears the recorded version when set to null", () => {
       repository.updateSandboxRuntimeVersion(null);
 
       expect(mock.calls[0].params).toEqual([null]);
+    });
+  });
+
+  describe("recordReportedSandboxRuntimeVersion", () => {
+    it("only fills a row with nothing recorded yet", () => {
+      repository.recordReportedSandboxRuntimeVersion("v59-runtime");
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET runtime_version");
+      // A restore seeds the snapshot's version first; the sandbox's own report
+      // must not overwrite it.
+      expect(mock.calls[0].query).toContain("runtime_version IS NULL");
+      expect(mock.calls[0].params).toEqual(["v59-runtime"]);
     });
   });
 

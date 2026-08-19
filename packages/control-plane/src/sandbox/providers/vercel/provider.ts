@@ -376,15 +376,17 @@ export class VercelSandboxProvider implements SandboxProvider {
       cloneToken: config.cloneToken,
       baseEnvVars: config.userEnvVars,
     });
-    Object.assign(envVars, this.buildPlatformEnvVars(), {
-      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
-    });
+    // SANDBOX_VERSION comes from buildPlatformEnvVars now.
+    Object.assign(envVars, this.buildPlatformEnvVars());
     return envVars;
   }
 
   /** Vercel base-image paths layered on top of the canonical sandbox env. */
   private buildPlatformEnvVars(): Record<string, string> {
     return {
+      // The base snapshot bakes no SANDBOX_VERSION, so without this every
+      // sandbox reports an unknown runtime and its snapshots are unrestorable.
+      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
       HOME: "/root",
       NODE_ENV: "development",
       PATH: buildVercelRuntimePath(this.providerConfig.runtime),

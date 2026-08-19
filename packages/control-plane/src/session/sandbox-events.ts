@@ -95,9 +95,9 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "ready") {
       this.diffService.pinBaselines(event);
-      // Always write, including null: a sandbox that reports no version must
-      // not inherit the one its predecessor recorded on this row.
-      this.sandboxRepository.updateSandboxRuntimeVersion(event.runtimeVersion ?? null);
+      // Fills the column a fresh spawn cleared; a restore has already seeded
+      // the snapshot's version, which outranks whatever this sandbox reports.
+      this.sandboxRepository.recordReportedSandboxRuntimeVersion(event.runtimeVersion ?? null);
     }
 
     const eventMessageId = "messageId" in event ? event.messageId : null;

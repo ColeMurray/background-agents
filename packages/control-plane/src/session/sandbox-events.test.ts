@@ -29,7 +29,7 @@ function createProcessor() {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
-    updateSandboxRuntimeVersion: vi.fn(),
+    recordReportedSandboxRuntimeVersion: vi.fn(),
     getProcessingMessage,
     addSessionCost: vi.fn(),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
@@ -225,22 +225,25 @@ describe("SessionSandboxEventProcessor", () => {
       runtimeVersion: "v59-opencode-1-18-18",
     });
 
-    expect(h.repository.updateSandboxRuntimeVersion).toHaveBeenCalledWith("v59-opencode-1-18-18");
+    expect(h.repository.recordReportedSandboxRuntimeVersion).toHaveBeenCalledWith(
+      "v59-opencode-1-18-18"
+    );
   });
 
-  it("clears the recorded runtime version when the sandbox reports none", async () => {
+  it("records a null runtime version when the sandbox reports none", async () => {
     const h = createProcessor();
 
     // A replacement sandbox that reports nothing must not inherit its
     // predecessor's version, or a snapshot it takes is stamped with a runtime
-    // that never produced it.
+    // that never produced it. Spawn clears the column; this write keeps it
+    // clear rather than filling it in.
     await h.processor.processSandboxEvent({
       type: "ready",
       sandboxId: "sb-1",
       timestamp: 1000,
     });
 
-    expect(h.repository.updateSandboxRuntimeVersion).toHaveBeenCalledWith(null);
+    expect(h.repository.recordReportedSandboxRuntimeVersion).toHaveBeenCalledWith(null);
   });
 
   it("persists token event and broadcasts it", async () => {

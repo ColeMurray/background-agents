@@ -912,6 +912,8 @@ export class SessionDO extends DurableObject<Env> {
       updateSandboxForSpawn: (data) => this.sandboxRepository.updateSandboxForSpawn(data),
       updateSandboxForResume: (data) => this.sandboxRepository.updateSandboxForResume(data),
       updateSandboxModalObjectId: (id) => this.sandboxRepository.updateSandboxModalObjectId(id),
+      updateSandboxRuntimeVersion: (runtimeVersion) =>
+        this.sandboxRepository.updateSandboxRuntimeVersion(runtimeVersion),
       updateSandboxSnapshotImageId: (sandboxId, imageId, runtimeVersion) =>
         this.sandboxRepository.updateSandboxSnapshotImageId(sandboxId, imageId, runtimeVersion),
       updateSandboxLastActivity: (timestamp) =>

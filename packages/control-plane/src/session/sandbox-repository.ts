@@ -135,14 +135,33 @@ export class SandboxRepository {
   }
 
   /**
-   * Record the SANDBOX_VERSION the running sandbox reported when it came up,
-   * or null when it reported none — never leave a predecessor's version in
-   * place, or a snapshot taken by this sandbox inherits a version it did not
-   * produce.
+   * Set the runtime version describing the sandbox's current filesystem.
+   *
+   * Used when the control plane already knows it authoritatively — restoring a
+   * snapshot puts that snapshot's runtime on disk regardless of what the
+   * provider exports into the new sandbox.
    */
   updateSandboxRuntimeVersion(runtimeVersion: string | null): void {
     this.sql.exec(
       `UPDATE sandbox SET runtime_version = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      runtimeVersion
+    );
+  }
+
+  /**
+   * Record the SANDBOX_VERSION a sandbox reported at startup, but only when
+   * nothing authoritative is on the row yet.
+   *
+   * A fresh spawn clears the column, so its report lands. A restore seeds the
+   * snapshot's version first, so a report is ignored: OpenComputer and Vercel
+   * export the *current* SANDBOX_VERSION into every sandbox they start,
+   * including ones forked from an old checkpoint, and trusting that would hand
+   * a stale filesystem a clean bill of health.
+   */
+  recordReportedSandboxRuntimeVersion(runtimeVersion: string | null): void {
+    this.sql.exec(
+      `UPDATE sandbox SET runtime_version = ?
+       WHERE runtime_version IS NULL AND id = (SELECT id FROM sandbox LIMIT 1)`,
       runtimeVersion
     );
   }
