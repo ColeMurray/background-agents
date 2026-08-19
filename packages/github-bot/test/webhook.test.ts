@@ -18,6 +18,7 @@ vi.mock("../src/github-auth", () => ({
   REVIEW_PENDING_DESCRIPTION: "Review in progress",
   REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
   REVIEW_STATUS_CONTEXT: "open-inspect",
+  REVIEW_SUPERSEDED_DESCRIPTION: "Superseded by a newer commit",
 }));
 
 import app from "../src/index";

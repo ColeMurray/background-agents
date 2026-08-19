@@ -142,7 +142,9 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 6. Create a session through the control plane, fenced on that generation. A 409 means a newer
    trigger already won, and the handler skips. Any other failure releases the claim — conditionally,
    so a newer claim is never disturbed — before rethrowing.
-7. Sweep and cancel review sessions for the PR that hold an older generation.
+7. Sweep and cancel review sessions for the PR that hold an older generation. On `synchronize`, post
+   `error` on the head the push replaced (`before`): its review was just cancelled, so nothing else
+   would ever replace that head's pending status.
 8. Post a pending `open-inspect` status on `pull_request.head.sha`.
 9. Send the code review prompt. Before submitting, the prompt re-checks freshness and acquires a
    submission lease from the control plane; a superseded session exits silently, because the newer

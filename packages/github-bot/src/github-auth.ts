@@ -22,6 +22,8 @@ export const REVIEW_PENDING_DESCRIPTION = "Review in progress";
 export const REVIEW_COMPLETED_DESCRIPTION = "Review completed";
 export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
 export const REVIEW_STALE_DESCRIPTION = "Review skipped: PR changed before submission";
+/** Terminal status for the head a newer push replaced, so its pending status does not outlive it. */
+export const REVIEW_SUPERSEDED_DESCRIPTION = "Superseded by a newer commit";
 
 export interface GitHubAppConfig {
   appId: string;
