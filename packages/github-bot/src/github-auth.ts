@@ -21,6 +21,15 @@ export const REVIEW_STATUS_CONTEXT = "open-inspect";
 export const REVIEW_PENDING_DESCRIPTION = "Review in progress";
 export const REVIEW_COMPLETED_DESCRIPTION = "Review completed";
 export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
+/**
+ * Terminal status for a review that ran but could not publish its verdict — a moved head, a lost
+ * ownership lease, a failed write. It exists because "pending" is written when a review starts and
+ * only the success path ever replaced it, so any other ending left the status pending forever:
+ * indistinguishable from a review still in progress, and never cleared by anything.
+ */
+export const REVIEW_NOT_PUBLISHED_DESCRIPTION = "Review did not publish — push again to retry";
+/** Terminal status for the head a newer push replaced, so its pending status does not outlive it. */
+export const REVIEW_SUPERSEDED_DESCRIPTION = "Superseded by a newer commit";
 export interface GitHubAppConfig {
   appId: string;
   privateKey: string;

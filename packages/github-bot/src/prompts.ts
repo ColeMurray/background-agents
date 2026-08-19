@@ -1,4 +1,9 @@
-import { REVIEW_COMPLETED_DESCRIPTION, REVIEW_STATUS_CONTEXT } from "./github-auth";
+import {
+  REVIEW_COMPLETED_DESCRIPTION,
+  REVIEW_NOT_PUBLISHED_DESCRIPTION,
+  REVIEW_PENDING_DESCRIPTION,
+  REVIEW_STATUS_CONTEXT,
+} from "./github-auth";
 
 function buildCustomInstructionsSection(instructions: string | null | undefined): string {
   if (!instructions?.trim()) return "";
@@ -154,8 +159,23 @@ ${prDescriptionBlock}
    (204 = owned; 409 = a newer review session has taken over, curl exits 22); the final
    DELETE releases the lease after the writes. If ANY part fails — missing environment
    variable, freshness mismatch, ownership 409, network error — the chain stops before or at
-   the review POST. In that case exit immediately WITHOUT posting a review, inline comment,
-   or status update by any other means.
+   the review POST. In that case post NO review and NO inline comment by any other means.
+
+6. If, and only if, step 5's chain did not reach its status write, close the commit status out
+   before you exit, so the review never ends leaving "${REVIEW_PENDING_DESCRIPTION}" behind:
+
+   gh api repos/${owner}/${repo}/statuses/${headSha} \\
+     --method POST \\
+     -f state="error" \\
+     -f context="${REVIEW_STATUS_CONTEXT}" \\
+     -f description="${REVIEW_NOT_PUBLISHED_DESCRIPTION}"
+
+   This is the only status write permitted outside the chain, and it is required. A "pending"
+   status is written when the review starts, so an ending that leaves it in place is
+   indistinguishable from a review still running: nothing else ever clears it, and a human
+   waiting on the check waits forever. Posting the failure is always better than posting
+   nothing. If the head has genuinely moved on, this status lands on the commit that was
+   superseded and the newer review publishes its own — so it is safe in every case.
 
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
