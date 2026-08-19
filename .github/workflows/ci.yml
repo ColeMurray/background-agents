@@ -246,9 +246,6 @@ jobs:
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
 
-      - name: Install workerd runtime dependency
-        run: sudo apt-get update && sudo apt-get install -y libc++1
-
       - name: Run control-plane integration tests
         run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}
 
