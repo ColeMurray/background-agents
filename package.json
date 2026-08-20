@@ -14,6 +14,7 @@
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
     "test:lint-complexity": "node --test scripts/lint-complexity-message.test.mjs",
+    "test:sandbox-runtime-js": "node --test \"packages/sandbox-runtime/tests/*.test.mjs\"",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:integration": "npm run test:integration --workspaces --if-present",
     "typecheck": "npm run build -w @open-inspect/shared && npm run typecheck --workspaces --if-present",
