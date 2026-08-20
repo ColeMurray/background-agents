@@ -1063,6 +1063,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const userEnvVars = {
         OPENAI_OAUTH_MANAGED: "1",
