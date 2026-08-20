@@ -71,9 +71,9 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     }
 
     const current: Array<[ImageBuildProvider, string]> = [
-      ["modal", "v59-opencode-1-18-18"],
-      ["opencomputer", "v59-vnc-opencode-1-18-18"],
-      ["vercel", "v59-vnc-opencode-1-18-18"],
+      ["modal", "v60-provider-account-broker"],
+      ["opencomputer", "v60-provider-account-broker"],
+      ["vercel", "v60-provider-account-broker"],
     ];
     for (const [provider, runtime_version] of current) {
       expect(

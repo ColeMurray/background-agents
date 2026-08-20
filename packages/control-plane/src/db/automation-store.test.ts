@@ -123,17 +123,22 @@ const sampleRunRow: AutomationRunRow = {
 
 describe("toAutomation", () => {
   it("converts row to camelCase Automation", () => {
-    const automation = toAutomation(sampleRow, [
-      {
-        automation_id: "auto_test1",
-        repo_owner: "acme",
-        repo_name: "web-app",
-        repo_id: 12345,
-        base_branch: "main",
-        created_at: now,
-        updated_at: now,
-      },
-    ]);
+    const automation = toAutomation(
+      sampleRow,
+      [
+        {
+          automation_id: "auto_test1",
+          repo_owner: "acme",
+          repo_name: "web-app",
+          repo_id: 12345,
+          base_branch: "main",
+          created_at: now,
+          updated_at: now,
+        },
+      ],
+      [],
+      []
+    );
     expect(automation.id).toBe("auto_test1");
     expect(automation.repositories).toEqual([
       { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
@@ -167,19 +172,54 @@ describe("toAutomation", () => {
           created_at: now,
           updated_at: now,
         },
-      ]
+      ],
+      []
     );
     expect(automation.environmentIds).toEqual(["env_abc", "env_def"]);
   });
 
   it("converts enabled=0 to false", () => {
-    const automation = toAutomation({ ...sampleRow, enabled: 0 }, []);
+    const automation = toAutomation({ ...sampleRow, enabled: 0 }, [], [], []);
     expect(automation.enabled).toBe(false);
   });
 
   it("maps repo-less automations to an empty repository list", () => {
-    const automation = toAutomation(sampleRow, []);
+    const automation = toAutomation(sampleRow, [], [], []);
     expect(automation.repositories).toEqual([]);
+  });
+
+  it("hydrates provider selections from auth rows", () => {
+    const automation = toAutomation(
+      sampleRow,
+      [],
+      [],
+      [
+        {
+          automation_id: sampleRow.id,
+          provider: "openai",
+          auth_mode: "provider_account",
+          provider_account_id: "0123456789abcdef0123456789abcdef",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          automation_id: sampleRow.id,
+          provider: "xai",
+          auth_mode: "api_key",
+          provider_account_id: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ]
+    );
+
+    expect(automation.providerSelections).toEqual({
+      openai: {
+        mode: "provider_account",
+        accountId: "0123456789abcdef0123456789abcdef",
+      },
+      xai: { mode: "api_key" },
+    });
   });
 });
 

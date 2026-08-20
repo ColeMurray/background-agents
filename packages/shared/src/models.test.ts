@@ -7,6 +7,7 @@ import {
   MODEL_REASONING_CONFIG,
   VALID_MODELS,
   extractProviderAndModel,
+  getSubscriptionProviderForModel,
   getDefaultReasoningEffort,
   getReasoningConfig,
   getValidModelOrDefault,
@@ -227,6 +228,30 @@ describe("model utilities", () => {
       provider: "anthropic",
       model: "unknown-model",
     });
+  });
+
+  it("strictly derives subscription providers from canonical catalog routes", () => {
+    expect(getSubscriptionProviderForModel("openai/gpt-5.6-sol")).toBe("openai");
+    expect(getSubscriptionProviderForModel("xai/grok-4.6")).toBe("xai");
+    expect(getSubscriptionProviderForModel("anthropic/claude-sonnet-4-6")).toBeNull();
+    expect(getSubscriptionProviderForModel("deepseek/deepseek-v4-pro")).toBeNull();
+  });
+
+  it("rejects bare, malformed, and unknown billing model routes", () => {
+    for (const model of [
+      "gpt-5.6-sol",
+      "claude-sonnet-4-6",
+      "openai",
+      "/gpt-5.6-sol",
+      "openai/",
+      "openai/gpt-5.6-sol/extra",
+      "OpenAI/gpt-5.6-sol",
+      "openai/not-in-catalog",
+      "unknown/model",
+      "",
+    ]) {
+      expect(() => getSubscriptionProviderForModel(model)).toThrow();
+    }
   });
 
   it("returns canonical valid models or the default fallback", () => {

@@ -36,10 +36,14 @@ function stubFetch({ codex, broker, usage } = {}) {
   globalThis.fetch = async (url, init) => {
     const target = String(url);
     calls.push({ url: target, headers: new Headers(init?.headers), body: init?.body });
-    if (target.includes("/openai-token-refresh")) {
+    if (target.includes("/provider-auth/openai/access-token")) {
       return (
         broker?.() ??
-        Response.json({ access_token: "cp-access", account_id: "acct-1", expires_in: 3600 })
+        Response.json({
+          accessToken: "cp-access",
+          expiresIn: 3600,
+          providerMetadata: { accountId: "acct-1" },
+        })
       );
     }
     if (target.includes("/wham/usage")) {

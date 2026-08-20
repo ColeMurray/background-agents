@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { PROVIDER_TOKEN_REFRESH_TIMEOUT_MS } from "./provider-token-timeouts";
 
 const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-const XAI_TOKEN_REQUEST_TIMEOUT_MS = 10_000;
 
 const xaiTokenResponseSchema = z.object({
   access_token: z.string().min(1),
@@ -44,7 +44,7 @@ function classifyRefreshError(status: number, body: string): XaiTokenRefreshErro
 export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenResponse> {
   const response = await fetch(XAI_TOKEN_URL, {
     method: "POST",
-    signal: AbortSignal.timeout(XAI_TOKEN_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(PROVIDER_TOKEN_REFRESH_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",

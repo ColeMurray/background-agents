@@ -7,6 +7,7 @@ import {
   type AutomationRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
+import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { seedRun, fetchRuns } from "./run-helpers";
@@ -204,13 +205,42 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(row);
 
       const dbRow = (await store.getById("auto-map"))!;
-      const automation = toAutomation(dbRow, []);
+      const automation = toAutomation(dbRow, [], [], []);
       expect(automation.repositories).toEqual([]);
       expect(automation.scheduleCron).toBe("0 9 * * *");
       expect(automation.reasoningEffort).toBe("high");
       expect(automation.enabled).toBe(true);
       expect(automation.consecutiveFailures).toBe(2);
       expect(automation.createdBy).toBe("user-1");
+    });
+
+    it("round-trips provider selections into the hydrated automation", async () => {
+      const store = new AutomationStore(env.DB);
+      const providerAuthStore = new AutomationModelProviderAuthStore(env.DB);
+      const row = makeAutomation({ id: "auto-provider-auth" });
+      await store.create(row);
+      await env.DB.batch(
+        providerAuthStore.bindInserts(
+          row.id,
+          {
+            openai: { mode: "api_key" },
+            xai: { mode: "api_key" },
+          },
+          Date.now()
+        )
+      );
+
+      const automation = toAutomation(
+        (await store.getById(row.id))!,
+        [],
+        [],
+        await providerAuthStore.list(row.id)
+      );
+
+      expect(automation.providerSelections).toEqual({
+        openai: { mode: "api_key" },
+        xai: { mode: "api_key" },
+      });
     });
   });
 

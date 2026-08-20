@@ -32,6 +32,7 @@ function automation(id: string, name: string): Automation {
     triggerConfig: { conditions: [] },
     repositories: [],
     environmentIds: [],
+    providerSelections: {},
   };
 }
 

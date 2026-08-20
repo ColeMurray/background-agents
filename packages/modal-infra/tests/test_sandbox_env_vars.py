@@ -167,6 +167,55 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     assert NOVNC_PORT_ENV_VAR not in env_vars
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("managed_marker", "suppressed_api_key"),
+    [
+        ("OPENAI_OAUTH_MANAGED", "OPENAI_API_KEY"),
+        ("XAI_OAUTH_MANAGED", "XAI_API_KEY"),
+    ],
+)
+async def test_create_preserves_managed_provider_env_isolation(
+    monkeypatch, managed_marker, suppressed_api_key
+):
+    captured = {}
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
+
+    await SandboxManager().create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            user_env_vars={managed_marker: "1", "CUSTOM_SECRET": "value"},
+        )
+    )
+
+    assert captured["env"][managed_marker] == "1"
+    assert suppressed_api_key not in captured["env"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("managed_marker", "suppressed_api_key"),
+    [
+        ("OPENAI_OAUTH_MANAGED", "OPENAI_API_KEY"),
+        ("XAI_OAUTH_MANAGED", "XAI_API_KEY"),
+    ],
+)
+async def test_restore_preserves_managed_provider_env_isolation(
+    monkeypatch, managed_marker, suppressed_api_key
+):
+    captured = _fake_restore_setup(monkeypatch)
+
+    await SandboxManager().restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={"session_id": "sess-1"},
+        user_env_vars={managed_marker: "1", "CUSTOM_SECRET": "value"},
+    )
+
+    assert captured["env"][managed_marker] == "1"
+    assert suppressed_api_key not in captured["env"]
+
+
 def test_generated_vnc_password_respects_protocol_limit():
     assert len(SandboxManager._generate_vnc_password().encode()) == VNC_PASSWORD_MAX_BYTES
 
