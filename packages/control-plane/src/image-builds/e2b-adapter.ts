@@ -9,6 +9,9 @@ import type {
   ImageBuildStartCallbacks,
 } from "./types";
 import { resolveImageBuildProviderSessionTimeoutSeconds } from "./timeouts";
+import { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { E2BApiError } from "../sandbox/e2b-rest-client";
+import { SandboxProviderError } from "../sandbox/provider";
 
 const MS_PER_SECOND = 1000;
 
@@ -49,16 +52,34 @@ export class E2BImageBuildAdapter implements ImageBuildAdapter {
   async finalizeSuccessfulBuild(
     input: FinalizeImageBuildInput
   ): Promise<ImageBuildProviderImageRef> {
-    const snapshot = await this.provider.takePrebuiltImageSnapshot({
-      providerObjectId: input.providerSessionId,
-      sessionId: input.buildId,
-      reason: "environment_image_build",
-      correlation: {
-        ...input.correlation,
-        sandbox_id: input.providerSessionId,
-      },
-      signal: input.signal,
-    });
+    let snapshot;
+    try {
+      snapshot = await this.provider.takePrebuiltImageSnapshot({
+        providerObjectId: input.providerSessionId,
+        sessionId: input.buildId,
+        reason: "environment_image_build",
+        correlation: {
+          ...input.correlation,
+          sandbox_id: input.providerSessionId,
+        },
+        signal: input.signal,
+      });
+    } catch (error) {
+      // ImageBuildFinalizer retries only definitely_not_created; anything else
+      // fails the build and kills the sandbox. A 429 is a *rejected* request, so
+      // none of pause / connect / createSnapshot can have produced a template —
+      // translate it into a retry, as ModalImageBuildAdapter does.
+      if (
+        error instanceof SandboxProviderError &&
+        error.cause instanceof E2BApiError &&
+        error.cause.status === 429
+      ) {
+        throw new ImageBuildFinalizationAttemptError(error.message, "definitely_not_created", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
 
     if (!snapshot.success || !snapshot.imageId) {
       throw new Error(snapshot.error || "E2B snapshot did not return an image id");

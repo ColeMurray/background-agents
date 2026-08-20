@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { E2BApiError } from "../sandbox/e2b-rest-client";
+import { SandboxProviderError } from "../sandbox/provider";
+import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 import type { E2BSandboxProvider } from "../sandbox/providers/e2b-provider";
 import { E2BImageBuildAdapter } from "./e2b-adapter";
 import { resolveImageBuildProviderSessionTimeoutSeconds } from "./timeouts";
@@ -126,6 +129,47 @@ describe("E2BImageBuildAdapter", () => {
         correlation: { request_id: "request-1", trace_id: "trace-1" },
       })
     ).rejects.toThrow(/boom/);
+  });
+
+  it("turns a rate-limited bake into a retryable finalization attempt", async () => {
+    const provider = createProvider();
+    vi.mocked(provider.takePrebuiltImageSnapshot).mockRejectedValueOnce(
+      new SandboxProviderError(
+        "Failed to bake E2B image snapshot (rate-limited during snapshot)",
+        "transient",
+        new E2BApiError("slow down", 429)
+      )
+    );
+    const adapter = new E2BImageBuildAdapter(provider);
+
+    // A 429 rejects the request, so no template exists; the finalizer retries
+    // definitely_not_created instead of failing the build and killing the sandbox.
+    await expect(
+      adapter.finalizeSuccessfulBuild({
+        buildId: "build-1",
+        providerSessionId: "e2b-session-1",
+        correlation: { request_id: "request-1", trace_id: "trace-1" },
+      })
+    ).rejects.toMatchObject({
+      name: "ImageBuildFinalizationAttemptError",
+      outcome: "definitely_not_created",
+    });
+  });
+
+  it("leaves non-rate-limit provider failures terminal", async () => {
+    const provider = createProvider();
+    vi.mocked(provider.takePrebuiltImageSnapshot).mockRejectedValueOnce(
+      new SandboxProviderError("boom", "permanent", new E2BApiError("gone", 500))
+    );
+    const adapter = new E2BImageBuildAdapter(provider);
+
+    await expect(
+      adapter.finalizeSuccessfulBuild({
+        buildId: "build-1",
+        providerSessionId: "e2b-session-1",
+        correlation: { request_id: "request-1", trace_id: "trace-1" },
+      })
+    ).rejects.not.toBeInstanceOf(ImageBuildFinalizationAttemptError);
   });
 
   it("kills the build sandbox after a completed build", async () => {

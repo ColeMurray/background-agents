@@ -72,16 +72,19 @@ def main() -> None:
                     _log("session env is not a JSON object — retrying")
         time.sleep(POLL_INTERVAL_SECONDS)
 
-    # Delete the consumed env file before exec. An image-build sandbox is baked
-    # into a reusable snapshot; if this file survived on disk, a sandbox cold-
-    # booted from that snapshot would read the *build's* stale env (build mode,
-    # build callbacks) before the control plane wrote the new session env. The
-    # image build additionally sanitizes via pause(keepMemory:false)+connect, but
-    # removing the file here keeps the snapshot filesystem clean regardless.
+    # Delete the consumed env file before exec, and refuse to start if we can't.
+    # An image-build sandbox is baked into a reusable snapshot; if this file
+    # survived on disk, a sandbox cold-booted from that snapshot would read the
+    # *build's* stale env (build mode, build callbacks, clone token) before the
+    # control plane wrote the new session env — and every sandbox spawned from
+    # that image would carry the build's credentials. Continuing past a failed
+    # removal would make the sanitization this bake depends on untrue, so treat
+    # anything other than "already gone" as fatal.
     try:
         Path(SESSION_ENV_PATH).unlink(missing_ok=True)
     except OSError as e:
-        _log(f"could not remove session env file (continuing): {e}")
+        _log(f"could not remove session env file; refusing to start: {e}")
+        raise
 
     env = {**os.environ, **STATIC_ENV}
     for k, v in session_env.items():

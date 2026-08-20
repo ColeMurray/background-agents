@@ -76,18 +76,18 @@ RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_c
 # Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
 # so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
 # control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.
-# SANDBOX_VERSION here is build-time provenance only — it does NOT reach the
-# supervisor, for the reason stated just above. The value a build actually
-# reports (and that must parse as v<N> >= MIN_COMPATIBLE_RUNTIME_VERSION, or
-# spawn-time selection rejects every prebuilt image) is E2B_SANDBOX_VERSION in
-# control-plane e2b-provider.ts, injected via the session env file. Kept equal
-# to it so the two do not read as different builds.
+#
+# Deliberately no SANDBOX_VERSION here. It would never reach the supervisor (see
+# above), so a literal could only rot: image selection gates on the version a
+# build *reports*, which comes from E2B_SANDBOX_VERSION in the control plane —
+# derived from sandbox_runtime/runtime_manifest.json. A second copy in this file
+# would drift below the floor the next time the manifest bumps, with nothing to
+# catch it.
 ENV HOME=/root \
     NODE_ENV=development \
     PATH=/usr/local/bin:/usr/bin:/bin \
     PYTHONPATH=/app \
-    NODE_PATH=/usr/lib/node_modules \
-    SANDBOX_VERSION=v57-vnc-opencode-1-18-11
+    NODE_PATH=/usr/lib/node_modules
 
 # NOTE: file staging (sandbox_runtime, oi-launch.py), WORKDIR, and the start/ready
 # commands are applied by build-template.py via the E2B Template SDK

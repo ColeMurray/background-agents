@@ -10,13 +10,13 @@
  * template's start command runs at build time.
  *
  * Prebuilt images (snapshots): the image-build workflow runs `.openinspect/setup.sh`
- * once in a build sandbox (triggerImageBuild), then bakes its filesystem
- * into a reusable snapshot template (takePrebuiltImageSnapshot →
- * `POST /sandboxes/{id}/snapshots`).
- * The snapshot id doubles as a `templateID`, so a prebuilt/restored sandbox is just a
- * create with that id in place of the base template. The snapshot resumes oi-launch
- * in its env wait loop, where it reads the freshly written per-session env — so
- * prebuilt boots reuse the baked filesystem while still getting fresh session config.
+ * once in a build sandbox (triggerImageBuild), then bakes its filesystem into a
+ * reusable snapshot template (takePrebuiltImageSnapshot →
+ * `POST /sandboxes/{id}/snapshots`). The snapshot id doubles as a `templateID`, so a
+ * prebuilt spawn is just a create with that id in place of the base template. The
+ * snapshot resumes oi-launch in its env wait loop, where it reads the freshly written
+ * per-session env — so prebuilt boots reuse the baked filesystem while still getting
+ * fresh session config.
  */
 
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
@@ -31,6 +31,7 @@ import {
   imageBuildSandboxIdentity,
   scmCloneIdentity,
 } from "../sandbox-env";
+import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxCreated, E2BSandboxDetail } from "../e2b-rest-client";
@@ -42,8 +43,6 @@ import {
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type ImageBuildProviderTriggerConfig,
-  type RestoreConfig,
-  type RestoreResult,
   type ResumeConfig,
   type ResumeResult,
   type SandboxProvider,
@@ -62,14 +61,16 @@ export const DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS = DEFAULT_SANDBOX_TIMEOUT_SECON
 export const DEFAULT_E2B_AUTO_PAUSE = true;
 
 /**
- * Runtime version baked into the E2B template, reported by build sandboxes so
- * spawn-time selection can gate on the compatibility floor
- * (MIN_COMPATIBLE_RUNTIME_VERSION). E2B does not propagate the Dockerfile's
- * SANDBOX_VERSION to the runtime process, so builds get it here instead. Keep in
- * sync with the toolchain pinned in e2b.Dockerfile (OPENCODE_VERSION) and the
- * matching Vercel/OpenComputer constants.
+ * Runtime version reported by E2B build sandboxes, so spawn-time selection can
+ * gate on the compatibility floor (MIN_COMPATIBLE_RUNTIME_VERSION). E2B does not
+ * propagate the Dockerfile's SANDBOX_VERSION to the runtime process, so builds
+ * get it from the session env instead.
+ *
+ * Derived from the manifest rather than pinned, exactly as VERCEL_SANDBOX_VERSION
+ * is: a literal here silently drifts below the floor when the manifest bumps, and
+ * every image built under it is then rejected as runtime_below_floor.
  */
-export const E2B_SANDBOX_VERSION = "v57-vnc-opencode-1-18-11";
+export const E2B_SANDBOX_VERSION = SANDBOX_RUNTIME_VERSION;
 
 /**
  * TTL for the brief cold-boot between the sanitizing pause and createSnapshot
@@ -101,17 +102,25 @@ export class E2BSandboxProvider implements SandboxProvider {
    */
   private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout", "respawn"]);
 
+  /**
+   * Session continuity on E2B is provider-managed: stop pauses the sandbox and
+   * resume reconnects to it, so there is no session snapshot/restore pair here.
+   *
+   * Adding one would be a second, losing mechanism. `evaluateSpawnDecision`
+   * consults `supportsPersistentResume` before `snapshotImageId`, so a
+   * stopped/stale E2B sandbox always resumes; and when resume gives up
+   * (`shouldSpawnFresh`) the manager spawns fresh rather than consulting a
+   * snapshot. On top of that, every E2B snapshot is a durable template in the
+   * team account with no TTL — unlike Vercel's expiring snapshots — so a
+   * per-execution `takeSnapshot` would leak one template per turn.
+   *
+   * Prebuilt images are unaffected: they spawn through createSandbox with the
+   * image id as the templateID, and are baked by takePrebuiltImageSnapshot.
+   */
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSandboxTimeout: true,
-    // Deliberately off, even though restoreFromSnapshot is implemented below.
-    // Enabling it makes the lifecycle manager snapshot after every execution,
-    // and on E2B each snapshot is a durable template in the team account with
-    // no TTL (unlike Vercel's expiring snapshots). The stored id is overwritten
-    // on the next turn, so every superseded template leaks. Turning this on
-    // needs a reaper first. Prebuilt images do not depend on it: they spawn
-    // through createSandbox with the image id as the templateID.
     supportsSnapshots: false,
-    supportsRestore: true,
+    supportsRestore: false,
     // Stop is a resumable pause; the manager treats it as provider-managed state.
     supportsPersistentResume: true,
     supportsExplicitStop: true,
@@ -176,75 +185,6 @@ export class E2BSandboxProvider implements SandboxProvider {
       };
     } catch (error) {
       throw this.classifyError("Failed to create E2B sandbox", error, "create");
-    }
-  }
-
-  /**
-   * Spawn a session from a session snapshot, which — unlike a prebuilt image —
-   * captures live process memory: the snapshotted supervisor would otherwise
-   * wake up holding the previous session's credentials. The sandbox is created
-   * with outbound networking off, its memory is dropped (pause memory:false)
-   * and cold-booted back into the template launcher, the fresh per-session env
-   * is delivered, and only then is outbound networking re-enabled.
-   *
-   * The network stays off until after the env write on purpose. Delivering env
-   * is an inbound envd call, which `allow_internet_access` does not gate, so
-   * nothing needs the network before that point — while a cold boot that found
-   * a stale /tmp/oi-session.env on the snapshot filesystem (oi-launch.py
-   * removes it after reading, but only best-effort) would exec a supervisor
-   * holding the previous session's credentials. Keeping outbound off across
-   * that window is the whole point of the quarantine.
-   */
-  async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
-    let sandbox: E2BSandboxCreated | undefined;
-    try {
-      const { envVars, codeServerPassword, vncPassword } = await this.buildRuntimeEnv(config, {
-        RESTORED_FROM_SNAPSHOT: "true",
-      });
-      const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
-      sandbox = await this.client.createSandbox({
-        templateID: config.snapshotImageId,
-        metadata: this.buildMetadata(config),
-        timeoutSeconds,
-        autoPause: this.providerConfig.autoPause,
-        autoResume: false,
-        secure: true,
-        allowInternetAccess: false,
-      });
-
-      // Drop the captured process memory, then cold-boot the template launcher.
-      // connect reports the sandbox's current envd token, which the env write below uses.
-      await this.client.pauseSandbox(sandbox.sandboxID, { memory: false });
-      const connected = await this.client.connectSandbox(sandbox.sandboxID, timeoutSeconds);
-      await this.deliverSessionEnv(
-        { ...connected, domain: connected.domain ?? sandbox.domain },
-        envVars
-      );
-      await this.client.updateSandboxNetwork(connected.sandboxID, { allowInternetAccess: true });
-
-      const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
-        connected.sandboxID,
-        config.codeServerEnabled,
-        config.vncEnabled,
-        config.sandboxSettings,
-        connected.domain ?? sandbox.domain
-      );
-
-      return {
-        success: true,
-        sandboxId: config.sandboxId,
-        providerObjectId: connected.sandboxID,
-        codeServerUrl,
-        codeServerPassword,
-        vncAccess: createVncAccess(vncUrl, vncPassword),
-        tunnelUrls,
-      };
-    } catch (error) {
-      if (sandbox) {
-        await this.cleanupSandbox(sandbox.sandboxID, "e2b.restore_cleanup_kill_failed");
-      }
-      if (error instanceof SandboxProviderError) throw error;
-      throw this.classifyError("Failed to restore E2B sandbox from snapshot", error, "create");
     }
   }
 
@@ -505,7 +445,7 @@ export class E2BSandboxProvider implements SandboxProvider {
    * the create and restore paths.
    */
   private async buildRuntimeEnv(
-    config: CreateSandboxConfig | RestoreConfig,
+    config: CreateSandboxConfig,
     extraEnv: Record<string, string>
   ): Promise<{
     envVars: Record<string, string>;
@@ -591,7 +531,7 @@ export class E2BSandboxProvider implements SandboxProvider {
     }
   }
 
-  private buildMetadata(config: CreateSandboxConfig | RestoreConfig): Record<string, string> {
+  private buildMetadata(config: CreateSandboxConfig): Record<string, string> {
     const metadata: Record<string, string> = {
       openinspect_framework: "open-inspect",
       openinspect_session_id: config.sessionId,

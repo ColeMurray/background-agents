@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
-import { E2BSandboxProvider, type E2BProviderConfig } from "./e2b-provider";
+import { E2BSandboxProvider, E2B_SANDBOX_VERSION, type E2BProviderConfig } from "./e2b-provider";
+import {
+  MIN_COMPATIBLE_RUNTIME_VERSION,
+  parseRuntimeVersionNumber,
+} from "../../image-builds/model";
 import { SandboxProviderError } from "../provider";
 import {
   E2BNotFoundError,
@@ -435,15 +439,26 @@ describe("E2BSandboxProvider", () => {
 describe("E2BSandboxProvider prebuilt images / snapshots", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("advertises restore support but keeps generic session snapshots off", () => {
+  it("keeps session snapshot/restore off in favour of provider-managed resume", () => {
     const provider = new E2BSandboxProvider(mockClient(), providerConfig);
-    expect(provider.capabilities.supportsRestore).toBe(true);
-    // Every E2B snapshot is a durable, TTL-less template. Enabling this makes the
-    // lifecycle manager snapshot after every execution and leak the superseded
-    // template each turn, so it stays off until a reaper exists. Prebuilt images
-    // do not need it — they spawn through createSandbox.
+    // E2B stop/resume already carries a session across idle, and it wins in
+    // evaluateSpawnDecision anyway. A snapshot pair here would be a second,
+    // unreachable mechanism that leaks a durable TTL-less template per turn.
+    expect(provider.capabilities.supportsPersistentResume).toBe(true);
     expect(provider.capabilities.supportsSnapshots).toBe(false);
+    expect(provider.capabilities.supportsRestore).toBe(false);
     expect("takeSnapshot" in provider).toBe(false);
+    expect("restoreFromSnapshot" in provider).toBe(false);
+  });
+
+  it("reports a runtime version at or above the image-selection floor", () => {
+    // A version below the floor makes evaluateImageBuildForSpawn reject every
+    // image this provider builds (runtime_below_floor), silently disabling
+    // prebuilt images. Mirrors the Vercel assertion.
+    const version = parseRuntimeVersionNumber(E2B_SANDBOX_VERSION);
+
+    expect(version).not.toBeNull();
+    expect(version).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
   });
 
   it("createSandbox with no prebuilt image uses the base template and no repo-image markers", async () => {
@@ -471,63 +486,6 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
     expect(env.FROM_REPO_IMAGE).toBe("true");
     expect(env.REPO_IMAGE_SHA).toBe("abc123");
-  });
-
-  it("restoreFromSnapshot quarantines captured memory, cold-boots, then delivers fresh env", async () => {
-    const client = mockClient();
-    const result = await new E2BSandboxProvider(client, providerConfig).restoreFromSnapshot({
-      ...baseCreateConfig,
-      snapshotImageId: "snap-restore:default",
-    });
-    expect(result.success).toBe(true);
-    expect(result.providerObjectId).toBe("e2b-id");
-    expect(client.createSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({
-        templateID: "snap-restore:default",
-        allowInternetAccess: false,
-        secure: true,
-      })
-    );
-    expect(client.pauseSandbox).toHaveBeenCalledWith("e2b-id", { memory: false });
-    expect(client.connectSandbox).toHaveBeenCalledWith("e2b-id", 1800);
-    expect(client.updateSandboxNetwork).toHaveBeenCalledWith("e2b-id", {
-      allowInternetAccess: true,
-    });
-    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
-    expect(env.RESTORED_FROM_SNAPSHOT).toBe("true");
-    expect(client.writeSessionEnv).toHaveBeenCalledWith(
-      "e2b-id",
-      expect.any(Object),
-      expect.objectContaining({ envdAccessToken: "fresh-envd-token" })
-    );
-    const pauseOrder = vi.mocked(client.pauseSandbox).mock.invocationCallOrder[0];
-    const connectOrder = vi.mocked(client.connectSandbox).mock.invocationCallOrder[0];
-    const networkOrder = vi.mocked(client.updateSandboxNetwork).mock.invocationCallOrder[0];
-    const envOrder = vi.mocked(client.writeSessionEnv).mock.invocationCallOrder[0];
-    expect(pauseOrder).toBeLessThan(connectOrder);
-    expect(connectOrder).toBeLessThan(envOrder);
-    // Outbound stays off until the fresh session env has landed: a cold boot that
-    // found a stale /tmp/oi-session.env would otherwise be online while holding
-    // the previous session's credentials.
-    expect(envOrder).toBeLessThan(networkOrder);
-  });
-
-  it("restoreFromSnapshot kills the sandbox when the cold boot fails", async () => {
-    const client = mockClient({
-      connectSandbox: vi.fn(async () => {
-        throw new Error("cold boot failed");
-      }),
-    });
-    await expect(
-      new E2BSandboxProvider(client, providerConfig).restoreFromSnapshot({
-        ...baseCreateConfig,
-        snapshotImageId: "snap-restore:default",
-      })
-    ).rejects.toThrow(/Failed to restore E2B sandbox/);
-    expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
-    // Never reached, so the quarantined sandbox is torn down with outbound off.
-    expect(client.updateSandboxNetwork).not.toHaveBeenCalled();
-    expect(client.writeSessionEnv).not.toHaveBeenCalled();
   });
 
   it("takePrebuiltImageSnapshot sanitizes via pause(memory:false)+connect before snapshot", async () => {
