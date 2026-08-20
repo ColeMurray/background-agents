@@ -1,6 +1,10 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as SandboxProviderModuleNamespace from "@/lib/sandbox-provider";
+
+type SandboxProviderModule = typeof SandboxProviderModuleNamespace;
+
 const mocks = vi.hoisted(() => ({
   supportsRepoImagesValue: true,
 }));
@@ -13,12 +17,16 @@ vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-vi.mock("@/lib/sandbox-provider", () => ({
+// Only the provider probe is stubbed; the 501 copy comes from the real module so
+// the assertion below pins the message routes actually answer with.
+vi.mock("@/lib/sandbox-provider", async (importOriginal) => ({
+  ...(await importOriginal<SandboxProviderModule>()),
   supportsRepoImages: () => mocks.supportsRepoImagesValue,
 }));
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { REPO_IMAGES_UNSUPPORTED_MESSAGE } from "@/lib/sandbox-provider";
 import { GET as getEnvironmentStatus } from "./[id]/images/route";
 import { POST as triggerBuild } from "./[id]/images/trigger/route";
 
@@ -59,6 +67,9 @@ describe.each(routes)("$name", ({ call }) => {
     const response = await call();
 
     expect(response.status).toBe(501);
+    // Every image-build route answers with the one derived message, so adding a
+    // provider cannot leave a stale list behind on some subset of routes.
+    expect(await response.json()).toEqual({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE });
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 

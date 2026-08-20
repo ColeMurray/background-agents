@@ -76,10 +76,12 @@ RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_c
 # Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
 # so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
 # control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.
-# SANDBOX_VERSION must parse as v<N> (>= MIN_COMPATIBLE_RUNTIME_VERSION) so
-# prebuilt images built from this template clear the spawn-time floor. Keep it in
-# sync with E2B_SANDBOX_VERSION in control-plane e2b-provider.ts and the pinned
-# OPENCODE_VERSION above.
+# SANDBOX_VERSION here is build-time provenance only — it does NOT reach the
+# supervisor, for the reason stated just above. The value a build actually
+# reports (and that must parse as v<N> >= MIN_COMPATIBLE_RUNTIME_VERSION, or
+# spawn-time selection rejects every prebuilt image) is E2B_SANDBOX_VERSION in
+# control-plane e2b-provider.ts, injected via the session env file. Kept equal
+# to it so the two do not read as different builds.
 ENV HOME=/root \
     NODE_ENV=development \
     PATH=/usr/local/bin:/usr/bin:/bin \

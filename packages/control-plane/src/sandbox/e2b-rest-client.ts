@@ -246,13 +246,11 @@ export class E2BRestClient {
    * image-build path uses that to discard the build supervisor (and its secret
    * env) before baking a reusable snapshot.
    */
-  async pauseSandbox(id: string, opts?: { memory?: boolean }): Promise<void> {
-    await this.requestVoid(
-      "POST",
-      `/sandboxes/${id}/pause`,
-      TIMEOUT_PAUSE_MS,
-      opts?.memory === undefined ? undefined : { body: { memory: opts.memory } }
-    );
+  async pauseSandbox(id: string, opts?: { memory?: boolean }, signal?: AbortSignal): Promise<void> {
+    await this.requestVoid("POST", `/sandboxes/${id}/pause`, TIMEOUT_PAUSE_MS, {
+      ...(opts?.memory === undefined ? {} : { body: { memory: opts.memory } }),
+      signal,
+    });
   }
 
   /**
@@ -265,13 +263,17 @@ export class E2BRestClient {
    * the restore path connects a sandbox it did not create, so this is where it
    * gets the token to write the per-session env with.
    */
-  async connectSandbox(id: string, timeoutSeconds: number): Promise<E2BSandboxCreated> {
+  async connectSandbox(
+    id: string,
+    timeoutSeconds: number,
+    signal?: AbortSignal
+  ): Promise<E2BSandboxCreated> {
     return this.requestJson(
       "POST",
       `/sandboxes/${id}/connect`,
       TIMEOUT_CONNECT_MS,
       e2bSandboxCreatedSchema,
-      { body: { timeout: timeoutSeconds } }
+      { body: { timeout: timeoutSeconds }, signal }
     );
   }
 
@@ -304,7 +306,10 @@ export class E2BRestClient {
    * sandbox. Used by the image-build workflow after `.openinspect/setup.sh` has
    * run once in the build sandbox.
    */
-  async createSnapshot(id: string, name?: string): Promise<E2BSnapshotInfo> {
+  async createSnapshot(
+    id: string,
+    options?: { name?: string; signal?: AbortSignal }
+  ): Promise<E2BSnapshotInfo> {
     const startMs = Date.now();
     try {
       return await this.requestJson(
@@ -312,7 +317,7 @@ export class E2BRestClient {
         `/sandboxes/${id}/snapshots`,
         TIMEOUT_SNAPSHOT_MS,
         e2bSnapshotInfoSchema,
-        { body: name ? { name } : {} }
+        { body: options?.name ? { name: options.name } : {}, signal: options?.signal }
       );
     } finally {
       log.info("e2b.create_snapshot", { duration_ms: Date.now() - startMs, sandbox_id: id });
@@ -324,11 +329,12 @@ export class E2BRestClient {
    * build tag included, are passed verbatim as the E2B API requires. Used by the
    * image-build reaper to reclaim superseded prebuilt images.
    */
-  async deleteTemplate(templateId: string): Promise<void> {
+  async deleteTemplate(templateId: string, signal?: AbortSignal): Promise<void> {
     await this.requestVoid(
       "DELETE",
       `/templates/${encodeURIComponent(templateId)}`,
-      TIMEOUT_DELETE_TEMPLATE_MS
+      TIMEOUT_DELETE_TEMPLATE_MS,
+      { signal }
     );
   }
 

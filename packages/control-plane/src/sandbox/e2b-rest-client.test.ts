@@ -258,8 +258,23 @@ describe("E2BRestClient", () => {
   it("createSnapshot forwards an optional name", async () => {
     const client = new E2BRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(jsonResponse({ snapshotID: "snap-x:default", names: [] }, 201));
-    await client.createSnapshot("sb-1", "my-snap");
+    await client.createSnapshot("sb-1", { name: "my-snap" });
     expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ name: "my-snap" });
+  });
+
+  it("createSnapshot aborts when the caller's deadline fires", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    const caller = new AbortController();
+    fetchSpy.mockImplementation((_url: string, init: RequestInit) => {
+      caller.abort();
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      expect(init.signal?.aborted).toBe(true);
+      return Promise.reject(error);
+    });
+    await expect(client.createSnapshot("sb-1", { signal: caller.signal })).rejects.toThrow(
+      /timeout/
+    );
   });
 
   it("deleteTemplate passes the full snapshot id to E2B", async () => {

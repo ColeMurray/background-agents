@@ -21,8 +21,7 @@ const MS_PER_SECOND = 1000;
  *
  * Quiescing the build process before the snapshot is owned by the provider's
  * takePrebuiltImageSnapshot (pause memory:false → connect cold-boot → snapshot),
- * so the
- * adapter neither waits nor guesses when the build supervisor has exited.
+ * so the adapter neither waits nor guesses when the build supervisor has exited.
  */
 export class E2BImageBuildAdapter implements ImageBuildAdapter {
   constructor(private readonly provider: E2BSandboxProvider) {}
@@ -58,6 +57,7 @@ export class E2BImageBuildAdapter implements ImageBuildAdapter {
         ...input.correlation,
         sandbox_id: input.providerSessionId,
       },
+      signal: input.signal,
     });
 
     if (!snapshot.success || !snapshot.imageId) {
@@ -74,14 +74,21 @@ export class E2BImageBuildAdapter implements ImageBuildAdapter {
     // The snapshot taken in finalizeSuccessfulBuild is a standalone template;
     // it does not reference the build sandbox, so the box can be killed once
     // the build is done. E2B stop only pauses, so delete rather than stop.
-    await this.provider.deleteSandbox(input.providerSessionId);
+    await this.deleteBuildSandbox(input.providerSessionId, input.signal);
   }
 
   async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
-    await this.provider.deleteSandbox(input.providerSessionId);
+    await this.deleteBuildSandbox(input.providerSessionId, input.signal);
   }
 
   async deleteImage(input: DeleteImageInput): Promise<void> {
-    await this.provider.deleteProviderImage(input.image.providerImageId);
+    await this.provider.deleteProviderImage(
+      input.image.providerImageId,
+      ...(input.signal ? [input.signal] : [])
+    );
+  }
+
+  private async deleteBuildSandbox(providerSessionId: string, signal?: AbortSignal): Promise<void> {
+    await this.provider.deleteSandbox(providerSessionId, ...(signal ? [signal] : []));
   }
 }

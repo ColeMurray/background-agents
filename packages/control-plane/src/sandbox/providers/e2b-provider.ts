@@ -103,7 +103,14 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSandboxTimeout: true,
-    supportsSnapshots: true,
+    // Deliberately off, even though restoreFromSnapshot is implemented below.
+    // Enabling it makes the lifecycle manager snapshot after every execution,
+    // and on E2B each snapshot is a durable template in the team account with
+    // no TTL (unlike Vercel's expiring snapshots). The stored id is overwritten
+    // on the next turn, so every superseded template leaks. Turning this on
+    // needs a reaper first. Prebuilt images do not depend on it: they spawn
+    // through createSandbox with the image id as the templateID.
+    supportsSnapshots: false,
     supportsRestore: true,
     // Stop is a resumable pause; the manager treats it as provider-managed state.
     supportsPersistentResume: true,
@@ -125,18 +132,47 @@ export class E2BSandboxProvider implements SandboxProvider {
         extraEnv.FROM_REPO_IMAGE = "true";
         extraEnv.REPO_IMAGE_SHA = config.prebuiltImageSha ?? "";
       }
-      const templateId = config.prebuiltImageId || this.client.config.templateId;
-      const spawned = await this.spawnFromTemplate(config, templateId, extraEnv);
+
+      const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
+      const { envVars, codeServerPassword, vncPassword } = await this.buildRuntimeEnv(
+        config,
+        extraEnv
+      );
+
+      const sandbox = await this.client.createSandbox({
+        templateID: config.prebuiltImageId || this.client.config.templateId,
+        metadata: this.buildMetadata(config),
+        timeoutSeconds,
+        autoPause: this.providerConfig.autoPause,
+        // Require secure envd access: the per-session env we upload carries
+        // SANDBOX_AUTH_TOKEN + user secrets, so envd must reject writes lacking the
+        // returned access token (otherwise the upload is anonymous over the public host).
+        secure: true,
+        // Deliberately NOT auto-resume: resume is control-plane-driven (resumeSandbox →
+        // connectSandbox). Provider-side auto-resume would wake a paused sandbox from
+        // stray inbound traffic, outside the DO state machine.
+        autoResume: false,
+      });
+
+      await this.deliverSessionEnv(sandbox, envVars);
+
+      const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
+        sandbox.sandboxID,
+        config.codeServerEnabled,
+        config.vncEnabled,
+        config.sandboxSettings,
+        sandbox.domain
+      );
 
       return {
         sandboxId: config.sandboxId,
-        providerObjectId: spawned.providerObjectId,
+        providerObjectId: sandbox.sandboxID,
         status: "running",
-        createdAt: spawned.createdAt,
-        codeServerUrl: spawned.codeServerUrl,
-        codeServerPassword: spawned.codeServerPassword,
-        vncAccess: createVncAccess(spawned.vncUrl, spawned.vncPassword),
-        tunnelUrls: spawned.tunnelUrls,
+        createdAt: Date.now(),
+        codeServerUrl,
+        codeServerPassword,
+        vncAccess: createVncAccess(vncUrl, vncPassword),
+        tunnelUrls,
       };
     } catch (error) {
       throw this.classifyError("Failed to create E2B sandbox", error, "create");
@@ -148,8 +184,16 @@ export class E2BSandboxProvider implements SandboxProvider {
    * captures live process memory: the snapshotted supervisor would otherwise
    * wake up holding the previous session's credentials. The sandbox is created
    * with outbound networking off, its memory is dropped (pause memory:false)
-   * and cold-booted back into the template launcher, and only then is the
-   * network re-enabled and the fresh per-session env delivered.
+   * and cold-booted back into the template launcher, the fresh per-session env
+   * is delivered, and only then is outbound networking re-enabled.
+   *
+   * The network stays off until after the env write on purpose. Delivering env
+   * is an inbound envd call, which `allow_internet_access` does not gate, so
+   * nothing needs the network before that point — while a cold boot that found
+   * a stale /tmp/oi-session.env on the snapshot filesystem (oi-launch.py
+   * removes it after reading, but only best-effort) would exec a supervisor
+   * holding the previous session's credentials. Keeping outbound off across
+   * that window is the whole point of the quarantine.
    */
   async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
     let sandbox: E2BSandboxCreated | undefined;
@@ -172,16 +216,11 @@ export class E2BSandboxProvider implements SandboxProvider {
       // connect reports the sandbox's current envd token, which the env write below uses.
       await this.client.pauseSandbox(sandbox.sandboxID, { memory: false });
       const connected = await this.client.connectSandbox(sandbox.sandboxID, timeoutSeconds);
-      await this.client.updateSandboxNetwork(sandbox.sandboxID, { allowInternetAccess: true });
       await this.deliverSessionEnv(
-        {
-          sandboxID: connected.sandboxID,
-          templateID: connected.templateID,
-          domain: connected.domain ?? sandbox.domain,
-          envdAccessToken: connected.envdAccessToken,
-        },
+        { ...connected, domain: connected.domain ?? sandbox.domain },
         envVars
       );
+      await this.client.updateSandboxNetwork(connected.sandboxID, { allowInternetAccess: true });
 
       const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         connected.sandboxID,
@@ -210,18 +249,6 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Take a resumable snapshot of a live session without changing its runtime
-   * state. This is the generic lifecycle operation used after a prompt.
-   */
-  async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
-    try {
-      return await this.createSnapshotResult(config.providerObjectId);
-    } catch (error) {
-      throw this.classifyError("Failed to snapshot E2B sandbox", error, "snapshot");
-    }
-  }
-
-  /**
    * Bake an image-build sandbox into a reusable snapshot template, sanitized so
    * the image is a clean, quiescent cold boot rather than a frozen build process.
    *
@@ -235,17 +262,30 @@ export class E2BSandboxProvider implements SandboxProvider {
    * captures that clean state, so sandboxes spawned from it start a fresh
    * supervisor with their own per-session env (and never inherit build secrets in
    * memory).
+   *
+   * This is the only snapshot path E2B exposes; there is no generic
+   * `takeSnapshot` (see `capabilities.supportsSnapshots`).
    */
   async takePrebuiltImageSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
     try {
-      await this.client.pauseSandbox(config.providerObjectId, { memory: false });
+      await this.client.pauseSandbox(config.providerObjectId, { memory: false }, config.signal);
       // Cold-boot from disk; connect returns once the template ready-check passes,
       // i.e. once the launcher is back up and waiting — no readiness guesswork.
-      await this.client.connectSandbox(config.providerObjectId, SNAPSHOT_CONNECT_TIMEOUT_SECONDS);
+      await this.client.connectSandbox(
+        config.providerObjectId,
+        SNAPSHOT_CONNECT_TIMEOUT_SECONDS,
+        config.signal
+      );
       // No name: each build gets a distinct snapshot template. Superseded images
       // are reclaimed by the reaper via deleteProviderImage, so reusing a name
       // (which would reassign builds to one template) buys nothing.
-      return await this.createSnapshotResult(config.providerObjectId);
+      const snapshot = await this.client.createSnapshot(config.providerObjectId, {
+        signal: config.signal,
+      });
+      if (!snapshot.snapshotID) {
+        return { success: false, error: "E2B snapshot did not return a snapshot id" };
+      }
+      return { success: true, imageId: snapshot.snapshotID };
     } catch (error) {
       throw this.classifyError("Failed to bake E2B image snapshot", error, "snapshot");
     }
@@ -365,9 +405,9 @@ export class E2BSandboxProvider implements SandboxProvider {
    * (correct for idle sessions) and would leak the single-use build sandbox
    * until its TTL. Idempotent — a missing sandbox is treated as already gone.
    */
-  async deleteSandbox(providerObjectId: string): Promise<void> {
+  async deleteSandbox(providerObjectId: string, signal?: AbortSignal): Promise<void> {
     try {
-      await this.client.killSandbox(providerObjectId);
+      await this.client.killSandbox(providerObjectId, signal);
     } catch (error) {
       if (error instanceof E2BNotFoundError) return;
       throw this.classifyError("Failed to delete E2B sandbox", error, "stop");
@@ -444,90 +484,20 @@ export class E2BSandboxProvider implements SandboxProvider {
       // deliverSessionEnv kills on write failure; this covers a create-time or
       // onProviderSessionCreated failure that leaves the sandbox running.
       if (sandboxId) {
-        try {
-          await this.client.killSandbox(sandboxId);
-        } catch (killError) {
-          if (!(killError instanceof E2BNotFoundError)) {
-            log.warn("e2b.build_cleanup_kill_failed", {
-              sandbox_id: sandboxId,
-              error: killError instanceof Error ? killError.message : String(killError),
-            });
-          }
-        }
+        await this.cleanupSandbox(sandboxId, "e2b.build_cleanup_kill_failed");
       }
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to trigger E2B image build", error, "create");
     }
   }
 
-  async deleteProviderImage(providerImageId: string): Promise<void> {
+  async deleteProviderImage(providerImageId: string, signal?: AbortSignal): Promise<void> {
     try {
-      await this.client.deleteTemplate(providerImageId);
+      await this.client.deleteTemplate(providerImageId, signal);
     } catch (error) {
       if (error instanceof E2BNotFoundError) return;
       throw this.classifyError("Failed to delete E2B snapshot", error, "delete");
     }
-  }
-
-  /**
-   * Create a runtime sandbox from `templateId` (the base template, a prebuilt
-   * snapshot, or a restore snapshot) and deliver the per-session env. Shared by
-   * createSandbox and restoreFromSnapshot; `extraEnv` carries the boot-mode
-   * marker each path sets.
-   */
-  private async spawnFromTemplate(
-    config: CreateSandboxConfig | RestoreConfig,
-    templateId: string,
-    extraEnv: Record<string, string>
-  ): Promise<{
-    providerObjectId: string;
-    createdAt: number;
-    codeServerUrl?: string;
-    codeServerPassword?: string;
-    vncUrl?: string;
-    vncPassword?: string;
-    tunnelUrls?: Record<string, string>;
-  }> {
-    const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
-    const { envVars, codeServerPassword, vncPassword } = await this.buildRuntimeEnv(
-      config,
-      extraEnv
-    );
-
-    const sandbox = await this.client.createSandbox({
-      templateID: templateId,
-      metadata: this.buildMetadata(config),
-      timeoutSeconds,
-      autoPause: this.providerConfig.autoPause,
-      // Require secure envd access: the per-session env we upload carries
-      // SANDBOX_AUTH_TOKEN + user secrets, so envd must reject writes lacking the
-      // returned access token (otherwise the upload is anonymous over the public host).
-      secure: true,
-      // Deliberately NOT auto-resume: resume is control-plane-driven (resumeSandbox →
-      // connectSandbox). Provider-side auto-resume would wake a paused sandbox from
-      // stray inbound traffic, outside the DO state machine.
-      autoResume: false,
-    });
-
-    await this.deliverSessionEnv(sandbox, envVars);
-
-    const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
-      sandbox.sandboxID,
-      config.codeServerEnabled,
-      config.vncEnabled,
-      config.sandboxSettings,
-      sandbox.domain
-    );
-
-    return {
-      providerObjectId: sandbox.sandboxID,
-      createdAt: Date.now(),
-      codeServerUrl,
-      codeServerPassword,
-      vncUrl,
-      vncPassword,
-      tunnelUrls,
-    };
   }
 
   /**
@@ -568,14 +538,7 @@ export class E2BSandboxProvider implements SandboxProvider {
     return { envVars, codeServerPassword, vncPassword };
   }
 
-  private async createSnapshotResult(providerObjectId: string): Promise<SnapshotResult> {
-    const snapshot = await this.client.createSnapshot(providerObjectId);
-    if (!snapshot.snapshotID) {
-      return { success: false, error: "E2B snapshot did not return a snapshot id" };
-    }
-    return { success: true, imageId: snapshot.snapshotID };
-  }
-
+  /** Best-effort kill for a sandbox we are abandoning; never masks the original error. */
   private async cleanupSandbox(sandboxId: string, event: string): Promise<void> {
     try {
       await this.client.killSandbox(sandboxId);
