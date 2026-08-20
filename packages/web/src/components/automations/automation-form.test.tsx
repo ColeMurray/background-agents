@@ -90,6 +90,10 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-provider-accounts", () => ({
+  useProviderAccounts: () => ({ accounts: [], defaults: [], providers: [], loading: false }),
+}));
+
 // The SlackChannelPicker (rendered for slack_channel conditions) lists channels via
 // useSession-backed SWR. The form tests don't exercise channel listing, so stub it out
 // to avoid needing a SessionProvider.
@@ -109,6 +113,32 @@ const openRepositoryPicker = () =>
   fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
 
 describe("automation cron submission", () => {
+  it("retains and submits pins for all providers", () => {
+    const onSubmit = vi.fn();
+    const providerSelections = {
+      openai: { mode: "provider_account" as const, accountId: "a".repeat(32) },
+      xai: { mode: "api_key" as const },
+    };
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Provider pins",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Run with pins.",
+          providerSelections,
+        }}
+      />
+    );
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].providerSelections).toEqual(providerSelections);
+  });
+
   it("groups conditions under an accessible name", () => {
     render(
       <AutomationForm

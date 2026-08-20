@@ -18,6 +18,7 @@ import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
+  getSubscriptionProviderForModel,
   type ModelCategory,
 } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
@@ -47,6 +48,11 @@ import {
 } from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { ProviderAuthControls } from "@/components/provider-auth-controls";
+import { useProviderAccounts } from "@/hooks/use-provider-accounts";
+import { providerSelectionsKey, setProviderSelection } from "@/lib/provider-selection";
+import { retireWarmDraftSession } from "@/lib/warm-session";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
@@ -81,12 +87,16 @@ export default function Home() {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
+  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
+  const providerSelectionKey = providerSelectionsKey(providerSelections);
+  const providerAccounts = useProviderAccounts();
   const skillSelectionKey =
     skillSelection.mode === "profile" ? `profile:${skillSelection.profileId}` : skillSelection.mode;
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const pendingSessionIdRef = useRef<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -99,6 +109,7 @@ export default function Home() {
     reasoningEffort?: string;
     branch: string;
     skills: string;
+    providers: string;
   } | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
@@ -133,11 +144,27 @@ export default function Home() {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    if (pendingSessionIdRef.current) void retireWarmDraftSession(pendingSessionIdRef.current);
+    pendingSessionIdRef.current = null;
     setPendingSessionId(null);
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch, skillSelectionKey]);
+  }, [
+    sessionTarget,
+    selectedModel,
+    reasoningEffort,
+    selectedBranch,
+    skillSelectionKey,
+    providerSelectionKey,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (pendingSessionIdRef.current) void retireWarmDraftSession(pendingSessionIdRef.current);
+    },
+    []
+  );
 
   const createSessionForWarming = useCallback(async () => {
     if (loadingEnabledModels) return null;
@@ -153,6 +180,7 @@ export default function Home() {
       reasoningEffort,
       branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
       skills: skillSelectionKey,
+      providers: providerSelectionKey,
     };
     pendingConfigRef.current = currentConfig;
 
@@ -169,6 +197,7 @@ export default function Home() {
             model: selectedModel,
             reasoningEffort,
             skillSelection,
+            providerSelections,
           }),
           signal: abortController.signal,
         });
@@ -180,11 +209,14 @@ export default function Home() {
             pendingConfigRef.current?.model === currentConfig.model &&
             pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
             pendingConfigRef.current?.branch === currentConfig.branch &&
-            pendingConfigRef.current?.skills === currentConfig.skills
+            pendingConfigRef.current?.skills === currentConfig.skills &&
+            pendingConfigRef.current?.providers === currentConfig.providers
           ) {
             setPendingSessionId(data.sessionId);
+            pendingSessionIdRef.current = data.sessionId;
             return data.sessionId as string;
           }
+          void retireWarmDraftSession(data.sessionId as string);
           return null;
         }
         return null;
@@ -214,6 +246,8 @@ export default function Home() {
     reasoningEffort,
     skillSelection,
     skillSelectionKey,
+    providerSelections,
+    providerSelectionKey,
     pendingSessionId,
     loadingEnabledModels,
   ]);
@@ -314,6 +348,9 @@ export default function Home() {
       });
 
       if (res.ok) {
+        pendingSessionIdRef.current = null;
+        setPendingSessionId(null);
+        pendingConfigRef.current = null;
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         mutate(isSessionInboxKey);
@@ -359,6 +396,9 @@ export default function Home() {
       skillPreview={skillPreview}
       skillPreviewLoading={skillPreviewLoading}
       skillSuggestions={skillSuggestions}
+      providerSelections={providerSelections}
+      setProviderSelections={setProviderSelections}
+      providerAccounts={providerAccounts}
     />
   );
 }
@@ -384,6 +424,9 @@ function HomeContent({
   skillPreview,
   skillPreviewLoading,
   skillSuggestions,
+  providerSelections,
+  setProviderSelections,
+  providerAccounts,
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
@@ -411,6 +454,9 @@ function HomeContent({
   skillPreview: SkillResolutionPreviewResponse | null;
   skillPreviewLoading: boolean;
   skillSuggestions: PromptSkillSuggestionSource;
+  providerSelections: ModelProviderSelections;
+  setProviderSelections: React.Dispatch<React.SetStateAction<ModelProviderSelections>>;
+  providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
   const { isOpen } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -425,6 +471,7 @@ function HomeContent({
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
   const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
+  const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -539,7 +586,7 @@ function HomeContent({
                 </div>
 
                 {/* Footer row with target and model selectors */}
-                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
+                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
                   {/* Left side - Target selector + Model selector */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
@@ -577,6 +624,23 @@ function HomeContent({
                       disabled={creating}
                     />
 
+                    {selectedProvider && (
+                      <ProviderAuthControls
+                        variant="menu"
+                        provider={selectedProvider}
+                        accounts={providerAccounts.accounts}
+                        defaultValue={providerAccounts.defaults.find(
+                          (item) => item.provider === selectedProvider
+                        )}
+                        value={providerSelections[selectedProvider]}
+                        onChange={(selection) =>
+                          setProviderSelections((current) =>
+                            setProviderSelection(current, selectedProvider, selection)
+                          )
+                        }
+                      />
+                    )}
+
                     <SessionSkillSelector
                       value={skillSelection}
                       onChange={setSkillSelection}
@@ -586,11 +650,6 @@ function HomeContent({
                       disabled={creating}
                     />
                   </div>
-
-                  {/* Right side - Agent label */}
-                  <span className="hidden sm:inline text-sm text-muted-foreground">
-                    build agent
-                  </span>
                 </div>
               </div>
 
