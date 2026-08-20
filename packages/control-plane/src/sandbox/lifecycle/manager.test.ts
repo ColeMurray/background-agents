@@ -1003,6 +1003,35 @@ describe("SandboxLifecycleManager", () => {
       expect(onSandboxTerminated).not.toHaveBeenCalled();
     });
 
+    it("persists the circuit-breaker reason, not just the broadcast", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "pending",
+        spawn_failure_count: 3,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      // Broadcast alone reaches only the tab that is already open; the reason
+      // has to be persisted or it vanishes on the reload someone does to read it.
+      expect(storage.setLastSpawnError).toHaveBeenCalledWith(
+        expect.stringContaining("temporarily disabled"),
+        expect.any(Number)
+      );
+      expect(sandbox.last_spawn_error).toContain("temporarily disabled");
+    });
+
     it("resets circuit breaker when window passes", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -2213,6 +2242,9 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type?: string }).type === "sandbox_error")
       ).toBe(true);
+      // The reason is persisted alongside the broadcast, so reloading to
+      // investigate still shows why the sandbox failed.
+      expect(sandbox.last_spawn_error).toContain("failed to connect");
       // Should NOT trigger snapshot (nothing to snapshot)
       expect(provider.takeSnapshot).not.toHaveBeenCalled();
     });
