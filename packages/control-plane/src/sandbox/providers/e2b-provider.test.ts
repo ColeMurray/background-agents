@@ -39,12 +39,9 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
       })
     ),
     pauseSandbox: vi.fn(async () => {}),
-    connectSandbox: vi.fn(async () => ({
-      sandboxID: "e2b-id",
-      templateID: "tmpl",
-      envdAccessToken: "fresh-envd-token",
-    })),
+    connectSandbox: vi.fn(async () => {}),
     updateSandboxNetwork: vi.fn(async () => {}),
+    startProcess: vi.fn(async () => {}),
     killSandbox: vi.fn(async () => {}),
     setSandboxTimeout: vi.fn(async () => {}),
     createSnapshot: vi.fn(async () => ({ snapshotID: "snap-abc:default", names: ["oi/snap"] })),
@@ -488,6 +485,51 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect(env.REPO_IMAGE_SHA).toBe("abc123");
   });
 
+  it("starts the launcher on a prebuilt boot, after the env is on disk", async () => {
+    const client = mockClient();
+    await new E2BSandboxProvider(client, providerConfig).createSandbox({
+      ...baseCreateConfig,
+      prebuiltImageId: "snap-repo:default",
+    });
+    // A prebuilt image resumes quiet (its bake pause dropped all process memory,
+    // and a snapshot resume never re-runs the template start command), so the
+    // control plane must start oi-launch itself or nothing consumes the env and
+    // the session dies on the connecting timeout with no runtime logs.
+    expect(client.startProcess).toHaveBeenCalledWith(
+      "e2b-id",
+      expect.stringContaining("oi-launch"),
+      expect.objectContaining({ envdAccessToken: "envd-token" })
+    );
+    // Env first, so the launcher consumes the file on its first poll.
+    const writeOrder = vi.mocked(client.writeSessionEnv).mock.invocationCallOrder[0];
+    const launchOrder = vi.mocked(client.startProcess).mock.invocationCallOrder[0];
+    expect(writeOrder).toBeLessThan(launchOrder);
+  });
+
+  it("does not start a launcher on a base-template boot", async () => {
+    const client = mockClient();
+    await new E2BSandboxProvider(client, providerConfig).createSandbox(baseCreateConfig);
+    // Base templates resume the launcher E2B captured at template build;
+    // starting a second one would race it for the env file.
+    expect(client.startProcess).not.toHaveBeenCalled();
+  });
+
+  it("kills the sandbox and fails the create when the launcher cannot start", async () => {
+    const client = mockClient({
+      startProcess: vi.fn(async () => {
+        throw new Error("envd process start exited non-zero: exit status 127");
+      }),
+    });
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        prebuiltImageId: "snap-repo:default",
+      })
+    ).rejects.toThrow(/Failed to create E2B sandbox/);
+    // Without the kill the sandbox idles unbootable until its TTL.
+    expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
+  });
+
   it("takePrebuiltImageSnapshot sanitizes via pause(memory:false)+connect before snapshot", async () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);
@@ -499,6 +541,10 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect(client.pauseSandbox).toHaveBeenCalledWith("build-sbx", { memory: false }, undefined);
     expect(client.connectSandbox).toHaveBeenCalledWith("build-sbx", expect.any(Number), undefined);
     expect(client.createSnapshot).toHaveBeenCalledWith("build-sbx", { signal: undefined });
+    // The image's contract is its filesystem: the bake starts nothing inside the
+    // sandbox, and every spawn from the image starts the launcher itself. Baking
+    // a waiting launcher in would make bootability depend on captured memory.
+    expect(client.startProcess).not.toHaveBeenCalled();
     const pauseOrder = vi.mocked(client.pauseSandbox).mock.invocationCallOrder[0];
     const connectOrder = vi.mocked(client.connectSandbox).mock.invocationCallOrder[0];
     const snapOrder = vi.mocked(client.createSnapshot).mock.invocationCallOrder[0];

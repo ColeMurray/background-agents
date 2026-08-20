@@ -27,6 +27,12 @@ const TIMEOUT_WRITE_FILE_MS = 30_000;
 // larger than the other calls because it copies the whole prebuilt filesystem.
 const TIMEOUT_SNAPSHOT_MS = 180_000;
 const TIMEOUT_DELETE_TEMPLATE_MS = 30_000;
+const TIMEOUT_START_PROCESS_MS = 30_000;
+
+/** Connect envelope prefix: one flag byte plus a big-endian uint32 length. */
+const ENVELOPE_HEADER_BYTES = 5;
+/** Connect end-of-stream flag; that envelope carries `{}` or `{"error": ...}`. */
+const ENVELOPE_END_STREAM_FLAG = 0x02;
 
 const e2bSandboxDetailSchema = z.object({
   sandboxID: z.string(),
@@ -122,6 +128,59 @@ export class E2BApiError extends Error {
   ) {
     super(message);
     this.name = "E2BApiError";
+  }
+}
+
+/**
+ * Walk a Connect streaming response, yielding each envelope's flags and JSON.
+ * Truncated trailing bytes are ignored rather than throwing — the caller only
+ * asserts on the messages it did receive.
+ */
+function* decodeConnectEnvelopes(buffer: Uint8Array): Generator<{ flags: number; body: unknown }> {
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const decoder = new TextDecoder();
+  let offset = 0;
+  while (offset + ENVELOPE_HEADER_BYTES <= buffer.length) {
+    const flags = buffer[offset]!;
+    const length = view.getUint32(offset + 1);
+    const start = offset + ENVELOPE_HEADER_BYTES;
+    const end = start + length;
+    if (end > buffer.length) return;
+    let body: unknown;
+    try {
+      body = JSON.parse(decoder.decode(buffer.subarray(start, end)));
+    } catch {
+      return;
+    }
+    yield { flags, body };
+    offset = end;
+  }
+}
+
+/**
+ * Fail unless the stream reported a process that started and exited cleanly.
+ * envd reports command failures in-band (a normal 200 stream ending in a
+ * non-zero `exit status`), so the HTTP status alone proves nothing.
+ */
+function assertProcessStarted(buffer: Uint8Array): void {
+  let started = false;
+  for (const { flags, body } of decodeConnectEnvelopes(buffer)) {
+    const event = (body as { event?: Record<string, { status?: string }> }).event;
+    if (flags & ENVELOPE_END_STREAM_FLAG) {
+      const streamError = (body as { error?: { message?: string } }).error;
+      if (streamError) {
+        throw new Error(`envd process start failed: ${streamError.message ?? "stream error"}`);
+      }
+      continue;
+    }
+    if (event?.start) started = true;
+    const status = event?.end?.status;
+    if (status !== undefined && status !== "exit status 0") {
+      throw new Error(`envd process start exited non-zero: ${status}`);
+    }
+  }
+  if (!started) {
+    throw new Error("envd process start returned no start event");
   }
 }
 
@@ -262,6 +321,65 @@ export class E2BRestClient {
       body: { timeout: timeoutSeconds },
       signal,
     });
+  }
+
+  /**
+   * Start a detached process inside a sandbox through envd.
+   *
+   * envd speaks Connect RPC and `Process/Start` is server-streaming, so the
+   * request body must be a Connect *envelope* — one flag byte, then a
+   * big-endian uint32 length, then the JSON message. Posting bare JSON to this
+   * endpoint returns 415.
+   *
+   * The command is expected to detach and exit (the caller wants the spawned
+   * process to outlive this RPC), so a non-zero exit or a stream-level error is
+   * a real failure and throws.
+   */
+  async startProcess(
+    id: string,
+    shellCommand: string,
+    opts: { domain?: string | null; envdAccessToken: string; signal?: AbortSignal }
+  ): Promise<void> {
+    const domain = opts.domain || DEFAULT_SANDBOX_DOMAIN;
+    const url = `https://${ENVD_PORT}-${id}.${domain}/process.Process/Start`;
+    const message = JSON.stringify({
+      process: { cmd: "/bin/sh", args: ["-c", shellCommand] },
+    });
+    const payload = new TextEncoder().encode(message);
+    const framed = new Uint8Array(ENVELOPE_HEADER_BYTES + payload.length);
+    new DataView(framed.buffer).setUint32(1, payload.length);
+    framed.set(payload, ENVELOPE_HEADER_BYTES);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_START_PROCESS_MS);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        body: framed,
+        headers: {
+          "Content-Type": "application/connect+json",
+          "connect-protocol-version": "1",
+          "X-Access-Token": opts.envdAccessToken,
+        },
+        signal: opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new E2BApiError(
+          text || `envd process start failed (${response.status})`,
+          response.status,
+          text
+        );
+      }
+      assertProcessStarted(new Uint8Array(await response.arrayBuffer()));
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`E2B envd process start timeout after ${TIMEOUT_START_PROCESS_MS}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async killSandbox(id: string, signal?: AbortSignal): Promise<void> {

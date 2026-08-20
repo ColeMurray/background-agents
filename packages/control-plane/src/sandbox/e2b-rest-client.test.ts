@@ -20,6 +20,26 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+/** Build a Connect streaming body: each message is flags + big-endian length + JSON. */
+function connectStream(messages: Array<{ flags: number; body: unknown }>): Uint8Array {
+  const chunks = messages.map(({ flags, body }) => {
+    const payload = new TextEncoder().encode(JSON.stringify(body));
+    const framed = new Uint8Array(5 + payload.length);
+    framed[0] = flags;
+    new DataView(framed.buffer).setUint32(1, payload.length);
+    framed.set(payload, 5);
+    return framed;
+  });
+  const total = chunks.reduce((sum, c) => sum + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -253,6 +273,68 @@ describe("E2BRestClient", () => {
     });
     await expect(client.createSnapshot("sb-1", { signal: caller.signal })).rejects.toThrow(
       /timeout/
+    );
+  });
+
+  it("startProcess frames the request as a Connect envelope", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    // envd's Process/Start is server-streaming: bare JSON gets a 415, so the body
+    // must be flags + big-endian length + payload.
+    const stream = connectStream([
+      { flags: 0, body: { event: { start: { pid: 42 } } } },
+      { flags: 0, body: { event: { end: { exited: true, status: "exit status 0" } } } },
+      { flags: 2, body: {} },
+    ]);
+    fetchSpy.mockResolvedValue(new Response(stream, { status: 200 }));
+
+    await client.startProcess("sb-1", "echo hi", { envdAccessToken: "tok" });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe("https://49983-sb-1.e2b.app/process.Process/Start");
+    expect(init.headers["Content-Type"]).toBe("application/connect+json");
+    expect(init.headers["X-Access-Token"]).toBe("tok");
+    const framed = new Uint8Array(init.body as ArrayBuffer);
+    expect(framed[0]).toBe(0);
+    const declaredLength = new DataView(framed.buffer).getUint32(1);
+    expect(declaredLength).toBe(framed.length - 5);
+    expect(JSON.parse(new TextDecoder().decode(framed.subarray(5)))).toEqual({
+      process: { cmd: "/bin/sh", args: ["-c", "echo hi"] },
+    });
+  });
+
+  it("startProcess fails on a non-zero exit reported inside a 200 stream", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    // envd reports command failures in-band, so the HTTP status proves nothing.
+    fetchSpy.mockResolvedValue(
+      new Response(
+        connectStream([
+          { flags: 0, body: { event: { start: { pid: 7 } } } },
+          { flags: 0, body: { event: { end: { exited: true, status: "exit status 127" } } } },
+          { flags: 2, body: {} },
+        ]),
+        { status: 200 }
+      )
+    );
+
+    await expect(client.startProcess("sb-1", "nope", { envdAccessToken: "tok" })).rejects.toThrow(
+      /exit status 127/
+    );
+  });
+
+  it("startProcess surfaces a Connect end-of-stream error", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(
+      new Response(
+        connectStream([
+          { flags: 0, body: { event: { start: { pid: 7 } } } },
+          { flags: 2, body: { error: { message: "permission denied" } } },
+        ]),
+        { status: 200 }
+      )
+    );
+
+    await expect(client.startProcess("sb-1", "nope", { envdAccessToken: "tok" })).rejects.toThrow(
+      /permission denied/
     );
   });
 

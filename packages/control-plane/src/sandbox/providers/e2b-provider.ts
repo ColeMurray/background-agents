@@ -13,10 +13,11 @@
  * once in a build sandbox (triggerImageBuild), then bakes its filesystem into a
  * reusable snapshot template (takePrebuiltImageSnapshot →
  * `POST /sandboxes/{id}/snapshots`). The snapshot id doubles as a `templateID`, so a
- * prebuilt spawn is just a create with that id in place of the base template. The
- * snapshot resumes oi-launch in its env wait loop, where it reads the freshly written
- * per-session env — so prebuilt boots reuse the baked filesystem while still getting
- * fresh session config.
+ * prebuilt spawn is a create with that id in place of the base template — plus an
+ * explicit launcher start: a snapshot resume never re-runs the template start command,
+ * so after writing the per-session env the control plane starts oi-launch itself
+ * (startLauncher). The image's contract is its filesystem; nothing captured in memory
+ * is relied on, mirroring how Modal repo images reboot their entrypoint on each spawn.
  */
 
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
@@ -73,11 +74,20 @@ export const DEFAULT_E2B_AUTO_PAUSE = true;
 export const E2B_SANDBOX_VERSION = SANDBOX_RUNTIME_VERSION;
 
 /**
- * TTL for the brief cold-boot between the sanitizing pause and createSnapshot
+ * TTL for the brief quiet resume between the sanitizing pause and createSnapshot
  * during an image build. Only needs to outlive the snapshot call; the build
  * sandbox is killed immediately afterwards.
  */
 const SNAPSHOT_CONNECT_TIMEOUT_SECONDS = 300;
+
+/**
+ * The template's start command (packages/e2b-infra/build-template.py START_CMD)
+ * — run by the control plane on every prebuilt-image boot, because a snapshot
+ * resume never re-runs it (see startLauncher). Keep in sync with that file.
+ */
+const E2B_LAUNCHER_COMMAND = "python /usr/local/bin/oi-launch";
+/** Where the control-plane-started launcher's output goes, for in-sandbox debugging. */
+const E2B_LAUNCHER_LOG_PATH = "/tmp/oi-launch.log";
 
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -163,7 +173,15 @@ export class E2BSandboxProvider implements SandboxProvider {
         autoResume: false,
       });
 
-      await this.deliverSessionEnv(sandbox, envVars);
+      const envd = await this.deliverSessionEnv(sandbox, envVars);
+      // A prebuilt image resumes quiet (the bake's sanitizing pause dropped all
+      // process memory, and snapshot resumes never re-run the template start
+      // command), so nothing inside is watching for the env file we just wrote.
+      // Base-template boots need no start: E2B captured their launcher mid-poll
+      // at template build, and starting a second one would race it for the file.
+      if (config.prebuiltImageId) {
+        await this.startLauncher(sandbox.sandboxID, envd);
+      }
 
       const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
@@ -189,19 +207,22 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Bake an image-build sandbox into a reusable snapshot template, sanitized so
-   * the image is a clean, quiescent cold boot rather than a frozen build process.
+   * Bake an image-build sandbox into a reusable snapshot template whose only
+   * contract is its filesystem.
    *
-   * A reusable E2B snapshot (`POST /sandboxes/{id}/snapshots`) captures live
-   * process memory, so snapshotting the running build sandbox directly would (a)
-   * bake the build supervisor and its secret env into every image and (b) resume
-   * that stale process on spawn instead of a fresh launcher. To avoid both, we
-   * first `pause(keepMemory:false)` — which drops all memory and persists only
-   * the filesystem — then `connect`, which cold-boots the sandbox from disk,
-   * re-running the launcher fresh in its env-wait state. The snapshot then
-   * captures that clean state, so sandboxes spawned from it start a fresh
-   * supervisor with their own per-session env (and never inherit build secrets in
-   * memory).
+   * An E2B snapshot (`POST /sandboxes/{id}/snapshots`) always captures live
+   * memory: it requires a running sandbox (404 on a paused one) and has no
+   * filesystem-only variant. Snapshotting the build sandbox directly would bake
+   * the build supervisor and its secret env (clone token, build callback
+   * credentials) into every image and resume them on every spawn. So the bake
+   * first `pause(memory:false)` — dropping all process memory, keeping the disk
+   * — then `connect`s and snapshots the resumed, quiet sandbox: kernel and envd
+   * up, no userland processes.
+   *
+   * Nothing captured in memory is relied on. Sandboxes spawned from the image
+   * resume quiet, and createSandbox starts the launcher itself (startLauncher)
+   * — the same lifecycle as Modal repo images, whose entrypoint reboots on
+   * every spawn from a filesystem snapshot.
    *
    * This is the only snapshot path E2B exposes; there is no generic
    * `takeSnapshot` (see `capabilities.supportsSnapshots`).
@@ -209,8 +230,6 @@ export class E2BSandboxProvider implements SandboxProvider {
   async takePrebuiltImageSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
     try {
       await this.client.pauseSandbox(config.providerObjectId, { memory: false }, config.signal);
-      // Cold-boot from disk; connect returns once the template ready-check passes,
-      // i.e. once the launcher is back up and waiting — no readiness guesswork.
       await this.client.connectSandbox(
         config.providerObjectId,
         SNAPSHOT_CONNECT_TIMEOUT_SECONDS,
@@ -228,6 +247,37 @@ export class E2BSandboxProvider implements SandboxProvider {
       return { success: true, imageId: snapshot.snapshotID };
     } catch (error) {
       throw this.classifyError("Failed to bake E2B image snapshot", error, "snapshot");
+    }
+  }
+
+  /**
+   * Start the launcher in a sandbox booted from a prebuilt image.
+   *
+   * Without this, nothing ever consumes the session env: the control plane
+   * writes it, the supervisor never starts, and the session dies on the
+   * connecting timeout with no runtime logs to explain it (there is nothing
+   * inside to emit any). The env file is written before this runs, so the
+   * launcher consumes it on its first poll and execs the supervisor exactly as
+   * a base-template boot does. The command detaches, so the launcher outlives
+   * the RPC that started it.
+   *
+   * On failure the sandbox exists but can never boot — kill it rather than
+   * leak it until its TTL, then let the create fail loudly.
+   */
+  private async startLauncher(
+    e2bSandboxId: string,
+    envd: { domain?: string | null; envdAccessToken: string }
+  ): Promise<void> {
+    try {
+      await this.client.startProcess(
+        e2bSandboxId,
+        `nohup ${E2B_LAUNCHER_COMMAND} >${E2B_LAUNCHER_LOG_PATH} 2>&1 & echo started`,
+        envd
+      );
+      log.info("e2b.launcher_started", { sandbox_id: e2bSandboxId });
+    } catch (error) {
+      await this.cleanupSandbox(e2bSandboxId, "e2b.cleanup_kill_failed");
+      throw error;
     }
   }
 
@@ -494,14 +544,17 @@ export class E2BSandboxProvider implements SandboxProvider {
   /**
    * Deliver the per-session env to the supervisor via envd. E2B's template start
    * command runs once at build and never sees create-time env vars, so the
-   * launcher (oi-launch.py) waits for this file and starts the supervisor with it.
+   * launcher (oi-launch.py) reads this file and starts the supervisor with it.
    * On failure the sandbox exists but will never get its env — kill it rather
    * than leak a running launcher-only sandbox until its TTL.
+   *
+   * Returns the validated envd channel so callers can make follow-up envd calls
+   * (startLauncher) without re-checking the token.
    */
   private async deliverSessionEnv(
     sandbox: E2BSandboxCreated,
     envVars: Record<string, string>
-  ): Promise<void> {
+  ): Promise<{ domain?: string | null; envdAccessToken: string }> {
     try {
       const envdAccessToken = sandbox.envdAccessToken;
       if (!envdAccessToken) {
@@ -514,10 +567,9 @@ export class E2BSandboxProvider implements SandboxProvider {
           "permanent"
         );
       }
-      await this.client.writeSessionEnv(sandbox.sandboxID, envVars, {
-        domain: sandbox.domain,
-        envdAccessToken,
-      });
+      const envd = { domain: sandbox.domain, envdAccessToken };
+      await this.client.writeSessionEnv(sandbox.sandboxID, envVars, envd);
+      return envd;
     } catch (error) {
       try {
         await this.client.killSandbox(sandbox.sandboxID);
