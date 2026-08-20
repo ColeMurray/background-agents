@@ -338,6 +338,59 @@ describe("E2BRestClient", () => {
     );
   });
 
+  it("startProcess rejects a stream with no clean exit or end-of-stream", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    // A start event alone proves nothing ran to completion. Treating it as
+    // success would let an unconfirmed launcher through to a session that then
+    // dies silently on the connecting timeout.
+    fetchSpy.mockResolvedValue(
+      new Response(connectStream([{ flags: 0, body: { event: { start: { pid: 7 } } } }]), {
+        status: 200,
+      })
+    );
+    await expect(client.startProcess("sb-1", "cmd", { envdAccessToken: "tok" })).rejects.toThrow(
+      /stream incomplete/
+    );
+
+    // Clean exit but no Connect end-of-stream envelope: the protocol requires
+    // one on every completed stream, so its absence means the response is cut.
+    fetchSpy.mockResolvedValue(
+      new Response(
+        connectStream([
+          { flags: 0, body: { event: { start: { pid: 7 } } } },
+          { flags: 0, body: { event: { end: { exited: true, status: "exit status 0" } } } },
+        ]),
+        { status: 200 }
+      )
+    );
+    await expect(client.startProcess("sb-1", "cmd", { envdAccessToken: "tok" })).rejects.toThrow(
+      /stream incomplete/
+    );
+  });
+
+  it("startProcess rejects truncated and malformed streams", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    const complete = connectStream([
+      { flags: 0, body: { event: { start: { pid: 7 } } } },
+      { flags: 0, body: { event: { end: { exited: true, status: "exit status 0" } } } },
+      { flags: 2, body: {} },
+    ]);
+    fetchSpy.mockResolvedValue(
+      new Response(complete.subarray(0, complete.length - 3), { status: 200 })
+    );
+    await expect(client.startProcess("sb-1", "cmd", { envdAccessToken: "tok" })).rejects.toThrow(
+      /truncated/
+    );
+
+    // Declared length 1, body "{" — parses as neither an event nor an error.
+    fetchSpy.mockResolvedValue(
+      new Response(new Uint8Array([0, 0, 0, 0, 1, 0x7b]), { status: 200 })
+    );
+    await expect(client.startProcess("sb-1", "cmd", { envdAccessToken: "tok" })).rejects.toThrow(
+      /malformed/
+    );
+  });
+
   it("deleteTemplate passes the full snapshot id to E2B", async () => {
     const client = new E2BRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));

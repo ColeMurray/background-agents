@@ -500,6 +500,12 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
       expect.stringContaining("oi-launch"),
       expect.objectContaining({ envdAccessToken: "envd-token" })
     );
+    // The command exits 0 only once the launcher has consumed the session env
+    // (launcher-owned liveness evidence — a detached launcher that dies
+    // instantly must fail the create, not surface as a silent timeout).
+    const [, command] = vi.mocked(client.startProcess).mock.calls[0];
+    expect(command).toContain("/tmp/oi-session.env");
+    expect(command).toContain("exit 1");
     // Env first, so the launcher consumes the file on its first poll.
     const writeOrder = vi.mocked(client.writeSessionEnv).mock.invocationCallOrder[0];
     const launchOrder = vi.mocked(client.startProcess).mock.invocationCallOrder[0];

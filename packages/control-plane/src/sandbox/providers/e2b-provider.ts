@@ -36,7 +36,12 @@ import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxCreated, E2BSandboxDetail } from "../e2b-rest-client";
-import { E2BApiError, E2BConflictError, E2BNotFoundError } from "../e2b-rest-client";
+import {
+  E2BApiError,
+  E2BConflictError,
+  E2BNotFoundError,
+  SESSION_ENV_PATH,
+} from "../e2b-rest-client";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
@@ -88,6 +93,13 @@ const SNAPSHOT_CONNECT_TIMEOUT_SECONDS = 300;
 const E2B_LAUNCHER_COMMAND = "python /usr/local/bin/oi-launch";
 /** Where the control-plane-started launcher's output goes, for in-sandbox debugging. */
 const E2B_LAUNCHER_LOG_PATH = "/tmp/oi-launch.log";
+/**
+ * How many 0.2s in-shell polls the launcher start command waits for the
+ * launcher to consume the session env before reporting failure (4s total).
+ * The launcher polls the file at 100ms, so a healthy handshake completes in
+ * the first iteration or two.
+ */
+const LAUNCHER_HANDSHAKE_POLLS = 20;
 
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -251,15 +263,22 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Start the launcher in a sandbox booted from a prebuilt image.
+   * Start the launcher in a sandbox booted from a prebuilt image, and wait for
+   * launcher-owned proof that it is alive.
    *
    * Without this, nothing ever consumes the session env: the control plane
    * writes it, the supervisor never starts, and the session dies on the
    * connecting timeout with no runtime logs to explain it (there is nothing
-   * inside to emit any). The env file is written before this runs, so the
-   * launcher consumes it on its first poll and execs the supervisor exactly as
-   * a base-template boot does. The command detaches, so the launcher outlives
-   * the RPC that started it.
+   * inside to emit any). The launcher detaches so it outlives the RPC, but a
+   * detached launcher that dies instantly (interpreter or launcher script
+   * broken — e.g. by the image's own setup.sh) would leave the shell exiting 0
+   * and reproduce exactly that silent timeout. So the foreground shell exits 0
+   * only once /tmp/oi-session.env is gone — the env file is written before
+   * this runs and only the launcher removes it (it unlinks after reading and
+   * fails closed if it can't), so consumption proves the whole handshake:
+   * env at the right path, launcher alive, launcher reading it. A process
+   * probe (kill -0 / pgrep) can't give that: an instantly-dead child is still
+   * a visible zombie of the shell.
    *
    * On failure the sandbox exists but can never boot — kill it rather than
    * leak it until its TTL, then let the create fail loudly.
@@ -268,12 +287,12 @@ export class E2BSandboxProvider implements SandboxProvider {
     e2bSandboxId: string,
     envd: { domain?: string | null; envdAccessToken: string }
   ): Promise<void> {
+    const command =
+      `nohup ${E2B_LAUNCHER_COMMAND} >${E2B_LAUNCHER_LOG_PATH} 2>&1 & ` +
+      `i=0; while [ $i -lt ${LAUNCHER_HANDSHAKE_POLLS} ]; do ` +
+      `[ ! -f ${SESSION_ENV_PATH} ] && exit 0; sleep 0.2; i=$((i+1)); done; exit 1`;
     try {
-      await this.client.startProcess(
-        e2bSandboxId,
-        `nohup ${E2B_LAUNCHER_COMMAND} >${E2B_LAUNCHER_LOG_PATH} 2>&1 & echo started`,
-        envd
-      );
+      await this.client.startProcess(e2bSandboxId, command, envd);
       log.info("e2b.launcher_started", { sandbox_id: e2bSandboxId });
     } catch (error) {
       await this.cleanupSandbox(e2bSandboxId, "e2b.cleanup_kill_failed");

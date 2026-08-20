@@ -87,8 +87,10 @@ const DEFAULT_SANDBOX_DOMAIN = "e2b.app";
 /**
  * Path the per-session env file is written to. The template launcher
  * (packages/e2b-infra/oi-launch.py) polls this exact path — keep them in sync.
+ * Exported because the E2B provider's launcher start command waits on this
+ * file's consumption as its readiness handshake.
  */
-const SESSION_ENV_PATH = "/tmp/oi-session.env";
+export const SESSION_ENV_PATH = "/tmp/oi-session.env";
 
 export interface E2BCreateSandboxParams {
   templateID: string;
@@ -133,24 +135,30 @@ export class E2BApiError extends Error {
 
 /**
  * Walk a Connect streaming response, yielding each envelope's flags and JSON.
- * Truncated trailing bytes are ignored rather than throwing — the caller only
- * asserts on the messages it did receive.
+ * The response is fully buffered before decoding, so a truncated or malformed
+ * envelope means the stream is not trustworthy evidence — throw rather than
+ * silently dropping what did not parse.
  */
 function* decodeConnectEnvelopes(buffer: Uint8Array): Generator<{ flags: number; body: unknown }> {
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const decoder = new TextDecoder();
   let offset = 0;
-  while (offset + ENVELOPE_HEADER_BYTES <= buffer.length) {
+  while (offset < buffer.length) {
+    if (offset + ENVELOPE_HEADER_BYTES > buffer.length) {
+      throw new Error("envd stream truncated mid-envelope");
+    }
     const flags = buffer[offset]!;
     const length = view.getUint32(offset + 1);
     const start = offset + ENVELOPE_HEADER_BYTES;
     const end = start + length;
-    if (end > buffer.length) return;
+    if (end > buffer.length) {
+      throw new Error("envd stream truncated mid-envelope");
+    }
     let body: unknown;
     try {
       body = JSON.parse(decoder.decode(buffer.subarray(start, end)));
     } catch {
-      return;
+      throw new Error("envd stream contained a malformed envelope");
     }
     yield { flags, body };
     offset = end;
@@ -158,29 +166,43 @@ function* decodeConnectEnvelopes(buffer: Uint8Array): Generator<{ flags: number;
 }
 
 /**
- * Fail unless the stream reported a process that started and exited cleanly.
- * envd reports command failures in-band (a normal 200 stream ending in a
- * non-zero `exit status`), so the HTTP status alone proves nothing.
+ * Fail unless the stream proves the command ran to a clean exit: a start
+ * event, `end.status === "exit status 0"`, and a healthy Connect end-of-stream
+ * envelope (the protocol requires one on every completed stream). envd reports
+ * command failures in-band (a normal 200 stream ending in a non-zero
+ * `exit status`), so the HTTP status alone proves nothing — and a stream
+ * missing any part of that shape is a failure, not a success: this guards the
+ * spawn path, where a false "started" becomes a session that dies silently on
+ * the connecting timeout.
  */
 function assertProcessStarted(buffer: Uint8Array): void {
   let started = false;
+  let exitedCleanly = false;
+  let endOfStream = false;
   for (const { flags, body } of decodeConnectEnvelopes(buffer)) {
-    const event = (body as { event?: Record<string, { status?: string }> }).event;
     if (flags & ENVELOPE_END_STREAM_FLAG) {
       const streamError = (body as { error?: { message?: string } }).error;
       if (streamError) {
         throw new Error(`envd process start failed: ${streamError.message ?? "stream error"}`);
       }
+      endOfStream = true;
       continue;
     }
+    const event = (body as { event?: Record<string, { status?: string }> }).event;
     if (event?.start) started = true;
     const status = event?.end?.status;
-    if (status !== undefined && status !== "exit status 0") {
-      throw new Error(`envd process start exited non-zero: ${status}`);
+    if (status !== undefined) {
+      if (status !== "exit status 0") {
+        throw new Error(`envd process start exited non-zero: ${status}`);
+      }
+      exitedCleanly = true;
     }
   }
-  if (!started) {
-    throw new Error("envd process start returned no start event");
+  if (!started || !exitedCleanly || !endOfStream) {
+    throw new Error(
+      `envd process start stream incomplete ` +
+        `(start=${started} clean_exit=${exitedCleanly} end_of_stream=${endOfStream})`
+    );
   }
 }
 
