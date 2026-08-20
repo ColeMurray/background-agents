@@ -14,12 +14,13 @@ session regardless of E2B's snapshot/resume model.
 On pause/resume the supervisor process itself is frozen/thawed by E2B, so this
 launcher only runs for a fresh spawn (including a prebuilt-image spawn, whose
 snapshot was cold-booted back into this env-wait state — see the E2B provider's
-takeSnapshot).
+takePrebuiltImageSnapshot).
 """
 
 import json
 import os
 import time
+from pathlib import Path
 
 SESSION_ENV_PATH = "/tmp/oi-session.env"
 POLL_INTERVAL_SECONDS = 0.3
@@ -78,7 +79,7 @@ def main() -> None:
     # image build additionally sanitizes via pause(keepMemory:false)+connect, but
     # removing the file here keeps the snapshot filesystem clean regardless.
     try:
-        os.remove(SESSION_ENV_PATH)
+        Path(SESSION_ENV_PATH).unlink(missing_ok=True)
     except OSError as e:
         _log(f"could not remove session env file (continuing): {e}")
 
