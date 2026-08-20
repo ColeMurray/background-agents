@@ -222,6 +222,18 @@ linear_webhook_secret = ""   # Webhook Signing Secret from the application confi
 # From: https://console.anthropic.com/
 anthropic_api_key = ""
 
+# OpenAI credential for the Slack/Linear bot classifiers. Required when
+# classification_model names an OpenAI model AND at least one of the Slack or
+# Linear bots is enabled; an Anthropic classifier model is served by
+# anthropic_api_key above.
+# From: https://platform.openai.com/api-keys
+classification_openai_api_key = ""
+
+# Model backing the Slack/Linear bot classifiers. A "claude-"/"anthropic/" id is
+# served by anthropic_api_key; a "gpt-"/"openai/" id by
+# classification_openai_api_key.
+# classification_model = "claude-haiku-4-5"
+
 # =============================================================================
 # Security Secrets
 # =============================================================================
