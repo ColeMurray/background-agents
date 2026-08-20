@@ -255,5 +255,47 @@ describe("SessionEventStream", () => {
         hasMore: true,
       });
     });
+
+    it("skips persisted list events with malformed JSON", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.listEventPage).mockReturnValue({
+        events: [
+          eventRow("bad", "token", "{bad", 1000),
+          eventRow("good", "token", { type: "token", content: "hello" }, 2000),
+        ],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      const page = stream.listEvents({
+        cursor: null,
+        limit: 10,
+        type: null,
+        messageId: null,
+      });
+
+      expect(page.events).toEqual([
+        {
+          id: "good",
+          type: "token",
+          data: { type: "token", content: "hello" },
+          messageId: null,
+          createdAt: 2000,
+        },
+      ]);
+    });
+
+    it("skips persisted list events whose JSON is not an object", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.listEventPage).mockReturnValue({
+        events: [eventRow("bad", "token", "null", 1000)],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      expect(
+        stream.listEvents({ cursor: null, limit: 10, type: null, messageId: null }).events
+      ).toEqual([]);
+    });
   });
 });
