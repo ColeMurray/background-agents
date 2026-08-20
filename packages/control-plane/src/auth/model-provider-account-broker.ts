@@ -146,13 +146,18 @@ export class ModelProviderAccountBroker {
           state.exchangeStartedAt === null ||
           this.now() - state.exchangeStartedAt >= this.exchangeTimeoutMs;
         if (stale) {
-          const fenced = await this.stores.atomicWriter.fenceExchangeAndRequireReconnect({
-            providerAccountId: account.id,
-            credentialVersion: state.credentialVersion,
-            exchangeGeneration: state.exchangeGeneration,
-            exchangeOwner: state.exchangeOwner ?? "",
-            now: this.now(),
-          });
+          let fenced: boolean;
+          try {
+            fenced = await this.stores.atomicWriter.fenceExchangeAndRequireReconnect({
+              providerAccountId: account.id,
+              credentialVersion: state.credentialVersion,
+              exchangeGeneration: state.exchangeGeneration,
+              exchangeOwner: state.exchangeOwner ?? "",
+              now: this.now(),
+            });
+          } catch {
+            return this.reconcileLostTerminalFence(account, adapter, state);
+          }
           if (fenced) {
             throw this.reconnectError(account.provider, "A credential exchange became stale");
           }

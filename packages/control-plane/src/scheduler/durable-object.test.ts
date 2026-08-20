@@ -1311,6 +1311,37 @@ describe("SchedulerDO", () => {
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
+    it("claims the run session before initializing it", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockStore.updateRun).toHaveBeenCalledWith(expect.any(String), {
+        status: "running",
+        session_id: expect.any(String),
+        started_at: expect.any(Number),
+      });
+      expect(mockStore.updateRun.mock.invocationCallOrder[0]).toBeLessThan(
+        mockSessionStoreCreate.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("does not initialize a session after recovery wins the launch claim", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.updateRun.mockResolvedValue(false);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+    });
+
     it("auto-pauses after 3 consecutive failures", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
@@ -1416,7 +1447,9 @@ describe("SchedulerDO", () => {
     it("swallows launch-failure tracking errors and logs scheduler.fail_track_error", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
-      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+      mockStore.updateRun
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error("D1 timeout"));
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ active: 0, failed: 1, completed: 0 })
       );

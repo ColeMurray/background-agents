@@ -466,19 +466,23 @@ export class SchedulerDO extends DurableObject<Env> {
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
         if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
-        const { sessionId } = await this.createSessionForAutomationRun(
-          automation,
-          child,
-          providerAuthSnapshot.providerAuth
-        );
+        const sessionId = generateId();
+        // Claim the generated session before initialization. Otherwise the orphan sweep can
+        // terminalize an old `starting` row while initialization is still creating its session.
         const claimed = await store.updateRun(child.id, {
           status: "running",
           session_id: sessionId,
           started_at: Date.now(),
         });
         if (!claimed) {
-          throw new Error("Automation run was recovered before launch completed");
+          throw new Error("Automation run was recovered before launch claimed its session");
         }
+        await this.createSessionForAutomationRun(
+          automation,
+          child,
+          providerAuthSnapshot.providerAuth,
+          sessionId
+        );
         await this.sendPromptToSession(sessionId, automation, child.id, instructionsOverride);
         child.status = "running";
         child.session_id = sessionId;
@@ -1358,10 +1362,9 @@ export class SchedulerDO extends DurableObject<Env> {
   private async createSessionForAutomationRun(
     automation: AutomationRow,
     run: AutomationRunRow,
-    providerAuth: SessionModelProviderAuthInput[]
-  ): Promise<{ sessionId: string }> {
-    const sessionId = generateId();
-
+    providerAuth: SessionModelProviderAuthInput[],
+    sessionId: string
+  ): Promise<void> {
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
     // (handleCreateAutomation resolves it for both GitHub and Google users), so this
@@ -1443,8 +1446,6 @@ export class SchedulerDO extends DurableObject<Env> {
     };
 
     await initializeSession(this.env, sessionInput, ctx);
-
-    return { sessionId };
   }
 
   private async sendPromptToSession(

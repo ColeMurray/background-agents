@@ -22,7 +22,10 @@ import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { D1ModelProviderAccountAtomicWriter } from "../db/model-provider-account-atomic-writer";
 import { ProviderCredentialStore } from "../db/provider-account-credentials";
 import { ProviderAccountAuthorizationStore } from "../db/provider-account-authorizations";
-import { ProviderDefaultStore } from "../db/provider-account-defaults";
+import {
+  ProviderDefaultConstraintError,
+  ProviderDefaultStore,
+} from "../db/provider-account-defaults";
 import { SessionIndexStore } from "../db/session-index";
 import { listLegacyProviderCredentials } from "../model-provider-accounts/legacy-provider-credentials";
 import {
@@ -138,13 +141,22 @@ async function accountOperation(
   }
 }
 
-async function authorizationOperation(operation: () => Promise<Response>): Promise<Response> {
+async function authorizationOperation(
+  ctx: RequestContext,
+  operation: () => Promise<Response>
+): Promise<Response> {
   try {
     return await operation();
   } catch (cause) {
     if (cause instanceof ProviderDeviceAuthorizationError) {
       return json({ error: cause.message, retryable: cause.retryable }, cause.status);
     }
+    providerAuthorizationLogger.error("provider_device_authorization.operation_failed", {
+      event: "provider_device_authorization.operation_failed",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+      error: cause instanceof Error ? cause : String(cause),
+    });
     return error("Provider authorization failed", 502);
   }
 }
@@ -222,7 +234,7 @@ const managementRoutes: Route[] = [
       if (body instanceof Response) return body;
       const parsed = startProviderDeviceAuthorizationRequestSchema.safeParse(body);
       if (!parsed.success) return error("Invalid device authorization request", 400);
-      return authorizationOperation(async () =>
+      return authorizationOperation(ctx, async () =>
         json(
           await authorizationService(env, ctx).start(
             ctx.principal.userId,
@@ -242,7 +254,7 @@ const managementRoutes: Route[] = [
       if (parsedProvider instanceof Response) return parsedProvider;
       const id = authorizationId(match);
       if (id instanceof Response) return id;
-      return authorizationOperation(async () =>
+      return authorizationOperation(ctx, async () =>
         json(await authorizationService(env, ctx).poll(ctx.principal.userId, parsedProvider, id))
       );
     }
@@ -255,7 +267,7 @@ const managementRoutes: Route[] = [
       if (parsedProvider instanceof Response) return parsedProvider;
       const id = authorizationId(match);
       if (id instanceof Response) return id;
-      return authorizationOperation(async () => {
+      return authorizationOperation(ctx, async () => {
         await authorizationService(env, ctx).cancel(ctx.principal.userId, parsedProvider, id);
         return new Response(null, { status: 204 });
       });
@@ -356,13 +368,16 @@ const managementRoutes: Route[] = [
         if (cause instanceof ProviderAccountSelectionPolicyError) {
           return error(cause.message, cause.status);
         }
+        if (cause instanceof ProviderDefaultConstraintError) {
+          return error(cause.message, 409);
+        }
         logger.error("provider_account.default_update_failed", {
           event: "provider_account.default_update_failed",
           request_id: ctx.request_id,
           trace_id: ctx.trace_id,
           error: cause instanceof Error ? cause : String(cause),
         });
-        return error("Provider default could not be updated", 409);
+        return error("Provider default could not be updated", 502);
       }
     }
   ),
@@ -418,7 +433,15 @@ async function handleProviderAccess(
       sessionId,
       parsedProvider
     );
-  } catch {
+  } catch (cause) {
+    logger.error("provider_account.session_binding_lookup_failed", {
+      event: "provider_account.session_binding_lookup_failed",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+      session_id: sessionId,
+      provider: parsedProvider,
+      error: cause instanceof Error ? cause : String(cause),
+    });
     return error("Session provider auth unavailable", 503);
   }
   if (!binding) return error("Session provider account is not configured", 404);

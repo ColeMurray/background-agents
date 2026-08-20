@@ -138,6 +138,36 @@ describe("provider account management routes", () => {
     expectPrivateNoStore(removed);
   });
 
+  it("returns a retryable gateway error for an unexpected default write failure", async () => {
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+        (id, provider, display_name, status, created_at, updated_at)
+        VALUES (?, 'openai', 'Default OpenAI', 'active', ?, ?)`
+    )
+      .bind(OPENAI_ACCOUNT_ID, now, now)
+      .run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_provider_default_write
+       BEFORE INSERT ON model_provider_account_defaults
+       BEGIN
+         SELECT RAISE(FAIL, 'simulated storage failure');
+       END`
+    ).run();
+
+    try {
+      const response = await managementFetch("/model-provider-account-defaults/openai", {
+        method: "PUT",
+        body: { providerAccountId: OPENAI_ACCOUNT_ID, unattendedMode: "provider_account" },
+      });
+
+      expect(response.status).toBe(502);
+      expectPrivateNoStore(response);
+    } finally {
+      await env.DB.exec("DROP TRIGGER IF EXISTS reject_provider_default_write");
+    }
+  });
+
   it("preflights a duplicate identity through an atomic reconnect", async () => {
     const first = await managementFetch("/model-provider-accounts", {
       method: "POST",
