@@ -82,4 +82,22 @@ describe("ProviderAuthControls menu", () => {
     );
     expect(screen.queryByText(/Use defaults when each run starts: Team ChatGPT/)).toBeNull();
   });
+
+  it("disables both control variants while the owning form is locked", () => {
+    const { rerender } = render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[account]}
+        disabled
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("button", { name: "OpenAI authentication options" })).toBeDisabled();
+
+    rerender(
+      <ProviderAuthControls provider="openai" accounts={[account]} disabled onChange={vi.fn()} />
+    );
+    expect(screen.getByRole("combobox")).toBeDisabled();
+  });
 });

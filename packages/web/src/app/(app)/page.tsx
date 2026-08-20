@@ -52,7 +52,7 @@ import type { ModelProviderSelections } from "@open-inspect/shared/types/provide
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
-import { setProviderSelection } from "@/lib/provider-selection";
+import { EMPTY_PROVIDER_SELECTIONS, setProviderSelection } from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
@@ -87,7 +87,8 @@ export default function Home() {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
-  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
+  const [providerSelections, setProviderSelections] =
+    useState<ModelProviderSelections>(EMPTY_PROVIDER_SELECTIONS);
   const providerAccounts = useProviderAccounts();
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
@@ -516,6 +517,7 @@ function HomeContent({
                           (item) => item.provider === selectedProvider
                         )}
                         value={providerSelections[selectedProvider]}
+                        disabled={creating}
                         onChange={(selection) =>
                           setProviderSelections((current) =>
                             setProviderSelection(current, selectedProvider, selection)

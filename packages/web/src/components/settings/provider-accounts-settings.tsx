@@ -331,6 +331,7 @@ export function ProviderAccountsSettings() {
                         <Button
                           size="xs"
                           variant="subtle"
+                          disabled={saving}
                           onClick={() =>
                             setConnection(
                               CONNECTION_STRATEGIES[account.provider].reconnect(account)
@@ -343,6 +344,7 @@ export function ProviderAccountsSettings() {
                           <Button
                             size="xs"
                             variant="subtle"
+                            disabled={saving}
                             onClick={() =>
                               void run(
                                 () => runProviderAccountAction(account.id, "enable"),
@@ -356,6 +358,7 @@ export function ProviderAccountsSettings() {
                           <Button
                             size="xs"
                             variant="subtle"
+                            disabled={saving}
                             onClick={() => setConfirm({ account, action: "disable" })}
                           >
                             Disable
@@ -364,6 +367,7 @@ export function ProviderAccountsSettings() {
                         <Button
                           size="xs"
                           variant="subtle"
+                          disabled={saving}
                           onClick={() =>
                             void run(
                               () => runProviderAccountAction(account.id, "verify"),

@@ -32,6 +32,9 @@ import {
 const POLICY = "policy";
 const API_KEY = "api_key";
 const ACCOUNT_PREFIX = "account:";
+const DEFAULT_POLICY_LABEL = "Use default";
+const DEFAULT_UNATTENDED = false;
+const DEFAULT_VARIANT = "select";
 
 export function ProviderAuthControls({
   provider,
@@ -39,9 +42,10 @@ export function ProviderAuthControls({
   defaultValue,
   value,
   onChange,
-  policyLabel = "Use default",
-  unattended = false,
-  variant = "select",
+  policyLabel = DEFAULT_POLICY_LABEL,
+  unattended = DEFAULT_UNATTENDED,
+  variant = DEFAULT_VARIANT,
+  disabled = false,
 }: {
   provider: SubscriptionProviderId;
   accounts: ModelProviderAccount[];
@@ -51,6 +55,7 @@ export function ProviderAuthControls({
   policyLabel?: string;
   unattended?: boolean;
   variant?: "select" | "menu";
+  disabled?: boolean;
 }) {
   const available = accounts.filter(
     (account) => account.provider === provider && account.status === "active" && !account.archivedAt
@@ -86,6 +91,7 @@ export function ProviderAuthControls({
             className={`rounded p-1 transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
             aria-label={`${providerName} authentication options`}
             title={`${providerName} authentication`}
+            disabled={disabled}
           >
             <MoreIcon className="size-4" />
           </button>
@@ -120,7 +126,7 @@ export function ProviderAuthControls({
   return (
     <div className="space-y-1.5">
       <Label htmlFor={`provider-auth-${provider}`}>{providerName} authentication</Label>
-      <Select value={selected} onValueChange={handleChange}>
+      <Select value={selected} onValueChange={handleChange} disabled={disabled}>
         <SelectTrigger id={`provider-auth-${provider}`}>
           <SelectValue />
         </SelectTrigger>

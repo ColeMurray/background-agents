@@ -26,6 +26,8 @@ type AuthorizationFailure = {
   status?: number;
 };
 
+const COUNTDOWN_TICK_INTERVAL_MS = 1_000;
+
 function authorizationFailure(error: unknown): AuthorizationFailure {
   if (error instanceof Error && "status" in error && typeof error.status === "number") {
     const retryable =
@@ -70,6 +72,8 @@ export function useProviderDeviceAuthorization(
     let cancellationRequested = false;
     let transactionId: string | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let pollIntervalMs: number | null = null;
+    let deadline: number | null = null;
 
     setAuthorization(null);
     setFailure(null);
@@ -94,6 +98,7 @@ export function useProviderDeviceAuthorization(
         const result = await pollProviderDeviceAuthorization(initialProvider, transactionId);
         if (!active) return;
         if (result.status === "pending") {
+          pollIntervalMs = result.pollIntervalMs;
           setAuthorization((current) =>
             current
               ? {
@@ -115,8 +120,14 @@ export function useProviderDeviceAuthorization(
         }
       } catch (error) {
         if (!active) return;
+        const nextFailure = authorizationFailure(error);
+        const remaining = deadline === null ? 0 : deadline - performance.now();
+        if (nextFailure.retryable && pollIntervalMs !== null && remaining > 0) {
+          schedulePoll(Math.min(pollIntervalMs, remaining));
+          return;
+        }
         setStatus("failed");
-        setFailure(authorizationFailure(error));
+        setFailure(nextFailure);
       }
     };
 
@@ -139,7 +150,8 @@ export function useProviderDeviceAuthorization(
         }
         setAuthorization(result);
         setStatus("pending");
-        const deadline = performance.now() + result.expiresInMs;
+        pollIntervalMs = result.pollIntervalMs;
+        deadline = performance.now() + result.expiresInMs;
         setLocalDeadline(deadline);
         setRemainingMs(result.expiresInMs);
         schedulePoll(result.pollIntervalMs);
@@ -163,7 +175,7 @@ export function useProviderDeviceAuthorization(
     if (localDeadline === null || status !== "pending") return;
     const updateRemaining = () => setRemainingMs(Math.max(0, localDeadline - performance.now()));
     updateRemaining();
-    const timer = setInterval(updateRemaining, 1_000);
+    const timer = setInterval(updateRemaining, COUNTDOWN_TICK_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [localDeadline, status]);
 
