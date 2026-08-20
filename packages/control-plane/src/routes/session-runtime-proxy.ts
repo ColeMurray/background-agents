@@ -5,6 +5,8 @@ import type {
 } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
+import { SessionIndexStore } from "../db/session-index";
+import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
 import {
@@ -74,6 +76,32 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
         }
 
         return response;
+      },
+    })
+  );
+}
+
+function legacyTokenRefreshRoute(
+  provider: SubscriptionProviderId,
+  routePath: string,
+  internalPath: SessionInternalPath
+): Route {
+  return defineRoute(
+    SCM_AGNOSTIC_SANDBOX_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern(routePath),
+      handler: async (_request, _env, match, ctx) => {
+        const sessionId = getSessionId(match);
+        if (sessionId instanceof Response) return sessionId;
+        const binding = await new SessionIndexStore(ctx.db).getProviderAuthForProvider(
+          sessionId,
+          provider
+        );
+        if (binding?.authMode !== "legacy_scoped_oauth") {
+          return error("Session does not use legacy scoped OAuth for this provider", 409);
+        }
+        return ctx.sessionRuntime.fetch(sessionId, internalPath, { method: "POST" });
       },
     })
   );
@@ -316,20 +344,16 @@ export const sessionRuntimeProxyRoutes: Route[] = [
       handler: handleCreatePR,
     })
   ),
-  simpleProxyRoute({
-    policy: SCM_AGNOSTIC_SANDBOX_ROUTE,
-    method: "POST",
-    routePath: "/sessions/:id/openai-token-refresh",
-    internalPath: SessionInternalPaths.openaiTokenRefresh,
-    runtimeMethod: "POST",
-  }),
-  simpleProxyRoute({
-    policy: SCM_AGNOSTIC_SANDBOX_ROUTE,
-    method: "POST",
-    routePath: "/sessions/:id/xai-token-refresh",
-    internalPath: SessionInternalPaths.xaiTokenRefresh,
-    runtimeMethod: "POST",
-  }),
+  legacyTokenRefreshRoute(
+    "openai",
+    "/sessions/:id/openai-token-refresh",
+    SessionInternalPaths.openaiTokenRefresh
+  ),
+  legacyTokenRefreshRoute(
+    "xai",
+    "/sessions/:id/xai-token-refresh",
+    SessionInternalPaths.xaiTokenRefresh
+  ),
   simpleProxyRoute({
     policy: SCM_CREDENTIALS_ROUTE,
     method: "POST",

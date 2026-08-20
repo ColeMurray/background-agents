@@ -38,6 +38,10 @@ import {
   type AutomationRepositoryInsert,
   type AutomationEnvironmentRow,
 } from "../db/automation-store";
+import {
+  AutomationModelProviderAuthStore,
+  toProviderSelections,
+} from "../db/automation-model-provider-auth";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
@@ -56,6 +60,9 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { initializeSession } from "../session/initialize";
+import type { SessionInitInput } from "../session/initialize";
+import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
+import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
@@ -209,6 +216,21 @@ type SchedulerPromptRequest = Pick<
 > & {
   callbackContext: AutomationCallbackContext | SlackCallbackContext;
 };
+
+export async function resolveAutomationProviderAuth(
+  db: SqlDatabase,
+  automationId: string
+): Promise<SessionModelProviderAuthInput[]> {
+  const pinRows = await new AutomationModelProviderAuthStore(db).list(automationId);
+  const explicit = toProviderSelections(pinRows);
+  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true });
+  const pinnedProviders = new Set(pinRows.map((pin) => pin.provider));
+  return resolved.map((auth) =>
+    pinnedProviders.has(auth.provider) && auth.selectionSource === "explicit"
+      ? { ...auth, selectionSource: "automation_pin" }
+      : auth
+  );
+}
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -423,15 +445,37 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
+    const launchCandidates = children.filter((child) => child.status === "starting");
+    let providerAuthResolution:
+      | { providerAuth: SessionModelProviderAuthInput[] }
+      | { error: unknown } = { providerAuth: [] };
+    if (launchCandidates.length > 0) {
+      try {
+        providerAuthResolution = {
+          providerAuth: await resolveAutomationProviderAuth(this.db, automation.id),
+        };
+      } catch (error) {
+        providerAuthResolution = { error };
+      }
+    }
+
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
-        const { sessionId } = await this.createSessionForAutomationRun(automation, child);
-        await this.sendPromptToSession(sessionId, automation, child.id, instructionsOverride);
-        await store.updateRun(child.id, {
+        if ("error" in providerAuthResolution) throw providerAuthResolution.error;
+        const { sessionId } = await this.createSessionForAutomationRun(
+          automation,
+          child,
+          providerAuthResolution.providerAuth
+        );
+        const claimed = await store.updateRun(child.id, {
           status: "running",
           session_id: sessionId,
           started_at: Date.now(),
         });
+        if (!claimed) {
+          throw new Error("Automation run was recovered before launch completed");
+        }
+        await this.sendPromptToSession(sessionId, automation, child.id, instructionsOverride);
         child.status = "running";
         child.session_id = sessionId;
       } catch (e) {
@@ -463,7 +507,6 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     };
 
-    const launchCandidates = children.filter((child) => child.status === "starting");
     let nextLaunchIndex = 0;
     const launchWorkerCount = Math.min(AUTOMATION_LAUNCH_CONCURRENCY, launchCandidates.length);
     await Promise.all(
@@ -1310,7 +1353,8 @@ export class SchedulerDO extends DurableObject<Env> {
 
   private async createSessionForAutomationRun(
     automation: AutomationRow,
-    run: AutomationRunRow
+    run: AutomationRunRow,
+    providerAuth: SessionModelProviderAuthInput[]
   ): Promise<{ sessionId: string }> {
     const sessionId = generateId();
 
@@ -1373,29 +1417,28 @@ export class SchedulerDO extends DurableObject<Env> {
       userId
     );
 
-    await initializeSession(
-      this.env,
-      {
-        sessionId,
-        ...target,
-        title: `[Auto] ${automation.name}`,
-        model: automation.model,
-        reasoningEffort: automation.reasoning_effort,
-        participantUserId: automation.created_by,
-        platformUserId: userId,
-        scmTokenEncrypted: null,
-        scmRefreshTokenEncrypted: null,
-        codeServerEnabled,
-        vncEnabled,
-        sandboxSettings,
-        spawnSource: "automation",
-        spawnDepth: 0,
-        automationId: automation.id,
-        automationRunId: run.id,
-        managedSkillsManifest,
-      },
-      ctx
-    );
+    const sessionInput: SessionInitInput = {
+      sessionId,
+      ...target,
+      title: `[Auto] ${automation.name}`,
+      model: automation.model,
+      reasoningEffort: automation.reasoning_effort,
+      participantUserId: automation.created_by,
+      platformUserId: userId,
+      scmTokenEncrypted: null,
+      scmRefreshTokenEncrypted: null,
+      codeServerEnabled,
+      vncEnabled,
+      sandboxSettings,
+      spawnSource: "automation",
+      spawnDepth: 0,
+      automationId: automation.id,
+      automationRunId: run.id,
+      managedSkillsManifest,
+      providerAuth,
+    };
+
+    await initializeSession(this.env, sessionInput, ctx);
 
     return { sessionId };
   }

@@ -59,19 +59,34 @@ async function refreshViaControlPlane() {
     );
   }
 
-  const response = await fetch(`${controlPlaneUrl}/sessions/${sessionId}/openai-token-refresh`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-    },
-  });
+  const response = await fetch(
+    `${controlPlaneUrl}/sessions/${sessionId}/provider-auth/openai/access-token`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    }
+  );
 
   if (!response.ok) {
     const body = (await response.text()).slice(0, 200);
     throw new Error(`Token refresh failed (${response.status}): ${body}`);
   }
 
-  return response.json();
+  const result = await response.json();
+  if (
+    !result ||
+    typeof result.accessToken !== "string" ||
+    !result.accessToken.trim() ||
+    (result.expiresIn !== undefined &&
+      (typeof result.expiresIn !== "number" ||
+        !Number.isFinite(result.expiresIn) ||
+        result.expiresIn <= 0))
+  ) {
+    throw new Error("Invalid OpenAI token broker response");
+  }
+  return result;
 }
 
 async function ensureAccessToken(getAuth, setAuth) {
@@ -85,9 +100,9 @@ async function ensureAccessToken(getAuth, setAuth) {
   // Refresh via control plane
   const result = await refreshViaControlPlane();
 
-  cachedAccessToken = result.access_token;
-  cachedAccountId = result.account_id || null;
-  cachedExpiresAt = now + (result.expires_in ?? 3600) * 1000;
+  cachedAccessToken = result.accessToken;
+  cachedAccountId = result.providerMetadata?.accountId || null;
+  cachedExpiresAt = now + (result.expiresIn ?? 3600) * 1000;
 
   // Update OpenCode's auth state for consistency
   try {
@@ -95,7 +110,7 @@ async function ensureAccessToken(getAuth, setAuth) {
     await setAuth({
       type: "oauth",
       refresh: currentAuth?.refresh || "managed-by-control-plane",
-      access: result.access_token,
+      access: result.accessToken,
       expires: cachedExpiresAt,
       ...(cachedAccountId && { accountId: cachedAccountId }),
     });

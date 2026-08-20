@@ -12,10 +12,15 @@ import { z } from "zod";
 import { createLogger } from "../logger";
 import { generateId } from "../auth/crypto";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
+import {
+  ModelProviderAccountBroker,
+  ModelProviderAccountBrokerError,
+} from "../auth/model-provider-account-broker";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { D1ModelProviderAccountAtomicWriter } from "../db/model-provider-account-atomic-writer";
 import { ProviderCredentialStore } from "../db/provider-account-credentials";
 import { ProviderDefaultStore } from "../db/provider-account-defaults";
+import { SessionIndexStore } from "../db/session-index";
 import { listLegacyProviderCredentials } from "../model-provider-accounts/legacy-provider-credentials";
 import {
   ModelProviderAccountService,
@@ -26,6 +31,8 @@ import {
   ProviderAccountSelectionPolicyError,
 } from "../model-provider-accounts/selection-policy";
 import type { Env } from "../types";
+import { SessionInternalPaths } from "../session/contracts";
+import { createSessionRuntimeClient } from "../session/runtime-client";
 import {
   defineRoute,
   error,
@@ -33,14 +40,26 @@ import {
   parseJsonBody,
   parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
   type Route,
+  type SandboxRouteContext,
   type UserRouteContext,
 } from "./shared";
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
+const NO_STORE = "no-store" as const;
 const renameSchema = z.strictObject({ displayName: modelProviderAccountDisplayNameSchema });
 const logger = createLogger("router:model-provider-accounts");
+const legacyAccessSchema = z.object({
+  access_token: z.string().min(1),
+  expires_in: z.number().optional(),
+  account_id: z.string().optional(),
+});
+const LEGACY_REFRESH_PATH = {
+  openai: SessionInternalPaths.openaiTokenRefresh,
+  xai: SessionInternalPaths.xaiTokenRefresh,
+} as const;
 
 function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
   const accounts = new ModelProviderAccountStore(ctx.db);
@@ -265,4 +284,86 @@ const managementRoutes: Route[] = [
   ),
 ];
 
-export const modelProviderAccountRoutes: Route[] = managementRoutes;
+async function handleLegacyProviderAccess(
+  env: Env,
+  ctx: SandboxRouteContext,
+  sessionId: string,
+  providerId: SubscriptionProviderId
+): Promise<Response> {
+  const response = await createSessionRuntimeClient(env, ctx).fetch(
+    sessionId,
+    LEGACY_REFRESH_PATH[providerId],
+    { method: "POST" }
+  );
+  if (!response.ok) return response;
+  const parsed = legacyAccessSchema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) return error("Provider access unavailable", 503);
+  return json({
+    accessToken: parsed.data.access_token,
+    ...(parsed.data.expires_in === undefined ? {} : { expiresIn: parsed.data.expires_in }),
+    providerMetadata:
+      providerId === "openai" && parsed.data.account_id
+        ? { accountId: parsed.data.account_id }
+        : {},
+  });
+}
+
+async function handleProviderAccess(
+  _request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: SandboxRouteContext
+): Promise<Response> {
+  const sessionId = match.groups?.id;
+  const parsedProvider = provider(match.groups?.provider);
+  if (!sessionId) return error("Session ID required", 400);
+  if (parsedProvider instanceof Response) return parsedProvider;
+  let binding;
+  try {
+    binding = await new SessionIndexStore(ctx.db).getProviderAuthForProvider(
+      sessionId,
+      parsedProvider
+    );
+  } catch {
+    return error("Session provider auth unavailable", 503);
+  }
+  if (!binding) return error("Session provider account is not configured", 404);
+  if (binding.authMode === "legacy_scoped_oauth") {
+    return handleLegacyProviderAccess(env, ctx, sessionId, parsedProvider);
+  }
+  if (binding.authMode === "api_key") {
+    return error("Session uses API-key mode for this provider", 409);
+  }
+  const broker = new ModelProviderAccountBroker(
+    {
+      accounts: new ModelProviderAccountStore(ctx.db),
+      credentials: new ProviderCredentialStore(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY),
+      atomicWriter: new D1ModelProviderAccountAtomicWriter(
+        ctx.db,
+        env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY
+      ),
+    },
+    modelProviderAccountAdapterRegistry,
+    { now: () => Date.now(), createOwner: () => generateId() }
+  );
+  try {
+    return json(await broker.getAccess(binding.providerAccountId, parsedProvider));
+  } catch (cause) {
+    if (cause instanceof ModelProviderAccountBrokerError) {
+      const status =
+        cause.code === "account_not_found" ? 404 : cause.code === "upstream_retry_safe" ? 502 : 409;
+      return error(cause.message, status);
+    }
+    return error("Provider access unavailable", 503);
+  }
+}
+
+export const modelProviderAccountRoutes: Route[] = [
+  ...managementRoutes,
+  defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/provider-auth/:provider/access-token"),
+    cacheControl: NO_STORE,
+    handler: handleProviderAccess,
+  }),
+];

@@ -4,11 +4,9 @@ import { parseRepositoryShasJson, repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
 
 // Runtime generations are one sequence shared by every image-build provider.
-// v59 carries OpenCode past its message-ID wraparound (see
-// packages/modal-infra/src/images/base.py); v57 added the VNC/noVNC toolchain.
-// MIN_COMPATIBLE_RUNTIME_VERSION remains safe to boot while the scheduler
-// converges prebuilt images in the background.
-export const MIN_REBUILD_RUNTIME_VERSION = 59;
+// v60 carries the generic provider-account token broker plugin. Older images
+// cannot boot safely because their managed-provider plugins call legacy routes.
+export const MIN_REBUILD_RUNTIME_VERSION = 60;
 
 export type ImageBuildRebuildDecision =
   | { type: "skip"; reason: "building" }

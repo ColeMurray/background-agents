@@ -239,69 +239,71 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      deps.sessionCoreRepository.upsertSession({
-        id: sessionId,
-        sessionName,
-        title: body.title ?? null,
-        repoOwner,
-        repoName,
-        repoId: hasRepoOwner ? body.repoId : null,
-        baseBranch,
-        model,
-        reasoningEffort,
-        status: "created",
-        parentSessionId: body.parentSessionId ?? null,
-        spawnSource: body.spawnSource ?? "user",
-        spawnDepth: body.spawnDepth ?? 0,
-        codeServerEnabled: body.codeServerEnabled ?? false,
-        vncEnabled: body.vncEnabled ?? false,
-        sandboxSettings: body.sandboxSettings
-          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
-          : null,
-        environmentId: body.environmentId ?? null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      deps.sessionCoreRepository.transaction(() => {
+        deps.sessionCoreRepository.upsertSession({
+          id: sessionId,
+          sessionName,
+          title: body.title ?? null,
+          repoOwner,
+          repoName,
+          repoId: hasRepoOwner ? body.repoId : null,
+          baseBranch,
+          model,
+          reasoningEffort,
+          status: "created",
+          parentSessionId: body.parentSessionId ?? null,
+          spawnSource: body.spawnSource ?? "user",
+          spawnDepth: body.spawnDepth ?? 0,
+          codeServerEnabled: body.codeServerEnabled ?? false,
+          vncEnabled: body.vncEnabled ?? false,
+          sandboxSettings: body.sandboxSettings
+            ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+            : null,
+          environmentId: body.environmentId ?? null,
+          createdAt: now,
+          updatedAt: now,
+        });
 
-      // Legacy scalar producers (spawn paths not yet list-aware) still get a
-      // member row so spawn/read paths have one source of truth.
-      const memberRepositories: RepositoryRef[] =
-        repositories.length > 0
-          ? repositories
-          : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
-            ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
-            : [];
-      deps.sessionCoreRepository.replaceSessionRepositories(
-        memberRepositories.map((repo, position) => ({
-          position,
-          repoOwner: repo.repoOwner,
-          repoName: repo.repoName,
-          repoId: repo.repoId,
-          baseBranch: repo.baseBranch,
-        }))
-      );
-      const sandboxId = deps.generateId();
-      deps.sandboxRepository.createSandbox({
-        id: sandboxId,
-        status: "pending",
-        gitSyncStatus: "pending",
-        createdAt: 0,
-      });
+        // Legacy scalar producers (spawn paths not yet list-aware) still get a
+        // member row so spawn/read paths have one source of truth.
+        const memberRepositories: RepositoryRef[] =
+          repositories.length > 0
+            ? repositories
+            : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
+              ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
+              : [];
+        deps.sessionCoreRepository.replaceSessionRepositories(
+          memberRepositories.map((repo, position) => ({
+            position,
+            repoOwner: repo.repoOwner,
+            repoName: repo.repoName,
+            repoId: repo.repoId,
+            baseBranch: repo.baseBranch,
+          }))
+        );
+        const sandboxId = deps.generateId();
+        deps.sandboxRepository.createSandbox({
+          id: sandboxId,
+          status: "pending",
+          gitSyncStatus: "pending",
+          createdAt: 0,
+        });
 
-      const participantId = deps.generateId();
-      deps.participantRepository.createParticipant({
-        id: participantId,
-        userId: body.userId,
-        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
-        scmUserId: body.scmUserId ?? null,
-        scmLogin: body.scmLogin ?? null,
-        scmName: body.scmName ?? null,
-        scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: encryptedToken,
-        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
-        role: "owner",
-        joinedAt: now,
+        const participantId = deps.generateId();
+        deps.participantRepository.createParticipant({
+          id: participantId,
+          userId: body.userId,
+          ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
+          scmUserId: body.scmUserId ?? null,
+          scmLogin: body.scmLogin ?? null,
+          scmName: body.scmName ?? null,
+          scmEmail: body.scmEmail ?? null,
+          scmAccessTokenEncrypted: encryptedToken,
+          scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
+          scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
+          role: "owner",
+          joinedAt: now,
+        });
       });
 
       log.info("Triggering sandbox spawn for new session");

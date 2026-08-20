@@ -112,7 +112,12 @@ def test_xai_plugin_uses_broker_without_refresh_token_environment():
     ).read_text()
 
     assert 'provider: "xai"' in plugin
-    assert "/xai-token-refresh" in plugin
+    assert "/provider-auth/xai/access-token" in plugin
+    assert "/xai-token-refresh" not in plugin
+    assert "result.accessToken" in plugin
+    assert "result.expiresIn" in plugin
+    assert "providerMetadata" not in plugin
+    assert "externalAccountId" not in plugin
     assert "XAI_OAUTH_REFRESH_TOKEN" not in plugin
     assert "reasoningEffort" not in plugin
 

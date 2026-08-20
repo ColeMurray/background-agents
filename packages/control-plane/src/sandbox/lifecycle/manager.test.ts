@@ -1043,6 +1043,35 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).not.toHaveBeenCalled();
     });
 
+    it("passes the current managed provider environment when restoring a snapshot", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const userEnvVars = {
+        OPENAI_OAUTH_MANAGED: "1",
+        XAI_API_KEY: "xai-key",
+      };
+      const storage = createMockStorage(createMockSession(), sandbox, userEnvVars);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(storage.getUserEnvVars).toHaveBeenCalledOnce();
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ userEnvVars })
+      );
+    });
+
     it("logs one terminal sandbox.restore event for success", async () => {
       const sandbox = createMockSandbox({
         status: "stopped",

@@ -30,11 +30,14 @@ async function refreshViaControlPlane() {
     throw new Error("Missing environment for xAI token refresh");
   }
 
-  const response = await fetch(`${controlPlaneUrl}/sessions/${sessionId}/xai-token-refresh`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${authToken}` },
-    signal: AbortSignal.timeout(CONTROL_PLANE_TOKEN_REQUEST_TIMEOUT_MS),
-  });
+  const response = await fetch(
+    `${controlPlaneUrl}/sessions/${sessionId}/provider-auth/xai/access-token`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal: AbortSignal.timeout(CONTROL_PLANE_TOKEN_REQUEST_TIMEOUT_MS),
+    }
+  );
   if (!response.ok) {
     const body = (await response.text()).slice(0, 200);
     throw new Error(`xAI token refresh failed (${response.status}): ${body}`);
@@ -42,11 +45,12 @@ async function refreshViaControlPlane() {
   const result = await response.json();
   if (
     !result ||
-    typeof result.access_token !== "string" ||
-    !result.access_token.trim() ||
-    typeof result.expires_in !== "number" ||
-    !Number.isFinite(result.expires_in) ||
-    result.expires_in <= 0
+    typeof result.accessToken !== "string" ||
+    !result.accessToken.trim() ||
+    (result.expiresIn !== undefined &&
+      (typeof result.expiresIn !== "number" ||
+        !Number.isFinite(result.expiresIn) ||
+        result.expiresIn <= 0))
   ) {
     throw new Error("Invalid xAI token broker response");
   }
@@ -60,8 +64,8 @@ async function ensureAccessToken() {
   if (!refreshPromise) {
     refreshPromise = refreshViaControlPlane()
       .then((result) => {
-        cachedAccessToken = result.access_token;
-        cachedExpiresAt = Date.now() + result.expires_in * 1000;
+        cachedAccessToken = result.accessToken;
+        cachedExpiresAt = Date.now() + (result.expiresIn ?? 3600) * 1000;
         return cachedAccessToken;
       })
       .finally(() => {

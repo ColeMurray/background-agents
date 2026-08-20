@@ -1832,21 +1832,34 @@ export class SessionDO extends DurableObject<Env> {
       return undefined;
     }
 
-    if (!this.db || !this.env.REPO_SECRETS_ENCRYPTION_KEY) {
-      this.log.debug("Secrets not configured, skipping", {
-        has_db: !!this.db,
+    const db = this.db;
+    if (!db) throw new Error("D1 is required to load session provider auth");
+    const providerAuth = await new SessionIndexStore(db).getCompleteProviderAuth(
+      this.getPublicSessionId(session)
+    );
+    const providerAuthModes = Object.fromEntries(
+      providerAuth.map(({ provider, authMode }) => [provider, authMode])
+    );
+
+    if (!this.env.REPO_SECRETS_ENCRYPTION_KEY) {
+      this.log.debug("Ordinary secrets not configured, skipping secret loading", {
         has_encryption_key: !!this.env.REPO_SECRETS_ENCRYPTION_KEY,
       });
-      return undefined;
+      const sandboxEnv = prepareManagedProviderEnv({
+        exposedSecrets: {},
+        brokerSecrets: {},
+        providerAuthModes,
+      });
+      return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
     }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
     const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
-    const globalStore = new GlobalSecretsStore(this.db, encryptionKey);
+    const globalStore = new GlobalSecretsStore(db, encryptionKey);
     const globalSecrets = await globalStore.getDecryptedSecrets();
 
-    const repoStore = new RepoSecretsStore(this.db, encryptionKey);
-    const environmentSecretsStore = new EnvironmentSecretsStore(this.db, encryptionKey);
+    const repoStore = new RepoSecretsStore(db, encryptionKey);
+    const environmentSecretsStore = new EnvironmentSecretsStore(db, encryptionKey);
     const members = this.sessionCoreRepository.getSessionRepositories();
     const sources = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
@@ -1875,7 +1888,6 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
 
-    if (mergedCount === 0) return undefined;
     const primary = members.find((member) => member.isPrimary);
     const managedSources = session.environment_id
       ? sources
@@ -1888,6 +1900,7 @@ export class SessionDO extends DurableObject<Env> {
     const sandboxEnv = prepareManagedProviderEnv({
       exposedSecrets: merge.merged,
       brokerSecrets: managedSecrets,
+      providerAuthModes,
     });
     return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
   }

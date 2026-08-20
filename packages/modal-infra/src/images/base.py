@@ -48,7 +48,8 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # and MIN_REBUILD_RUNTIME_VERSION gates which prebuilt images get rebuilt onto
 # it, so bump every provider's label together.
 # v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
-CACHE_BUSTER = "v59-opencode-1-18-18"
+# v60: generic provider-account token broker plugin
+CACHE_BUSTER = "v60-provider-account-broker"
 
 # Base image with all development tools
 base_image = (

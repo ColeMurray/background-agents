@@ -27,6 +27,38 @@ describe("Child session operations (list, get, cancel)", () => {
     const pName = parentName();
     const childName = `child-ops-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
+    // Seed D1 before initializing the DOs because sandbox warming reads provider auth from D1.
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: pName,
+      title: "Parent Session",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      spawnDepth: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.create({
+      id: childName,
+      title: "Child Session",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: opts?.childStatus ?? "created",
+      parentSessionId: pName,
+      spawnSource: "agent",
+      spawnDepth: 1,
+      createdAt: now + 1,
+      updatedAt: now + 1,
+    });
+
     // Create parent DO
     const { stub: parentStub } = await initNamedSessionDO(pName, {
       repoOwner: "acme",
@@ -62,40 +94,6 @@ describe("Child session operations (list, get, cancel)", () => {
       parentSessionId: pName,
       spawnSource: "agent",
       spawnDepth: 1,
-    });
-
-    // Seed D1 rows for both parent and child
-    const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
-
-    await store.create({
-      id: pName,
-      title: "Parent Session",
-      repoOwner: "acme",
-      repoName: "web-app",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: "active",
-      spawnDepth: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await store.create({
-      id: childName,
-      title: "Child Session",
-      repoOwner: "acme",
-      repoName: "web-app",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: opts?.childStatus ?? "created",
-      parentSessionId: pName,
-      spawnSource: "agent",
-      spawnDepth: 1,
-      createdAt: now + 1,
-      updatedAt: now + 1,
     });
 
     return { pName, childName, parentStub, childStub, sandboxToken, store };

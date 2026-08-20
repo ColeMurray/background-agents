@@ -1,7 +1,9 @@
 import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { initNamedSession, seedSandboxAuth, serviceFetch } from "./helpers";
+import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
+import { GlobalSecretsStore } from "../../src/db/global-secrets";
 
 const OPENAI_ACCOUNT_ID = "11111111111111111111111111111111";
 
@@ -256,5 +258,136 @@ describe("provider account management routes", () => {
       },
     ]);
     expect(JSON.stringify(readBody)).not.toContain("ciphertext");
+  });
+});
+
+describe("provider account sandbox broker route", () => {
+  beforeEach(cleanD1Tables);
+  afterEach(cleanD1Tables);
+
+  it("is sandbox-only and applies no-store to every outcome", async () => {
+    const sessionName = `provider-broker-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await env.DB.prepare(
+      "DELETE FROM session_model_provider_auth WHERE session_id = ? AND provider = 'openai'"
+    )
+      .bind(sessionName)
+      .run();
+    const sandboxToken = "provider-broker-token";
+    await seedSandboxAuth(stub, { authToken: sandboxToken, sandboxId: "sandbox-1" });
+    const url = `https://test.local/sessions/${sessionName}/provider-auth/openai/access-token`;
+
+    const missing = await SELF.fetch(url, { method: "POST" });
+    expect(missing.status).toBe(401);
+    expect(missing.headers.get("Cache-Control")).toBe("no-store");
+
+    const service = await serviceFetch(url, { method: "POST", service: "web" });
+    expect(service.status).toBe(401);
+    expect(service.headers.get("Cache-Control")).toBe("no-store");
+
+    const absentBinding = await SELF.fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sandboxToken}` },
+    });
+    expect(absentBinding.status).toBe(404);
+    expect(absentBinding.headers.get("Cache-Control")).toBe("no-store");
+
+    const unsupportedProvider = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/provider-auth/anthropic/access-token`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sandboxToken}` },
+      }
+    );
+    expect(unsupportedProvider.status).toBe(400);
+    expect(unsupportedProvider.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("adapts legacy scoped OAuth to the generic provider access contract", async () => {
+    const sessionName = `provider-broker-legacy-${Date.now()}`;
+    await new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!).setSecrets({
+      OPENAI_OAUTH_REFRESH_TOKEN: "integration-openai",
+    });
+    const { stub } = await initNamedSession(sessionName);
+    const sandboxToken = "provider-broker-legacy-token";
+    await seedSandboxAuth(stub, { authToken: sandboxToken, sandboxId: "sandbox-legacy" });
+
+    const response = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/provider-auth/openai/access-token`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sandboxToken}` },
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      accessToken: "integration-openai-access-token",
+      expiresIn: 3600,
+      providerMetadata: { accountId: "acct-integration" },
+    });
+  });
+
+  it("brokers only the account pinned to the trusted session auth row", async () => {
+    const sessionName = `provider-broker-success-${Date.now()}`;
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+        (id, provider, display_name, external_account_id, status, created_at, updated_at)
+        VALUES (?, 'openai', 'Pinned OpenAI', 'acct-pinned', 'active', ?, ?)`
+    )
+      .bind(OPENAI_ACCOUNT_ID, now, now)
+      .run();
+    await new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!).create({
+      providerAccountId: OPENAI_ACCOUNT_ID,
+      provider: "openai",
+      credentialSchemaVersion: 1,
+      payload: {
+        refreshToken: "never-returned",
+        accessToken: "brokered-access-token",
+        accessTokenExpiresAt: now + 60 * 60 * 1000,
+        accountId: "acct-pinned",
+      },
+      accessTokenExpiresAt: now + 60 * 60 * 1000,
+      now,
+    });
+    const { stub } = await initNamedSession(sessionName, {
+      providerAuth: [
+        {
+          provider: "openai",
+          authMode: "provider_account",
+          providerAccountId: OPENAI_ACCOUNT_ID,
+          selectionSource: "explicit",
+        },
+        { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
+      ],
+    });
+    const sandboxToken = "provider-broker-success-token";
+    await seedSandboxAuth(stub, { authToken: sandboxToken, sandboxId: "sandbox-success" });
+
+    const response = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/provider-auth/openai/access-token`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sandboxToken}` },
+      }
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const body = await response.json<Record<string, unknown>>();
+    expect(body).toMatchObject({
+      accessToken: "brokered-access-token",
+      externalAccountId: "acct-pinned",
+    });
+    expect(JSON.stringify(body)).not.toContain("never-returned");
+    const legacyBypass = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/openai-token-refresh`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sandboxToken}` },
+      }
+    );
+    expect(legacyBypass.status).toBe(409);
   });
 });

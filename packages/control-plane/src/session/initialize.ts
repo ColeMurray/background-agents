@@ -7,6 +7,9 @@ import { SessionIndexStore } from "../db/session-index";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { createLogger } from "../logger";
 import type { SessionSkillManifestInput } from "./skill-resolution";
+import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { resolveSessionProviderAuth } from "./provider-account-resolution";
 
 const logger = createLogger("session-init");
 
@@ -71,6 +74,8 @@ export interface SessionInitInput {
   automationRunId?: string | null;
   managedSkillsManifest?: SessionSkillManifestInput;
   managedSkillsSourceSessionId?: string;
+  providerAuth?: SessionModelProviderAuthInput[];
+  providerSelections?: ModelProviderSelections;
 }
 
 /**
@@ -103,6 +108,12 @@ export async function initializeSession(
   const defaultBranch = hasRepoOwner ? input.defaultBranch : null;
 
   const now = Date.now();
+  const providerAuth =
+    input.providerAuth ??
+    (await resolveSessionProviderAuth(ctx.db, {
+      explicit: input.providerSelections,
+      unattended: input.spawnSource !== undefined && input.spawnSource !== "user",
+    }));
   const baseBranch = hasRepoOwner ? branch || defaultBranch || "main" : null;
 
   if (input.repositories?.length) {
@@ -153,6 +164,7 @@ export async function initializeSession(
     updatedAt: now,
     skillManifest: input.managedSkillsManifest,
     skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
+    providerAuth,
   });
 
   // Step 2: DO init

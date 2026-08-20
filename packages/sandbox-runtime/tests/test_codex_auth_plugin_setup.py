@@ -57,6 +57,23 @@ class TestCodexAuthPluginSetup:
         for model in ("gpt-5.2", "gpt-5.2-codex"):
             assert f'"{model}"' not in plugin_source
 
+    def test_oauth_proxy_uses_generic_provider_broker_contract(self):
+        plugin_source = (
+            Path(__file__).parents[1]
+            / "src"
+            / "sandbox_runtime"
+            / "plugins"
+            / "codex-auth-plugin.js"
+        ).read_text()
+
+        assert "/provider-auth/openai/access-token" in plugin_source
+        assert "/openai-token-refresh" not in plugin_source
+        assert "result.accessToken" in plugin_source
+        assert "result.providerMetadata?.accountId" in plugin_source
+        assert "Invalid OpenAI token broker response" in plugin_source
+        assert "result.account_id" not in plugin_source
+        assert "result.externalAccountId" not in plugin_source
+
     def test_auth_json_uses_sentinel_token(self, tmp_path):
         """auth.json should contain the sentinel, not the real refresh token."""
         sup = _make_opencode_server()

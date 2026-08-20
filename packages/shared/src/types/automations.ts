@@ -103,6 +103,8 @@ export const createAutomationRequestSchema = z.object({
   repositories: automationRepositoriesInputSchema.optional(),
   /** Environments to fan out over, one workspace session each (design §13.3). */
   environmentIds: z.array(z.string()).optional(),
+  /** Complete pin set. Omission creates the automation without pins. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
 });
 export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
 
@@ -119,6 +121,8 @@ export const updateAutomationRequestSchema = z.object({
   repositories: automationRepositoriesInputSchema.optional(),
   /** Replaces the full environment selection when present (empty clears). */
   environmentIds: z.array(z.string()).optional(),
+  /** Replaces every provider pin when present; an empty map clears all pins. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
 });
 export type UpdateAutomationRequest = z.input<typeof updateAutomationRequestSchema>;
 

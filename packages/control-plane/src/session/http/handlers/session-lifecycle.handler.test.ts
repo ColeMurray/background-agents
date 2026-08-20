@@ -90,6 +90,7 @@ function createHandler() {
   const repository = {
     upsertSession: vi.fn(),
     replaceSessionRepositories: vi.fn(),
+    transaction: vi.fn((callback: () => void) => callback()),
     createParticipant: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 0),
@@ -314,6 +315,7 @@ describe("createSessionLifecycleHandler", () => {
         baseBranch: "feature/work",
       },
     ]);
+    expect(repository.transaction).toHaveBeenCalledOnce();
     expect(scheduleWarmSandbox).toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
   });
