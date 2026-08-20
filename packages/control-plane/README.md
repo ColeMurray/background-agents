@@ -351,10 +351,10 @@ runtime constructs Better Auth and the immutable provider list from the same con
 `GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
 requests so the React `/login` route can render them server-side.
 
-## Token Encryption
+## Credential Encryption
 
-Two independent key domains protect stored credentials. Rotation guidance differs — never treat them
-as interchangeable during an incident:
+Three independent key domains protect stored credentials. Rotation guidance differs — never treat
+them as interchangeable during an incident:
 
 - **`TOKEN_ENCRYPTION_KEY`** — AES-256-GCM for the SCM enrichment tokens in `user_scm_tokens`:
 
@@ -375,6 +375,15 @@ as interchangeable during an incident:
   `refresh_token`, `id_token`, written at web sign-in and read via `auth.api.getAccessToken`).
   Rotating it signs every browser session out and orphans those stored credentials — they
   re-populate at each user's next sign-in. It does not affect `user_scm_tokens`.
+
+- **`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`** — dedicated AES-256-GCM key for subscription-provider
+  account credentials. Provider account mode stores only account references on sessions and brokers
+  short-lived access through `POST /sessions/:id/provider-auth/:provider/access-token`. Rotate this
+  key only with a credential migration or planned reconnection of every stored provider account.
+
+Legacy scoped OpenAI/xAI OAuth and provider accounts can coexist. Explicit choices and provider
+defaults apply to newly created sessions; sessions without either retain legacy scoped behavior.
+Existing sessions remain pinned to their stored authentication mode.
 
 ## Security Model
 
@@ -421,6 +430,7 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+- `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` - Dedicated key for provider account credentials in D1
 
 Optional variables:
 
