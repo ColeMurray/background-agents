@@ -2,9 +2,10 @@
 
 ## Status
 
-Proposed design for V1. This document defines a provider-neutral account catalog for subscription-
-backed model access, concrete account selection for sessions, deterministic defaults for unattended
-launches, and coexistence with existing managed OAuth secrets.
+Implemented V1 architecture. D1 migrations `0064_provider_accounts.sql` and
+`0065_provider_account_authorizations.sql`, the shared contracts, and the control-plane routes are
+the executable sources of truth. This document records the stable data, lifecycle, selection, and
+runtime boundaries, including coexistence with existing managed OAuth secrets.
 
 ## Summary
 
@@ -18,7 +19,8 @@ V1 introduces five concepts:
 - **Provider account**: a stable, installation-wide connection to one provider account or workspace.
 - **Provider credential**: encrypted, provider-specific authentication state for that account.
 - **Provider default**: the installation-wide account selected by default for a provider.
-- **Session provider auth**: immutable account or API-key mode for one provider in one session.
+- **Session provider auth**: immutable account, API-key, or legacy scoped-OAuth mode for one
+  provider in one session.
 - **Automation provider auth**: an optional account or API-key mode pinned to an automation.
 
 The control plane owns credentials and refreshes them through provider-specific adapters. Sandboxes
@@ -38,7 +40,7 @@ secrets, while provider auth rows make the choice between account and API-key mo
 | Ownership           | Installation-wide, matching the current single-tenant trust model; retain creator audit metadata. |
 | Credentials         | Separate encrypted credential row with a versioned, provider-validated payload.                   |
 | Defaults            | At most one installation-wide default account per provider.                                       |
-| Resolution          | Explicit auth mode, unattended policy when relevant, default account, then API-key mode.          |
+| Resolution          | Explicit auth mode, unattended policy when relevant, default account, then legacy compatibility.  |
 | Sessions            | Pin provider auth rows at creation; never consult moving defaults during token refresh.           |
 | Provider switching  | Snapshot auth for each configured subscription provider so later model changes are stable.        |
 | Children            | Inherit all parent auth rows; agent child-spawn requests cannot override them.                    |
@@ -76,8 +78,8 @@ auditable.
 - Present all provider accounts in a first-party Settings experience.
 - Let an initiating web user explicitly choose the account used by a session.
 - Give unattended launch paths deterministic account/API-key policy.
-- Require operators to remove legacy managed OAuth secrets and reconnect accounts explicitly rather
-  than importing or translating scoped credentials.
+- Surface legacy managed OAuth secrets so operators can connect provider accounts and retire legacy
+  credentials deliberately, without importing or translating them.
 - Pin provider-account choices to sessions for reproducibility and attribution.
 - Keep long-lived credentials control-plane-only.
 - Centralize provider-neutral refresh, cache, concurrency, and lifecycle behavior.
@@ -134,9 +136,9 @@ session again.
 
 ### Session provider auth
 
-The account or API-key mode pinned to a session for one provider. Account-mode rows include a
-concrete account ID. Both modes retain routing provenance and are runtime authorization inputs; they
-contain no credential data.
+The provider-account, API-key, or legacy scoped-OAuth mode pinned to a session for one provider.
+Account-mode rows include a concrete account ID. All modes retain routing provenance and are runtime
+authorization inputs; they contain no credential data.
 
 ## Current Architecture
 
@@ -238,8 +240,12 @@ concurrency, single-flight coordination, audit logging, and session auth checks.
 - external account/workspace ID extraction;
 - provider error classification;
 - runtime metadata derivation from trusted credentials and external identity;
-- canonical API-key environment names to suppress in account mode;
 - documented retry safety for ambiguous and stale exchanges.
+
+Sandbox environment preparation owns the canonical provider environment-name registry. The current
+source is `PROVIDER_ENV` in `packages/control-plane/src/sandbox/managed-provider-env.ts`; it maps
+each provider to its API-key name, managed marker, and legacy refresh-token name. Adapters do not
+declare environment-variable ownership.
 
 ### Initial adapters
 
@@ -256,8 +262,9 @@ explicit non-rotating response differently.
 
 ## Data Model
 
-The SQL below is illustrative. The implementation migration must use the next available migration
-number and follow D1's supported SQLite subset.
+The schema is implemented across `0064_provider_accounts.sql` and
+`0065_provider_account_authorizations.sql`. The excerpts below summarize the current design; the
+migrations remain authoritative for complete SQLite constraints and indexes.
 
 ### `model_provider_accounts`
 
@@ -275,6 +282,7 @@ CREATE TABLE model_provider_accounts (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   archived_at INTEGER,
+  lifecycle_version INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
   UNIQUE (id, provider),
@@ -301,6 +309,10 @@ belongs to the provider named by the referencing row.
 
 Archival is soft because sessions and historical usage may reference the account. Archived accounts
 cannot be selected for new sessions.
+
+`lifecycle_version` increments when an account lifecycle operation could invalidate an in-progress
+reconnect. Device authorization records snapshot it together with account status and reject stale
+completion attempts.
 
 ### `model_provider_account_credentials`
 
@@ -337,6 +349,24 @@ represent the transient durable lease and contain no credential.
 Use a dedicated `PROVIDER_ACCOUNTS_ENCRYPTION_KEY`. New encryption should bind ciphertext to the
 provider account ID, provider ID, and credential schema version using authenticated associated data.
 The stored encoding must carry an encryption format version to permit later key or format migration.
+
+### `model_provider_account_authorizations`
+
+Migration `0065_provider_account_authorizations.sql` adds user-owned device-authorization
+transactions. A transaction records provider, `create` or `reconnect` operation, reconnect lifecycle
+snapshot or create display name, encrypted provider state, polling cadence and expiry, terminal
+result, and processing-claim metadata. Its state is one of `initiating`, `pending`, `processing`,
+`connected`, `denied`, `expired`, `failed`, `cancelled`, or `superseded`.
+
+Provider state is encrypted with transaction ID, provider, and schema version as authenticated
+context. Terminal transitions clear that ciphertext. The store uses conditional processing claims so
+only one poller may exchange or finalize a transaction; stale reconnect completions are fenced by
+the account's captured status and `lifecycle_version`.
+
+The same migration adds `model_provider_account_authorization_attempts`. It records per-user start
+attempts for throttling without storing credentials. Authorization rows are user-scoped even though
+connected provider accounts are installation-wide: only the initiating user may poll or cancel the
+temporary flow.
 
 ### `model_provider_account_defaults`
 
@@ -385,10 +415,13 @@ CREATE TABLE session_model_provider_auth (
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
   FOREIGN KEY (provider_account_id, provider)
     REFERENCES model_provider_accounts(id, provider),
-  CHECK (auth_mode IN ('provider_account', 'api_key')),
+  CHECK (auth_mode IN ('provider_account', 'api_key', 'legacy_scoped_oauth')),
   CHECK (
     (auth_mode = 'provider_account' AND provider_account_id IS NOT NULL)
-    OR (auth_mode = 'api_key' AND provider_account_id IS NULL)
+    OR (
+      auth_mode IN ('api_key', 'legacy_scoped_oauth')
+      AND provider_account_id IS NULL
+    )
   )
 );
 
@@ -401,10 +434,11 @@ Runtime consumers read these rows from D1 using the authenticated public session
 session snapshot may expose provider IDs and selection source, but account display metadata should
 be fetched from the model-provider-account API rather than copied into the WebSocket snapshot.
 
-`provider_account_id` is the concrete routing result and `selection_source` records how it was
-chosen. V1 sources include explicit selection, provider default, unattended policy, automation pin,
-and parent inheritance. Children copy the selected auth row and set `inherited_from_session_id` to
-their parent.
+`provider_account_id` is present only for `provider_account` mode; API-key and legacy modes require
+it to be null. `selection_source` records how the row was chosen. V1 sources include explicit
+selection, provider default, unattended policy, automation pin, legacy fallback, migration, and
+parent inheritance. Children copy the selected auth row and set `inherited_from_session_id` to their
+parent.
 
 ### `automation_model_provider_auth`
 
@@ -455,38 +489,26 @@ account table.
 
 ### Create
 
-V1 uses a provider-specific manual credential form because current OpenAI and xAI setup already
-depends on credentials obtained through a local provider login. A create request includes:
+The Settings UI uses the provider's device-authorization flow for OpenAI and xAI:
 
-```text
-provider
-displayName
-provider-specific credential input
-claimed external account ID, when required by that provider
-```
+1. A human starts a user-scoped `create` authorization with provider and display name.
+2. The control plane reserves the transaction and rate-limit attempt before calling the provider.
+3. It encrypts the provider's device state and returns only the user code, verification URL, expiry,
+   and poll interval to the browser.
+4. The browser polls no faster than the returned interval. The store atomically claims one poller,
+   and the adapter reports pending, denied, expired, failed, or connected state.
+5. On connection, the service derives external identity from the trusted provider result, encrypts
+   the complete credential, and atomically creates or safely reconnects the matching account.
+6. Terminal state clears encrypted provider state. Cancellation is an explicit terminal transition.
 
-The control plane:
+If another non-archived account already has the trusted external identity, finalization uses the
+same authorized atomic reconnect path and reports that existing account. A concurrent unique
+conflict rereads and follows the winner. Unsafe or ambiguous persistence fails closed and requires a
+fresh device flow; it never leaves a partial account or credential row.
 
-1. Validates provider availability and the provider-specific input schema.
-2. Preflights a claimed external identity against existing accounts when the provider supplies one.
-3. Creates a pending in-memory account identity and stable local ID.
-4. Exchanges or verifies the supplied credential through the provider adapter.
-5. Derives the external account/workspace ID from the trusted provider response when possible.
-6. Rejects a mismatch with a user-supplied external account ID.
-7. Encrypts the resulting current credential, including any rotated refresh token.
-8. Persists active account metadata and its initial credential atomically before returning success.
-9. Records `last_verified_at`.
-
-The browser never receives a stored credential after submission.
-
-The exchange can rotate a refresh token before D1 persistence. If the trusted external identity
-matches an existing non-archived account, the service checks `manage` authorization and completes
-the operation through the same atomic reconnect path rather than discarding the rotated result. The
-response identifies that the existing account was updated. A concurrent unique conflict follows the
-same path after rereading the winner. If authorization or safe persistence cannot complete, fail
-closed and tell the operator that the submitted credential may have been consumed and a fresh local
-login is required. Never leave a partial account or credential row and never retry deterministic
-uniqueness conflicts as transient storage failures.
+Provider-discriminated manual create remains an authenticated compatibility endpoint for legacy or
+administrative input. It is not the primary Settings workflow, and the browser never receives a
+stored credential from either path.
 
 ### Verify
 
@@ -496,17 +518,21 @@ identity conflict, not a metadata update or reconnect.
 
 ### Reconnect
 
-Reconnect accepts new provider-specific credential input for an existing local account. It verifies
-that the resulting external identity matches the existing account. If the user intends to connect a
-different provider identity, they must create a new provider account instead.
+Reconnect starts the same user-owned device flow with a target account. The transaction snapshots
+the target's provider, status, and `lifecycle_version`; finalization succeeds only if all still
+match. It verifies that the resulting trusted external identity matches the existing account. If the
+user intends to connect a different provider identity, they must create a new provider account
+instead.
 
 Changing provider identity therefore requires a new account, explicit updates to defaults and
 automation pins, and new sessions. Existing sessions remain immutably bound to the old account and
 fail when it becomes unusable. Bulk session rebinding is intentionally out of V1 because it would
 change paid-account identity after session creation.
 
-Reconnect increments `credential_version`, replaces the encrypted payload atomically, clears stale
-cached access state, and returns the account to active status.
+Successful reconnect increments `credential_version` and `lifecycle_version`, replaces the encrypted
+payload atomically, clears stale cached access state, and returns the account to active status.
+Provider-discriminated manual reconnect remains only as a compatibility path, including legacy xAI
+accounts that have no external identity to fence through the device flow.
 
 ### Disable
 
@@ -532,7 +558,7 @@ For each connectable subscription provider:
 1. Validate and use an explicitly requested account or API-key mode.
 2. For unattended launches, apply the provider's `unattended_mode`.
 3. Otherwise use the active installation-wide default account.
-4. Leave the provider in API-key mode when no account applies.
+4. Persist `legacy_scoped_oauth` with `legacy_fallback` when no default applies.
 
 Persist auth mode, concrete account ID when applicable, and routing provenance. A configured but
 disabled, archived, missing, or unavailable provider default is a configuration error when policy
@@ -545,10 +571,11 @@ Session creation resolves auth rows for every enabled, connectable subscription 
 the initial model's provider. This keeps later per-prompt model changes deterministic. It also means
 the initiating user can review the effective provider accounts before launch.
 
-If no account is available for a provider, the session can still be created for other providers. A
-later prompt may use that provider's existing API-key path when the session's resolved secrets
-contain the required API key. Runtime refresh must never resolve a new moving default for an
-already-created session.
+If no account is available for a provider, the session can still be created for other providers. The
+legacy row uses a matching scoped refresh token when one is available in the resolved secrets;
+otherwise sandbox environment preparation leaves the provider API key available as the effective
+fallback. The persisted mode remains `legacy_scoped_oauth` in both cases. Runtime refresh must never
+resolve a new moving default for an already-created session.
 
 ### Authentication precedence
 
@@ -557,8 +584,12 @@ Provider selection determines authentication mode:
 1. If the session is in provider-account mode, subscription authentication is mandatory and takes
    precedence over any API key available in global or target secrets.
 2. If the session is in API-key mode, existing provider API-key behavior remains available.
-3. If API-key mode lacks the required key, model use fails with the existing provider-not-configured
-   error.
+3. If the session is in legacy scoped-OAuth mode and has a matching legacy refresh token, the legacy
+   broker path is mandatory and suppresses that provider's API key.
+4. If legacy mode has no matching refresh token, the API key remains available as its effective
+   compatibility fallback.
+5. If the effective API-key path lacks the required key, model use fails with the existing
+   provider-not-configured error.
 
 An explicitly selected account and a resolved provider default both create a provider-account auth
 row. Explicit or policy-selected API-key mode creates an API-key auth row without an account ID. The
@@ -636,16 +667,16 @@ use explicit choices, provider defaults, or legacy scoped behavior when neither 
 
 ## Launch-Path Behavior
 
-| Launch path              | V1 behavior                                                          |
-| ------------------------ | -------------------------------------------------------------------- |
-| Web                      | User may explicitly select accounts; omitted providers use defaults. |
-| Slack                    | Resolve unattended policy and defaults.                              |
-| GitHub                   | Resolve unattended policy/defaults after target lookup.              |
-| Linear                   | Resolve unattended policy/defaults after target lookup.              |
-| Automation with auth pin | Use the pinned account or API-key mode.                              |
-| Automation without pin   | Resolve provider defaults and unattended policy for each execution.  |
-| Child session            | Copy every parent auth row; no override.                             |
-| Repository-less service  | Resolve unattended policy and defaults.                              |
+| Launch path              | V1 behavior                                                         |
+| ------------------------ | ------------------------------------------------------------------- |
+| Web                      | User may select auth; omission resolves policy/default/legacy.      |
+| Slack                    | Resolve unattended policy, default, then legacy compatibility.      |
+| GitHub                   | Resolve policy/default/legacy after target lookup.                  |
+| Linear                   | Resolve policy/default/legacy after target lookup.                  |
+| Automation with auth pin | Use the pinned account or API-key mode.                             |
+| Automation without pin   | Resolve provider defaults and unattended policy for each execution. |
+| Child session            | Copy every parent auth row; no override.                            |
+| Repository-less service  | Resolve unattended policy and defaults.                             |
 
 Bots need no provider-account contract in V1. They continue to call `POST /sessions`; the control
 plane owns default resolution. This avoids duplicating credential visibility or selection policy in
@@ -692,17 +723,20 @@ The route:
 2. Rejects user and service credentials.
 3. Reads the provider auth row from D1 using the sandbox-authenticated session ID.
 4. Rejects an absent or API-key-mode provider.
-5. Calls the generic broker with the bound account ID and expected provider.
-6. Applies `Cache-Control: no-store` through a route-level response wrapper to every success and
+5. Delegates a legacy-bound session to the existing provider-specific scoped refresh handler.
+6. Calls the generic broker with the bound account ID and expected provider in account mode.
+7. Applies `Cache-Control: no-store` through a route-level response wrapper to every success and
    error, including authentication, validation, missing-account-auth, provider, and unexpected
    failures.
-7. Returns a provider-neutral access response.
+8. Returns a provider-neutral access response.
 
 The sandbox cannot submit a provider-account ID. Provider path validation plus the session auth row
 prevents it from probing other accounts.
 
-Existing OpenAI and xAI endpoints may remain as temporary adapters that delegate to the generic
-handler. Remove them only after all deployed runtime images use the new route.
+The generic route is the compatibility entry point: for a `legacy_scoped_oauth` binding it delegates
+to the existing provider-specific refresh implementation. The old sandbox-facing OpenAI and xAI
+routes accept only legacy-bound sessions and reject account- or API-key-bound sessions. Remove those
+routes only after no deployed runtime images or legacy-bound sessions depend on them.
 
 ### Runtime plugins
 
@@ -714,11 +748,13 @@ Provider plugins retain provider-specific request behavior:
 The runtime writes only managed sentinels to OpenCode authentication state. Refresh tokens never
 cross the control-plane boundary.
 
-Sandbox environment preparation reads the complete resolved session auth snapshot from D1. Each
-provider adapter declares the canonical API-key environment names it owns. For account mode,
-preparation sets the managed-auth marker and strips legacy managed OAuth fields plus every declared
-API-key name. API-key mode receives no managed marker and retains existing injection behavior. D1
-read failures and incomplete snapshots fail closed rather than falling back to API-key exposure.
+Sandbox environment preparation reads the complete resolved session auth snapshot from D1.
+`prepareManagedProviderEnv` owns the `PROVIDER_ENV` registry of API-key, managed-marker, and legacy
+refresh-token names. For account mode, preparation sets the managed-auth marker and strips the API
+key and legacy refresh token. It does the same for legacy mode only when the resolved secrets
+contain the matching legacy refresh token; otherwise it preserves the API key as the compatibility
+fallback. API-key mode receives no managed marker and retains existing injection behavior. D1 read
+failures and incomplete snapshots fail closed rather than falling back to API-key exposure.
 
 Suppression happens before `CreateSandboxConfig` reaches a sandbox provider, but provider-specific
 environment layering must obey the same result. Add cross-provider create and restore conformance
@@ -852,14 +888,17 @@ later outage.
 
 ## API Design
 
-All account-management routes require a human principal through the web service boundary; they do
-not inherit broad `user-or-service` route policy. Bots and automations call the internal resolver
-through session creation and never list account metadata or retrieve credentials.
+Account-management and device-authorization routes require a human principal through the web service
+boundary; they do not inherit broad `user-or-service` route policy. Under the current installation-
+wide trust model, those routes are the `view` and `manage` boundary for admitted humans. Selection
+is validated separately during session or automation resolution. Consumption is separately
+authorized by the sandbox-authenticated session binding at the generic broker route. Bots and
+services never list account metadata or retrieve credentials.
 
-Keep one account-authorization boundary with `view`, `manage`, `select`, and `consume` actions. V1
-allows every admitted human all four actions, but routes, resolution, and future RBAC use the same
-interface. Selection errors must not disclose hidden account existence once `view` can differ from
-`consume`.
+There is intentionally no unified `view`/`manage`/`select`/`consume` policy interface or hidden-
+account nondisclosure guarantee in V1 because accounts are installation-wide. A future RBAC or
+personal-account design must introduce those authorization and error-disclosure semantics together
+instead of implying they already exist.
 
 ### Account routes
 
@@ -867,6 +906,9 @@ interface. Selection errors must not disclose hidden account existence once `vie
 GET    /model-provider-accounts/legacy-credentials
 GET    /model-provider-accounts
 POST   /model-provider-accounts
+POST   /model-provider-accounts/:provider/device-authorizations
+POST   /model-provider-accounts/:provider/device-authorizations/:id/poll
+DELETE /model-provider-accounts/:provider/device-authorizations/:id
 GET    /model-provider-accounts/:id
 PATCH  /model-provider-accounts/:id
 POST   /model-provider-accounts/:id/verify
@@ -890,7 +932,9 @@ fields and use `Cache-Control: private, no-store`.
 encrypted credentials and historical references, and returns `409` while the account is a provider
 default. V1 has no unarchive route. Destructive credential erasure is a separate future operation.
 
-Create and reconnect use provider-discriminated request schemas. Example shape:
+Device authorization is the primary create and reconnect interface for OpenAI and xAI. Start returns
+only user-facing device-flow metadata; poll and cancel require the initiating human. Manual create
+and reconnect use provider-discriminated compatibility schemas. Example shape:
 
 ```ts
 type ConnectModelProviderAccountRequest =
@@ -927,7 +971,7 @@ Session create accepts `providerSelections`. Session reads may return a secret-f
 ```ts
 interface SessionModelProviderAuth {
   provider: SubscriptionProviderId;
-  authMode: "provider_account" | "api_key";
+  authMode: "provider_account" | "api_key" | "legacy_scoped_oauth";
   providerAccountId?: string;
   selectionSource: string;
 }
@@ -1003,6 +1047,8 @@ for other providers because automation sessions can switch model later.
 
 - Encrypt credentials with a dedicated key and authenticated context.
 - Never return refresh tokens, cached access tokens, or encrypted payloads to browsers.
+- Encrypt device-authorization provider state at rest and clear it on every terminal transition.
+- Scope authorization polling and cancellation to the initiating canonical user.
 - Never inject provider credentials into generic sandbox environment variables.
 - Allow only the matching session sandbox to request its bound provider access.
 - Return broker responses with `Cache-Control: no-store`.
@@ -1095,6 +1141,9 @@ needed.
 | Well-formed explicit account not found  | Reject session creation with `404`.                                       |
 | Explicit account provider mismatch      | Reject session creation with `400`.                                       |
 | Account inactive or adapter unavailable | Return `409`; do not fall through.                                        |
+| Device authorization is still pending   | Return pending state and the bounded next poll interval.                  |
+| Device authorization denied or expired  | Terminalize and clear encrypted provider state; start a new flow.         |
+| Reconnect lifecycle snapshot is stale   | Supersede the transaction; do not overwrite newer account state.          |
 | API-key mode and provider key exists    | Use the existing API-key authentication path.                             |
 | API-key mode but no provider key        | Reject model use with an actionable provider configuration error.         |
 | Refresh unauthorized                    | Check concurrent rotation, then mark reconnect required.                  |
@@ -1160,11 +1209,14 @@ Build `@open-inspect/shared` before dependent packages.
 - Unavailable adapters reject default assignment without deleting existing account metadata.
 - Real-D1 partial-index, trim-check, composite-FK, and provider/account referential behavior.
 - Session and automation auth-row referential behavior.
+- Device-authorization ownership, state transitions, expiry, attempt throttling, processing claims,
+  terminal ciphertext cleanup, and lifecycle fencing.
 
 ### Provider adapter tests
 
 - OpenAI required replacement-token and xAI optional replacement-token responses.
 - Provider response schema failures and bounded upstream errors.
+- Device start/poll response validation and provider-state serialization.
 - External identity extraction and claimed-ID mismatch.
 - Rotated refresh-token persistence.
 - xAI persistence failure is fail-closed and never returns access.
@@ -1221,11 +1273,16 @@ Build `@open-inspect/shared` before dependent packages.
 - Automation account pin, API-key pin, and policy-at-run behavior across all providers.
 - Legacy credential inventory reports every configured scope without exposing values.
 - Existing sessions are backfilled and remain legacy-bound when defaults change.
+- Device start, poll, and cancel require the initiating human and never return encrypted provider
+  state or credentials.
+- Concurrent pollers finalize at most once; disable, archive, or reconnect races fence stale
+  results.
 
 ### Web tests
 
 - Settings navigation, provider grouping, empty/loading/error states.
-- Add, verify, reconnect, disable, enable, archive, and conflict flows.
+- Device-code add/reconnect polling, cancellation, expiry, denial, disable, enable, archive, and
+  conflict flows.
 - Write-only credential forms and no secret hydration.
 - Provider default editing.
 - Session selector follows model provider and retains per-provider form state.
@@ -1239,15 +1296,18 @@ Build `@open-inspect/shared` before dependent packages.
 - Slack, GitHub, and Linear create requests remain account-agnostic.
 - Control plane resolves unattended policy and provider defaults after each bot's final target
   lookup.
-- Missing or disabled defaults produce actionable bot-visible failure text.
+- An invalid configured default produces actionable bot-visible failure text; an absent default
+  preserves legacy compatibility.
 
 ### Sandbox runtime tests
 
 - Generic provider-auth endpoint URL and session authentication.
 - Provider plugins consume only their own broker response metadata.
 - Refresh tokens never appear in environment variables or auth files.
-- Account mode suppresses adapter-declared API-key names across create and restore for Modal,
-  Daytona, E2B, Vercel, and OpenComputer.
+- Account mode suppresses registry-owned API-key names across create and restore for Modal, Daytona,
+  E2B, Vercel, and OpenComputer.
+- Legacy mode suppresses the API key only when its matching scoped refresh token is present and
+  keeps the API-key fallback otherwise.
 - Snapshot restore continues to use the session's pinned provider auth.
 
 ### Coexistence tests
@@ -1258,105 +1318,25 @@ Build `@open-inspect/shared` before dependent packages.
 - Prevent account-bound sessions from calling legacy provider-specific endpoints.
 - Preserve legacy secret writes while dependent sessions remain.
 
-## Rollout Plan
+## Implementation Status and Source of Truth
 
-### Phase 0: Contracts and security foundation
+V1 is implemented by these architectural layers:
 
-- Add shared provider IDs and account/provider-auth schemas.
-- Add dedicated encryption configuration and associated-data crypto helpers.
-- Implement provider account, credential, and default stores.
-- Add portable atomic exchange-claim methods to the credential store.
-- Introduce provider adapters by extracting existing OpenAI and xAI refresh behavior without
-  changing runtime routing.
+- D1 migrations `0064_provider_accounts.sql` and `0065_provider_account_authorizations.sql` define
+  account, credential, default, session/automation binding, and device-authorization persistence.
+- `@open-inspect/shared` owns provider IDs and API contracts.
+- The control plane owns adapters, device authorization, account lifecycle, default resolution,
+  session binding, credential refresh, environment preparation, and sandbox broker routes.
+- The web BFF and Settings/session/automation UI expose the human workflows without credential
+  reads.
+- `packages/sandbox-runtime` owns the generic broker client and provider-specific request behavior.
+- Terraform supplies the Worker encryption binding and tracks sandbox runtime source hashes.
 
-### Phase 1: Catalog and Settings
-
-- Add D1 tables and integration-test cleanup.
-- Add account and default APIs plus web BFF routes.
-- Add Provider Accounts Settings UI.
-- Support adding and verifying multiple OpenAI and xAI accounts.
-- Show remaining legacy credential locations without blocking account setup.
-
-### Phase 2: Session provider auth
-
-- Add session and automation provider-auth contracts and stores.
-- Add explicit provider auth, unattended policy, and default resolution.
-- Add web session and automation selectors.
-- Persist provider auth in D1 as the sole session-auth authority.
-- Add child inheritance.
-- Continue using existing provider-specific broker endpoints behind resolved account-mode auth in
-  staging.
-
-### Phase 3: Generic broker and runtime
-
-- Add the sandbox-authenticated generic provider endpoint.
-- Update OpenAI and xAI runtime plugins.
-- Rebuild every sandbox provider image or snapshot.
-- Enable provider-account sessions in staging, then opt-in installations.
-
-### Phase 4: Coexistence rollout
-
-- Backfill existing sessions with legacy scoped-OAuth routing metadata.
-- Reauthenticate subscriptions and add them through Provider Accounts Settings.
-- Select provider defaults when future sessions should use accounts.
-- Retain legacy keys until dependent sessions are no longer needed.
-
-### Phase 5: Default-on and cleanup
-
-- Remove legacy broker code, including `OpenAITokenBroker.refreshGlobal()`, and provider-specific
-  legacy endpoints after no legacy-bound sessions remain.
-- Update `OPENAI_MODELS.md`, `GROK_MODELS.md`, `SECRETS.md`, setup guides, and model availability
-  docs.
-
-### Phase 6: Usage
-
-- Add provider usage collectors only for supported, stable endpoints.
-- Expose account-attributed usage history and limit windows in Settings.
-
-## Implementation Map
-
-Expected code areas include:
-
-| Tier                | Files or modules                                                                              |
-| ------------------- | --------------------------------------------------------------------------------------------- |
-| Shared              | New provider-account types; session and automation request schemas; provider registry exports |
-| D1                  | Next available migration (currently expected to be `0064`); FK-safe integration cleanup       |
-| Stores              | Provider accounts, credentials, defaults, session auth, and automation auth                   |
-| Provider auth       | Generic broker, storage-backed exchange coordination, OpenAI adapter, and xAI adapter         |
-| Session resolution  | New provider-account resolver integrated before `initializeSession()`                         |
-| Session persistence | D1 session index writer and reader, `SessionInitInput`                                        |
-| Child sessions      | D1 parent snapshot read and atomic child initialization copy                                  |
-| Automations         | Shared contracts, store mappings, routes, scheduler resolution                                |
-| Routes              | Account/default CRUD, legacy inventory, and generic sandbox broker                            |
-| Web BFF             | Provider-account/default API proxies; session and automation field forwarding                 |
-| Web UI              | Settings category, account forms/cards, defaults, session selector, automation selector       |
-| Bots                | Error presentation tests only; account selection remains control-plane-owned                  |
-| Runtime             | Generic broker client plus provider-specific OpenAI/xAI plugin behavior                       |
-| Terraform           | Encryption key, Worker secret propagation, and runtime source hashes                          |
-| Documentation       | Provider setup, coexistence, available models, deployment and troubleshooting guides          |
-
-No sandbox-provider-specific credential selection should be introduced. Modal, Daytona, E2B, Vercel,
-and OpenComputer must all use the same control-plane broker contract through the shared sandbox
-runtime.
-
-## Detailed Implementation Sequence
-
-1. Define shared provider IDs, metadata, account responses, and selection maps.
-2. Add the D1 schema and dedicated encryption configuration.
-3. Implement account, credential, and default stores with unit tests.
-4. Extract OpenAI and xAI adapters from existing brokers while preserving current public behavior.
-5. Implement account CRUD, verification, reconnect, lifecycle, and defaults APIs.
-6. Add web BFF routes and Provider Accounts Settings UI.
-7. Implement provider default resolution, auth precedence, and preview.
-8. Extend D1 session initialization and reads with provider auth.
-9. Add the web session selector and warm-session cache invalidation.
-10. Extend automations with optional pinned auth and run-time policy resolution.
-11. Copy parent auth rows from D1 during child-session creation.
-12. Add the generic sandbox broker endpoint and migrate runtime plugins.
-13. Rebuild provider images and verify sandbox credential isolation.
-14. Backfill existing sessions with legacy scoped-OAuth bindings.
-15. Document coexistence and eventual legacy cleanup.
-16. Monitor adoption and remove legacy broker code when no legacy-bound sessions remain.
+Executable migrations, schemas, and code are authoritative when implementation details change. This
+document describes stable boundaries and invariants; Git history and pull requests describe rollout
+sequence. Do not duplicate a file-by-file implementation checklist here. All sandbox providers use
+the same control-plane broker contract through the shared runtime; provider-specific credential
+selection does not belong in Modal, Daytona, E2B, Vercel, or OpenComputer.
 
 ## Alternatives Considered
 
@@ -1465,14 +1445,16 @@ provenance are retained, but V1 does not build ledger-grade per-message chargeba
 
 ## Product Validation
 
-Before implementation, validate these product decisions with intended operators:
+V1 implements these product decisions; revalidate them with intended operators before changing the
+trust or routing model:
 
 - All admitted users may manage and consume installation-wide subscriptions in V1.
 - One installation-wide default plus an unattended account/API-key policy per provider is sufficient
   for V1 launches.
 - Session account choice is immutable; changing it requires a new session or future explicit fork.
 - No automatic failover occurs when allowance or authentication fails.
-- Manual credential transfer is acceptable until approved hosted OAuth is available.
+- Provider-hosted device authorization is acceptable until approved redirect-based OAuth is
+  available; manual credential input remains a compatibility path only.
 - Displaying provider external account IDs in Settings is acceptable for the installation trust
   model.
 - Operators may retain scoped OAuth during coexistence and remove it after dependent sessions age

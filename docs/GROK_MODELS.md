@@ -45,8 +45,10 @@ Choose an xAI **Default account** in **Settings > Provider Accounts**. Set **Una
 **Use default account** for Slack, GitHub, Linear, and unpinned automation runs to use SuperGrok, or
 choose **Use API key** to retain the metered API-key path for unattended launches.
 
-Defaults affect newly created sessions only. Existing sessions keep their pinned account or API-key
-mode.
+Defaults affect newly created sessions only. Existing sessions keep their pinned provider-account,
+API-key, or `legacy_scoped_oauth` mode. When a new session has no explicit selection or xAI default,
+it also persists `legacy_scoped_oauth`: a resolved legacy refresh token uses the managed broker,
+while its absence leaves `XAI_API_KEY` available as the compatibility fallback.
 
 ### Step 3: Enable and Select Grok
 
@@ -64,9 +66,9 @@ Automation editors expose xAI authentication independently of the configured mod
 
 ## How Authentication Works
 
-The OAuth refresh token stays in the encrypted provider-account credential store:
+The provider-account OAuth refresh token stays in the encrypted credential store:
 
-1. Session creation pins a concrete xAI provider account or API-key mode.
+1. Session creation pins a concrete xAI provider account, API-key mode, or legacy scoped-OAuth mode.
 2. In account mode, Open-Inspect removes `XAI_API_KEY` and legacy xAI OAuth fields from the sandbox
    environment and injects only the non-secret `XAI_OAUTH_MANAGED=1` marker.
 3. The sandbox runtime writes an xAI OAuth sentinel to OpenCode's `auth.json` and installs the xAI
@@ -76,6 +78,10 @@ The OAuth refresh token stays in the encrypted provider-account credential store
 5. The control plane returns a short-lived access token and atomically persists rotated account
    credentials.
 6. The plugin replaces OpenCode's dummy authorization header with the short-lived bearer token.
+
+For a `legacy_scoped_oauth` binding, the generic broker delegates to the legacy scoped refresh path.
+If the resolved secrets contain no legacy xAI refresh token, sandbox preparation leaves
+`XAI_API_KEY` available as the compatibility fallback instead.
 
 The sandbox never receives the refresh token. Broker responses use `Cache-Control: no-store`, and
 the endpoint rejects user and service credentials in favor of the matching session's sandbox token.
