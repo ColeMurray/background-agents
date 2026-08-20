@@ -199,6 +199,8 @@ from it, even after you rotate the secret. Two guidelines:
 | Key                 | Scope  | Purpose                                                      |
 | ------------------- | ------ | ------------------------------------------------------------ |
 | `ANTHROPIC_API_KEY` | Global | Claude API access (required for Daytona or Vercel sandboxes) |
+| `OPENAI_API_KEY`    | Global | OpenAI API access when a session selects API-key mode        |
+| `XAI_API_KEY`       | Global | xAI API access when a session selects API-key mode           |
 | `DEEPSEEK_API_KEY`  | Global | DeepSeek API access                                          |
 | `ZHIPU_API_KEY`     | Global | Z.AI Coding Plan GLM access                                  |
 | `DATABASE_URL`      | Repo   | Database connection string                                   |
@@ -213,9 +215,10 @@ from it, even after you rotate the secret. Two guidelines:
 
 If you see "Model not found" errors, verify the selected provider authentication mode first. For
 provider-account mode, verify the account and model entitlement. For API-key mode, add the required
-key to the session's secret scope. Claude on Daytona or Vercel uses `ANTHROPIC_API_KEY`; DeepSeek
-uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses `ZHIPU_API_KEY`. For SuperGrok, follow the
-[provider-account setup guide](GROK_MODELS.md).
+key to the session's secret scope. OpenAI uses `OPENAI_API_KEY`; xAI uses `XAI_API_KEY`; Claude on
+Daytona or Vercel uses `ANTHROPIC_API_KEY`; DeepSeek uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses
+`ZHIPU_API_KEY`. For subscription authentication, follow the provider-account setup guidance in
+[OpenAI models](OPENAI_MODELS.md) or [Grok models](GROK_MODELS.md).
 
 ### Secret not appearing in sandbox
 

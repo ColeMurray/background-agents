@@ -967,6 +967,8 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
 | `ANTHROPIC_API_KEY`                | Anthropic API key                                                                           |
+| `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
+| `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                     |
 | `DEEPSEEK_API_KEY`                 | DeepSeek API key (optional, required only for DeepSeek models)                              |
 | `TOKEN_ENCRYPTION_KEY`             | Generated encryption key (OAuth tokens)                                                     |
 | `REPO_SECRETS_ENCRYPTION_KEY`      | Generated encryption key (repo secrets)                                                     |
