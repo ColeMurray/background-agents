@@ -23,7 +23,7 @@ variables {
   anthropic_api_key                = "test-anthropic-key"
   token_encryption_key             = "test-token-key"
   repo_secrets_encryption_key      = "test-repo-key"
-  provider_accounts_encryption_key = "test-provider-account-key"
+  provider_accounts_encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
   nextauth_secret                  = "test-browser-auth-secret-with-32-characters"
   deployment_name                  = "auth-provider-test"
 
@@ -67,7 +67,7 @@ run "github_only" {
   }
 
   assert {
-    condition     = nonsensitive(local.effective_provider_accounts_encryption_key) == "test-provider-account-key"
+    condition     = nonsensitive(local.effective_provider_accounts_encryption_key) == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     error_message = "An operator-provided provider account key must remain unchanged."
   }
 }
@@ -94,6 +94,36 @@ run "terraform_generated_provider_account_key" {
     )
     error_message = "Terraform must generate a Base64-encoded 32-byte provider account key."
   }
+}
+
+run "reject_malformed_provider_account_key" {
+  command = plan
+
+  variables {
+    provider_accounts_encryption_key = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!="
+  }
+
+  expect_failures = [var.provider_accounts_encryption_key]
+}
+
+run "reject_31_byte_provider_account_key" {
+  command = plan
+
+  variables {
+    provider_accounts_encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZQ=="
+  }
+
+  expect_failures = [var.provider_accounts_encryption_key]
+}
+
+run "reject_33_byte_provider_account_key" {
+  command = plan
+
+  variables {
+    provider_accounts_encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYw"
+  }
+
+  expect_failures = [var.provider_accounts_encryption_key]
 }
 
 run "vercel_github_only" {

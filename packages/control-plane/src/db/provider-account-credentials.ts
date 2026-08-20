@@ -7,8 +7,13 @@ import {
   type ModelProviderId,
 } from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import type { ModelProviderAccountStatus } from "@open-inspect/shared/types/provider-accounts";
 
 export type ProviderCredentialExchangeState = "idle" | "in_flight";
+export type ProviderCredentialExchangeAccountStatus = Exclude<
+  ModelProviderAccountStatus,
+  "disabled"
+>;
 
 interface CredentialRow {
   encrypted_payload: string;
@@ -45,6 +50,7 @@ interface CredentialPayloadInput {
 
 export interface CompleteProviderExchangeInput extends CredentialPayloadInput {
   expectedCredentialVersion: number;
+  expectedAccountStatus: ProviderCredentialExchangeAccountStatus;
   exchangeGeneration: number;
   exchangeOwner: string;
 }
@@ -180,6 +186,7 @@ export class ProviderCredentialStore {
     providerAccountId: string,
     expectedCredentialVersion: number,
     exchangeOwner: string,
+    expectedAccountStatus: ProviderCredentialExchangeAccountStatus,
     now = Date.now()
   ): Promise<{ acquired: true; generation: number } | { acquired: false }> {
     const row = await this.db
@@ -189,9 +196,20 @@ export class ProviderCredentialStore {
              exchange_generation = exchange_generation + 1,
              exchange_started_at = ?, updated_at = ?
          WHERE provider_account_id = ? AND credential_version = ? AND exchange_state = 'idle'
+           AND EXISTS (
+             SELECT 1 FROM model_provider_accounts
+             WHERE id = provider_account_id AND status = ? AND archived_at IS NULL
+           )
          RETURNING exchange_generation`
       )
-      .bind(exchangeOwner, now, now, providerAccountId, expectedCredentialVersion)
+      .bind(
+        exchangeOwner,
+        now,
+        now,
+        providerAccountId,
+        expectedCredentialVersion,
+        expectedAccountStatus
+      )
       .first<{ exchange_generation: number }>();
     return row ? { acquired: true, generation: row.exchange_generation } : { acquired: false };
   }
@@ -218,7 +236,8 @@ export class ProviderCredentialStore {
            AND exchange_generation = ? AND exchange_owner = ? AND exchange_state = 'in_flight'
            AND EXISTS (
              SELECT 1 FROM model_provider_accounts
-              WHERE id = provider_account_id AND provider = ? AND archived_at IS NULL
+              WHERE id = provider_account_id AND provider = ? AND status = ?
+                AND archived_at IS NULL
            )`
       )
       .bind(
@@ -230,7 +249,8 @@ export class ProviderCredentialStore {
         input.expectedCredentialVersion,
         input.exchangeGeneration,
         input.exchangeOwner,
-        input.provider
+        input.provider,
+        input.expectedAccountStatus
       );
     return { statement, encryptedPayload: encrypted };
   }

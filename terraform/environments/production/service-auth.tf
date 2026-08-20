@@ -40,5 +40,5 @@ resource "random_bytes" "provider_accounts_encryption_key" {
 }
 
 locals {
-  effective_provider_accounts_encryption_key = trimspace(var.provider_accounts_encryption_key) != "" ? var.provider_accounts_encryption_key : random_bytes.provider_accounts_encryption_key.base64
+  effective_provider_accounts_encryption_key = trimspace(var.provider_accounts_encryption_key) != "" ? trimspace(var.provider_accounts_encryption_key) : random_bytes.provider_accounts_encryption_key.base64
 }

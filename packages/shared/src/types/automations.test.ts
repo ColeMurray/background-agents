@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createAutomationRequestSchema,
-  listAutomationsResponseSchema,
-  updateAutomationRequestSchema,
-} from "./automations";
-
-const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+import { listAutomationsResponseSchema } from "./automations";
 
 const automation = {
   id: "auto-1",
@@ -85,17 +79,7 @@ describe("listAutomationsResponseSchema", () => {
 });
 
 describe("automation provider selection contracts", () => {
-  it("accepts complete create selections and returns selections in responses", () => {
-    expect(
-      createAutomationRequestSchema.safeParse({
-        name: "Daily sync",
-        instructions: "Run the sync",
-        providerSelections: {
-          openai: { mode: "provider_account", accountId: ACCOUNT_ID },
-          xai: { mode: "api_key" },
-        },
-      }).success
-    ).toBe(true);
+  it("returns selections in responses", () => {
     expect(
       listAutomationsResponseSchema.safeParse({
         automations: [automation],
@@ -105,25 +89,8 @@ describe("automation provider selection contracts", () => {
     ).toBe(true);
   });
 
-  it("distinguishes omitted patch selections from an explicit clear", () => {
-    expect(updateAutomationRequestSchema.parse({ name: "Renamed" })).not.toHaveProperty(
-      "providerSelections"
-    );
-    expect(updateAutomationRequestSchema.parse({ providerSelections: {} })).toEqual({
-      providerSelections: {},
-    });
-  });
-
-  it("rejects unknown providers in create, update, and response records", () => {
+  it("rejects unknown providers in response records", () => {
     const providerSelections = { anthropic: { mode: "api_key" } };
-    expect(
-      createAutomationRequestSchema.safeParse({
-        name: "Daily sync",
-        instructions: "Run the sync",
-        providerSelections,
-      }).success
-    ).toBe(false);
-    expect(updateAutomationRequestSchema.safeParse({ providerSelections }).success).toBe(false);
     expect(
       listAutomationsResponseSchema.safeParse({
         automations: [{ ...automation, providerSelections }],

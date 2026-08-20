@@ -1,7 +1,10 @@
 import type { ModelProviderId } from "../model-provider-accounts/provider-auth-contracts";
 import type { ModelProviderAccount, ModelProviderAccountStatus } from "./model-provider-accounts";
 import { ModelProviderAccountStore } from "./model-provider-accounts";
-import { ProviderCredentialStore } from "./provider-account-credentials";
+import {
+  ProviderCredentialStore,
+  type ProviderCredentialExchangeAccountStatus,
+} from "./provider-account-credentials";
 import type { SqlDatabase } from "./sql-database";
 
 interface CredentialWriteInput {
@@ -22,6 +25,7 @@ export interface AccountConnectionWriteInput extends CredentialWriteInput {
 }
 
 export interface CompleteVerificationCredentialAndAccountInput extends AccountConnectionWriteInput {
+  expectedAccountStatus: ProviderCredentialExchangeAccountStatus;
   exchangeGeneration: number;
   exchangeOwner: string;
 }

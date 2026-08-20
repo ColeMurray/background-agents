@@ -55,8 +55,8 @@ describe("provider account atomic persistence", () => {
     const { credentials } = await seedAccount("claim-race", "reconnect_required");
 
     const claims = await Promise.all([
-      credentials.tryBeginExchange("claim-race", 1, "owner-a", NOW + 1),
-      credentials.tryBeginExchange("claim-race", 1, "owner-b", NOW + 1),
+      credentials.tryBeginExchange("claim-race", 1, "owner-a", "reconnect_required", NOW + 1),
+      credentials.tryBeginExchange("claim-race", 1, "owner-b", "reconnect_required", NOW + 1),
     ]);
 
     expect(claims.filter((claim) => claim.acquired)).toHaveLength(1);
@@ -64,7 +64,7 @@ describe("provider account atomic persistence", () => {
 
   it("atomically fences an observed lease and marks its account reconnect required", async () => {
     const { accounts, credentials, writer } = await seedAccount("terminal-failure", "active");
-    await credentials.tryBeginExchange("terminal-failure", 1, "owner-a", NOW + 1);
+    await credentials.tryBeginExchange("terminal-failure", 1, "owner-a", "active", NOW + 1);
 
     await expect(
       writer.fenceExchangeAndRequireReconnect({
@@ -91,7 +91,7 @@ describe("provider account atomic persistence", () => {
 
   it("rejects a late completion after terminal failure fences its lease", async () => {
     const { credentials, writer } = await seedAccount("late-completion", "active");
-    await credentials.tryBeginExchange("late-completion", 1, "owner-a", NOW + 1);
+    await credentials.tryBeginExchange("late-completion", 1, "owner-a", "active", NOW + 1);
     await writer.fenceExchangeAndRequireReconnect({
       providerAccountId: "late-completion",
       credentialVersion: 1,
@@ -105,6 +105,7 @@ describe("provider account atomic persistence", () => {
         providerAccountId: "late-completion",
         provider: "openai",
         expectedCredentialVersion: 1,
+        expectedAccountStatus: "active",
         exchangeGeneration: 1,
         exchangeOwner: "owner-a",
         credentialSchemaVersion: 1,
@@ -119,7 +120,7 @@ describe("provider account atomic persistence", () => {
 
   it("leaves both rows unchanged when the observed lease is stale", async () => {
     const { accounts, credentials, writer } = await seedAccount("stale-observation", "active");
-    await credentials.tryBeginExchange("stale-observation", 1, "owner-a", NOW + 1);
+    await credentials.tryBeginExchange("stale-observation", 1, "owner-a", "active", NOW + 1);
 
     await expect(
       writer.fenceExchangeAndRequireReconnect({
@@ -144,7 +145,7 @@ describe("provider account atomic persistence", () => {
 
   it("rolls back the account transition when the lease fence cannot commit", async () => {
     const { accounts, credentials, writer } = await seedAccount("terminal-rollback", "active");
-    await credentials.tryBeginExchange("terminal-rollback", 1, "owner-a", NOW + 1);
+    await credentials.tryBeginExchange("terminal-rollback", 1, "owner-a", "active", NOW + 1);
     await env.DB.prepare(
       `CREATE TRIGGER fail_terminal_credential_fence
        BEFORE UPDATE OF exchange_state ON model_provider_account_credentials
@@ -181,7 +182,7 @@ describe("provider account atomic persistence", () => {
 
   it("clears a retry-safe lease without changing account status", async () => {
     const { accounts, credentials } = await seedAccount("retry-safe", "active");
-    await credentials.tryBeginExchange("retry-safe", 1, "owner-a", NOW + 1);
+    await credentials.tryBeginExchange("retry-safe", 1, "owner-a", "active", NOW + 1);
 
     await expect(
       credentials.clearSafeFailure("retry-safe", 1, 1, "owner-a", NOW + 2)
@@ -194,11 +195,23 @@ describe("provider account atomic persistence", () => {
   });
 
   it("keeps disabled as a supported durable account status", async () => {
-    const { accounts } = await seedAccount("disabled-account", "disabled");
+    const { accounts, credentials } = await seedAccount("disabled-account", "disabled");
     await expect(accounts.getById("disabled-account")).resolves.toMatchObject({
       status: "disabled",
       archivedAt: null,
     });
+    await expect(
+      credentials.tryBeginExchange("disabled-account", 1, "owner-a", "active", NOW + 1)
+    ).resolves.toEqual({ acquired: false });
+  });
+
+  it("rejects a credential claim after the account is archived", async () => {
+    const { accounts, credentials } = await seedAccount("archived-account", "active");
+    await accounts.archive("archived-account", "user-1", NOW + 1);
+
+    await expect(
+      credentials.tryBeginExchange("archived-account", 1, "owner-a", "active", NOW + 2)
+    ).resolves.toEqual({ acquired: false });
   });
 
   it("does not overwrite an operator disable while fencing a failed exchange", async () => {
@@ -206,8 +219,22 @@ describe("provider account atomic persistence", () => {
       "disabled-during-exchange",
       "active"
     );
-    await credentials.tryBeginExchange("disabled-during-exchange", 1, "owner-a", NOW + 1);
+    await credentials.tryBeginExchange("disabled-during-exchange", 1, "owner-a", "active", NOW + 1);
     await accounts.setStatus("disabled-during-exchange", "disabled", "user-1", NOW + 2);
+
+    await expect(
+      credentials.completeExchange({
+        providerAccountId: "disabled-during-exchange",
+        provider: "openai",
+        expectedCredentialVersion: 1,
+        expectedAccountStatus: "active",
+        exchangeGeneration: 1,
+        exchangeOwner: "owner-a",
+        credentialSchemaVersion: 1,
+        payload: { refreshToken: "new-secret" },
+        now: NOW + 3,
+      })
+    ).resolves.toBe(false);
 
     await expect(
       writer.fenceExchangeAndRequireReconnect({
@@ -215,7 +242,7 @@ describe("provider account atomic persistence", () => {
         credentialVersion: 1,
         exchangeGeneration: 1,
         exchangeOwner: "owner-a",
-        now: NOW + 3,
+        now: NOW + 4,
       })
     ).resolves.toBe(true);
     await expect(accounts.getById("disabled-during-exchange")).resolves.toMatchObject({
@@ -248,7 +275,13 @@ describe("provider account atomic persistence", () => {
       "atomic-verify",
       "reconnect_required"
     );
-    await credentials.tryBeginExchange("atomic-verify", 1, "verify-owner", NOW + 1);
+    await credentials.tryBeginExchange(
+      "atomic-verify",
+      1,
+      "verify-owner",
+      "reconnect_required",
+      NOW + 1
+    );
     await env.DB.prepare(
       `CREATE TRIGGER fail_verified_account_update
        BEFORE UPDATE OF status ON model_provider_accounts
@@ -264,6 +297,7 @@ describe("provider account atomic persistence", () => {
           provider: "openai",
           credentialSchemaVersion: 1,
           expectedCredentialVersion: 1,
+          expectedAccountStatus: "reconnect_required",
           exchangeGeneration: 1,
           exchangeOwner: "verify-owner",
           payload: { refreshToken: "new-secret" },

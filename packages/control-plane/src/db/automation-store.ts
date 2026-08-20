@@ -175,8 +175,8 @@ function toAutomationRepository(row: AutomationRepositoryRow): AutomationReposit
 export function toAutomation(
   row: AutomationRow,
   repositoryRows: AutomationRepositoryRow[],
-  environmentRows: AutomationEnvironmentRow[] = [],
-  providerAuthRows: AutomationModelProviderAuthRow[] = []
+  environmentRows: AutomationEnvironmentRow[],
+  providerAuthRows: AutomationModelProviderAuthRow[]
 ): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)

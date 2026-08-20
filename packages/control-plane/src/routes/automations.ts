@@ -407,7 +407,8 @@ async function handleListAutomations(
     toAutomation(
       row,
       repositoriesByAutomation.get(row.id) ?? [],
-      environmentsByAutomation.get(row.id) ?? []
+      environmentsByAutomation.get(row.id) ?? [],
+      []
     )
   );
   return json({
@@ -633,7 +634,8 @@ async function handleCreateAutomation(
   const automation = toAutomation(
     (await store.getById(id))!,
     await store.getRepositoriesForAutomation(id),
-    await store.getEnvironmentsForAutomation(id)
+    await store.getEnvironmentsForAutomation(id),
+    []
   );
 
   logger.info("automation.created", {
@@ -688,7 +690,8 @@ async function handleGetAutomation(
     automation: toAutomation(
       row,
       await store.getRepositoriesForAutomation(id),
-      await store.getEnvironmentsForAutomation(id)
+      await store.getEnvironmentsForAutomation(id),
+      []
     ),
   });
 }
@@ -944,7 +947,8 @@ async function handleUpdateAutomation(
     automation: toAutomation(
       updated,
       await store.getRepositoriesForAutomation(id),
-      await store.getEnvironmentsForAutomation(id)
+      await store.getEnvironmentsForAutomation(id),
+      []
     ),
   });
 }
@@ -998,7 +1002,8 @@ async function handlePauseAutomation(
       ? toAutomation(
           row,
           await store.getRepositoriesForAutomation(id),
-          await store.getEnvironmentsForAutomation(id)
+          await store.getEnvironmentsForAutomation(id),
+          []
         )
       : null,
   });
@@ -1046,7 +1051,8 @@ async function handleResumeAutomation(
       ? toAutomation(
           row,
           await store.getRepositoriesForAutomation(id),
-          await store.getEnvironmentsForAutomation(id)
+          await store.getEnvironmentsForAutomation(id),
+          []
         )
       : null,
   });

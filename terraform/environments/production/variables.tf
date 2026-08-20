@@ -325,6 +325,14 @@ variable "provider_accounts_encryption_key" {
   sensitive   = true
   nullable    = false
   default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.provider_accounts_encryption_key) == "" ||
+      can(regex("^[A-Za-z0-9+/]{43}=$", trimspace(var.provider_accounts_encryption_key)))
+    )
+    error_message = "provider_accounts_encryption_key must be blank or a Base64-encoded 32-byte key."
+  }
 }
 
 variable "modal_api_secret" {

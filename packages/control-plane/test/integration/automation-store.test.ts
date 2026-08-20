@@ -205,7 +205,7 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(row);
 
       const dbRow = (await store.getById("auto-map"))!;
-      const automation = toAutomation(dbRow, []);
+      const automation = toAutomation(dbRow, [], [], []);
       expect(automation.repositories).toEqual([]);
       expect(automation.scheduleCron).toBe("0 9 * * *");
       expect(automation.reasoningEffort).toBe("high");

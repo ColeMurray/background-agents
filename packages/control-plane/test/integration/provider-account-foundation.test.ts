@@ -58,19 +58,16 @@ describe("provider account migration and stores", () => {
     const accountColumns = await env.DB.prepare("PRAGMA table_info(model_provider_accounts)").all<{
       name: string;
     }>();
-    expect(accountColumns.results.map((column) => column.name)).not.toEqual(
-      expect.arrayContaining(["external_account_kind", "provider_metadata"])
-    );
+    const accountColumnNames = accountColumns.results.map((column) => column.name);
+    expect(accountColumnNames).not.toContain("external_account_kind");
+    expect(accountColumnNames).not.toContain("provider_metadata");
     const sessionAuthColumns = await env.DB.prepare(
       "PRAGMA table_info(session_model_provider_auth)"
     ).all<{ name: string }>();
-    expect(sessionAuthColumns.results.map((column) => column.name)).not.toEqual(
-      expect.arrayContaining([
-        "routing_source_type",
-        "routing_source_id",
-        "routing_source_revision",
-      ])
-    );
+    const sessionAuthColumnNames = sessionAuthColumns.results.map((column) => column.name);
+    expect(sessionAuthColumnNames).not.toContain("routing_source_type");
+    expect(sessionAuthColumnNames).not.toContain("routing_source_id");
+    expect(sessionAuthColumnNames).not.toContain("routing_source_revision");
   });
 
   it("round-trips accounts and encrypted credentials without exposing plaintext", async () => {
@@ -178,7 +175,13 @@ describe("provider account migration and stores", () => {
       payload: { refreshToken: "old-secret" },
       now,
     });
-    const claim = await credentials.tryBeginExchange("atomic-verify", 1, "verify-owner", now + 1);
+    const claim = await credentials.tryBeginExchange(
+      "atomic-verify",
+      1,
+      "verify-owner",
+      "reconnect_required",
+      now + 1
+    );
     expect(claim).toEqual({ acquired: true, generation: 1 });
 
     await env.DB.prepare(
@@ -196,6 +199,7 @@ describe("provider account migration and stores", () => {
           provider: "openai",
           credentialSchemaVersion: 1,
           expectedCredentialVersion: 1,
+          expectedAccountStatus: "reconnect_required",
           exchangeGeneration: 1,
           exchangeOwner: "verify-owner",
           payload: { refreshToken: "new-secret" },
@@ -369,18 +373,18 @@ describe("provider account migration and stores", () => {
       now,
     });
 
-    expect(await credentials.tryBeginExchange("account-claim", 1, "owner-a", now + 1)).toEqual({
-      acquired: true,
-      generation: 1,
-    });
-    expect(await credentials.tryBeginExchange("account-claim", 1, "owner-b", now + 2)).toEqual({
-      acquired: false,
-    });
+    expect(
+      await credentials.tryBeginExchange("account-claim", 1, "owner-a", "active", now + 1)
+    ).toEqual({ acquired: true, generation: 1 });
+    expect(
+      await credentials.tryBeginExchange("account-claim", 1, "owner-b", "active", now + 2)
+    ).toEqual({ acquired: false });
     expect(
       await credentials.completeExchange({
         providerAccountId: "account-claim",
         provider: "xai",
         expectedCredentialVersion: 1,
+        expectedAccountStatus: "active",
         exchangeGeneration: 1,
         exchangeOwner: "wrong-owner",
         credentialSchemaVersion: 1,
@@ -393,6 +397,7 @@ describe("provider account migration and stores", () => {
         providerAccountId: "account-claim",
         provider: "xai",
         expectedCredentialVersion: 1,
+        expectedAccountStatus: "active",
         exchangeGeneration: 1,
         exchangeOwner: "owner-a",
         credentialSchemaVersion: 1,
@@ -409,17 +414,15 @@ describe("provider account migration and stores", () => {
       })
     );
 
-    expect(await credentials.tryBeginExchange("account-claim", 2, "owner-b", now + 5)).toEqual({
-      acquired: true,
-      generation: 2,
-    });
+    expect(
+      await credentials.tryBeginExchange("account-claim", 2, "owner-b", "active", now + 5)
+    ).toEqual({ acquired: true, generation: 2 });
     expect(await credentials.clearSafeFailure("account-claim", 2, 2, "owner-b", now + 6)).toBe(
       true
     );
-    expect(await credentials.tryBeginExchange("account-claim", 2, "owner-c", now + 7)).toEqual({
-      acquired: true,
-      generation: 3,
-    });
+    expect(
+      await credentials.tryBeginExchange("account-claim", 2, "owner-c", "active", now + 7)
+    ).toEqual({ acquired: true, generation: 3 });
   });
 
   it("stores defaults and automation auth", async () => {
