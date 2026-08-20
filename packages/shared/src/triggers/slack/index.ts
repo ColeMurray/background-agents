@@ -4,7 +4,6 @@
 
 import type { TriggerSourceDefinition } from "../types";
 
-export type { SlackAutomationEvent } from "../types";
 export {
   normalizeSlackEvent,
   buildSlackContextBlock,

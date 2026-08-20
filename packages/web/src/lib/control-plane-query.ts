@@ -1,11 +1,4 @@
-export const DEFAULT_CONTROL_PLANE_QUERY_PARAMS = ["status", "limit", "offset"] as const;
-
-export const SESSION_CONTROL_PLANE_QUERY_PARAMS = [
-  ...DEFAULT_CONTROL_PLANE_QUERY_PARAMS,
-  "excludeStatus",
-  "excludeAutomationLineage",
-  "createdBy",
-] as const;
+const DEFAULT_CONTROL_PLANE_QUERY_PARAMS = ["status", "limit", "offset"] as const;
 
 export function buildControlPlanePath(
   basePath: string,

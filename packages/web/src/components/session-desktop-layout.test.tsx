@@ -45,6 +45,7 @@ describe("SessionDesktopLayout", () => {
 
     expect(screen.getByTestId("session-main")).toHaveAttribute("data-default-size", "45%");
     expect(screen.getByTestId("session-changes")).toHaveAttribute("data-default-size", "55%");
+    expect(screen.getByText("details")).toBeInTheDocument();
   });
 
   it("clips overflow on the real panel group and nested content wrapper", () => {
@@ -67,6 +68,8 @@ describe("SessionDesktopLayout", () => {
   it("keeps the session workspace mounted when the changes panel opens and closes", () => {
     const mounted = vi.fn();
     const unmounted = vi.fn();
+    const sidebarMounted = vi.fn();
+    const sidebarUnmounted = vi.fn();
 
     function Workspace() {
       useEffect(() => {
@@ -76,30 +79,32 @@ describe("SessionDesktopLayout", () => {
       return <div>timeline and terminal</div>;
     }
 
+    function Sidebar() {
+      useEffect(() => {
+        sidebarMounted();
+        return sidebarUnmounted;
+      }, []);
+      return <aside>details</aside>;
+    }
+
     const { rerender } = render(
-      <SessionDesktopLayout
-        workspace={<Workspace />}
-        sidebar={<aside>details</aside>}
-        changes={null}
-      />
+      <SessionDesktopLayout workspace={<Workspace />} sidebar={<Sidebar />} changes={null} />
     );
 
     rerender(
       <SessionDesktopLayout
         workspace={<Workspace />}
-        sidebar={<aside>details</aside>}
+        sidebar={<Sidebar />}
         changes={<aside>changes</aside>}
       />
     );
     rerender(
-      <SessionDesktopLayout
-        workspace={<Workspace />}
-        sidebar={<aside>details</aside>}
-        changes={null}
-      />
+      <SessionDesktopLayout workspace={<Workspace />} sidebar={<Sidebar />} changes={null} />
     );
 
     expect(mounted).toHaveBeenCalledTimes(1);
     expect(unmounted).not.toHaveBeenCalled();
+    expect(sidebarMounted).toHaveBeenCalledTimes(1);
+    expect(sidebarUnmounted).not.toHaveBeenCalled();
   });
 });

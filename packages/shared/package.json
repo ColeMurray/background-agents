@@ -50,6 +50,10 @@
       "import": "./dist/browser-auth-routes.js",
       "types": "./dist/browser-auth-routes.d.ts"
     },
+    "./session-list-query": {
+      "import": "./dist/session-list-query.js",
+      "types": "./dist/session-list-query.d.ts"
+    },
     "./types/commit-signing": {
       "import": "./dist/types/commit-signing.js",
       "types": "./dist/types/commit-signing.d.ts"
@@ -106,6 +110,10 @@
       "import": "./dist/types/automations.js",
       "types": "./dist/types/automations.d.ts"
     },
+    "./types/provider-accounts": {
+      "import": "./dist/types/provider-accounts.js",
+      "types": "./dist/types/provider-accounts.d.ts"
+    },
     "./types/websocket": {
       "import": "./dist/types/websocket.js",
       "types": "./dist/types/websocket.d.ts"
@@ -122,6 +130,10 @@
       "import": "./dist/types/sessions.js",
       "types": "./dist/types/sessions.d.ts"
     },
+    "./types/session-inbox": {
+      "import": "./dist/types/session-inbox.js",
+      "types": "./dist/types/session-inbox.d.ts"
+    },
     "./types/artifacts": {
       "import": "./dist/types/artifacts.js",
       "types": "./dist/types/artifacts.d.ts"
@@ -137,6 +149,10 @@
     "./types/session-diffs": {
       "import": "./dist/types/session-diffs.js",
       "types": "./dist/types/session-diffs.d.ts"
+    },
+    "./types/skills": {
+      "import": "./dist/types/skills.js",
+      "types": "./dist/types/skills.d.ts"
     },
     "./types/prompts": {
       "import": "./dist/types/prompts.js",

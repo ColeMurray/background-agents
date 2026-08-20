@@ -1,0 +1,578 @@
+"use client";
+
+import { useState } from "react";
+import { toast } from "sonner";
+import {
+  modelProviderAccountReconnectMethod,
+  SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
+  type ModelProviderAccount,
+  type SubscriptionProviderId,
+} from "@open-inspect/shared/types/provider-accounts";
+import {
+  archiveProviderAccount,
+  reconnectProviderAccount,
+  renameProviderAccount,
+  runProviderAccountAction,
+  setProviderAccountDefault,
+  useLegacyProviderCredentials,
+  useProviderAccounts,
+  type LegacyProviderKeyLocation,
+} from "@/hooks/use-provider-accounts";
+import {
+  ProviderDeviceAuthorizationDialog,
+  type ProviderDeviceAuthorizationTarget,
+} from "@/components/settings/provider-device-authorization-dialog";
+import { formatRelativeTime } from "@/lib/time";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { GrokIcon, MoreIcon, OpenAIIcon, PlusIcon } from "@/components/ui/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+type Confirm = { account: ModelProviderAccount; action: "disable" | "archive" } | null;
+type Connection =
+  | { kind: "device"; target: ProviderDeviceAuthorizationTarget }
+  | { kind: "legacy-xai"; account: ModelProviderAccount };
+
+type ConnectionStrategy = {
+  add: () => Connection;
+  reconnect: (account: ModelProviderAccount) => Connection;
+};
+
+const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> = {
+  openai: {
+    add: () => ({ kind: "device", target: { provider: "openai", operation: "create" } }),
+    reconnect: (account) => ({
+      kind: "device",
+      target: {
+        provider: "openai",
+        operation: "reconnect",
+        providerAccountId: account.id,
+        displayName: account.displayName,
+      },
+    }),
+  },
+  xai: {
+    add: () => ({ kind: "device", target: { provider: "xai", operation: "create" } }),
+    reconnect: (account) =>
+      modelProviderAccountReconnectMethod(account) === "device_authorization"
+        ? {
+            kind: "device",
+            target: {
+              provider: "xai",
+              operation: "reconnect",
+              providerAccountId: account.id,
+              displayName: account.displayName,
+            },
+          }
+        : { kind: "legacy-xai", account },
+  },
+};
+
+function dateLabel(timestamp: number | null) {
+  return timestamp ? new Date(timestamp).toLocaleString() : "Never";
+}
+
+function relativeDateLabel(timestamp: number | null) {
+  if (!timestamp) return "Never";
+  const relative = formatRelativeTime(timestamp);
+  return relative === "just now" ? relative : `${relative} ago`;
+}
+
+function ProviderIcon({
+  provider,
+  className = "size-6",
+}: {
+  provider: SubscriptionProviderId;
+  className?: string;
+}) {
+  const Icon = provider === "openai" ? OpenAIIcon : GrokIcon;
+  return <Icon aria-hidden="true" className={`${className} shrink-0 text-primary`} />;
+}
+
+function legacyKeyLocationLabel(location: LegacyProviderKeyLocation): string {
+  if (location.scope === "global") return `Global: ${location.key}`;
+  if (location.scope === "repository") {
+    return `Repository ${location.repository} (${location.scopeId}): ${location.key}`;
+  }
+  return `Environment ${location.scopeId}: ${location.key}`;
+}
+
+function connectionToastMessage(
+  provider: SubscriptionProviderId,
+  reconnectedExisting: boolean,
+  operation: ProviderDeviceAuthorizationTarget["operation"]
+): string {
+  if (!reconnectedExisting) {
+    return `${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account connected`;
+  }
+  return operation === "reconnect"
+    ? "Account reconnected"
+    : `Existing ${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account reconnected`;
+}
+
+function LegacyReconnectForm({
+  account,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  account: ModelProviderAccount;
+  saving: boolean;
+  onSave: (refreshToken: string) => void;
+  onCancel: () => void;
+}) {
+  const [refreshToken, setRefreshToken] = useState("");
+
+  return (
+    <div className="space-y-3 rounded-md border border-border-muted p-4">
+      <h3 className="font-medium">Reconnect {account.displayName}</h3>
+      <p className="text-xs text-muted-foreground">
+        This legacy account predates device authorization. Enter a fresh xAI refresh token once; new
+        SuperGrok accounts connect through xAI directly.
+      </p>
+      <div>
+        <Label htmlFor="provider-refresh-token">Refresh token</Label>
+        <Input
+          id="provider-refresh-token"
+          type="password"
+          autoComplete="off"
+          value={refreshToken}
+          onChange={(event) => setRefreshToken(event.target.value)}
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={saving || !refreshToken} onClick={() => onSave(refreshToken)}>
+          Save
+        </Button>
+        <Button size="sm" variant="subtle" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function ProviderAccountsSettings() {
+  const { providers, accounts, defaults, loading, error, refresh } = useProviderAccounts();
+  const legacyCredentials = useLegacyProviderCredentials();
+  const [connection, setConnection] = useState<Connection | null>(null);
+  const [confirm, setConfirm] = useState<Confirm>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function run(operation: () => Promise<unknown>, success: string) {
+    setSaving(true);
+    try {
+      await operation();
+      await refresh();
+      setConnection(null);
+      setConfirm(null);
+      toast.success(success);
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : "Provider account request failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <p className="text-sm text-muted-foreground">Loading provider accounts...</p>;
+  if (error) return <ErrorBanner role="alert">Failed to load provider accounts.</ErrorBanner>;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Provider Accounts</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Connected subscriptions are installation-wide. Credential values are write-only.
+        </p>
+      </div>
+
+      {legacyCredentials.error && (
+        <ErrorBanner role="alert">Failed to inspect legacy OAuth credentials.</ErrorBanner>
+      )}
+
+      {!legacyCredentials.loading &&
+        !legacyCredentials.error &&
+        legacyCredentials.legacyKeys.length > 0 && (
+          <div className="rounded-md border border-border-muted p-4">
+            <div>
+              <h3 className="text-sm font-medium text-foreground">Legacy OAuth credentials</h3>
+              <p className="text-xs text-muted-foreground">
+                Existing legacy-bound sessions may depend on these credentials. Provider-account
+                defaults affect only sessions created afterward.
+              </p>
+            </div>
+            <ul className="mt-3 space-y-1 text-xs text-destructive">
+              {legacyCredentials.legacyKeys.map((location) => (
+                <li
+                  key={`${location.scope}:${"scopeId" in location ? location.scopeId : ""}:${location.key}`}
+                >
+                  {legacyKeyLocationLabel(location)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+      {providers.length === 0 ? (
+        <div className="rounded-md border border-border-muted p-4 text-sm text-muted-foreground">
+          No subscription providers are available.
+        </div>
+      ) : (
+        <>
+          <section className="overflow-hidden rounded-md border border-border-muted">
+            <div className="flex items-center justify-between gap-3 border-b border-border-muted p-4">
+              <h3 className="font-medium text-foreground">Connected accounts</h3>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="subtle">
+                    <PlusIcon className="size-4" />
+                    Add account
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  <DropdownMenuLabel>Subscriptions</DropdownMenuLabel>
+                  {providers.map((provider) => (
+                    <DropdownMenuItem
+                      key={provider.provider}
+                      onSelect={() => setConnection(CONNECTION_STRATEGIES[provider.provider].add())}
+                    >
+                      <ProviderIcon provider={provider.provider} className="size-5" />
+                      <span>{provider.subscriptionName}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            {accounts.length === 0 ? (
+              <p className="p-4 text-sm text-muted-foreground">No accounts connected.</p>
+            ) : (
+              <div className="divide-y divide-border-muted">
+                {accounts.map((account) => {
+                  const provider = providers.find((item) => item.provider === account.provider);
+                  const providerDefault = defaults.find(
+                    (item) => item.provider === account.provider
+                  );
+                  const isDefault = providerDefault?.providerAccountId === account.id;
+                  const externalAccountId = account.externalAccountId;
+                  return (
+                    <div
+                      key={account.id}
+                      className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between"
+                    >
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="flex size-10 shrink-0 items-center justify-center text-foreground">
+                          <ProviderIcon provider={account.provider} className="size-6" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="font-medium text-foreground">
+                              {account.displayName}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {provider?.subscriptionName ?? account.provider}
+                            </span>
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-xs capitalize text-foreground">
+                              {account.status.replaceAll("_", " ")}
+                            </span>
+                            {isDefault && (
+                              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
+                                Default
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            <span
+                              className="whitespace-nowrap"
+                              title={
+                                account.lastVerifiedAt
+                                  ? dateLabel(account.lastVerifiedAt)
+                                  : undefined
+                              }
+                            >
+                              Verified {relativeDateLabel(account.lastVerifiedAt)}
+                            </span>
+                            <span
+                              className="whitespace-nowrap"
+                              title={account.lastUsedAt ? dateLabel(account.lastUsedAt) : undefined}
+                            >
+                              Used {relativeDateLabel(account.lastUsedAt)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex max-w-full shrink-0 items-center gap-1.5 overflow-x-auto lg:justify-end">
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          onClick={() =>
+                            setConnection(
+                              CONNECTION_STRATEGIES[account.provider].reconnect(account)
+                            )
+                          }
+                        >
+                          Reconnect
+                        </Button>
+                        {account.status === "disabled" ? (
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            onClick={() =>
+                              void run(
+                                () => runProviderAccountAction(account.id, "enable"),
+                                "Account enabled"
+                              )
+                            }
+                          >
+                            Enable
+                          </Button>
+                        ) : (
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            onClick={() => setConfirm({ account, action: "disable" })}
+                          >
+                            Disable
+                          </Button>
+                        )}
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          onClick={() =>
+                            void run(
+                              () => runProviderAccountAction(account.id, "verify"),
+                              "Account verified"
+                            )
+                          }
+                        >
+                          Verify
+                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="subtle"
+                              className="size-7"
+                              aria-label={`More actions for ${account.displayName}`}
+                              disabled={saving}
+                            >
+                              <MoreIcon className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {account.status === "active" && !isDefault && (
+                              <DropdownMenuItem
+                                onSelect={() =>
+                                  void run(
+                                    () =>
+                                      setProviderAccountDefault(
+                                        account.provider,
+                                        account.id,
+                                        providerDefault?.unattendedMode ?? "provider_account"
+                                      ),
+                                    "Default updated"
+                                  )
+                                }
+                              >
+                                Make default
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem
+                              onSelect={() => {
+                                const displayName = window
+                                  .prompt("Account name", account.displayName)
+                                  ?.trim();
+                                if (displayName)
+                                  void run(
+                                    () => renameProviderAccount(account.id, displayName),
+                                    "Account renamed"
+                                  );
+                              }}
+                            >
+                              Rename
+                            </DropdownMenuItem>
+                            {externalAccountId && (
+                              <DropdownMenuItem
+                                onSelect={() =>
+                                  void navigator.clipboard
+                                    .writeText(externalAccountId)
+                                    .then(() => toast.success("Account ID copied"))
+                                    .catch(() => toast.error("Failed to copy account ID"))
+                                }
+                              >
+                                Copy account ID
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onSelect={() => setConfirm({ account, action: "archive" })}
+                            >
+                              Archive
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="overflow-hidden rounded-md border border-border-muted">
+            <div className="border-b border-border-muted p-4">
+              <h3 className="font-medium text-foreground">Automated sessions</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Choose credentials for sessions started by automations, bots, or other agents.
+              </p>
+            </div>
+            <div className="divide-y divide-border-muted">
+              {providers.map((provider) => {
+                const providerDefault = defaults.find(
+                  (item) => item.provider === provider.provider
+                );
+                return (
+                  <div
+                    key={provider.provider}
+                    className="grid gap-3 p-4 sm:grid-cols-[minmax(8rem,0.6fr)_1fr] sm:items-end"
+                  >
+                    <div className="flex items-center gap-2 self-center font-medium text-foreground">
+                      <ProviderIcon provider={provider.provider} className="size-5" />
+                      {provider.subscriptionName}
+                    </div>
+                    <div>
+                      <Label htmlFor={`unattended-${provider.provider}`}>Authentication</Label>
+                      <Select
+                        disabled={!providerDefault}
+                        value={providerDefault?.unattendedMode ?? "api_key"}
+                        onValueChange={(value: "provider_account" | "api_key") => {
+                          if (providerDefault)
+                            void run(
+                              () =>
+                                setProviderAccountDefault(
+                                  provider.provider,
+                                  providerDefault.providerAccountId,
+                                  value
+                                ),
+                              "Authentication updated"
+                            );
+                        }}
+                      >
+                        <SelectTrigger id={`unattended-${provider.provider}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="provider_account">Use default account</SelectItem>
+                          <SelectItem value="api_key">No account</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      )}
+
+      {connection?.kind === "device" && (
+        <ProviderDeviceAuthorizationDialog
+          key={
+            connection.target.operation === "create"
+              ? `${connection.target.provider}:create`
+              : `${connection.target.provider}:reconnect:${connection.target.providerAccountId}`
+          }
+          target={connection.target}
+          onClose={() => setConnection(null)}
+          onConnected={(result) => {
+            const target = connection.target;
+            setConnection(null);
+            void refresh();
+            toast.success(
+              connectionToastMessage(target.provider, result.reconnectedExisting, target.operation)
+            );
+          }}
+        />
+      )}
+
+      {connection?.kind === "legacy-xai" && (
+        <LegacyReconnectForm
+          key={connection.account.id}
+          account={connection.account}
+          saving={saving}
+          onSave={(refreshToken) =>
+            void run(
+              () =>
+                reconnectProviderAccount(connection.account.id, {
+                  provider: "xai",
+                  refreshToken,
+                }),
+              "Account reconnected"
+            )
+          }
+          onCancel={() => setConnection(null)}
+        />
+      )}
+
+      <AlertDialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirm?.action === "archive" ? "Archive" : "Disable"} this account?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Running sessions may retain issued access until it expires. Defaults and pinned
+              automations can cause a conflict and must be updated first.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              onClick={(event) => {
+                event.preventDefault();
+                if (confirm)
+                  void run(
+                    () =>
+                      confirm.action === "archive"
+                        ? archiveProviderAccount(confirm.account.id)
+                        : runProviderAccountAction(confirm.account.id, "disable"),
+                    confirm.action === "archive" ? "Account archived" : "Account disabled"
+                  );
+              }}
+            >
+              {confirm?.action === "archive" ? "Archive" : "Disable"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

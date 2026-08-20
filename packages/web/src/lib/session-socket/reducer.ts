@@ -10,7 +10,7 @@ import type {
 import { toUiArtifact } from "./artifact-metadata";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 
-export interface HistoryCursor {
+interface HistoryCursor {
   timestamp: number;
   id: string;
   sequence?: number;
@@ -288,7 +288,7 @@ function reduceServerMessage(
       // Reset loading state if a fetch_history request was rejected.
       return { ...state, loadingHistory: false };
 
-    // pong, prompt_queued, child_session_update, snapshot_saved,
+    // pong, prompt_queued, prompt_cancelled, child_session_update, snapshot_saved,
     // sandbox_restored, sandbox_warning: no view-state change.
     default:
       return state;

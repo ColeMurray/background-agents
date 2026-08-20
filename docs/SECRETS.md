@@ -148,9 +148,34 @@ If you try to save a reserved key, the UI will show a validation error.
 - Secrets are decrypted at sandbox creation time and injected as environment variables
 - System variables (set by the control plane) always take precedence over user-defined secrets
 
-Managed OpenAI and xAI OAuth credentials are exceptions to generic environment injection. Their
-refresh and cached access tokens stay in the control plane; the sandbox receives only a non-secret
-provider marker and requests short-lived access through its session-authenticated broker.
+OpenAI and xAI subscription credentials belong in **Settings > Provider Accounts**, not generic
+Secrets. Their refresh and cached access tokens are encrypted with
+`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`, remain control-plane-only, and are never returned to the browser
+or injected into sandboxes. A session pins an account ID, API-key mode, or legacy scoped-OAuth mode
+and requests short-lived access through `POST /sessions/:id/provider-auth/:provider/access-token`.
+
+Provider-account mode removes that provider's canonical API key from the sandbox environment so the
+runtime cannot bypass the selected subscription. API-key mode continues to use ordinary global,
+repository, or environment secrets.
+
+### Legacy managed OAuth coexistence
+
+Legacy scoped OpenAI/xAI OAuth remains supported for sessions pinned to it. Provider-account
+defaults affect only sessions created afterward. **Settings > Provider Accounts** lists legacy key
+locations across global, repository, and environment scopes:
+
+```text
+OPENAI_OAUTH_REFRESH_TOKEN
+OPENAI_OAUTH_ACCESS_TOKEN
+OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT
+OPENAI_OAUTH_ACCOUNT_ID
+XAI_OAUTH_REFRESH_TOKEN
+XAI_OAUTH_ACCESS_TOKEN
+XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT
+```
+
+Do not reuse the same rotating refresh token in both systems. Operators may remove legacy keys once
+the legacy-bound sessions that depend on them are no longer needed.
 
 ### Secrets and prebuilt images
 
@@ -171,17 +196,14 @@ from it, even after you rotate the secret. Two guidelines:
 
 ## Common Examples
 
-| Key                          | Scope  | Purpose                                                      |
-| ---------------------------- | ------ | ------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona or Vercel sandboxes) |
-| `DEEPSEEK_API_KEY`           | Global | DeepSeek API access                                          |
-| `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                  |
-| `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
-| `OPENAI_OAUTH_ACCOUNT_ID`    | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
-| `XAI_OAUTH_REFRESH_TOKEN`    | Any    | SuperGrok access ([setup guide](GROK_MODELS.md))             |
-| `DATABASE_URL`               | Repo   | Database connection string                                   |
-| `AWS_ACCESS_KEY_ID`          | Repo   | AWS credentials for a specific project                       |
-| `STRIPE_SECRET_KEY`          | Repo   | Stripe API key for a specific project                        |
+| Key                 | Scope  | Purpose                                                      |
+| ------------------- | ------ | ------------------------------------------------------------ |
+| `ANTHROPIC_API_KEY` | Global | Claude API access (required for Daytona or Vercel sandboxes) |
+| `DEEPSEEK_API_KEY`  | Global | DeepSeek API access                                          |
+| `ZHIPU_API_KEY`     | Global | Z.AI Coding Plan GLM access                                  |
+| `DATABASE_URL`      | Repo   | Database connection string                                   |
+| `AWS_ACCESS_KEY_ID` | Repo   | AWS credentials for a specific project                       |
+| `STRIPE_SECRET_KEY` | Repo   | Stripe API key for a specific project                        |
 
 ---
 
@@ -189,10 +211,11 @@ from it, even after you rotate the secret. Two guidelines:
 
 ### "Model not found" errors
 
-If you see "Model not found" errors, add the API key for your selected model provider as a global
-secret in Settings. For Claude on Daytona or Vercel, add `ANTHROPIC_API_KEY`. For DeepSeek, add
-`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`. For SuperGrok, follow the
-[managed OAuth setup guide](GROK_MODELS.md) instead of injecting the refresh token into a sandbox.
+If you see "Model not found" errors, verify the selected provider authentication mode first. For
+provider-account mode, verify the account and model entitlement. For API-key mode, add the required
+key to the session's secret scope. Claude on Daytona or Vercel uses `ANTHROPIC_API_KEY`; DeepSeek
+uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses `ZHIPU_API_KEY`. For SuperGrok, follow the
+[provider-account setup guide](GROK_MODELS.md).
 
 ### Secret not appearing in sandbox
 

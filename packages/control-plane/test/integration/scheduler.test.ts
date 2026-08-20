@@ -3,6 +3,10 @@ import { env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
+import { resolveAutomationProviderAuth } from "../../src/scheduler/durable-object";
+import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
+import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
+import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 
 function getSchedulerStub() {
   const id = env.SCHEDULER.idFromName("global-scheduler");
@@ -36,7 +40,112 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 }
 
 describe("SchedulerDO (integration)", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await env.DB.exec(
+      "DELETE FROM model_provider_account_defaults; DELETE FROM model_provider_accounts;"
+    );
+  });
+
+  describe("automation provider auth resolution", () => {
+    const accountIds = {
+      openai: "00000000000000000000000000000001",
+      xai: "00000000000000000000000000000002",
+    } as const;
+
+    async function seedProviderAccounts(): Promise<void> {
+      const accounts = new ModelProviderAccountStore(env.DB);
+      const defaults = new ProviderDefaultStore(env.DB);
+      for (const provider of ["openai", "xai"] as const) {
+        await accounts.create({
+          id: accountIds[provider],
+          provider,
+          displayName: provider,
+        });
+        await defaults.set(provider, accountIds[provider], "provider_account", null);
+      }
+    }
+
+    it.each(["openai", "xai"] as const)("uses an account pin for %s", async (provider) => {
+      await seedProviderAccounts();
+      const automation = makeAutomation({ id: `auto-account-${provider}` });
+      await new AutomationStore(env.DB).create(automation);
+      const authStore = new AutomationModelProviderAuthStore(env.DB);
+      await env.DB.batch(
+        authStore.bindReplace(
+          automation.id,
+          {
+            [provider]: { mode: "provider_account", accountId: accountIds[provider] },
+          },
+          Date.now()
+        )
+      );
+
+      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id);
+
+      expect(resolved).toContainEqual({
+        provider,
+        authMode: "provider_account",
+        providerAccountId: accountIds[provider],
+        selectionSource: "automation_pin",
+      });
+    });
+
+    it.each(["openai", "xai"] as const)("uses an API-key pin for %s", async (provider) => {
+      await seedProviderAccounts();
+      const automation = makeAutomation({ id: `auto-api-key-${provider}` });
+      await new AutomationStore(env.DB).create(automation);
+      const authStore = new AutomationModelProviderAuthStore(env.DB);
+      await env.DB.batch(
+        authStore.bindReplace(automation.id, { [provider]: { mode: "api_key" } }, Date.now())
+      );
+
+      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id);
+
+      expect(resolved).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider,
+            authMode: "api_key",
+            selectionSource: "automation_pin",
+          }),
+        ])
+      );
+    });
+
+    it.each(["openai", "xai"] as const)(
+      "resolves the unattended policy on every unpinned %s run",
+      async (provider) => {
+        await seedProviderAccounts();
+        const automation = makeAutomation({ id: `auto-policy-${provider}` });
+        await new AutomationStore(env.DB).create(automation);
+        const defaults = new ProviderDefaultStore(env.DB);
+        await defaults.set(provider, accountIds[provider], "api_key", null);
+
+        await expect(resolveAutomationProviderAuth(env.DB, automation.id)).resolves.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              provider,
+              authMode: "api_key",
+              selectionSource: "unattended_policy",
+            }),
+          ])
+        );
+
+        await defaults.set(provider, accountIds[provider], "provider_account", null);
+        await expect(resolveAutomationProviderAuth(env.DB, automation.id)).resolves.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              provider,
+              authMode: "provider_account",
+              providerAccountId: accountIds[provider],
+              selectionSource: "unattended_policy",
+            }),
+          ])
+        );
+      }
+    );
+  });
 
   // ─── Health check ─────────────────────────────────────────────────────────
 

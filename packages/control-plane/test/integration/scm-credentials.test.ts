@@ -14,8 +14,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
+import { SERVICE_NAMES } from "@open-inspect/shared/service-auth";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth } from "./helpers";
+import { initNamedSession, seedSandboxAuth, serviceFetch } from "./helpers";
 
 async function setupSession(): Promise<{ sessionName: string; sandboxToken: string }> {
   const sessionName = `scm-creds-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -24,7 +25,7 @@ async function setupSession(): Promise<{ sessionName: string; sandboxToken: stri
     repoName: "web-app",
   });
 
-  const sandboxToken = `sb-tok-${Date.now()}`;
+  const sandboxToken = `sb-tok-${sessionName}`;
   await seedSandboxAuth(stub, {
     authToken: sandboxToken,
     sandboxId: `sb-${Date.now()}`,
@@ -64,10 +65,21 @@ describe("POST /sessions/:id/scm-credentials", () => {
     });
   });
 
-  it("reaches the service and returns 500 when no SCM provider is configured", async () => {
+  it("rejects user and service credentials while accepting the bound sandbox", async () => {
     const { sessionName, sandboxToken } = await setupSession();
+    const url = `https://test.local/sessions/${sessionName}/scm-credentials`;
 
-    const res = await SELF.fetch(`https://test.local/sessions/${sessionName}/scm-credentials`, {
+    for (const service of SERVICE_NAMES) {
+      const rejected = await serviceFetch(url, { method: "POST", service });
+
+      expect(rejected.status, service).toBe(401);
+      const body = await rejected.json<Record<string, unknown>>();
+      expect(body, service).toEqual({ error: "Unauthorized: Missing sandbox token" });
+      expect(body, service).not.toHaveProperty("username");
+      expect(body, service).not.toHaveProperty("password");
+    }
+
+    const res = await SELF.fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${sandboxToken}` },
     });
@@ -80,6 +92,22 @@ describe("POST /sessions/:id/scm-credentials", () => {
     expect(res.status).toBe(500);
     const body = await res.json<{ error: string }>();
     expect(body.error).toMatch(/GitHub App not configured/i);
+  });
+
+  it("rejects a sandbox token bound to another session", async () => {
+    const { sandboxToken } = await setupSession();
+    const { sessionName } = await setupSession();
+
+    const res = await SELF.fetch(`https://test.local/sessions/${sessionName}/scm-credentials`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sandboxToken}` },
+    });
+
+    expect(res.status).toBe(401);
+    const body = await res.json<Record<string, unknown>>();
+    expect(body).toEqual({ error: "Unauthorized: Invalid sandbox token" });
+    expect(body).not.toHaveProperty("username");
+    expect(body).not.toHaveProperty("password");
   });
 
   it("does not respond to GET requests on the route", async () => {

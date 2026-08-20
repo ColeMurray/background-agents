@@ -2,10 +2,12 @@ import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-buil
 import { parseRuntimeVersionNumber, type ImageBuildProvider } from "./model";
 import { parseRepositoryShasJson, repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
+import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 
-// v57 adds the VNC/noVNC toolchain. v56 remains safe to boot while the
-// scheduler converges prebuilt images in the background.
-const MIN_REBUILD_RUNTIME_VERSION = 57;
+// Runtime generations are one sequence shared by every image-build provider.
+// v60 carries the generic provider-account token broker plugin. Older images
+// cannot boot safely because their managed-provider plugins call legacy routes.
+export const MIN_REBUILD_RUNTIME_VERSION = MIN_REBUILD_RUNTIME_GENERATION;
 
 export type ImageBuildRebuildDecision =
   | { type: "skip"; reason: "building" }

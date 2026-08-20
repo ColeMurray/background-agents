@@ -6,21 +6,29 @@ import type {
   SessionPullRequestStore,
 } from "../db/session-pull-request-store";
 import type { Logger } from "../logger";
-import { resolveHeadBranchForPr, sanitizeBranchName } from "../source-control/branch-resolution";
+import {
+  normalizeBranchName,
+  resolveHeadBranchForPr,
+  sanitizeBranchName,
+  type ResolveHeadBranchForPrResult,
+} from "../source-control/branch-resolution";
 import {
   SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
   type GitPushAuthContext,
   type GitPushSpec,
+  type PullRequestSnapshot,
 } from "../source-control";
 import type { SessionMessenger } from "./messenger";
-import { findPrArtifactForRepo } from "./pr-artifacts";
+import type { ArtifactRepository } from "./artifact-repository";
+import { listPrArtifactsForHead, type PrArtifactHeadMatch } from "./pr-artifacts";
 import {
   mergeSnapshotMetadata,
   snapshotToRecord,
   type PullRequestSnapshotInput,
 } from "./pull-request-snapshot";
+import { applyPullRequestSnapshot } from "./pull-request-snapshot-apply";
 import {
   mapRepositoryTargetError,
   resolveSessionRepositoryTarget,
@@ -59,10 +67,42 @@ export type CreatePullRequestResult =
       prNumber: number;
       prUrl: string;
       state: "open" | "closed" | "merged" | "draft";
+      /** Resolved head (source) branch the PR is created from. */
+      headBranch: string;
+      /** Resolved base (target) branch the PR merges into. */
+      baseBranch: string;
+      /**
+       * True when an open PR already existed for the head branch and was
+       * reused: the branch was force-pushed and no new PR was created.
+       */
+      updated: boolean;
     }
   | { kind: "error"; status: number; error: string };
 
 export type PushBranchResult = { success: true } | { success: false; error: string };
+
+/**
+ * A PR-creation failure with a caller-facing HTTP status. Thrown by internal
+ * steps; createPullRequest's boundary catch maps it into the error result.
+ */
+export class PullRequestCreationError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = "PullRequestCreationError";
+  }
+}
+
+/** An open PR already carrying the resolved head branch — reused instead of
+ * creating a duplicate. */
+interface ExistingOpenPullRequest {
+  prNumber: number;
+  prUrl: string;
+  state: "open" | "closed" | "merged" | "draft";
+  baseBranch: string;
+}
 
 function claimKey(repo: RepoIdentity): string {
   return `${repo.repoOwner.toLowerCase()}/${repo.repoName.toLowerCase()}`;
@@ -100,14 +140,6 @@ export interface PullRequestRepository {
   getSessionRepositories(): SessionRepositoryEntry[];
   updateSessionBranch(sessionId: string, branchName: string): void;
   updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void;
-  listArtifacts(): ArtifactRow[];
-  createArtifact(data: {
-    id: string;
-    type: "pr" | "branch";
-    url: string | null;
-    metadata: string | null;
-    createdAt: number;
-  }): void;
 }
 
 /**
@@ -115,6 +147,7 @@ export interface PullRequestRepository {
  */
 export interface PullRequestServiceDeps {
   repository: PullRequestRepository;
+  artifactRepository: ArtifactRepository;
   /** DO-instance-scoped in-flight claims — must outlive individual requests. */
   claims: PullRequestCreationClaims;
   sourceControlProvider: SourceControlProvider;
@@ -184,12 +217,6 @@ export class SessionPullRequestService {
     try {
       const sessionId = session.session_name || session.id;
       const generatedHeadBranch = generateBranchName(sessionId);
-
-      // The claim above serializes in-flight creation; this scan catches PRs
-      // persisted by earlier (completed) requests.
-      if (findPrArtifactForRepo(this.deps.repository.listArtifacts(), targetRepo, isPrimary)) {
-        return this.duplicatePrError(targetRepo);
-      }
 
       let scmSettings: ScmSettings;
       try {
@@ -266,6 +293,28 @@ export class SessionPullRequestService {
         };
       }
 
+      // The claim above serializes in-flight creation; this scan catches PRs
+      // persisted by earlier (completed) requests. Only a PR on the same head
+      // branch conflicts — each branch carries its own pull request.
+      const headMatches = listPrArtifactsForHead(
+        this.deps.artifactRepository.listArtifacts(),
+        targetRepo,
+        isPrimary,
+        { headBranch: sanitizedHeadBranch, generatedHeadBranch }
+      );
+      const existingOpenPr = await this.resolveExistingOpenPullRequest(
+        headMatches,
+        targetRepo,
+        sessionId,
+        {
+          sanitizedHeadBranch,
+          generatedHeadBranch,
+          resolutionSource: branchResolution.source,
+          requestedBaseBranch: input.baseBranch,
+          resolvedBaseBranch: baseBranch,
+        }
+      );
+
       const pushSpec = this.deps.sourceControlProvider.buildGitPushSpec({
         owner: targetRepo.repoOwner,
         name: targetRepo.repoName,
@@ -298,6 +347,18 @@ export class SessionPullRequestService {
         repoOwner: targetRepo.repoOwner,
         repoName: targetRepo.repoName,
       });
+
+      if (existingOpenPr) {
+        return {
+          kind: "created",
+          prNumber: existingOpenPr.prNumber,
+          prUrl: existingOpenPr.prUrl,
+          state: existingOpenPr.state,
+          headBranch: sanitizedHeadBranch,
+          baseBranch: existingOpenPr.baseBranch,
+          updated: true,
+        };
+      }
 
       // Use user OAuth if available, otherwise fall back to GitHub App token
       // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
@@ -335,7 +396,7 @@ export class SessionPullRequestService {
         providerUpdatedAt: prResult.providerUpdatedAt,
       };
       const artifactMetadata = mergeSnapshotMetadata({}, snapshot);
-      this.deps.repository.createArtifact({
+      this.deps.artifactRepository.createArtifact({
         id: artifactId,
         type: "pr",
         url: prResult.webUrl,
@@ -366,11 +427,18 @@ export class SessionPullRequestService {
         // The provider returns only status facts; the display state is
         // derived here, at the response boundary.
         state: toDisplayStatus(prResult),
+        headBranch: sanitizedHeadBranch,
+        baseBranch,
+        updated: false,
       };
     } catch (error) {
       this.deps.log.error("PR creation failed", {
         error: error instanceof Error ? error : String(error),
       });
+
+      if (error instanceof PullRequestCreationError) {
+        return { kind: "error", status: error.status, error: error.message };
+      }
 
       if (error instanceof SourceControlProviderError) {
         return {
@@ -411,11 +479,159 @@ export class SessionPullRequestService {
     }
   }
 
-  private duplicatePrError(targetRepo: RepoIdentity): CreatePullRequestResult {
-    return {
-      kind: "error",
-      status: 409,
-      error: `A pull request has already been created for ${targetRepo.repoOwner}/${targetRepo.repoName} in this session.`,
-    };
+  /**
+   * Decide what the existing PR artifacts on the resolved head branch mean
+   * for this request: reuse one (the caller force-pushes and reports it as
+   * updated), or create anyway. A PR's identity is (repo, head, base), so
+   * every stored-open candidate is walked — resolving each against the
+   * provider's live state, since artifact metadata only hears about merges
+   * from webhooks or the read-through refresh — rather than letting artifact
+   * recency pick a winner.
+   */
+  private async resolveExistingOpenPullRequest(
+    matches: PrArtifactHeadMatch[],
+    targetRepo: RepoIdentity,
+    sessionId: string,
+    head: {
+      sanitizedHeadBranch: string;
+      generatedHeadBranch: string;
+      resolutionSource: ResolveHeadBranchForPrResult["source"];
+      requestedBaseBranch: string | undefined;
+      /** Display fallback when neither live nor stored base is known. */
+      resolvedBaseBranch: string;
+    }
+  ): Promise<ExistingOpenPullRequest | null> {
+    // Stored-merged/closed artifacts released their head; stored-open (or
+    // state-less legacy) candidates may still be holding the branch.
+    const viable = matches.filter(
+      (candidate) => candidate.lifecycleState === null || candidate.lifecycleState === "open"
+    );
+
+    // Reusing (or replacing) a PR force-pushes the sandbox checkout over its
+    // head, so proceeding is only safe when the head IS the checkout: an
+    // explicitly requested branch (the tool derives it from HEAD), or the
+    // generated session branch (whose content is by construction whatever
+    // HEAD force-pushes onto it). A stored custom branch reached via
+    // fallback — e.g. the top of a stack recorded as the last-pushed branch —
+    // holds content this request never saw, and pushing over it would
+    // destroy that PR.
+    const headIsCheckout =
+      head.resolutionSource === "request" ||
+      normalizeBranchName(head.sanitizedHeadBranch) ===
+        normalizeBranchName(head.generatedHeadBranch);
+
+    for (const candidate of viable) {
+      // Unverifiable legacy candidates are handled after the walk.
+      if (candidate.prNumber === null || candidate.artifact.url === null) continue;
+
+      // Prefer the provider's live state, but a failed read falls back to
+      // the stored facts: reusing a PR that turns out closed is recoverable,
+      // opening a duplicate is not.
+      let live: PullRequestSnapshot | null = null;
+      try {
+        live = await this.deps.sourceControlProvider.getPullRequest({
+          owner: targetRepo.repoOwner,
+          name: targetRepo.repoName,
+          number: candidate.prNumber,
+          repositoryExternalId: candidate.repositoryExternalId ?? undefined,
+        });
+      } catch (error) {
+        this.deps.log.warn("Could not read live PR state; using the stored artifact's", {
+          pr_number: candidate.prNumber,
+          repo_owner: targetRepo.repoOwner,
+          repo_name: targetRepo.repoName,
+          error: error instanceof Error ? error : String(error),
+        });
+      }
+
+      // A merged or closed PR releases its head branch (the
+      // follow-up-after-merge flow). Heal the stale-open state that led here
+      // and keep walking — an older PR may still hold the branch.
+      if (live && live.lifecycleState !== "open") {
+        await this.applyLiveSnapshot(candidate.artifact, live, sessionId);
+        continue;
+      }
+
+      if (!headIsCheckout) {
+        throw new PullRequestCreationError(
+          409,
+          `An open pull request (#${candidate.prNumber}) already exists for branch "${head.sanitizedHeadBranch}" in ${targetRepo.repoOwner}/${targetRepo.repoName}. Check out that branch to update it, or create a new branch to open a separate pull request.`
+        );
+      }
+
+      // An explicitly different base asks for a separate PR from the same
+      // head (providers allow one open PR per head/base pair), so this open
+      // candidate is not the request's PR — but a later candidate may carry
+      // the requested pairing. Without an explicit base the candidate's base
+      // stands, whatever it is: a stacked PR's base is not the session
+      // default, and a follow-up call must not be read as a retarget.
+      const knownBase = live?.baseBranch ?? candidate.baseBranch;
+      if (
+        head.requestedBaseBranch !== undefined &&
+        knownBase !== null &&
+        normalizeBranchName(head.requestedBaseBranch) !== normalizeBranchName(knownBase)
+      ) {
+        continue;
+      }
+
+      return {
+        prNumber: candidate.prNumber,
+        prUrl: live?.url ?? candidate.artifact.url,
+        state: toDisplayStatus(live ?? { lifecycleState: "open", isDraft: candidate.isDraft }),
+        baseBranch: knownBase ?? head.resolvedBaseBranch,
+      };
+    }
+
+    // Pre-lifecycle-tracking metadata without a PR number (or URL) cannot be
+    // referenced or verified, so such a candidate keeps the head claimed
+    // unless a verifiable PR was already reused above.
+    if (
+      viable.some((candidate) => candidate.prNumber === null || candidate.artifact.url === null)
+    ) {
+      throw new PullRequestCreationError(
+        409,
+        `A pull request has already been created for ${targetRepo.repoOwner}/${targetRepo.repoName} in this session.`
+      );
+    }
+
+    return null;
+  }
+
+  /**
+   * The canonical snapshot application (authority-then-mirror with an
+   * apply-time re-read — the same sequence the read-through refresh and the
+   * webhook snapshot push perform), plus the broadcast it prescribes.
+   */
+  private async applyLiveSnapshot(
+    artifact: ArtifactRow,
+    live: PullRequestSnapshot,
+    sessionId: string
+  ): Promise<void> {
+    const applied = await applyPullRequestSnapshot(
+      {
+        artifactRepository: this.deps.artifactRepository,
+        sessionPullRequests: this.deps.sessionPullRequests ?? null,
+      },
+      { artifactId: artifact.id, sessionId, artifactCreatedAt: artifact.created_at },
+      live
+    );
+    if (applied.recordWriteError !== null) {
+      this.deps.log.error("Failed to write session pull request record", {
+        artifact_id: artifact.id,
+        pr_number: live.number,
+        repo_owner: live.repoOwner,
+        repo_name: live.repoName,
+        error:
+          applied.recordWriteError instanceof Error
+            ? applied.recordWriteError
+            : String(applied.recordWriteError),
+      });
+    }
+    if (applied.updatedArtifact) {
+      this.deps.messenger.broadcast({
+        type: "artifact_updated",
+        artifact: applied.updatedArtifact,
+      });
+    }
   }
 }

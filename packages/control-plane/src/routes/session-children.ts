@@ -10,7 +10,16 @@ import { SessionInternalPaths } from "../session/contracts";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import { activePromptAuthorSchema } from "../session/active-prompt-author";
 import type { Env } from "../types";
-import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
+import {
+  defineRoute,
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  json,
+  parsePattern,
+  SCM_AGNOSTIC_SANDBOX_ROUTE,
+  type RequestContext,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-children");
@@ -138,7 +147,7 @@ export async function handlePromptChild(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    ctx.executionCtx?.waitUntil(
+    ctx.executionCtx.submit(
       sessionStore.touchUpdatedAt(childId).catch((error) => {
         logger.error("session_index.touch_updated_at.background_error", {
           parent_id: parentId,
@@ -147,7 +156,16 @@ export async function handlePromptChild(
           trace_id: ctx.trace_id,
           error,
         });
-      })
+      }),
+      {
+        name: "session_index.touch_updated_at",
+        context: {
+          parent_id: parentId,
+          child_id: childId,
+          trace_id: ctx.trace_id,
+          request_id: ctx.request_id,
+        },
+      }
     );
   } else {
     if (admissionLease) await sessionStore.releaseChildAdmissionLease(admissionLease);
@@ -240,24 +258,33 @@ export async function handleCancelChild(
 }
 
 export const sessionChildRoutes: Route[] = [
-  {
+  defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/children"),
     handler: handleListChildren,
-  },
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/children/:childId"),
-    handler: handleGetChild,
   }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
-    handler: handleCancelChild,
-  }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/children/:childId/prompt"),
-    handler: handlePromptChild,
-  }),
+  defineRoute(
+    GITHUB_SANDBOX_FALLBACK_ROUTE,
+    sessionRoute({
+      method: "GET",
+      pattern: parsePattern("/sessions/:id/children/:childId"),
+      handler: handleGetChild,
+    })
+  ),
+  defineRoute(
+    GITHUB_SANDBOX_FALLBACK_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
+      handler: handleCancelChild,
+    })
+  ),
+  defineRoute(
+    SCM_AGNOSTIC_SANDBOX_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/children/:childId/prompt"),
+      handler: handlePromptChild,
+    })
+  ),
 ];

@@ -9,48 +9,107 @@
  * named handler.
  */
 
-import type { AutomationEventSource } from "@open-inspect/shared/triggers";
+import {
+  automationEventSchema,
+  type AutomationEvent,
+  type AutomationEventSource,
+} from "@open-inspect/shared/triggers";
 import { requireEventPoster } from "../auth/identity-enforcement";
+import { createLogger } from "../logger";
 import type { Route, RequestContext } from "../routes/shared";
-import { parsePattern, json, error } from "../routes/shared";
+import {
+  defineRoute,
+  error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  json,
+  parsePattern,
+} from "../routes/shared";
 import type { Env } from "../types";
 
-export type AutomationEventEnvelopeResult =
-  | { event: Record<string, unknown>; response?: never }
-  | { event?: never; response: Response };
+type AutomationEventForSource<S extends AutomationEventSource> = Extract<
+  AutomationEvent,
+  { source: S }
+>;
 
-/**
- * Validate the normalized event envelope — source, then source-specific
- * fields, then the common dispatch keys every event must carry.
- */
-export function validateAutomationEventEnvelope(
+const logger = createLogger("webhook:automation-event");
+
+export type AutomationEventEnvelopeResult<S extends AutomationEventSource> =
+  | { event: AutomationEventForSource<S>; response?: never }
+  | { event?: never; response: Response; issuePaths: string[] };
+
+function hasAutomationEventSource<S extends AutomationEventSource>(
+  event: AutomationEvent,
+  source: S
+): event is AutomationEventForSource<S> {
+  return event.source === source;
+}
+
+export function logAutomationEventRejection(
   body: unknown,
   source: AutomationEventSource,
-  validate: (event: Record<string, unknown>) => string | null
-): AutomationEventEnvelopeResult {
+  issuePaths: string[],
+  ctx: RequestContext
+): void {
+  const rawEventType =
+    typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as Record<string, unknown>).eventType
+      : undefined;
+  const eventType = typeof rawEventType === "string" ? rawEventType.slice(0, 128) : undefined;
+
+  logger.warn("Normalized automation event rejected", {
+    event: "automation_event.ingress_rejected",
+    source,
+    event_type: eventType,
+    issue_paths: issuePaths,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+}
+
+/**
+ * Validate the source and the complete normalized event protocol.
+ */
+export function validateAutomationEventEnvelope<S extends AutomationEventSource>(
+  body: unknown,
+  source: S
+): AutomationEventEnvelopeResult<S> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return { response: error("Invalid event: body must be a JSON object", 400) };
-  }
-  const event = body as Record<string, unknown>;
-  if (event.source !== source) {
-    return { response: error(`Invalid event: source must be '${source}'`, 400) };
-  }
-  const fieldError = validate(event);
-  if (fieldError) {
-    return { response: error(fieldError, 400) };
-  }
-  if (!event.eventType || !event.triggerKey || !event.concurrencyKey) {
     return {
-      response: error("Invalid event: eventType, triggerKey, and concurrencyKey are required", 400),
+      response: error("Invalid event: body must be a JSON object", 400),
+      issuePaths: ["body"],
     };
   }
-  return { event };
+  if ((body as Record<string, unknown>).source !== source) {
+    return {
+      response: error(`Invalid event: source must be '${source}'`, 400),
+      issuePaths: ["source"],
+    };
+  }
+
+  const parsed = automationEventSchema.safeParse(body);
+  if (!parsed.success) {
+    const issuePaths = [
+      ...new Set(parsed.error.issues.map((issue) => issue.path.join(".") || "body")),
+    ];
+    return {
+      response: error(`Invalid event: ${issuePaths.join(", ")}`, 400),
+      issuePaths,
+    };
+  }
+
+  if (!hasAutomationEventSource(parsed.data, source)) {
+    return {
+      response: error(`Invalid event: source must be '${source}'`, 400),
+      issuePaths: ["source"],
+    };
+  }
+  return { event: parsed.data };
 }
 
 /** Forward a validated event to the singleton SchedulerDO for matching. */
 export async function forwardAutomationEventToScheduler(
   env: Env,
-  event: Record<string, unknown>
+  event: AutomationEvent
 ): Promise<Response> {
   if (!env.SCHEDULER) {
     return error("Scheduler not configured", 503);
@@ -81,8 +140,6 @@ export async function forwardAutomationEventToScheduler(
 export function createAutomationEventRoute(opts: {
   path: string;
   source: AutomationEventSource;
-  /** Validate source-specific required fields. Returns an error message, or null when valid. */
-  validate: (event: Record<string, unknown>) => string | null;
 }): Route {
   async function handler(
     request: Request,
@@ -97,14 +154,22 @@ export function createAutomationEventRoute(opts: {
     try {
       body = await request.json();
     } catch {
+      logAutomationEventRejection(undefined, opts.source, ["body"], ctx);
       return error("Invalid JSON", 400);
     }
 
-    const validated = validateAutomationEventEnvelope(body, opts.source, opts.validate);
-    if (validated.response) return validated.response;
+    const validated = validateAutomationEventEnvelope(body, opts.source);
+    if (validated.response) {
+      logAutomationEventRejection(body, opts.source, validated.issuePaths, ctx);
+      return validated.response;
+    }
 
     return forwardAutomationEventToScheduler(env, validated.event);
   }
 
-  return { method: "POST", pattern: parsePattern(opts.path), handler };
+  return defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+    method: "POST",
+    pattern: parsePattern(opts.path),
+    handler,
+  });
 }

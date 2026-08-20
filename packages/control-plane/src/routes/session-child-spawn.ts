@@ -27,7 +27,14 @@ import {
 } from "../session/integration-settings-resolution";
 import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
-import { error, json, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  json,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-child-spawn");
@@ -168,6 +175,20 @@ async function handleSpawnChild(
       ? requestedReasoningEffort
       : null;
 
+  let providerAuth;
+  try {
+    providerAuth = await sessionStore.getCompleteProviderAuth(parentId);
+  } catch (cause) {
+    logger.error("Failed to load parent provider auth", {
+      event: "session.spawn_child_provider_auth_failed",
+      parent_id: parentId,
+      error: cause instanceof Error ? cause.message : String(cause),
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+    });
+    return error("Parent provider auth unavailable", 503);
+  }
+
   const childDepth = parentDepth + 1;
   const childId = generateId();
 
@@ -220,6 +241,11 @@ async function handleSpawnChild(
     spawnDepth: childDepth,
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
+    managedSkillsSourceSessionId: parentId,
+    providerAuth: providerAuth.map((auth) => ({
+      ...auth,
+      inheritedFromSessionId: parentId,
+    })),
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(
@@ -285,7 +311,7 @@ async function handleSpawnChild(
     return error("Failed to enqueue child session prompt", 500);
   }
 
-  ctx.executionCtx?.waitUntil(
+  ctx.executionCtx.submit(
     ctx.sessionRuntime
       .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
         method: "POST",
@@ -298,16 +324,20 @@ async function handleSpawnChild(
       })
       .catch((err: unknown) => {
         logger.error("session.notify_parent_spawn.failed", { error: err });
-      })
+      }),
+    {
+      name: "session.notify_parent_spawn",
+      context: { parent_id: parentId, child_id: childId, trace_id: ctx.trace_id },
+    }
   );
 
   return json({ sessionId: childId, status: "created" }, 201);
 }
 
-export const sessionChildSpawnRoutes: Route[] = [
+export const sessionChildSpawnRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/children"),
     handler: handleSpawnChild,
   }),
-];
+]);

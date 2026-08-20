@@ -149,6 +149,12 @@ describe("SlackNotifyEvent", () => {
     expect(screen.getByText(/couldn't reach the control plane/i)).toBeInTheDocument();
   });
 
+  it("warns against retrying when delivery is unknown", () => {
+    renderExpanded(denialEvent("delivery_unknown"));
+    expect(screen.getByText(/may have posted/i)).toBeInTheDocument();
+    expect(screen.getByText(/check the channel before retrying/i)).toBeInTheDocument();
+  });
+
   it("renders legacy denial events (status=error, bare reason) for backward compat", () => {
     renderExpanded(legacyDenialEvent("channel_not_found_or_forbidden"));
     expect(screen.getByText(/channel not found or bot is not in the channel/i)).toBeInTheDocument();

@@ -15,6 +15,8 @@ import { ScmSettingsPage } from "@/components/settings/scm-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
 import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
+import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
+import { SkillsSettings } from "@/components/settings/skills-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -24,6 +26,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   secrets: "Secrets",
   environments: "Environments",
   models: "Models",
+  "provider-accounts": "Accounts",
   images: "Images",
   appearance: "Appearance",
   "keyboard-shortcuts": "Keyboard",
@@ -31,6 +34,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   sandbox: "Sandbox",
   scm: "SCM Settings",
   integrations: "Integrations",
+  skills: "Skills",
   "mcp-servers": "MCP Servers",
 };
 
@@ -38,6 +42,7 @@ const VALID_CATEGORIES = new Set<string>([
   "secrets",
   "environments",
   "models",
+  "provider-accounts",
   "images",
   "appearance",
   "keyboard-shortcuts",
@@ -45,6 +50,7 @@ const VALID_CATEGORIES = new Set<string>([
   "sandbox",
   "scm",
   "integrations",
+  "skills",
   "mcp-servers",
 ]);
 
@@ -89,6 +95,7 @@ function SettingsPageContent() {
       {activeCategory === "secrets" && <SecretsSettings />}
       {activeCategory === "environments" && <EnvironmentsSettings />}
       {activeCategory === "models" && <ModelsSettings />}
+      {activeCategory === "provider-accounts" && <ProviderAccountsSettings />}
       {activeCategory === "images" && repoImagesEnabled && <ImagesSettings />}
       {activeCategory === "appearance" && <AppearanceSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
@@ -96,6 +103,7 @@ function SettingsPageContent() {
       {activeCategory === "sandbox" && <SandboxSettingsPage />}
       {activeCategory === "scm" && <ScmSettingsPage />}
       {activeCategory === "integrations" && <IntegrationsSettings />}
+      {activeCategory === "skills" && <SkillsSettings />}
       {activeCategory === "mcp-servers" && <McpServersSettings />}
     </>
   );

@@ -54,9 +54,10 @@ export function scheduleImageBuildOnSave(
       });
     });
 
-  if (ctx.executionCtx) {
-    ctx.executionCtx.waitUntil(task);
-  }
+  ctx.executionCtx.submit(task, {
+    name: "image_build.save_hook",
+    context: { scope_kind: scope.kind, scope_id: scope.id },
+  });
 }
 
 /**

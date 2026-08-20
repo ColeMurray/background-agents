@@ -5,6 +5,8 @@
  * to ensure consistent behavior across control plane, web UI, and Slack bot.
  */
 
+import { SUBSCRIPTION_PROVIDER_IDS, type SubscriptionProviderId } from "./types/provider-accounts";
+
 /**
  * Reasoning effort levels supported across providers.
  *
@@ -59,9 +61,18 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
-        description: "Latest balanced, fast coding",
+        description: "Balanced, fast coding",
         default: true,
         reasoning: { efforts: ["low", "medium", "high", "max"], default: "high" },
+      },
+      {
+        id: "anthropic/claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        description: "Latest Sonnet, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
       },
       {
         id: "anthropic/claude-opus-4-5",
@@ -182,6 +193,7 @@ export const MODEL_CATALOG = [
     models: [
       { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
       { id: "opencode/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
+      { id: "opencode/kimi-k3", name: "Kimi K3", description: "Moonshot AI" },
       { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
       { id: "opencode/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
@@ -195,6 +207,12 @@ export const MODEL_CATALOG = [
       {
         id: "xai/grok-4.5",
         name: "Grok 4.5",
+        description: "Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+      },
+      {
+        id: "xai/grok-4.6",
+        name: "Grok 4.6",
         description: "Latest Grok for chat, coding, and agentic tools",
         reasoning: { efforts: ["low", "medium", "high"], default: "high" },
       },
@@ -208,7 +226,10 @@ export const MODEL_CATALOG = [
   {
     category: "Z.AI Coding Plan",
     enabledByDefault: false,
-    models: [{ id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" }],
+    models: [
+      { id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" },
+      { id: "zai-coding-plan/glm-5.3", name: "GLM 5.3", description: "Z.AI Coding Plan" },
+    ],
   },
   {
     category: "DeepSeek",
@@ -388,6 +409,22 @@ export function extractProviderAndModel(modelId: string): { provider: string; mo
   }
   // Fallback for truly unknown models
   return { provider: "anthropic", model: normalized };
+}
+
+/**
+ * Resolve the subscription billing provider for a canonical catalog model.
+ * Unlike general model compatibility helpers, this rejects legacy bare IDs,
+ * malformed routes, and models absent from the current catalog.
+ */
+export function getSubscriptionProviderForModel(modelId: string): SubscriptionProviderId | null {
+  if (!VALID_MODELS.includes(modelId as ValidModel)) {
+    throw new Error(`Invalid canonical model ID: ${modelId}`);
+  }
+
+  const provider = modelId.slice(0, modelId.indexOf("/"));
+  return SUBSCRIPTION_PROVIDER_IDS.includes(provider as SubscriptionProviderId)
+    ? (provider as SubscriptionProviderId)
+    : null;
 }
 
 /**

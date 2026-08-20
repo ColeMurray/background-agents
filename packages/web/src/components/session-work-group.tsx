@@ -3,8 +3,8 @@
 import type { ReactNode } from "react";
 import { ChevronRightIcon } from "@/components/ui/icons";
 
-function formatDuration(durationSeconds: number): string {
-  const totalSeconds = Math.round(durationSeconds);
+function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.round(durationMs / 1000);
   if (totalSeconds < 1) return "less than a second";
 
   const hours = Math.floor(totalSeconds / 3600);
@@ -16,17 +16,17 @@ function formatDuration(durationSeconds: number): string {
 }
 
 export function SessionWorkGroup({
-  durationSeconds,
+  durationMs,
   isExpanded,
   onToggle,
   children,
 }: {
-  durationSeconds: number;
+  durationMs: number;
   isExpanded: boolean;
   onToggle: () => void;
   children: ReactNode;
 }) {
-  const label = `Worked for ${formatDuration(durationSeconds)}`;
+  const label = `Worked for ${formatDuration(durationMs)}`;
 
   return (
     <div className="border-b border-border-muted py-1">

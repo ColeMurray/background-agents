@@ -2,26 +2,30 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from daytona import CreateSnapshotParams, Daytona, Image
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # OpenCode version to install.
 #
 # OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
 # eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.18.11"
+#
+# Never pin below 1.18.15 — see packages/modal-infra/src/images/base.py for why
+# (OpenCode's message-ID counter wraps and earlier releases order by ID string).
+OPENCODE_VERSION = "1.18.18"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-SANDBOX_VERSION = "daytona-v5-vnc-opencode-1-18-11"
+SANDBOX_VERSION = "daytona-v6-vnc-opencode-1-18-18"
 
 
 def build_base_image(repo_root: Path) -> Image:
     """Build the Open-Inspect Daytona base image."""
-    sandbox_runtime_dir = (
-        repo_root / "packages" / "sandbox-runtime" / "src" / "sandbox_runtime"
-    )
+    sandbox_runtime_dir = repo_root / "packages" / "sandbox-runtime" / "src" / "sandbox_runtime"
 
     return (
         Image.base("python:3.12-slim-bookworm")
@@ -69,7 +73,7 @@ def build_base_image(repo_root: Path) -> Image:
             # below. Mirror packages/modal-infra/src/images/base.py.
             "printf '%s\\n'"
             " '#!/bin/sh'"
-            ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
+            " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
             " > /usr/local/bin/oi-git-credentials",
             "chmod 0755 /usr/local/bin/oi-git-credentials",
             "git config --system credential.helper /usr/local/bin/oi-git-credentials",

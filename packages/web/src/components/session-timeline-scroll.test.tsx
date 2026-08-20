@@ -148,6 +148,32 @@ describe("timeline auto-scrolling", () => {
     expect(timeline.scrollTop).toBe(300);
   });
 
+  it("anchors absolutely-positioned descendants inside the timeline scroller", () => {
+    // A thinking task renders a `position: absolute` sr-only live-status span.
+    // The scroller must be its containing block (`relative`): otherwise the
+    // span anchors to the document, escapes every ancestor overflow clip, and
+    // stretches the page by the timeline's content height — scrolling the
+    // whole layout while sub-tasks stream.
+    const task = toolEvent("task", "task-call", 1, { status: "running" });
+    const { container } = render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          task,
+          toolEvent("Read", "child-call", 2, { isSubtask: true, taskCallId: "task-call" }),
+        ]}
+      />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    expect(timeline).toHaveClass("relative");
+
+    const statusSpan = container.querySelector('[role="status"]');
+    expect(statusSpan).toBeInTheDocument();
+    const containingBlock = statusSpan?.closest(".relative, .absolute, .fixed, .sticky") ?? null;
+    expect(containingBlock).not.toBeNull();
+    expect(timeline.contains(containingBlock)).toBe(true);
+  });
+
   it("follows processing indicator height changes before passive effects", () => {
     const events: SandboxEvent[] = [
       {

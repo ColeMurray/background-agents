@@ -1,24 +1,94 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
+import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/types/sessions";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
+import { BoxIcon, RightSidebarIcon } from "@/components/ui/icons";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { getSafeExternalUrl } from "@/lib/urls";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
-const SANDBOX_STATUS_COLORS: Record<string, string> = {
-  pending: "text-muted-foreground",
-  warming: "text-warning",
-  spawning: "text-warning",
-  syncing: "text-accent",
-  ready: "text-success",
-  running: "text-accent",
-  stopped: "text-muted-foreground",
-  stale: "text-muted-foreground",
-  failed: "text-destructive",
+const SANDBOX_STATUS_PRESENTATION: Record<
+  SandboxStatusValue,
+  { label: string; detail: string; color: string; dot: string; pulse?: boolean }
+> = {
+  pending: {
+    label: "Pending",
+    detail: "Waiting for the sandbox to start.",
+    color: "text-muted-foreground",
+    dot: "bg-muted-foreground",
+  },
+  warming: {
+    label: "Warming...",
+    detail: "Preparing sandbox capacity.",
+    color: "text-warning",
+    dot: "bg-warning",
+    pulse: true,
+  },
+  spawning: {
+    label: "Starting...",
+    detail: "Creating or restoring the sandbox.",
+    color: "text-warning",
+    dot: "bg-warning",
+    pulse: true,
+  },
+  connecting: {
+    label: "Connecting...",
+    detail: "Waiting for the sandbox runtime to connect.",
+    color: "text-warning",
+    dot: "bg-warning",
+    pulse: true,
+  },
+  syncing: {
+    label: "Syncing...",
+    detail: "Synchronizing the sandbox workspace.",
+    color: "text-accent",
+    dot: "bg-accent",
+    pulse: true,
+  },
+  ready: {
+    label: "Ready",
+    detail: "The sandbox is available.",
+    color: "text-success",
+    dot: "bg-success",
+  },
+  running: {
+    label: "Running",
+    detail: "The sandbox is active.",
+    color: "text-success",
+    dot: "bg-success",
+  },
+  snapshotting: {
+    label: "Saving...",
+    detail: "Saving a sandbox snapshot.",
+    color: "text-accent",
+    dot: "bg-accent",
+    pulse: true,
+  },
+  stopped: {
+    label: "Stopped",
+    detail: "The sandbox stopped after inactivity and can restart with the next prompt.",
+    color: "text-muted-foreground",
+    dot: "bg-muted-foreground",
+  },
+  stale: {
+    label: "Unresponsive",
+    detail: "The sandbox runtime stopped responding.",
+    color: "text-destructive",
+    dot: "bg-destructive",
+  },
+  failed: {
+    label: "Failed",
+    detail: "The sandbox could not start or recover.",
+    color: "text-destructive",
+    dot: "bg-destructive",
+  },
 };
 
 export type SessionHeaderProps = {
@@ -31,12 +101,16 @@ export type SessionHeaderProps = {
   connected: boolean;
   connecting: boolean;
   isDetailsOpen: boolean;
+  isDesktopDetailsOpen: boolean;
+  showDesktopDetailsToggle: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
+  onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
   actions: SessionActionProps;
-  renameSession: (title: string) => Promise<boolean | undefined>;
+  optimisticTitle?: string;
+  renameSession: (title: string) => Promise<boolean>;
 };
 
 export function SessionHeader({
@@ -45,11 +119,15 @@ export function SessionHeader({
   connected,
   connecting,
   isDetailsOpen,
+  isDesktopDetailsOpen,
+  showDesktopDetailsToggle,
   detailsButtonRef,
   actionsButtonRef,
   onToggleDetails,
+  onToggleDesktopDetails,
   onOpenMobileDetails,
   actions,
+  optimisticTitle,
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
@@ -66,8 +144,6 @@ export function SessionHeader({
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [title, setTitle] = useState(baseResolvedTitle);
-  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
-
   const resolvedTitle =
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 
@@ -89,24 +165,13 @@ export function SessionHeader({
       return;
     }
 
-    const previousTitle = resolvedTitle;
     setIsRenaming(false);
-    setOptimisticTitle(trimmed);
 
     const success = await renameSession(trimmed);
     if (!success) {
-      setOptimisticTitle(null);
-      setTitle(previousTitle);
       setIsRenaming(true);
     }
   };
-
-  useEffect(() => {
-    if (!optimisticTitle) return;
-    if (sessionState?.title === optimisticTitle) {
-      setOptimisticTitle(null);
-    }
-  }, [optimisticTitle, sessionState?.title]);
 
   useEffect(() => {
     if (!isRenaming) setTitle(sessionState?.title ?? fallbackSessionInfo.title ?? "");
@@ -170,119 +235,113 @@ export function SessionHeader({
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
           />
-          <div className="md:hidden">
-            <CombinedStatusDot
-              connected={connected}
-              connecting={connecting}
-              sandboxStatus={sessionState?.sandboxStatus}
-            />
-          </div>
-          <div className="hidden md:contents">
-            <ConnectionStatus connected={connected} connecting={connecting} />
-            <SandboxStatus
+          <div className="flex items-center gap-1">
+            <ConnectionStatusIcon connected={connected} connecting={connecting} />
+            <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
               dashboardUrl={sessionState?.sandboxDashboardUrl}
             />
           </div>
+          {showDesktopDetailsToggle && (
+            <button
+              type="button"
+              onClick={onToggleDesktopDetails}
+              className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+              aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+              aria-controls="session-details-sidebar"
+              aria-expanded={isDesktopDetailsOpen}
+            >
+              <RightSidebarIcon className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </header>
   );
 }
 
-function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
-  if (connecting) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-warning">
-        <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-        Connecting...
-      </span>
-    );
-  }
-
-  if (connected) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-success">
-        <span className="w-2 h-2 rounded-full bg-success" />
-        Connected
-      </span>
-    );
-  }
+function ConnectionStatusIcon({
+  connected,
+  connecting,
+}: {
+  connected: boolean;
+  connecting: boolean;
+}) {
+  const label = connecting ? "Connecting..." : connected ? "Connected" : "Disconnected";
+  const color = connecting ? "bg-warning" : connected ? "bg-success" : "bg-destructive";
 
   return (
-    <span className="flex items-center gap-1 text-xs text-destructive">
-      <span className="w-2 h-2 rounded-full bg-destructive" />
-      Disconnected
-    </span>
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            role="status"
+            aria-label={`Connection status: ${label}`}
+            tabIndex={0}
+            className="flex h-8 w-8 items-center justify-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span
+              aria-hidden="true"
+              className={`h-2.5 w-2.5 rounded-full ${color}${connecting ? " animate-pulse motion-reduce:animate-none" : ""}`}
+            />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
-function SandboxStatus({
+function SandboxStatusIcon({
   status,
   dashboardUrl,
 }: {
-  status?: string;
+  status?: SandboxStatusValue;
   dashboardUrl?: string | null;
 }) {
   if (!status) return null;
 
-  const className = `text-xs ${SANDBOX_STATUS_COLORS[status] || SANDBOX_STATUS_COLORS.pending}`;
-  const label = `Sandbox: ${status}`;
-
-  if (dashboardUrl) {
-    return (
-      <a
-        href={dashboardUrl}
-        target="_blank"
-        rel="noreferrer noopener"
-        title="Open sandbox in provider dashboard"
-        className={`${className} hover:underline`}
-      >
-        {label}
-        <span aria-hidden="true" className="ml-0.5">
-          {"\u2197"}
-        </span>
-      </a>
-    );
-  }
-
-  return <span className={className}>{label}</span>;
-}
-
-function CombinedStatusDot({
-  connected,
-  connecting,
-  sandboxStatus,
-}: {
-  connected: boolean;
-  connecting: boolean;
-  sandboxStatus?: string;
-}) {
-  let color: string;
-  let pulse = false;
-  let label: string;
-
-  if (!connected && !connecting) {
-    color = "bg-destructive";
-    label = "Disconnected";
-  } else if (connecting) {
-    color = "bg-warning";
-    pulse = true;
-    label = "Connecting...";
-  } else if (sandboxStatus === "failed") {
-    color = "bg-destructive";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else if (["pending", "warming", "spawning", "syncing"].includes(sandboxStatus || "")) {
-    color = "bg-warning";
-    label = `Connected \u00b7 Sandbox: ${sandboxStatus}`;
-  } else {
-    color = "bg-success";
-    label = sandboxStatus ? `Connected \u00b7 Sandbox: ${sandboxStatus}` : "Connected";
-  }
+  const presentation = SANDBOX_STATUS_PRESENTATION[status];
+  const safeDashboardUrl = getSafeExternalUrl(dashboardUrl);
 
   return (
-    <span title={label} className="flex items-center">
-      <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
-    </span>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Sandbox status: ${presentation.label}`}
+          className={`relative flex h-8 w-8 items-center justify-center rounded-sm border border-border ${presentation.color} transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+        >
+          <BoxIcon className="h-4 w-4" />
+          <span
+            aria-hidden="true"
+            className={`absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full ${presentation.dot}${presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
+          />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" side="bottom" className="w-[min(20rem,calc(100vw-2rem))] p-0">
+        <div className="border-b border-border-muted p-3">
+          <div className={`flex items-center gap-2 text-sm font-medium ${presentation.color}`}>
+            <span
+              aria-hidden="true"
+              className={`h-2 w-2 rounded-full ${presentation.dot}${presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}
+            />
+            Sandbox {presentation.label}
+          </div>
+          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
+        </div>
+        {safeDashboardUrl && (
+          <a
+            href={safeDashboardUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-between p-3 text-xs font-medium text-accent hover:bg-muted"
+          >
+            Open provider dashboard
+            <span aria-hidden="true">{"\u2197"}</span>
+          </a>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

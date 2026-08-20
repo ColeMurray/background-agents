@@ -6,7 +6,6 @@ the synchronous per-event translator (`_apply_sse_event`) dispositions and
 the cross-prompt session-title dedupe, which are directly testable now.
 """
 
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,6 +15,7 @@ from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _Disposition,
+    _message_created_epoch_ms,
     _PromptState,
 )
 from tests.conftest import oc_message_id
@@ -40,18 +40,35 @@ def make_stream() -> OpenCodePromptStream:
     )
 
 
-def make_state(opencode_message_id: str = "msg_test") -> _PromptState:
+def make_state(
+    opencode_message_id: str = "msg_test", start_time: float = PROMPT_TS_MS / 1000
+) -> _PromptState:
+    """Anchor the prompt boundary to PROMPT_TS_MS so fixture creation times and
+    fixture IDs describe the same instant."""
     state = _PromptState(
         opencode_session_id=PARENT_SESSION_ID,
         message_id="cp-msg-1",
         opencode_message_id=opencode_message_id,
-        start_time=time.time(),
+        start_time=start_time,
     )
     return state
 
 
 def sse(event_type: str, properties: dict) -> dict:
     return {"type": event_type, "properties": properties}
+
+
+def test_message_created_epoch_ms_treats_unusable_values_as_absent():
+    """Anything int() would reject must read as absent: raising here would tear
+    down the SSE loop over one malformed message."""
+    assert _message_created_epoch_ms({"time": {"created": PROMPT_TS_MS}}) == PROMPT_TS_MS
+    assert _message_created_epoch_ms({}) is None
+    assert _message_created_epoch_ms({"time": None}) is None
+    assert _message_created_epoch_ms({"time": {}}) is None
+    assert _message_created_epoch_ms({"time": {"created": "1754000000000"}}) is None
+    assert _message_created_epoch_ms({"time": {"created": True}}) is None
+    assert _message_created_epoch_ms({"time": {"created": float("nan")}}) is None
+    assert _message_created_epoch_ms({"time": {"created": float("inf")}}) is None
 
 
 def test_oc_message_id_matches_real_generator_format():
@@ -662,9 +679,9 @@ class TestApplySseEventDispositions:
         assert step.events == []
 
     def test_post_compaction_prior_prompt_message_is_not_accepted(self):
-        """The compaction fallback must not claim messages that predate the
-        prompt (IDs below the prompt's user message): forwarding them would
-        replay prior turns' text as current output."""
+        """The compaction fallback must not claim messages created before the
+        prompt: forwarding them would replay prior turns' text as current
+        output."""
         prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
         prior_user_id = oc_message_id(PROMPT_TS_MS - 61_000, 1, "u")
         stream = make_stream()
@@ -696,6 +713,7 @@ class TestApplySseEventDispositions:
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
                         "parentID": prior_user_id,
+                        "time": {"created": PROMPT_TS_MS - 60_000},
                     }
                 },
             ),
@@ -722,6 +740,7 @@ class TestApplySseEventDispositions:
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
                         "parentID": continue_user_id,
+                        "time": {"created": PROMPT_TS_MS + 5_000},
                     }
                 },
             ),
@@ -751,17 +770,20 @@ class TestApplySseEventDispositions:
             }
         ]
 
-    def test_post_compaction_same_timestamp_counter_boundary(self):
-        """Within one millisecond the encoded counter decides ordering: an
-        assistant ID one counter tick below the prompt's user message is
-        rejected, one tick above is accepted."""
-        same_ms_below_id = oc_message_id(PROMPT_TS_MS, 1, "s")
-        same_ms_above_id = oc_message_id(PROMPT_TS_MS, 3, "t")
+    def test_post_compaction_millisecond_boundary(self):
+        """The boundary is the prompt's start millisecond and the comparison is
+        strict: a message created in that same millisecond is rejected, because
+        a prior turn could have produced it earlier within that millisecond."""
+        at_boundary_id = oc_message_id(PROMPT_TS_MS, 1, "s")
+        after_boundary_id = oc_message_id(PROMPT_TS_MS + 1, 3, "t")
         stream = make_stream()
         state = make_state(PROMPT_MESSAGE_ID)
         stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
 
-        for oc_msg_id in (same_ms_below_id, same_ms_above_id):
+        for oc_msg_id, created in (
+            (at_boundary_id, PROMPT_TS_MS),
+            (after_boundary_id, PROMPT_TS_MS + 1),
+        ):
             stream._apply_sse_event(
                 state,
                 sse(
@@ -772,13 +794,14 @@ class TestApplySseEventDispositions:
                             "role": "assistant",
                             "sessionID": PARENT_SESSION_ID,
                             "parentID": oc_message_id(PROMPT_TS_MS, 0, "w"),
+                            "time": {"created": created},
                         }
                     },
                 ),
             )
 
-        assert not state.attribution.is_assistant_allowed(same_ms_below_id)
-        assert state.attribution.is_assistant_allowed(same_ms_above_id)
+        assert not state.attribution.is_assistant_allowed(at_boundary_id)
+        assert state.attribution.is_assistant_allowed(after_boundary_id)
 
     def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
         prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
@@ -796,6 +819,7 @@ class TestApplySseEventDispositions:
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
                         "parentID": oc_message_id(PROMPT_TS_MS - 61_000, 1, "u"),
+                        "time": {"created": PROMPT_TS_MS - 60_000},
                         "error": {"name": "SomeError", "data": {"message": "Old failure"}},
                     }
                 },

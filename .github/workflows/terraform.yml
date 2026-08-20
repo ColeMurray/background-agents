@@ -213,6 +213,7 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
+          TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
           TF_VAR_nextauth_secret: ${{ secrets.NEXTAUTH_SECRET }}
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
@@ -367,6 +368,7 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
+          TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
           TF_VAR_nextauth_secret: ${{ secrets.NEXTAUTH_SECRET }}
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}

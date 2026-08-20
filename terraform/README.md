@@ -164,6 +164,13 @@ terraform init \
 
 ### 3. Plan Changes
 
+Terraform generates and persists a dedicated provider-account credential encryption key by default.
+Existing local installations may set `provider_accounts_encryption_key` in `terraform.tfvars` to
+retain their current key; Actions deployments use the `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` repository
+or production-environment secret instead. Never change this value after storing provider account
+credentials. Back up the remote Terraform state because it is the recovery source for an
+automatically generated key.
+
 ```bash
 terraform plan
 ```
@@ -265,6 +272,7 @@ ANTHROPIC_API_KEY
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
+PROVIDER_ACCOUNTS_ENCRYPTION_KEY # Optional existing provider-account key override
 NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 
 # Access control

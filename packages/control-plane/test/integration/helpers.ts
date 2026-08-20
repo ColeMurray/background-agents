@@ -5,6 +5,7 @@ import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 import { SessionIndexStore } from "../../src/db/session-index";
+import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
@@ -19,6 +20,10 @@ const TEST_NAMED_SESSION_DEFAULTS = {
   repoId: 12345,
   userId: "user-1",
 } as const;
+const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
+  { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+  { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+];
 
 async function signCookieValue(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -138,9 +143,7 @@ export async function serviceFetch(
   });
 }
 
-/**
- * Create a fresh DO, call /internal/init, return the stub and id.
- */
+/** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
   repoOwner?: string;
@@ -160,24 +163,43 @@ export async function initSession(overrides?: {
   sandboxSettings?: SandboxSettings;
   userId?: string;
   scmLogin?: string;
+  providerAuth?: SessionModelProviderAuthInput[];
 }) {
   const id = env.SESSION.newUniqueId();
   const stub = env.SESSION.get(id);
   const defaults = {
-    sessionName: `test-${Date.now()}`,
+    sessionName: `test-${Date.now()}-${crypto.randomUUID()}`,
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
     userId: "user-1",
     ...overrides,
   };
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const now = Date.now();
+  await new SessionIndexStore(env.DB).create({
+    id: defaults.sessionName,
+    title: defaults.title ?? null,
+    repoOwner: defaults.repoOwner,
+    repoName: defaults.repoName,
+    model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    reasoningEffort: defaults.reasoningEffort ?? null,
+    baseBranch: defaults.defaultBranch ?? "main",
+    repositories: defaults.repositories,
+    environmentId: defaults.environmentId ?? null,
+    status: "created",
+    userId: defaults.userId,
+    providerAuth,
+    createdAt: now,
+    updatedAt: now,
+  });
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(defaults),
+    body: JSON.stringify(doDefaults),
   });
   if (res.status !== 200) throw new Error(`Init failed: ${res.status}`);
-  return { stub, id };
+  return { stub, id, sessionName: defaults.sessionName };
 }
 
 /**
@@ -299,6 +321,7 @@ export async function initNamedSession(
     spawnSource?: "user" | "agent" | "automation";
     spawnDepth?: number;
     sandboxSettings?: Record<string, unknown>;
+    providerAuth?: SessionModelProviderAuthInput[];
   }
 ) {
   const defaults = {
@@ -306,6 +329,7 @@ export async function initNamedSession(
     ...TEST_NAMED_SESSION_DEFAULTS,
     ...overrides,
   };
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
@@ -320,11 +344,12 @@ export async function initNamedSession(
     spawnSource: defaults.spawnSource ?? "user",
     spawnDepth: defaults.spawnDepth ?? 0,
     userId: defaults.canonicalUserId ?? defaults.userId,
+    providerAuth,
     createdAt: now,
     updatedAt: now,
   });
 
-  return initNamedSessionDO(sessionName, defaults);
+  return initNamedSessionDO(sessionName, doDefaults);
 }
 
 /** Create only the named session DO for tests that manage the D1 row explicitly. */

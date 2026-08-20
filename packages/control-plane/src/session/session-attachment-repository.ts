@@ -69,6 +69,10 @@ export class SessionAttachmentRepository {
     }
   }
 
+  releaseForMessage(messageId: string): void {
+    this.sql.exec(`UPDATE attachments SET message_id = NULL WHERE message_id = ?`, messageId);
+  }
+
   /** Claim stale records without losing ownership before fallible object deletion. */
   claimStale(
     cutoff: number,

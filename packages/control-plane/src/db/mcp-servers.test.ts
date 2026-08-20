@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import type { ValidatedCreateMcpServerInput } from "@open-inspect/shared/types/integrations";
 import { McpServerStore, McpServerValidationError } from "./mcp-servers";
 
 // ─── Fake D1 helpers ────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ function createFakeD1(options?: {
 
 const sampleRow = {
   id: "abc123",
+  revision: 1,
   name: "playwright",
   type: "local",
   command: JSON.stringify(["npx", "-y", "@playwright/mcp"]),
@@ -75,6 +77,7 @@ const sampleRow = {
 
 const remoteRow = {
   id: "def456",
+  revision: 1,
   name: "remote-mcp",
   type: "remote",
   command: null,
@@ -180,23 +183,34 @@ describe("McpServerStore", () => {
     it("throws McpServerValidationError for local server without command", async () => {
       const { db } = createFakeD1();
       const store = new McpServerStore(db);
-      await expect(store.create({ name: "test", type: "local", enabled: true })).rejects.toThrow(
-        McpServerValidationError
-      );
+      const invalid = {
+        name: "test",
+        type: "local",
+        enabled: true,
+      } as unknown as ValidatedCreateMcpServerInput;
+      await expect(store.create(invalid)).rejects.toThrow(McpServerValidationError);
     });
 
     it("throws McpServerValidationError for remote server without url", async () => {
       const { db } = createFakeD1({ firstResult: remoteRow });
       const store = new McpServerStore(db);
-      await expect(store.create({ name: "test", type: "remote", enabled: true })).rejects.toThrow(
-        McpServerValidationError
-      );
+      const invalid = {
+        name: "test",
+        type: "remote",
+        enabled: true,
+      } as unknown as ValidatedCreateMcpServerInput;
+      await expect(store.create(invalid)).rejects.toThrow(McpServerValidationError);
     });
 
     it("throws McpServerValidationError (not generic Error) so routes can return 400", async () => {
       const { db } = createFakeD1();
       const store = new McpServerStore(db);
-      const err = await store.create({ name: "x", type: "local", enabled: true }).catch((e) => e);
+      const invalid = {
+        name: "x",
+        type: "local",
+        enabled: true,
+      } as unknown as ValidatedCreateMcpServerInput;
+      const err = await store.create(invalid).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
       expect(err).toBeInstanceOf(Error);
     });
@@ -385,8 +399,6 @@ describe("McpServerStore", () => {
     });
 
     it("update() throws McpServerValidationError on duplicate name", async () => {
-      // First call (get existing) returns the row; second call (update) throws constraint error
-      let runCallCount = 0;
       let firstCallCount = 0;
       const fakeStmt = {
         bind(..._params: unknown[]) {
@@ -394,7 +406,8 @@ describe("McpServerStore", () => {
         },
         async first<T>(): Promise<T | null> {
           firstCallCount++;
-          return firstCallCount <= 1 ? (sampleRow as T) : null;
+          if (firstCallCount === 1) return sampleRow as T;
+          throw new Error("UNIQUE constraint failed: mcp_servers.name");
         },
         async all<T>(): Promise<D1Result<T>> {
           return {
@@ -404,15 +417,13 @@ describe("McpServerStore", () => {
           } as unknown as D1Result<T>;
         },
         async run(): Promise<D1Result> {
-          runCallCount++;
-          throw new Error("UNIQUE constraint failed: mcp_servers.name");
+          throw new Error("Unexpected run");
         },
       };
       const db = { prepare: () => fakeStmt, dump: vi.fn(), exec: vi.fn() } as unknown as D1Database;
       const store = new McpServerStore(db);
       const err = await store.update("abc123", { name: "other-server" }).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
-      expect(runCallCount).toBeGreaterThan(0);
     });
   });
 

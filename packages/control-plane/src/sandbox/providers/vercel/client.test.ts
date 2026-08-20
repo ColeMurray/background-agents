@@ -3,7 +3,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VercelSandboxApiError, VercelSandboxClient } from "./client";
+import {
+  VERCEL_CLEANUP_REQUEST_DEADLINE_MS,
+  VERCEL_COMMAND_REQUEST_DEADLINE_MS,
+  VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS,
+  VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS,
+  VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS,
+  VercelSandboxApiError,
+  VercelSandboxClient,
+} from "./client";
+import { RequestDeadlineError } from "../../request-deadline";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -27,6 +36,28 @@ function streamResponse(chunks: string[], status = 200): Response {
   );
 }
 
+function rejectWhenAborted(signal: AbortSignal): Promise<Response> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
+function stalledStreamResponse(signal: AbortSignal): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        if (signal.aborted) {
+          controller.error(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+      },
+    }),
+    { status: 200 }
+  );
+}
+
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -35,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -56,6 +88,94 @@ function lastFetchBody(): Record<string, unknown> {
 }
 
 describe("VercelSandboxClient", () => {
+  it("times out when response headers stall", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      rejectWhenAborted((init as RequestInit).signal as AbortSignal)
+    );
+
+    const request = createClient().createSandbox({ name: "sandbox-1" });
+    const rejection = expect(request).rejects.toMatchObject({
+      name: RequestDeadlineError.name,
+      provider: "Vercel Sandbox",
+      endpoint: "createSandbox",
+      timeoutMs: VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS,
+    });
+    await vi.advanceTimersByTimeAsync(VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
+  it("keeps the deadline armed while reading a command stream", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve(stalledStreamResponse((init as RequestInit).signal as AbortSignal))
+    );
+
+    const request = createClient().runCommandAndWait({
+      sessionId: "session-1",
+      command: "bash",
+    });
+    const rejection = expect(request).rejects.toThrow(
+      `Vercel Sandbox request timeout after ${VERCEL_COMMAND_REQUEST_DEADLINE_MS}ms (runCommandAndWait)`
+    );
+    await vi.advanceTimersByTimeAsync(VERCEL_COMMAND_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
+  it("allows an explicit command timeout before applying deadline headroom", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve(stalledStreamResponse((init as RequestInit).signal as AbortSignal))
+    );
+    const commandTimeoutMs = VERCEL_COMMAND_REQUEST_DEADLINE_MS * 2;
+
+    const request = createClient().runCommandAndWait({
+      sessionId: "session-1",
+      command: "bash",
+      timeoutMs: commandTimeoutMs,
+    });
+    const rejection = expect(request).rejects.toThrow(
+      `Vercel Sandbox request timeout after ${commandTimeoutMs + VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS}ms (runCommandAndWait)`
+    );
+    await vi.advanceTimersByTimeAsync(commandTimeoutMs);
+    expect(lastFetchInit().signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS);
+    await rejection;
+  });
+
+  it("preserves caller cancellation when it wins just before the Vercel deadline", async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const callerReason = new DOMException("caller cancelled", "AbortError");
+    fetchSpy.mockImplementation((_url, init) =>
+      rejectWhenAborted((init as RequestInit).signal as AbortSignal)
+    );
+
+    const request = createClient().snapshotSession("session-1", { signal: caller.signal });
+    await vi.advanceTimersByTimeAsync(VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS - 1);
+    caller.abort(callerReason);
+    vi.advanceTimersByTime(1);
+
+    await expect(request).rejects.toBe(callerReason);
+    const providerSignal = lastFetchInit().signal as AbortSignal;
+    expect(providerSignal).not.toBe(caller.signal);
+    expect(providerSignal.reason).toBe(callerReason);
+  });
+
+  it("keeps the deadline armed while consuming a successful void response", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve(stalledStreamResponse((init as RequestInit).signal as AbortSignal))
+    );
+
+    const request = createClient().deleteSnapshot("snapshot-1");
+    const rejection = expect(request).rejects.toThrow(
+      `Vercel Sandbox request timeout after ${VERCEL_CLEANUP_REQUEST_DEADLINE_MS}ms (deleteSnapshot)`
+    );
+    await vi.advanceTimersByTimeAsync(VERCEL_CLEANUP_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
   it("validates required configuration", () => {
     expect(() => new VercelSandboxClient({ token: "", projectId: "project" })).toThrow(
       "VERCEL_TOKEN"
@@ -156,6 +276,39 @@ describe("VercelSandboxClient", () => {
       timeout: 1000,
     });
     expect(result).toEqual({ commandId: "cmd-1", exitCode: null });
+  });
+
+  it.each([
+    ["createSandbox", () => createClient().createSandbox({ name: "sandbox-1" })],
+    [
+      "startCommand",
+      () => createClient().startCommand({ sessionId: "session-1", command: "true" }),
+    ],
+    ["snapshotSession", () => createClient().snapshotSession("session-1")],
+    ["listSnapshots", () => createClient().listSnapshots()],
+  ])("rejects a valid JSON error envelope from %s", async (_endpoint, request) => {
+    const responseBody = JSON.stringify({ error: { code: "provider_drift" } });
+    fetchSpy.mockResolvedValue(new Response(responseBody, { status: 201 }));
+
+    await expect(request()).rejects.toMatchObject({
+      name: "VercelSandboxApiError",
+      status: 201,
+      responseText: responseBody,
+    });
+  });
+
+  it("preserves status and logs an error for invalid JSON", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    fetchSpy.mockResolvedValue(new Response("not-json", { status: 202 }));
+
+    await expect(createClient().listSnapshots()).rejects.toMatchObject({
+      message: expect.stringContaining("Vercel Sandbox API returned invalid JSON"),
+      status: 202,
+    });
+    const requestLog = logSpy.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .find((entry) => entry.event === "vercel_sandbox.request");
+    expect(requestLog).toMatchObject({ http_status: 202, outcome: "error" });
   });
 
   it("parses NDJSON output from a waited command", async () => {
@@ -268,7 +421,7 @@ describe("VercelSandboxClient", () => {
     expect(fetchSpy.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "DELETE" }));
   });
 
-  it("lists snapshots by sandbox name", async () => {
+  it("lists snapshots without requiring an undocumented region", async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({
         snapshots: [
@@ -276,7 +429,6 @@ describe("VercelSandboxClient", () => {
             id: "snapshot-1",
             sourceSessionId: "session-1",
             status: "created",
-            region: "iad1",
             sizeBytes: 1024,
             createdAt: 456,
             updatedAt: 789,
@@ -296,6 +448,7 @@ describe("VercelSandboxClient", () => {
       expect.objectContaining({ method: "GET" })
     );
     expect(snapshots[0]?.id).toBe("snapshot-1");
+    expect(snapshots[0]?.region).toBeUndefined();
   });
 
   it("stops a sandbox session with the expected endpoint", async () => {

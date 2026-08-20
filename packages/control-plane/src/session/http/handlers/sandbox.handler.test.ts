@@ -8,14 +8,18 @@ import {
 } from "../../openai-token-refresh-service";
 import type { SandboxRow, SessionRow } from "../../types";
 import { createSandboxHandler } from "./sandbox.handler";
+import type { ArtifactRepository } from "../../artifact-repository";
+import type { ParticipantRepository } from "../../participant-repository";
+import type { EventRepository } from "../../event-repository";
+import type { MessageRepository } from "../../message-repository";
 
 function createHandler() {
   const repository = {
     createParticipant: vi.fn(),
-    createArtifact: vi.fn(),
     createEvent: vi.fn(),
     getProcessingMessage: vi.fn(),
   };
+  const artifactRepository = { createArtifact: vi.fn() } as unknown as ArtifactRepository;
   const processSandboxEvent = vi.fn();
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const isValidSandboxToken = vi.fn();
@@ -25,7 +29,7 @@ function createHandler() {
   const isManagedSecretsConfigured = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
 
@@ -38,7 +42,10 @@ function createHandler() {
   } as unknown as Logger;
 
   const sandboxHandler = createSandboxHandler({
-    repository,
+    messageRepository: repository as unknown as MessageRepository,
+    eventRepository: repository as unknown as EventRepository,
+    participantRepository: repository as unknown as ParticipantRepository,
+    artifactRepository,
     processSandboxEvent,
     getSandbox,
     isValidSandboxToken,
@@ -66,6 +73,7 @@ function createHandler() {
   return {
     handler,
     repository,
+    artifactRepository,
     processSandboxEvent,
     getSandbox,
     isValidSandboxToken,
@@ -199,7 +207,8 @@ describe("createSandboxHandler", () => {
   });
 
   it("creates a media artifact row and matching timeline event", async () => {
-    const { handler, getSandbox, repository, broadcast, generateId } = createHandler();
+    const { handler, getSandbox, repository, artifactRepository, broadcast, generateId } =
+      createHandler();
     getSandbox.mockReturnValue({
       id: "sandbox-row-1",
       modal_sandbox_id: "sandbox-1",
@@ -226,7 +235,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok", artifactId: "artifact-1" });
-    expect(repository.createArtifact).toHaveBeenCalledWith({
+    expect(artifactRepository.createArtifact).toHaveBeenCalledWith({
       id: "artifact-1",
       type: "screenshot",
       url: "sessions/session-1/media/artifact-1.png",
@@ -292,7 +301,7 @@ describe("createSandboxHandler", () => {
   });
 
   it("rejects malformed media artifact bodies", async () => {
-    const { handler, repository, broadcast } = createHandler();
+    const { handler, repository, artifactRepository, broadcast } = createHandler();
 
     const response = await handler.createMediaArtifact(
       new Request("http://internal/internal/create-media-artifact", {
@@ -304,13 +313,13 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid media artifact body" });
-    expect(repository.createArtifact).not.toHaveBeenCalled();
+    expect(artifactRepository.createArtifact).not.toHaveBeenCalled();
     expect(repository.createEvent).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("rejects media artifacts when no prompt is active", async () => {
-    const { handler, getSandbox, repository, broadcast } = createHandler();
+    const { handler, getSandbox, repository, artifactRepository, broadcast } = createHandler();
     getSandbox.mockReturnValue({
       id: "sandbox-row-1",
       modal_sandbox_id: "sandbox-1",
@@ -331,7 +340,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "No active prompt" });
-    expect(repository.createArtifact).not.toHaveBeenCalled();
+    expect(artifactRepository.createArtifact).not.toHaveBeenCalled();
     expect(repository.createEvent).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
   });

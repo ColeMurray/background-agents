@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
 import type { SessionEntry } from "./session-index";
 
@@ -12,7 +13,8 @@ type SessionRow = {
   base_branch: string | null;
   status: string;
   parent_session_id: string | null;
-  spawn_source: "user" | "agent" | "automation";
+  root_session_id: string;
+  spawn_source: SpawnSource;
   spawn_depth: number;
   automation_id: string | null;
   automation_run_id: string | null;
@@ -37,7 +39,7 @@ type SessionRepositoryRow = {
 };
 
 const QUERY_PATTERNS = {
-  INSERT_SESSION: /^INSERT OR IGNORE INTO sessions/,
+  INSERT_SESSION: /^INSERT INTO sessions/,
   INSERT_SESSION_REPO: /^INSERT INTO session_repositories/,
   SELECT_SESSION_REPOS: /^SELECT \* FROM session_repositories WHERE session_id IN/,
   SELECT_PR_SUMMARIES: /FROM session_pull_requests WHERE session_id IN/,
@@ -186,6 +188,8 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.INSERT_SESSION.test(normalized)) {
+      if (this.rows.has(args[0] as string))
+        throw new Error("UNIQUE constraint failed: sessions.id");
       const [
         id,
         title,
@@ -196,6 +200,9 @@ class FakeD1Database {
         baseBranch,
         status,
         parentSessionId,
+        rootParentId,
+        topLevelRootId,
+        parentRootLookupId,
         spawnSource,
         spawnDepth,
         automationId,
@@ -208,6 +215,9 @@ class FakeD1Database {
       ] = args as [
         string,
         string | null,
+        string | null,
+        string | null,
+        string,
         string | null,
         string | null,
         string,
@@ -228,6 +238,9 @@ class FakeD1Database {
       // INSERT OR IGNORE — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
+        const rootSessionId = rootParentId
+          ? (this.rows.get(parentRootLookupId!)?.root_session_id ?? id)
+          : topLevelRootId;
         this.rows.set(id, {
           id,
           title,
@@ -238,6 +251,7 @@ class FakeD1Database {
           base_branch: baseBranch,
           status,
           parent_session_id: parentSessionId,
+          root_session_id: rootSessionId,
           spawn_source: spawnSource,
           spawn_depth: spawnDepth,
           automation_id: automationId,
@@ -388,7 +402,10 @@ class FakeD1Database {
 
       if (conditions.includes("automation_id IS NULL")) {
         rows = rows.filter(
-          (row) => row.automation_id === null && row.spawn_source !== "automation"
+          (row) =>
+            row.automation_id === null &&
+            row.spawn_source !== "automation" &&
+            row.spawn_source !== "github-bot"
         );
       }
 
@@ -527,12 +544,48 @@ describe("SessionIndexStore", () => {
       );
     });
 
+    it("rejects invalid or duplicate provider auth before writing the session batch", async () => {
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              {
+                provider: "other" as never,
+                authMode: "api_key",
+                selectionSource: "explicit",
+              },
+            ],
+          })
+        )
+      ).rejects.toThrow("Unsupported model provider");
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+            ],
+          })
+        )
+      ).rejects.toThrow("Duplicate provider auth: openai");
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+            ],
+          })
+        )
+      ).rejects.toThrow("must include every subscription provider");
+      expect(await store.exists("test-id")).toBe(false);
+    });
+
     it("throws instead of silently skipping a duplicate insert", async () => {
       const session = makeSession();
       await store.create(session);
 
       await expect(store.create(makeSession({ title: "Different Title" }))).rejects.toThrow(
-        "Session index insert was skipped"
+        "UNIQUE constraint failed"
       );
 
       const result = await store.get("test-id");
@@ -540,6 +593,7 @@ describe("SessionIndexStore", () => {
     });
 
     it("stores parent fields when provided", async () => {
+      await store.create(makeSession({ id: "parent-1" }));
       const session = makeSession({
         id: "child-1",
         parentSessionId: "parent-1",
@@ -664,6 +718,36 @@ describe("SessionIndexStore", () => {
 
       expect(result.sessions.map((session) => session.id)).toEqual(["manual-new", "manual-old"]);
       expect(result.hasMore).toBe(false);
+    });
+
+    it("excludes github-bot sessions from lineage-filtered lists even when created by the user", async () => {
+      await store.create(
+        makeSession({ id: "web", spawnSource: "user", userId: "alice", updatedAt: 4000 })
+      );
+      await store.create(
+        makeSession({
+          id: "auto-review",
+          spawnSource: "github-bot",
+          userId: "alice",
+          updatedAt: 3000,
+        })
+      );
+      await store.create(
+        makeSession({ id: "slack", spawnSource: "slack-bot", userId: "alice", updatedAt: 2000 })
+      );
+
+      const filtered = await store.list({
+        excludeAutomationLineage: true,
+        createdByUserIds: ["alice"],
+      });
+      expect(filtered.sessions.map((session) => session.id)).toEqual(["web", "slack"]);
+
+      const unfiltered = await store.list({ createdByUserIds: ["alice"] });
+      expect(unfiltered.sessions.map((session) => session.id)).toEqual([
+        "web",
+        "auto-review",
+        "slack",
+      ]);
     });
 
     it("trims and lowercases repo filters", async () => {

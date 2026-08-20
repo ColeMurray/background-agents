@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
 import { createAlarmHandler } from "./handler";
+import type { MessageRepository } from "../message-repository";
 import { createEarliestAlarmScheduler } from "./scheduler";
 
 function createHandler() {
@@ -15,7 +16,9 @@ function createHandler() {
     handleAlarm: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const alarmScheduler = {
-    scheduleAlarm: vi.fn<(timestamp: number) => Promise<void>>().mockResolvedValue(),
+    schedule: vi.fn<(timestamp: number) => Promise<void>>().mockResolvedValue(),
+    cancel: vi.fn<() => Promise<void>>().mockResolvedValue(),
+    current: vi.fn<() => Promise<number | null>>().mockResolvedValue(null),
   };
   const now = vi.fn(() => 2000);
   const log = {
@@ -27,7 +30,7 @@ function createHandler() {
   } as unknown as Logger;
 
   const handler = createAlarmHandler({
-    repository,
+    repository: repository as unknown as MessageRepository,
     messageQueue,
     lifecycleManager,
     alarmScheduler,
@@ -56,7 +59,7 @@ describe("createAlarmHandler", () => {
     await handler.handle();
 
     expect(now).not.toHaveBeenCalled();
-    expect(alarmScheduler.scheduleAlarm).not.toHaveBeenCalled();
+    expect(alarmScheduler.schedule).not.toHaveBeenCalled();
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
     expect(messageQueue.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
@@ -74,7 +77,7 @@ describe("createAlarmHandler", () => {
 
     expect(log.warn).not.toHaveBeenCalled();
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
-    expect(alarmScheduler.scheduleAlarm).toHaveBeenCalledWith(2500);
+    expect(alarmScheduler.schedule).toHaveBeenCalledWith(2500);
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 
@@ -85,10 +88,22 @@ describe("createAlarmHandler", () => {
       setAlarm: vi.fn(async (timestamp: number) => {
         currentAlarm = timestamp;
       }),
+      deleteAlarm: vi.fn(async () => {
+        currentAlarm = null;
+      }),
     };
-    const alarmScheduler = createEarliestAlarmScheduler(storage);
+    const alarmScheduler = createEarliestAlarmScheduler(storage, {
+      pending: vi.fn(() => null),
+      earliest: vi.fn(() => null),
+      cancelled: vi.fn(() => false),
+      setPending: vi.fn(),
+      activate: vi.fn(),
+      clear: vi.fn(),
+      beginDelivery: vi.fn(() => null),
+      completeDelivery: vi.fn(),
+    });
     const lifecycleManager = {
-      handleAlarm: vi.fn(async () => alarmScheduler.scheduleAlarm(5000)),
+      handleAlarm: vi.fn(async () => alarmScheduler.schedule(5000)),
     };
     const repository = {
       getProcessingMessageWithStartedAt: vi.fn(() => ({
@@ -102,7 +117,7 @@ describe("createAlarmHandler", () => {
     };
 
     const handler = createAlarmHandler({
-      repository,
+      repository: repository as unknown as MessageRepository,
       messageQueue,
       lifecycleManager,
       alarmScheduler,
@@ -135,7 +150,7 @@ describe("createAlarmHandler", () => {
       timeout_ms: 1000,
     });
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledTimes(1);
-    expect(alarmScheduler.scheduleAlarm).not.toHaveBeenCalled();
+    expect(alarmScheduler.schedule).not.toHaveBeenCalled();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 });

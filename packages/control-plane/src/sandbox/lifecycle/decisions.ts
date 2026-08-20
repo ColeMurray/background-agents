@@ -20,11 +20,7 @@ import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
  * through to their own checks (e.g. token comparison) instead of locking out
  * every sandbox.
  */
-export const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set([
-  "stopped",
-  "stale",
-  "failed",
-]);
+const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set(["stopped", "stale", "failed"]);
 
 export function isDeadSandboxStatus(status: SandboxStatus): boolean {
   return DEAD_SANDBOX_STATUSES.has(status);
@@ -368,7 +364,7 @@ export type InactivityAction =
  * );
  * if (decision.action === "extend") {
  *   // Warn user and schedule next check
- *   await scheduleAlarm(now + decision.extensionMs);
+ *   await alarmScheduler.schedule(now + decision.extensionMs);
  * }
  * ```
  */

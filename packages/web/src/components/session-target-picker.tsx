@@ -86,7 +86,7 @@ export function SessionTargetPicker({
           triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
         >
           <BranchIcon className="w-3.5 h-3.5" />
-          <span className="truncate max-w-[9rem] sm:max-w-none">
+          <span className="max-w-[9rem] truncate">
             {loadingBranches ? "Loading..." : selectedBranch || "branch"}
           </span>
           <ChevronDownIcon className="w-3 h-3" />

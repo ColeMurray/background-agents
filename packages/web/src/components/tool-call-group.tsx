@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/icons";
 
 function ToolIcon({ toolName }: { toolName: string }) {
-  const iconClass = "w-3.5 h-3.5 shrink-0 text-secondary-foreground";
+  const iconClass = "mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground";
 
   switch (toolName) {
     case "Read":
@@ -69,7 +69,7 @@ export const ToolCallGroup = memo(
           className="-mx-2 flex w-full min-w-0 items-start gap-2 px-2 py-1 text-left text-sm transition-colors hover:bg-muted"
         >
           <ChevronRightIcon
-            className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
+            className={`mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
               isExpanded ? "rotate-90" : ""
             }`}
           />

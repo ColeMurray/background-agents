@@ -2,7 +2,7 @@
  * Type definitions for the Linear bot.
  */
 
-import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
 
 /**
@@ -13,7 +13,7 @@ export interface Env {
   LINEAR_KV: KVNamespace;
 
   // Service binding to control plane
-  CONTROL_PLANE: Fetcher;
+  CONTROL_PLANE: ControlPlaneFetcher;
 
   // Environment variables
   DEPLOYMENT_NAME: string;
@@ -43,24 +43,20 @@ export interface Env {
  * A single repo configuration with an optional label filter.
  * Used for static team→repo mapping (legacy/override).
  */
-export const staticRepoConfigSchema = z.object({
+const staticRepoConfigSchema = z.object({
   owner: z.string(),
   name: z.string(),
   label: z.string().optional(),
 });
 
-export type StaticRepoConfig = z.infer<typeof staticRepoConfigSchema>;
-
 /**
  * An environment target with an optional label filter. References the stable
  * `env_…` id, not the rename-able display name.
  */
-export const staticEnvironmentConfigSchema = z.object({
+const staticEnvironmentConfigSchema = z.object({
   environmentId: z.string(),
   label: z.string().optional(),
 });
-
-export type StaticEnvironmentConfig = z.infer<typeof staticEnvironmentConfigSchema>;
 
 /**
  * A mapping entry: a repository or a saved environment. Targets unify instead
@@ -73,10 +69,7 @@ export type StaticEnvironmentConfig = z.infer<typeof staticEnvironmentConfigSche
  * that entry pointed at the same target — validating stored config may reject
  * an entry, but it must never quietly re-point a working one somewhere else.
  */
-export const staticTargetConfigSchema = z.union([
-  staticEnvironmentConfigSchema,
-  staticRepoConfigSchema,
-]);
+const staticTargetConfigSchema = z.union([staticEnvironmentConfigSchema, staticRepoConfigSchema]);
 
 export type StaticTargetConfig = z.infer<typeof staticTargetConfigSchema>;
 
@@ -129,33 +122,6 @@ export const issueSessionSchema = z.object({
 
 export type IssueSession = z.infer<typeof issueSessionSchema>;
 
-/**
- * Completion callback payload from control-plane.
- */
-export interface CompletionCallback {
-  sessionId: string;
-  messageId: string;
-  success: boolean;
-  error?: string;
-  timestamp: number;
-  signature: string;
-  context: LinearCallbackContext;
-}
-
-/**
- * Tool call callback payload from control-plane (ephemeral, best-effort).
- */
-export interface ToolCallCallback {
-  sessionId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  callId: string;
-  status?: string;
-  timestamp: number;
-  context: LinearCallbackContext;
-  signature: string;
-}
-
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 
 const linearNameSchema = z.object({ id: z.string(), name: z.string() });
@@ -164,7 +130,7 @@ const linearCommentSchema = z.object({
   user: z.object({ name: z.string() }).nullable().optional(),
 });
 
-export const linearIssueDetailsSchema = z
+const linearIssueDetailsSchema = z
   .object({
     id: z.string(),
     identifier: z.string(),

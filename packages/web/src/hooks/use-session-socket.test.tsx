@@ -190,6 +190,81 @@ describe("useSessionSocket", () => {
     });
   });
 
+  it("keeps cancelPrompt pending until the matching server acknowledgement", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    let cancellation!: ReturnType<typeof result.current.cancelPrompt>;
+    act(() => {
+      cancellation = result.current.cancelPrompt("message-1");
+    });
+    await waitFor(() => {
+      expect(socket.sentMessages).toContainEqual({
+        type: "cancel_prompt",
+        messageId: "message-1",
+        clientRequestId: "client-id",
+      });
+    });
+
+    let settled = false;
+    void cancellation.then(() => (settled = true));
+    act(() => {
+      socket.receive({
+        type: "prompt_cancelled",
+        clientRequestId: "another-request",
+        messageId: "message-1",
+      } as ServerMessage);
+      socket.receive({
+        type: "prompt_cancelled",
+        clientRequestId: "client-id",
+        messageId: "another-message",
+      } as ServerMessage);
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    act(() => {
+      socket.receive({
+        type: "prompt_cancelled",
+        clientRequestId: "client-id",
+        messageId: "message-1",
+      } as ServerMessage);
+    });
+    await expect(cancellation).resolves.toEqual({ ok: true, messageId: "message-1" });
+  });
+
+  it("returns a correlated cancellation race error without treating it as success", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    const cancellation = result.current.cancelPrompt("message-1");
+    await waitFor(() => expect(socket.sentMessages).toHaveLength(2));
+    act(() => {
+      socket.receive({
+        type: "error",
+        code: "PROMPT_NOT_CANCELLABLE",
+        message: "This prompt is no longer pending and cannot be removed",
+        clientRequestId: "client-id",
+      } as ServerMessage);
+    });
+
+    await expect(cancellation).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "This prompt is no longer pending and cannot be removed",
+    });
+  });
+
   it("sends correlated prompts without feature negotiation", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));

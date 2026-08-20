@@ -11,11 +11,14 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
+  getSubscriptionProviderForModel,
   type ModelCategory,
 } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
@@ -35,39 +38,70 @@ import { SessionTargetPicker } from "@/components/session-target-picker";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { SessionSkillSelector } from "@/components/session-skill-selector";
+import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
+import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
+import {
+  useSkillResolutionPreview,
+  type SkillResolutionPreviewInput,
+  type SkillResolutionPreviewResponse,
+} from "@/hooks/use-managed-skills";
+import type { SessionTargetRequestFields } from "@/lib/session-target";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { ProviderAuthControls } from "@/components/provider-auth-controls";
+import { useProviderAccounts } from "@/hooks/use-provider-accounts";
+import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
+import { setProviderSelection } from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+
+function skillPreviewTarget(
+  fields: SessionTargetRequestFields | null
+): Omit<SkillResolutionPreviewInput, "selection"> | null {
+  if (!fields) return null;
+  if ("environmentId" in fields) return { environmentId: fields.environmentId };
+  if ("repositories" in fields) {
+    return {
+      repositories: fields.repositories.map((repository) => ({
+        ...repository,
+        baseBranch: null,
+      })),
+    };
+  }
+  return fields.repoOwner && fields.repoName
+    ? { repoOwner: fields.repoOwner, repoName: fields.repoName }
+    : {};
+}
 
 export default function Home() {
   const { data: session } = useAuthSession();
   const router = useRouter();
   const picker = useSessionTargetPicker();
-  const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
+  const { sessionTarget, buildRequestFields, isLaunchable } = picker;
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
+  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
+  const providerAccounts = useProviderAccounts();
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
-  const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const submitInFlightRef = useRef(false);
-  // Keyed by the picker's configKey so environment/ad-hoc selections
-  // invalidate a warmed session exactly like repo/branch changes do.
-  const pendingConfigRef = useRef<{
-    target: string;
-    model: string;
-    reasoningEffort?: string;
-    branch: string;
-  } | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
+  const targetRequestFields = buildRequestFields();
+  const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
+  const {
+    preview: skillPreview,
+    loading: skillPreviewLoading,
+    suggestions: skillSuggestions,
+  } = useSkillResolutionPreview(currentSkillPreviewTarget, skillSelection);
 
   useEffect(() => {
     if (hasHydratedModelPreferencesRef.current) return;
@@ -86,90 +120,22 @@ export default function Home() {
     loadingEnabledModels ? undefined : enabledModels
   );
 
-  useEffect(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setPendingSessionId(null);
-    setIsCreatingSession(false);
-    sessionCreationPromise.current = null;
-    pendingConfigRef.current = null;
-  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch]);
-
-  const createSessionForWarming = useCallback(async () => {
-    if (loadingEnabledModels) return null;
-    if (pendingSessionId) return pendingSessionId;
-    if (sessionCreationPromise.current) return sessionCreationPromise.current;
-    const targetRequestFields = buildRequestFields();
-    if (!targetRequestFields) return null;
-
-    setIsCreatingSession(true);
-    const currentConfig = {
-      target: configKey,
-      model: selectedModel,
-      reasoningEffort,
-      branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
-    };
-    pendingConfigRef.current = currentConfig;
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
-    const promise = (async () => {
-      try {
-        const res = await browserApiFetch("/api/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...targetRequestFields,
-            model: selectedModel,
-            reasoningEffort,
-          }),
-          signal: abortController.signal,
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (
-            pendingConfigRef.current?.target === currentConfig.target &&
-            pendingConfigRef.current?.model === currentConfig.model &&
-            pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
-            pendingConfigRef.current?.branch === currentConfig.branch
-          ) {
-            setPendingSessionId(data.sessionId);
-            return data.sessionId as string;
-          }
-          return null;
+  const warmRequest =
+    session && !loadingEnabledModels && targetRequestFields
+      ? {
+          ...targetRequestFields,
+          model: selectedModel,
+          reasoningEffort,
+          skillSelection,
+          providerSelections,
         }
-        return null;
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          return null;
-        }
-        console.error("Failed to create session for warming:", error);
-        return null;
-      } finally {
-        if (abortControllerRef.current === abortController) {
-          setIsCreatingSession(false);
-          sessionCreationPromise.current = null;
-          abortControllerRef.current = null;
-        }
-      }
-    })();
-
-    sessionCreationPromise.current = promise;
-    return promise;
-  }, [
-    sessionTarget,
-    selectedBranch,
-    configKey,
-    buildRequestFields,
-    selectedModel,
-    reasoningEffort,
-    pendingSessionId,
-    loadingEnabledModels,
-  ]);
+      : null;
+  const {
+    sessionId: pendingSessionId,
+    isWarming: isCreatingSession,
+    warm: createSessionForWarming,
+    consume: consumeWarmSession,
+  } = useWarmDraftSession(warmRequest);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -267,8 +233,10 @@ export default function Home() {
       });
 
       if (res.ok) {
+        consumeWarmSession(sessionId);
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
+        mutate(isSessionInboxKey);
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();
@@ -305,6 +273,15 @@ export default function Home() {
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
+      skillSelection={skillSelection}
+      setSkillSelection={setSkillSelection}
+      skillPreviewTarget={currentSkillPreviewTarget}
+      skillPreview={skillPreview}
+      skillPreviewLoading={skillPreviewLoading}
+      skillSuggestions={skillSuggestions}
+      providerSelections={providerSelections}
+      setProviderSelections={setProviderSelections}
+      providerAccounts={providerAccounts}
     />
   );
 }
@@ -324,6 +301,15 @@ function HomeContent({
   error,
   handleSubmit,
   modelOptions,
+  skillSelection,
+  setSkillSelection,
+  skillPreviewTarget,
+  skillPreview,
+  skillPreviewLoading,
+  skillSuggestions,
+  providerSelections,
+  setProviderSelections,
+  providerAccounts,
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
@@ -345,6 +331,15 @@ function HomeContent({
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
+  skillSelection: SessionSkillSelection;
+  setSkillSelection: (value: SessionSkillSelection) => void;
+  skillPreviewTarget: Omit<SkillResolutionPreviewInput, "selection"> | null;
+  skillPreview: SkillResolutionPreviewResponse | null;
+  skillPreviewLoading: boolean;
+  skillSuggestions: PromptSkillSuggestionSource;
+  providerSelections: ModelProviderSelections;
+  setProviderSelections: React.Dispatch<React.SetStateAction<ModelProviderSelections>>;
+  providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
   const { isOpen } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -359,6 +354,7 @@ function HomeContent({
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
   const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
+  const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -422,14 +418,16 @@ function HomeContent({
                 />
                 {/* Text input area */}
                 <div className="relative">
-                  <textarea
+                  <PromptSkillTextarea
                     ref={inputRef}
                     value={prompt}
-                    onChange={(e) => handlePromptChange(e.target.value)}
+                    suggestions={skillSuggestions}
+                    onValueChange={handlePromptChange}
                     onKeyDown={handleKeyDown}
+                    maxLength={MAX_WEB_PROMPT_CHARS}
+                    disabled={creating}
                     placeholder="What do you want to build?"
                     autoComplete="off"
-                    disabled={creating}
                     className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
                     rows={3}
                   />
@@ -471,7 +469,7 @@ function HomeContent({
                 </div>
 
                 {/* Footer row with target and model selectors */}
-                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
+                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
                   {/* Left side - Target selector + Model selector */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
@@ -508,12 +506,33 @@ function HomeContent({
                       onSelect={setReasoningEffort}
                       disabled={creating}
                     />
-                  </div>
 
-                  {/* Right side - Agent label */}
-                  <span className="hidden sm:inline text-sm text-muted-foreground">
-                    build agent
-                  </span>
+                    {selectedProvider && (
+                      <ProviderAuthControls
+                        variant="menu"
+                        provider={selectedProvider}
+                        accounts={providerAccounts.accounts}
+                        defaultValue={providerAccounts.defaults.find(
+                          (item) => item.provider === selectedProvider
+                        )}
+                        value={providerSelections[selectedProvider]}
+                        onChange={(selection) =>
+                          setProviderSelections((current) =>
+                            setProviderSelection(current, selectedProvider, selection)
+                          )
+                        }
+                      />
+                    )}
+
+                    <SessionSkillSelector
+                      value={skillSelection}
+                      onChange={setSkillSelection}
+                      target={skillPreviewTarget}
+                      preview={skillPreview}
+                      previewLoading={skillPreviewLoading}
+                      disabled={creating}
+                    />
+                  </div>
                 </div>
               </div>
 

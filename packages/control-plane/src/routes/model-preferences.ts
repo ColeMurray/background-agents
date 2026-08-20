@@ -8,6 +8,8 @@ import { createLogger } from "../logger";
 import type { Env } from "../types";
 import {
   type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   type RequestContext,
   parsePattern,
   json,
@@ -103,7 +105,7 @@ async function handleSetModelPreferences(
   }
 }
 
-export const modelPreferencesRoutes: Route[] = [
+export const modelPreferencesRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
     pattern: parsePattern("/model-preferences"),
@@ -114,4 +116,4 @@ export const modelPreferencesRoutes: Route[] = [
     pattern: parsePattern("/model-preferences"),
     handler: handleSetModelPreferences,
   },
-];
+]);

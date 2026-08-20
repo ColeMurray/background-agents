@@ -5,7 +5,7 @@ import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import type { SessionItem } from "@/components/session-sidebar";
+import type { Session } from "@open-inspect/shared/types/sessions";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
   buildSessionHref,
@@ -25,7 +25,7 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
 });
 
 export function DataControlsSettings() {
-  const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
+  const [extraSessions, setExtraSessions] = useState<Session[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const offsetRef = useRef(0);
@@ -54,7 +54,7 @@ export function DataControlsSettings() {
       );
       if (res.ok) {
         const resData: SessionListResponse = await res.json();
-        const fetched: SessionItem[] = resData.sessions || [];
+        const fetched: Session[] = resData.sessions || [];
         setExtraSessions((prev) => [...prev, ...fetched]);
         setHasMore(resData.hasMore);
         offsetRef.current += fetched.length;
@@ -152,7 +152,7 @@ function ArchivedSessionRow({
   session,
   onUnarchive,
 }: {
-  session: SessionItem;
+  session: Session;
   onUnarchive: (id: string) => void;
 }) {
   const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);

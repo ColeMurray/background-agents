@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleRequest } from "./router";
+import { handleRequest, routes } from "./router";
+import {
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
+
+function routeFor(method: string, path: string) {
+  return routes.find((route) => route.method === method && route.pattern.test(path));
+}
 
 function createEnv(verifyStatus: number) {
   const fetch = vi
@@ -14,6 +23,7 @@ function createEnv(verifyStatus: number) {
   };
 
   const env = {
+    ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "gitlab",
     GITLAB_ACCESS_TOKEN: "glpat-test",
     DB: {
@@ -43,7 +53,8 @@ describe("router sandbox-token fallback", () => {
         method: "POST",
         headers: { Authorization: "Bearer valid-sandbox-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(202);
@@ -57,7 +68,8 @@ describe("router sandbox-token fallback", () => {
         method: "POST",
         headers: { Authorization: "Bearer invalid-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(401);
@@ -70,8 +82,26 @@ describe("router sandbox-token fallback", () => {
       new Request("https://test.local/analytics/summary", {
         headers: { Authorization: "Bearer invalid-token" },
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
+
+    expect(response.status).toBe(401);
+    expect(doFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back after a failed service credential attempt", async () => {
+    const { env, doFetch } = createEnv(204);
+    const request = await signedServiceRequest(
+      "https://test.local/sessions/session-1/tunnel-urls",
+      {
+        service: "linear-bot",
+        headers: { Authorization: "Bearer valid-sandbox-token" },
+      }
+    );
+    request.headers.set("X-OpenInspect-Service-Signature", "invalid");
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
 
     expect(response.status).toBe(401);
     expect(doFetch).not.toHaveBeenCalled();
@@ -87,9 +117,59 @@ describe("retired browser-auth routes", () => {
     const { env } = createEnv(401);
     const response = await handleRequest(
       new Request(`https://test.local${path}`, { method }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(404);
+  });
+});
+
+describe("managed skill browser authentication", () => {
+  it.each([
+    ["GET", "/skills", "user-or-service"],
+    ["POST", "/skills/preview", "user-or-service"],
+    ["GET", "/skills/skill_1", "user-or-service"],
+    ["GET", "/skill-profiles", "user-or-service"],
+    ["PATCH", "/skill-profiles/profile_1", "user-or-service"],
+    ["GET", "/sessions/session_1/skills", "user"],
+  ])("owns the browser authentication class for %s %s", (method, path, expectedKind) => {
+    expect(routeFor(method, path)?.authentication.kind).toBe(expectedKind);
+  });
+});
+
+describe("route-owned principal restrictions", () => {
+  it("rejects a non-web service on web-service routes", async () => {
+    const { env } = createEnv(401);
+    const request = await signedServiceRequest(
+      "https://test.local/internal/auth/sign-in-providers",
+      { service: "linear-bot" }
+    );
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects a service principal on human-user routes", async () => {
+    const { env } = createEnv(401);
+    const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const request = await signedServiceRequest("https://test.local/sessions/session-1", {
+      service: "linear-bot",
+    });
+
+    const response = await handleRequest(request, env as never, TEST_BACKGROUND_TASK_CONTEXT);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Human user authentication required",
+    });
+    const events = info.mock.calls.map(([line]) => JSON.parse(String(line)) as { event?: string });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "auth.principal" }),
+        expect.objectContaining({ event: "http.request", http_status: 403 }),
+      ])
+    );
   });
 });

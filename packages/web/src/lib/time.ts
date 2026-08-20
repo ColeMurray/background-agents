@@ -58,12 +58,3 @@ export function formatFutureRelativeTime(timestamp: number): string {
   }
   return "in <1m";
 }
-
-/**
- * Group sessions by activity status.
- * Sessions older than 7 days are considered "inactive".
- */
-export function isInactiveSession(updatedAt: number, now: number): boolean {
-  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-  return updatedAt < sevenDaysAgo;
-}

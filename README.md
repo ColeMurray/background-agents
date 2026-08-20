@@ -139,6 +139,9 @@ To understand the architecture and core concepts, read
 
 To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)**.
 
+To create and use reusable agent instructions, see
+**[docs/MANAGED_SKILLS.md](docs/MANAGED_SKILLS.md)**.
+
 ## Key Features
 
 ### Fast Startup
@@ -162,6 +165,15 @@ One session can work across several repositories in a single sandbox:
   optional prebuilt images, then launch it from the picker like any repository
 - See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#environments) for the model and
   [docs/IMAGE_PREBUILD.md](docs/IMAGE_PREBUILD.md) for environment prebuilds
+
+### Managed Skills
+
+Create reusable instructions and supporting files that agents receive when a session starts:
+
+- Assign shared skills globally or to selected repositories and environments
+- Save personal profiles for frequently used skill sets
+- Pin exact skill revisions to each session for repeatable behavior
+- See [docs/MANAGED_SKILLS.md](docs/MANAGED_SKILLS.md) for the user guide
 
 ### Multiplayer Sessions
 
@@ -187,13 +199,13 @@ await configureGitIdentity({
 
 Choose the AI model that fits your task, with per-session reasoning effort controls:
 
-| Provider         | Models                                                            |
-| ---------------- | ----------------------------------------------------------------- |
-| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8/5, Fable 5 |
-| OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                      |
-| xAI / SuperGrok  | Grok models (opt-in)                                              |
-| OpenCode Zen     | Kimi K2.5/K2.6, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)     |
-| Z.AI Coding Plan | GLM 5.2 (opt-in)                                                  |
+| Provider         | Models                                                              |
+| ---------------- | ------------------------------------------------------------------- |
+| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6/5, Opus 4.5/4.6/4.7/4.8/5, Fable 5 |
+| OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                        |
+| xAI / SuperGrok  | Grok models (opt-in)                                                |
+| OpenCode Zen     | Kimi K2.5/K2.6/K3, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)    |
+| Z.AI Coding Plan | GLM 5.2/5.3 (opt-in)                                                |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
 Grok models work with an eligible SuperGrok subscription through control-plane-managed OAuth. See

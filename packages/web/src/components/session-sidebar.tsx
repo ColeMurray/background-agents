@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useCallback } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useSidebarSessions } from "@/hooks/use-sidebar-sessions";
+import type { SessionItem } from "@/hooks/use-sidebar-sessions";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   SidebarIcon,
@@ -15,6 +16,7 @@ import {
   SettingsIcon,
   AutomationsIcon,
   DataControlsIcon,
+  ChevronRightIcon,
 } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
@@ -72,26 +74,36 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
   const { data: authSession } = useAuthSession();
   const pathname = usePathname();
+  const router = useRouter();
   const isMobile = useIsMobile();
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
   const {
-    sessions,
-    activeSessions,
-    inactiveSessions,
+    needsAttention,
+    running,
+    recent,
     childrenMap,
     loading,
-    loadingMore,
     sessionsError,
+    refreshSnapshot,
+    sectionPagination,
     sessionCreatorFilter,
     setSessionCreatorFilter,
-    scrollContainerRef,
-    maybeLoadMoreSessions,
     handleSessionArchived,
-    handleSessionRenamed,
     handleMarkLatestMessageRead,
-  } = useSidebarSessions(currentSessionId);
+  } = useSidebarSessions();
+
+  // Archiving the session on screen leaves nothing to show, so fall back to the home page.
+  const handleArchivedSession = useCallback(
+    async (sessionId: string) => {
+      await handleSessionArchived(sessionId);
+      if (currentSessionId === sessionId) {
+        router.push("/");
+      }
+    },
+    [currentSessionId, handleSessionArchived, router]
+  );
 
   // Environment provenance for the cards, resolved once for the whole list.
   // Names are looked up so a deleted environment (or one still loading)
@@ -103,17 +115,78 @@ export function SessionSidebar({
   );
 
   const hasSessionListError = sessionsError;
-  const emptyMessage = hasSessionListError
-    ? "Unable to load sessions"
-    : sessionCreatorFilter === "mine"
-      ? "No sessions started by you"
-      : "No sessions yet";
+  const emptyMessage =
+    sessionCreatorFilter === "mine" ? "No sessions started by you" : "No sessions yet";
 
   const handleNavigationSelect = useCallback(() => {
     if (isMobile) {
       onSessionSelect?.();
     }
   }, [isMobile, onSessionSelect]);
+
+  const renderSessionGroup = (
+    title: string,
+    groupSessions: SessionItem[],
+    pagination: {
+      hasMore: boolean;
+      loadingMore: boolean;
+      loadMore: () => void;
+      error?: unknown;
+      retry: () => Promise<unknown>;
+    },
+    emphasize = false
+  ) => {
+    if (groupSessions.length === 0 && !pagination.error) return null;
+
+    return (
+      <section aria-labelledby={`session-group-${title.toLowerCase().replaceAll(" ", "-")}`}>
+        <div className="px-4 pb-1 pt-3">
+          <h2
+            id={`session-group-${title.toLowerCase().replaceAll(" ", "-")}`}
+            className={`text-xs font-medium uppercase tracking-wider ${
+              emphasize ? "text-foreground" : "text-secondary-foreground"
+            }`}
+          >
+            {title}
+          </h2>
+        </div>
+        {groupSessions.map((session) => (
+          <SessionWithChildren
+            key={session.id}
+            session={session}
+            environmentName={
+              session.environmentId ? environmentNamesById.get(session.environmentId) : undefined
+            }
+            childrenMap={childrenMap}
+            currentSessionId={currentSessionId}
+            isMobile={isMobile}
+            onArchive={handleArchivedSession}
+            onSessionSelect={onSessionSelect}
+            onMarkLatestMessageRead={handleMarkLatestMessageRead}
+          />
+        ))}
+        {Boolean(pagination.error) && (
+          <div className="mx-3 my-1 flex items-center justify-between gap-2 px-1 py-2 text-xs text-destructive">
+            <span>Unable to load {title.toLowerCase()}</span>
+            <Button variant="ghost" size="sm" onClick={() => void pagination.retry()}>
+              Retry
+            </Button>
+          </div>
+        )}
+        {pagination.hasMore && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mx-3 my-1 w-[calc(100%-1.5rem)] text-xs text-muted-foreground"
+            disabled={pagination.loadingMore}
+            onClick={pagination.loadMore}
+          >
+            {pagination.loadingMore ? "Loading..." : `Load more ${title.toLowerCase()}`}
+          </Button>
+        )}
+      </section>
+    );
+  };
 
   return (
     <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
@@ -204,73 +277,47 @@ export function SessionSidebar({
       </div>
 
       {/* Session List */}
-      <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto"
-        onScroll={maybeLoadMoreSessions}
-      >
+      <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
           </div>
-        ) : sessions.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">{emptyMessage}</div>
         ) : (
           <>
-            {/* Active Sessions */}
-            {activeSessions.map((session) => (
-              <SessionWithChildren
-                key={session.id}
-                session={session}
-                environmentName={
-                  session.environmentId
-                    ? environmentNamesById.get(session.environmentId)
-                    : undefined
-                }
-                childrenMap={childrenMap}
-                currentSessionId={currentSessionId}
-                isMobile={isMobile}
-                onArchive={handleSessionArchived}
-                onSessionSelect={onSessionSelect}
-                onSessionRenamed={handleSessionRenamed}
-                onMarkLatestMessageRead={handleMarkLatestMessageRead}
-              />
-            ))}
-
-            {/* Inactive Divider */}
-            {inactiveSessions.length > 0 && (
-              <>
-                <div className="px-4 py-2 mt-2">
-                  <span className="text-xs font-medium text-secondary-foreground uppercase tracking-wider">
-                    Inactive
-                  </span>
+            {needsAttention.length === 0 && running.length === 0 && recent.length === 0 ? (
+              hasSessionListError ? (
+                <div className="flex items-center justify-between gap-2 px-4 py-8 text-sm text-destructive">
+                  <span>Unable to load sessions</span>
+                  <Button variant="ghost" size="sm" onClick={() => void refreshSnapshot()}>
+                    Retry
+                  </Button>
                 </div>
-                {inactiveSessions.map((session) => (
-                  <SessionWithChildren
-                    key={session.id}
-                    session={session}
-                    environmentName={
-                      session.environmentId
-                        ? environmentNamesById.get(session.environmentId)
-                        : undefined
-                    }
-                    childrenMap={childrenMap}
-                    currentSessionId={currentSessionId}
-                    isMobile={isMobile}
-                    onArchive={handleSessionArchived}
-                    onSessionSelect={onSessionSelect}
-                    onSessionRenamed={handleSessionRenamed}
-                    onMarkLatestMessageRead={handleMarkLatestMessageRead}
-                  />
-                ))}
+              ) : (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  {emptyMessage}
+                </div>
+              )
+            ) : (
+              <>
+                {renderSessionGroup(
+                  "Needs attention",
+                  needsAttention,
+                  sectionPagination.needsAttention,
+                  true
+                )}
+                {renderSessionGroup("Running", running, sectionPagination.running)}
+                {renderSessionGroup("Recent", recent, sectionPagination.recent)}
               </>
             )}
 
-            {loadingMore && (
-              <div className="flex justify-center py-3">
-                <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent text-muted-foreground" />
-              </div>
-            )}
+            <Link
+              href="/settings?tab=data-controls"
+              onClick={handleNavigationSelect}
+              className="mt-2 flex items-center gap-1 px-4 py-2 text-xs font-medium uppercase tracking-wider text-secondary-foreground transition hover:bg-muted hover:text-foreground"
+            >
+              <ChevronRightIcon className="h-3.5 w-3.5" />
+              Archived
+            </Link>
           </>
         )}
       </div>

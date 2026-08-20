@@ -384,18 +384,20 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Classify an error as transient or permanent for circuit breaker handling.
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
+    if (SandboxProviderError.isTransientNetworkError(error)) {
+      return new SandboxProviderError(
+        `${message}: ${error instanceof Error ? error.message : String(error)}`,
+        "transient",
+        error instanceof Error ? error : undefined
+      );
+    }
+
     // Check for fetch/network errors
     if (error instanceof Error) {
       const errorMessage = error.message.toLowerCase();
 
       // Transient network errors
       if (
-        errorMessage.includes("fetch failed") ||
-        errorMessage.includes("etimedout") ||
-        errorMessage.includes("econnreset") ||
-        errorMessage.includes("econnrefused") ||
-        errorMessage.includes("network") ||
-        errorMessage.includes("timeout") ||
         errorMessage.includes("502") ||
         errorMessage.includes("503") ||
         errorMessage.includes("504") ||

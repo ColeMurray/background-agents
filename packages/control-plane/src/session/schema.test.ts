@@ -326,11 +326,21 @@ describe("applyMigrations", () => {
     expect(SCHEMA_SQL).toContain("bundle_json TEXT");
     expect(SCHEMA_SQL).not.toContain("diff_objects");
     expect(SCHEMA_SQL).not.toContain("diff_capture_triggers");
-    expect(SCHEMA_SQL).not.toContain("session_alarm_deadlines");
 
     const migration = MIGRATIONS.find((item) => item.id === 36);
     expect(migration).toBeDefined();
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_diff");
+  });
+
+  it("persists pending and in-flight alarm state for fresh and migrated sessions", () => {
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_alarm_state");
+    expect(SCHEMA_SQL).toContain("singleton INTEGER PRIMARY KEY CHECK (singleton = 1)");
+    expect(SCHEMA_SQL).toContain("pending_deadline INTEGER");
+    expect(SCHEMA_SQL).toContain("in_flight_deadline INTEGER");
+    expect(SCHEMA_SQL).toContain("cancelled INTEGER NOT NULL DEFAULT 0");
+
+    const migration = MIGRATIONS.find((item) => item.id === 43);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_alarm_state");
   });
 
   it("adds prompt idempotency columns and index for fresh and migrated sessions", () => {
@@ -410,6 +420,7 @@ describe("applyMigrations", () => {
           "idx_messages_status",
           "idx_messages_author",
           "idx_messages_client_request_id",
+          "idx_messages_one_processing",
         ])
       );
       expectClientRequestIdIndex(db);
@@ -426,5 +437,76 @@ describe("applyMigrations", () => {
     expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
       "ADD COLUMN stop_confirmation_deadline INTEGER"
     );
+  });
+
+  it("allows only one processing message per session", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 42);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER
+      )`);
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        message_id TEXT
+      )`);
+      db.prepare(
+        "INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)"
+      ).run("first", "processing", 100, 120);
+      db.prepare(
+        "INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)"
+      ).run("second", "processing", 110, 130);
+      db.prepare(
+        "INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)"
+      ).run("unrelated", "pending", 90, null);
+      db.prepare("INSERT INTO events (id, type, message_id) VALUES (?, ?, ?)").run(
+        "user_message:first",
+        "user_message",
+        "first"
+      );
+      db.prepare("INSERT INTO events (id, type, message_id) VALUES (?, ?, ?)").run(
+        "user_message:second",
+        "user_message",
+        "second"
+      );
+      db.prepare("INSERT INTO events (id, type, message_id) VALUES (?, ?, ?)").run(
+        "user_message:unrelated",
+        "user_message",
+        "unrelated"
+      );
+
+      const run = migration!.run as (sql: SqlStorage) => void;
+      expect(() => run(sql)).not.toThrow();
+      expect(() => run(sql)).not.toThrow();
+
+      expect(db.prepare("SELECT id, status, started_at FROM messages ORDER BY id").all()).toEqual([
+        { id: "first", status: "processing", started_at: 120 },
+        { id: "second", status: "pending", started_at: null },
+        { id: "unrelated", status: "pending", started_at: null },
+      ]);
+      expect(db.prepare("SELECT id FROM events ORDER BY id").all()).toEqual([
+        { id: "user_message:first" },
+        { id: "user_message:unrelated" },
+      ]);
+      expect(() =>
+        db
+          .prepare("INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)")
+          .run("third", "processing", 140, 150)
+      ).toThrow();
+      expect(() =>
+        db
+          .prepare("INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)")
+          .run("queued", "pending", 160, null)
+      ).not.toThrow();
+    } finally {
+      db.close();
+    }
   });
 });

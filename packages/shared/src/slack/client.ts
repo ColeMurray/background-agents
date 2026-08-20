@@ -12,14 +12,16 @@ import { z } from "zod";
 import { computeHmacHex, timingSafeEqual } from "../auth";
 
 const SLACK_API_BASE = "https://slack.com/api";
-export const SLACK_USER_INFO_TIMEOUT_MS = 10_000;
+export const SLACK_REQUEST_TIMEOUT_MS = 10_000;
+export const SLACK_PAGINATION_TIMEOUT_MS = 30_000;
 
 /**
  * Discriminated success/failure envelope returned by every Slack API method.
  *
  * The success arm is `{ ok: true } & T`; the failure arm carries an `error`
  * string (Slack's `error` field, or one of the synthesized values
- * `network_error` / `invalid_response` / `http_<status>` / `ratelimited`).
+ * `network_error` / `timeout` / `cancelled` / `delivery_unknown` /
+ * `invalid_response` / `http_<status>` / `ratelimited`).
  *
  * `T` is never supplied by hand: each endpoint passes a schema for its success
  * payload and `T` is inferred from it, so the type a caller reads and the shape
@@ -65,6 +67,26 @@ export interface CompleteExternalUploadOptions {
   signal?: AbortSignal;
 }
 
+export interface SlackRequestOptions {
+  signal?: AbortSignal;
+}
+
+function boundedSignal(signal?: AbortSignal, timeoutMs = SLACK_REQUEST_TIMEOUT_MS) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
+function requestError(
+  signal: AbortSignal,
+  method: "GET" | "POST"
+): "timeout" | "cancelled" | "delivery_unknown" | "network_error" {
+  if (!signal.aborted) return "network_error";
+  if (method === "POST") return "delivery_unknown";
+  return signal.reason instanceof DOMException && signal.reason.name === "TimeoutError"
+    ? "timeout"
+    : "cancelled";
+}
+
 async function slackFetch<S extends z.ZodType<object>>(
   token: string,
   endpoint: string,
@@ -85,11 +107,12 @@ async function slackFetch<S extends z.ZodType<object>>(
     body = JSON.stringify(init.body);
   }
 
+  const signal = boundedSignal(init?.signal);
   let response: Response;
   try {
-    response = await fetch(url, { method, headers, body, signal: init?.signal });
+    response = await fetch(url, { method, headers, body, signal });
   } catch {
-    return { ok: false, error: "network_error" };
+    return { ok: false, error: requestError(signal, method) };
   }
 
   if (response.status === 429) {
@@ -110,7 +133,10 @@ async function slackFetch<S extends z.ZodType<object>>(
     const parsed = slackEnvelopeSchema(payload).safeParse(await response.json());
     return parsed.success ? parsed.data : { ok: false, error: "invalid_response" };
   } catch {
-    return { ok: false, error: "invalid_response" };
+    return {
+      ok: false,
+      error: signal.aborted ? requestError(signal, method) : "invalid_response",
+    };
   }
 }
 
@@ -159,16 +185,17 @@ export async function uploadToExternalUrl(
   contentType: string,
   signal?: AbortSignal
 ): Promise<SlackEnvelope> {
+  const boundedRequestSignal = boundedSignal(signal);
   try {
     const response = await fetch(uploadUrl, {
       method: "POST",
       headers: { "Content-Type": contentType },
       body,
-      signal,
+      signal: boundedRequestSignal,
     });
     return response.ok ? { ok: true } : { ok: false, error: `http_${response.status}` };
   } catch {
-    return { ok: false, error: "network_error" };
+    return { ok: false, error: requestError(boundedRequestSignal, "POST") };
   }
 }
 
@@ -252,14 +279,21 @@ export function postBlocks(
   options?: {
     thread_ts?: string;
     reply_broadcast?: boolean;
+    signal?: AbortSignal;
   }
 ): Promise<SlackEnvelope<{ channel: string; ts: string }>> {
-  return slackPost(token, "chat.postMessage", postedMessagePayloadSchema, {
-    channel,
-    blocks,
-    thread_ts: options?.thread_ts,
-    reply_broadcast: options?.reply_broadcast,
-  });
+  return slackPost(
+    token,
+    "chat.postMessage",
+    postedMessagePayloadSchema,
+    {
+      channel,
+      blocks,
+      thread_ts: options?.thread_ts,
+      reply_broadcast: options?.reply_broadcast,
+    },
+    options?.signal
+  );
 }
 
 const permalinkPayloadSchema = z.object({ permalink: z.string(), channel: z.string() });
@@ -267,12 +301,19 @@ const permalinkPayloadSchema = z.object({ permalink: z.string(), channel: z.stri
 export function getPermalink(
   token: string,
   channel: string,
-  messageTs: string
+  messageTs: string,
+  options?: SlackRequestOptions
 ): Promise<SlackEnvelope<{ permalink: string; channel: string }>> {
-  return slackGet(token, "chat.getPermalink", permalinkPayloadSchema, {
-    channel,
-    message_ts: messageTs,
-  });
+  return slackGet(
+    token,
+    "chat.getPermalink",
+    permalinkPayloadSchema,
+    {
+      channel,
+      message_ts: messageTs,
+    },
+    options?.signal
+  );
 }
 
 /**
@@ -405,8 +446,10 @@ export interface SlackChannelListing {
  * (private) scopes. Returns the SlackEnvelope failure arm on any page's error.
  */
 export async function listChannels(
-  token: string
+  token: string,
+  options?: SlackRequestOptions
 ): Promise<SlackEnvelope<{ channels: SlackChannelListing[] }>> {
+  const paginationSignal = boundedSignal(options?.signal, SLACK_PAGINATION_TIMEOUT_MS);
   const channels: SlackChannelListing[] = [];
   let cursor: string | undefined;
   // Bound the loop defensively: 1000/page × 20 pages caps at 20k channels.
@@ -418,7 +461,13 @@ export async function listChannels(
     };
     if (cursor) query.cursor = cursor;
 
-    const res = await slackGet(token, "conversations.list", conversationsListPayloadSchema, query);
+    const res = await slackGet(
+      token,
+      "conversations.list",
+      conversationsListPayloadSchema,
+      query,
+      paginationSignal
+    );
     if (!res.ok) return res;
 
     for (const c of res.channels) {
@@ -461,8 +510,10 @@ export async function getThreadMessages(
   token: string,
   channelId: string,
   threadTs: string,
-  oldest?: string
+  oldest?: string,
+  options?: SlackRequestOptions
 ): Promise<SlackEnvelope<{ messages: SlackThreadMessage[] }>> {
+  const paginationSignal = boundedSignal(options?.signal, SLACK_PAGINATION_TIMEOUT_MS);
   const messages: SlackThreadMessage[] = [];
   let cursor: string | undefined;
   // Bound the loop defensively: 200/page × 25 pages caps at 5k messages.
@@ -479,7 +530,8 @@ export async function getThreadMessages(
       token,
       "conversations.replies",
       conversationsRepliesPayloadSchema,
-      query
+      query,
+      paginationSignal
     );
     if (!res.ok) return res;
 
@@ -627,13 +679,7 @@ export function getUserInfo(
   token: string,
   userId: string
 ): Promise<SlackEnvelope<{ user: SlackUser }>> {
-  return slackGet(
-    token,
-    "users.info",
-    userInfoPayloadSchema,
-    { user: userId },
-    AbortSignal.timeout(SLACK_USER_INFO_TIMEOUT_MS)
-  );
+  return slackGet(token, "users.info", userInfoPayloadSchema, { user: userId });
 }
 
 export function publishView(

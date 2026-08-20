@@ -6,7 +6,13 @@ import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
 import type { Route, RequestContext } from "../routes/shared";
-import { parsePattern, json, error } from "../routes/shared";
+import {
+  defineRoute,
+  error,
+  json,
+  parsePattern,
+  SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
+} from "../routes/shared";
 import type { Env } from "../types";
 
 /** Maximum webhook payload size (64KB). */
@@ -94,8 +100,8 @@ async function handleAutomationWebhook(
   return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);
 }
 
-export const automationWebhookRoute: Route = {
+export const automationWebhookRoute: Route = defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
   method: "POST",
   pattern: parsePattern("/webhooks/automation/:id"),
   handler: handleAutomationWebhook,
-};
+});

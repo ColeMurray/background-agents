@@ -1,5 +1,40 @@
-import { describe, expect, it } from "vitest";
-import { anthropicMessagesResponseSchema, classifyToolInputSchema } from "./index";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
+import {
+  anthropicMessagesResponseSchema,
+  CLASSIFIER_REQUEST_TIMEOUT_MS,
+  classifyRepo,
+  classifyToolInputSchema,
+} from "./index";
+import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
+
+const { getAvailableRepos, buildRepoDescriptions } = vi.hoisted(() => ({
+  getAvailableRepos: vi.fn(),
+  buildRepoDescriptions: vi.fn(),
+}));
+
+vi.mock("./repos", () => ({ getAvailableRepos, buildRepoDescriptions }));
+
+const repos: RepoConfig[] = ["api", "web"].map((name) => ({
+  id: `acme/${name}`,
+  owner: "acme",
+  name,
+  fullName: `acme/${name}`,
+  displayName: name,
+  description: `${name} repository`,
+  defaultBranch: "main",
+  private: true,
+}));
+
+beforeEach(() => {
+  getAvailableRepos.mockResolvedValue(repos);
+  buildRepoDescriptions.mockResolvedValue("- acme/api\n- acme/web");
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("anthropicMessagesResponseSchema", () => {
   it("parses a response with the consumed tool block fields", () => {
@@ -61,5 +96,41 @@ describe("classifyToolInputSchema", () => {
     });
 
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("classifyRepo", () => {
+  it("falls back to clarification when the classifier request times out", async () => {
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        expect(init?.signal).toBe(timeoutSignal);
+        throw timeoutSignal.reason;
+      })
+    );
+    const { kv } = createFakeKV();
+
+    const result = await classifyRepo(
+      makeLinearBotEnv(kv),
+      "Update service",
+      null,
+      [],
+      null,
+      "Engineering",
+      "ENG",
+      null
+    );
+
+    expect(timeoutSpy).toHaveBeenCalledWith(CLASSIFIER_REQUEST_TIMEOUT_MS);
+    expect(result).toEqual({
+      repo: null,
+      confidence: "low",
+      reasoning:
+        "Could not classify repository automatically. Please reply with the repository name (e.g., `owner/repo`).",
+      alternatives: repos,
+      needsClarification: true,
+    });
   });
 });

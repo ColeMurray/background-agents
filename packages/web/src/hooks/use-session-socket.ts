@@ -62,19 +62,29 @@ interface UseSessionSocketReturn {
     attachments?: SessionAttachmentReference[],
     clientRequestId?: string
   ) => Promise<QueuePromptResult>;
+  cancelPrompt: (messageId: string) => Promise<CancelPromptResult>;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
   loadOlderEvents: () => void;
 }
 
-export type QueuePromptResult =
+type CorrelatedRequestFailure = {
+  ok: false;
+  reason: "rejected" | "disconnected" | "timeout";
+  message?: string;
+};
+
+type QueuePromptResult =
   | { ok: true; clientRequestId: string; messageId: string; position: number | null }
-  | {
-      ok: false;
-      reason: "rejected" | "disconnected" | "timeout";
-      message?: string;
-    };
+  | CorrelatedRequestFailure;
+
+type CancelPromptResult = { ok: true; messageId: string } | CorrelatedRequestFailure;
+
+interface PendingCorrelatedRequest {
+  settleSuccess: (message: ServerMessage) => boolean;
+  settleFailure: (failure: CorrelatedRequestFailure) => void;
+}
 
 /**
  * Session view over a WebSocket connection, composed from four layers:
@@ -99,11 +109,8 @@ export function useSessionSocket(
   // high frequency) don't re-render; the text is appended on completion.
   const pendingTextRef = useRef<PendingAssistantText | null>(null);
   const subscriptionWaitersRef = useRef(new Set<(subscribed: boolean) => void>());
-  const pendingPromptRef = useRef<{
-    clientRequestId: string;
-    resolve: (result: QueuePromptResult) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  } | null>(null);
+  const pendingPromptRequestIdRef = useRef<string | null>(null);
+  const pendingRequestsRef = useRef(new Map<string, PendingCorrelatedRequest>());
   const {
     sandboxAccess,
     clear: clearSandboxAccess,
@@ -117,13 +124,44 @@ export function useSessionSocket(
     subscriptionWaitersRef.current.clear();
   }, []);
 
-  const settlePendingPrompt = useCallback((result: QueuePromptResult) => {
-    const pending = pendingPromptRef.current;
-    if (!pending) return;
+  const registerCorrelatedRequest = useCallback(
+    <T extends { ok: true }>(
+      clientRequestId: string,
+      resolve: (result: T | CorrelatedRequestFailure) => void,
+      successFromMessage: (message: ServerMessage) => T | null,
+      onSettled?: () => void
+    ) => {
+      let settled = false;
+      const finish = (result: T | CorrelatedRequestFailure) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(ackTimeoutId);
+        pendingRequestsRef.current.delete(clientRequestId);
+        onSettled?.();
+        resolve(result);
+      };
 
-    clearTimeout(pending.timeout);
-    pendingPromptRef.current = null;
-    pending.resolve(result);
+      const ackTimeoutId = setTimeout(
+        () => finish({ ok: false, reason: "timeout" }),
+        PROMPT_ACK_TIMEOUT_MS
+      );
+      pendingRequestsRef.current.set(clientRequestId, {
+        settleSuccess: (message) => {
+          const result = successFromMessage(message);
+          if (!result) return false;
+          finish(result);
+          return true;
+        },
+        settleFailure: finish,
+      });
+    },
+    []
+  );
+
+  const settleAllCorrelatedRequests = useCallback((failure: CorrelatedRequestFailure) => {
+    for (const pending of [...pendingRequestsRef.current.values()]) {
+      pending.settleFailure(failure);
+    }
   }, []);
 
   useEffect(() => {
@@ -158,20 +196,15 @@ export function useSessionSocket(
         console.error("Sandbox error:", message.error);
       } else if (message.type === "error") {
         console.error("Session error:", message);
-        const pending = pendingPromptRef.current;
-        if (pending && message.clientRequestId === pending.clientRequestId) {
-          settlePendingPrompt({ ok: false, reason: "rejected", message: message.message });
-        }
-      } else if (message.type === "prompt_queued") {
-        const pending = pendingPromptRef.current;
-        if (pending && message.clientRequestId === pending.clientRequestId) {
-          settlePendingPrompt({
-            ok: true,
-            clientRequestId: pending.clientRequestId,
-            messageId: message.messageId,
-            position: message.position,
+        if (message.clientRequestId) {
+          pendingRequestsRef.current.get(message.clientRequestId)?.settleFailure({
+            ok: false,
+            reason: "rejected",
+            message: message.message,
           });
         }
+      } else if (message.type === "prompt_queued" || message.type === "prompt_cancelled") {
+        pendingRequestsRef.current.get(message.clientRequestId)?.settleSuccess(message);
       }
 
       const clearsSandboxAccess =
@@ -186,15 +219,15 @@ export function useSessionSocket(
         mutate(key);
       }
     },
-    [clearSandboxAccess, refreshSandboxAccess, sessionId, settlePendingPrompt]
+    [clearSandboxAccess, refreshSandboxAccess, sessionId]
   );
 
   const handleClose = useCallback(() => {
     subscribedRef.current = false;
     settleSubscriptionWaiters(false);
-    settlePendingPrompt({ ok: false, reason: "disconnected" });
+    settleAllCorrelatedRequests({ ok: false, reason: "disconnected" });
     dispatch({ type: "socket_closed" });
-  }, [settlePendingPrompt, settleSubscriptionWaiters]);
+  }, [settleAllCorrelatedRequests, settleSubscriptionWaiters]);
 
   const transport = useSessionTransport(sessionId, {
     onMessage: handleMessage,
@@ -210,9 +243,9 @@ export function useSessionSocket(
   useEffect(
     () => () => {
       settleSubscriptionWaiters(false);
-      settlePendingPrompt({ ok: false, reason: "disconnected" });
+      settleAllCorrelatedRequests({ ok: false, reason: "disconnected" });
     },
-    [settlePendingPrompt, settleSubscriptionWaiters]
+    [settleAllCorrelatedRequests, settleSubscriptionWaiters]
   );
 
   const waitForSubscription = useCallback((): Promise<boolean> => {
@@ -246,7 +279,7 @@ export function useSessionSocket(
         return { ok: false, reason: "disconnected" };
       }
 
-      if (pendingPromptRef.current) {
+      if (pendingPromptRequestIdRef.current) {
         console.error("A prompt is already waiting for acknowledgement");
         return { ok: false, reason: "rejected", message: "A prompt is awaiting confirmation" };
       }
@@ -256,7 +289,7 @@ export function useSessionSocket(
         return { ok: false, reason: "disconnected" };
       }
 
-      if (pendingPromptRef.current) {
+      if (pendingPromptRequestIdRef.current) {
         console.error("A prompt is already waiting for acknowledgement");
         return { ok: false, reason: "rejected", message: "A prompt is awaiting confirmation" };
       }
@@ -274,10 +307,25 @@ export function useSessionSocket(
 
       const clientRequestId = requestedClientRequestId ?? crypto.randomUUID();
       return new Promise<QueuePromptResult>((resolve) => {
-        const timeout = setTimeout(() => {
-          settlePendingPrompt({ ok: false, reason: "timeout" });
-        }, PROMPT_ACK_TIMEOUT_MS);
-        pendingPromptRef.current = { clientRequestId, resolve, timeout };
+        pendingPromptRequestIdRef.current = clientRequestId;
+        registerCorrelatedRequest<Extract<QueuePromptResult, { ok: true }>>(
+          clientRequestId,
+          resolve,
+          (message) =>
+            message.type === "prompt_queued"
+              ? {
+                  ok: true,
+                  clientRequestId,
+                  messageId: message.messageId,
+                  position: message.position,
+                }
+              : null,
+          () => {
+            if (pendingPromptRequestIdRef.current === clientRequestId) {
+              pendingPromptRequestIdRef.current = null;
+            }
+          }
+        );
 
         send({
           type: "prompt",
@@ -289,7 +337,7 @@ export function useSessionSocket(
         });
       });
     },
-    [isOpen, send, settlePendingPrompt, waitForSubscription]
+    [isOpen, registerCorrelatedRequest, send, waitForSubscription]
   );
 
   const stopExecution = useCallback(() => {
@@ -304,6 +352,28 @@ export function useSessionSocket(
     }
     send({ type: "stop" });
   }, [isOpen, send]);
+
+  const cancelPrompt = useCallback(
+    async (messageId: string): Promise<CancelPromptResult> => {
+      if (!isOpen() || !(await waitForSubscription()) || !isOpen()) {
+        return { ok: false, reason: "disconnected" };
+      }
+
+      const clientRequestId = crypto.randomUUID();
+      return new Promise<CancelPromptResult>((resolve) => {
+        registerCorrelatedRequest<Extract<CancelPromptResult, { ok: true }>>(
+          clientRequestId,
+          resolve,
+          (message) =>
+            message.type === "prompt_cancelled" && message.messageId === messageId
+              ? { ok: true, messageId }
+              : null
+        );
+        send({ type: "cancel_prompt", messageId, clientRequestId });
+      });
+    },
+    [isOpen, registerCorrelatedRequest, send, waitForSubscription]
+  );
 
   const sendTyping = useCallback(() => {
     if (!isOpen() || !subscribedRef.current) {
@@ -350,6 +420,7 @@ export function useSessionSocket(
     hasMoreHistory,
     loadingHistory,
     sendPrompt,
+    cancelPrompt,
     stopExecution,
     sendTyping,
     reconnect,

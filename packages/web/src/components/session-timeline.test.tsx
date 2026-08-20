@@ -356,6 +356,52 @@ describe("completed turn activity", () => {
     expect(screen.getByRole("button", { name: "Worked for 5s" })).toBeInTheDocument();
     expect(screen.getByText("Finished.")).toBeInTheDocument();
   });
+
+  it("does not collapse across a queued prompt before the running turn completes", () => {
+    render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          { ...event(), messageId: "message-1", content: "First prompt", timestamp: 10 },
+          {
+            type: "token",
+            messageId: "message-1",
+            content: "Working on the first prompt.",
+            sandboxId: "sandbox-1",
+            timestamp: 11,
+          },
+          { ...event(), messageId: "message-2", content: "Second prompt", timestamp: 12 },
+          {
+            type: "execution_complete",
+            messageId: "message-1",
+            success: true,
+            sandboxId: "sandbox-1",
+            timestamp: 13,
+          },
+          {
+            type: "token",
+            messageId: "message-2",
+            content: "Finished the second prompt.",
+            sandboxId: "sandbox-1",
+            timestamp: 14,
+          },
+          {
+            type: "execution_complete",
+            messageId: "message-2",
+            success: true,
+            sandboxId: "sandbox-1",
+            timestamp: 15,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText("First prompt")).toBeInTheDocument();
+    expect(screen.getByText("Second prompt")).toBeInTheDocument();
+    expect(screen.getByText("Working on the first prompt.")).toBeInTheDocument();
+    expect(screen.getByText("Finished the second prompt.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Worked for/i })).not.toBeInTheDocument();
+  });
 });
 
 describe("tool call groups", () => {
@@ -589,6 +635,7 @@ describe("terminal message visibility", () => {
     const outcomeTarget = observedTargets.find(
       (target) => target.getAttribute("data-terminal-message-id") === "message-1"
     );
+    expect(outcomeTarget).toHaveClass("space-y-2");
     expect(outcomeTarget).toHaveTextContent("The complete agent result");
     expect(outcomeTarget).toHaveTextContent("Execution complete");
   });

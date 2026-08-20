@@ -8,7 +8,10 @@ import {
   PromptQueueFullError,
   SessionNotPromptableError,
 } from "../../message-queue";
-import type { SessionRepository } from "../../repository";
+import type { MessageRepository } from "../../message-repository";
+import type { ArtifactRepository } from "../../artifact-repository";
+import type { EventRepository } from "../../event-repository";
+import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageService } from "../../services/message.service";
 import type { SpawnContext } from "../../spawn-context";
 import { activePromptAuthorSchema, type ActivePromptAuthor } from "../../active-prompt-author";
@@ -23,17 +26,10 @@ import {
 } from "./child-session-summary";
 
 export interface ChildSessionsHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    | "listParticipants"
-    | "listArtifacts"
-    | "listEventPage"
-    | "getLatestTerminalMessage"
-    | "getEventTimelinePage"
-    | "getPendingOrProcessingCount"
-    | "getProcessingMessageAuthor"
-    | "getParticipantById"
-  >;
+  messageRepository: MessageRepository;
+  eventRepository: EventRepository;
+  participantRepository: ParticipantRepository;
+  artifactRepository: ArtifactRepository;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
   getPublicSessionId: (session: SessionRow) => string;
@@ -64,16 +60,17 @@ const childSessionUpdateBodySchema = z.object({
 });
 
 function resolvePromptAuthorParticipant(
-  repository: ChildSessionsHandlerDeps["repository"]
+  messageRepository: MessageRepository,
+  participantRepository: ParticipantRepository
 ): ParticipantRow | Response {
-  const processingMessage = repository.getProcessingMessageAuthor();
+  const processingMessage = messageRepository.getProcessingMessageAuthor();
   if (!processingMessage) {
     return Response.json(
       { error: "No active prompt found. Child operations must be triggered by an active prompt." },
       { status: 400 }
     );
   }
-  const participant = repository.getParticipantById(processingMessage.author_id);
+  const participant = participantRepository.getParticipantById(processingMessage.author_id);
   if (!participant) return Response.json({ error: "Prompt author not found" }, { status: 401 });
   return participant;
 }
@@ -96,7 +93,10 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      const promptAuthor = resolvePromptAuthorParticipant(deps.repository);
+      const promptAuthor = resolvePromptAuthorParticipant(
+        deps.messageRepository,
+        deps.participantRepository
+      );
       if (promptAuthor instanceof Response) return promptAuthor;
       let sandboxTimeoutMs: number | undefined;
       try {
@@ -132,7 +132,10 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
 
     getActivePromptAuthor(): Response {
       if (!deps.getSession()) return Response.json({ error: "Session not found" }, { status: 404 });
-      const author = resolvePromptAuthorParticipant(deps.repository);
+      const author = resolvePromptAuthorParticipant(
+        deps.messageRepository,
+        deps.participantRepository
+      );
       return author instanceof Response ? author : Response.json(toActivePromptAuthor(author));
     },
 
@@ -149,23 +152,23 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
 
       const options = parsedOptions.options;
       const sandbox = deps.getSandbox();
-      const artifacts = deps.repository.listArtifacts();
-      const recentEventRows = deps.repository.listEventPage({
+      const artifacts = deps.artifactRepository.listArtifacts();
+      const recentEventRows = deps.eventRepository.listEventPage({
         limit: RECENT_EVENT_FETCH_LIMIT,
       }).events;
       let finalResponse: ChildSummaryFinalResponseInput | undefined;
       let trajectory: ChildSummaryTrajectoryInput | undefined;
 
       if (options.includeFinalResponse) {
-        const terminalMessage = deps.repository.getLatestTerminalMessage();
+        const terminalMessage = deps.messageRepository.getLatestTerminalMessage();
         const collectedEvents = terminalMessage
-          ? collectFinalResponseEventRows(deps.repository, terminalMessage.id)
+          ? collectFinalResponseEventRows(deps.eventRepository, terminalMessage.id)
           : { eventRows: [], eventLimitReached: false };
         finalResponse = { message: terminalMessage, ...collectedEvents };
       }
 
       if (options.includeTrajectory) {
-        const page = deps.repository.getEventTimelinePage({
+        const page = deps.eventRepository.getEventTimelinePage({
           limit: options.trajectoryLimit,
           cursor: options.trajectoryCursor ?? undefined,
         });
@@ -184,7 +187,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
           publicSessionId: deps.getPublicSessionId(session),
           artifacts,
           recentEventRows,
-          hasUnfinishedPrompt: deps.repository.getPendingOrProcessingCount() > 0,
+          hasUnfinishedPrompt: deps.messageRepository.getPendingOrProcessingCount() > 0,
           parseArtifactMetadata: deps.parseArtifactMetadata,
           finalResponse,
           trajectory,

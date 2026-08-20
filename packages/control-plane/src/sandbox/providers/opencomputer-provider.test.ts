@@ -806,8 +806,8 @@ describe("OpenComputerSandboxProvider", () => {
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ],
-      callbackUrl: "https://control.example/environment-images/build-complete",
-      failureCallbackUrl: "https://control.example/environment-images/build-failed",
+      callbackUrl: "https://control.example/image-builds/build-complete",
+      failureCallbackUrl: "https://control.example/image-builds/build-failed",
       callbackToken: "callback-token",
       buildExecutionTimeoutSeconds: 1800,
       providerSessionTimeoutSeconds: 2400,
@@ -825,9 +825,9 @@ describe("OpenComputerSandboxProvider", () => {
       REPO_NAME: "web",
       SANDBOX_ID: "build-env-env_flagship",
       OI_REPO_IMAGE_BUILD_ID: "envimg-1",
-      OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/environment-images/build-complete",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/image-builds/build-complete",
       OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
-      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://control.example/environment-images/build-failed",
+      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://control.example/image-builds/build-failed",
     });
     expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toEqual({
       branch: "main",
@@ -961,5 +961,30 @@ describe("OpenComputerSandboxProvider", () => {
     ).resolves.toEqual({ success: true });
 
     expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+  });
+
+  it("deletes sandboxes on replacement", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+    const signal = AbortSignal.timeout(1_000);
+
+    await expect(
+      provider.stopSandbox({
+        providerObjectId: "oc-sandbox-1",
+        sessionId: "session-1",
+        reason: "respawn",
+        signal,
+      })
+    ).resolves.toEqual({ success: true });
+
+    expect(client.deleteSandbox).toHaveBeenCalledWith(
+      "oc-sandbox-1",
+      { deleteSecretStore: true },
+      signal
+    );
+    expect(client.hibernateSandbox).not.toHaveBeenCalled();
   });
 });
