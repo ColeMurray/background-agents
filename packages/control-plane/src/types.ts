@@ -35,6 +35,7 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
+  PROVIDER_ACCOUNTS_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;

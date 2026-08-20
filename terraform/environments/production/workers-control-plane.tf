@@ -154,6 +154,7 @@ module "control_plane_worker" {
       { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
+      { name = "PROVIDER_ACCOUNTS_ENCRYPTION_KEY", value = local.effective_provider_accounts_encryption_key },
       # Pepper for image-build callback token hashes (see service-auth.tf)
       { name = "IMAGE_CALLBACK_TOKEN_PEPPER", value = random_password.image_callback_token_pepper.result },
       # Per-service sig1 verification keys

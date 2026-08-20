@@ -11,7 +11,16 @@ import {
   DEFAULT_SESSION_LIST_OFFSET,
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
+import {
+  sessionModelProviderAuthSchema,
+  SUBSCRIPTION_PROVIDER_IDS,
+} from "@open-inspect/shared/types/provider-accounts";
 import type { SessionSkillManifestInput } from "../session/skill-resolution";
+import {
+  assertProviderAuthSelection,
+  type ModelProviderId,
+  type SessionModelProviderAuthInput,
+} from "../model-provider-accounts/provider-auth-contracts";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import {
   SessionInboxStore,
@@ -101,6 +110,8 @@ export interface SessionEntry {
   skillManifest?: SessionSkillManifestInput;
   /** Parent manifest to copy atomically for an agent-spawned child. */
   skillManifestSourceSessionId?: string;
+  /** Complete immutable model-provider authentication snapshot. */
+  providerAuth?: SessionModelProviderAuthInput[];
 }
 
 interface SessionRow {
@@ -127,6 +138,14 @@ interface SessionRow {
   environment_id: string | null;
   created_at: number;
   updated_at: number;
+}
+
+interface SessionModelProviderAuthRow {
+  provider: string;
+  auth_mode: string;
+  provider_account_id: string | null;
+  selection_source: string;
+  inherited_from_session_id: string | null;
 }
 
 export interface ListSessionsOptions {
@@ -175,6 +194,30 @@ function toEntry(row: SessionRow): SessionEntry {
   };
 }
 
+function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {
+  const auth = sessionModelProviderAuthSchema.parse({
+    provider: row.provider,
+    authMode: row.auth_mode,
+    ...(row.provider_account_id ? { providerAccountId: row.provider_account_id } : {}),
+    selectionSource: row.selection_source,
+  });
+  return {
+    ...auth,
+    ...(row.inherited_from_session_id
+      ? { inheritedFromSessionId: row.inherited_from_session_id }
+      : {}),
+  };
+}
+
+function isCompleteProviderAuth(providerAuth: readonly SessionModelProviderAuthInput[]): boolean {
+  return (
+    providerAuth.length === SUBSCRIPTION_PROVIDER_IDS.length &&
+    SUBSCRIPTION_PROVIDER_IDS.every((provider) =>
+      providerAuth.some((auth) => auth.provider === provider)
+    )
+  );
+}
+
 function normalizeRepoIdentifier(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed.toLowerCase() : null;
@@ -217,9 +260,24 @@ export class SessionIndexStore {
       throw new Error("Session cannot both resolve and copy a managed skill manifest");
     }
 
+    const providers = new Set<string>();
+    for (const auth of session.providerAuth ?? []) {
+      assertProviderAuthSelection(
+        auth.provider,
+        auth.authMode,
+        "providerAccountId" in auth ? auth.providerAccountId : null
+      );
+      if (providers.has(auth.provider))
+        throw new Error(`Duplicate provider auth: ${auth.provider}`);
+      providers.add(auth.provider);
+    }
+    if (session.providerAuth && !isCompleteProviderAuth(session.providerAuth)) {
+      throw new Error("Session provider auth snapshot must include every subscription provider");
+    }
+
     const sessionStmt = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
@@ -267,11 +325,32 @@ export class SessionIndexStore {
       : session.skillManifestSourceSessionId
         ? this.bindManifestCopy(session.id, session.skillManifestSourceSessionId)
         : [];
-    const results = await this.db.batch([sessionStmt, ...repositoryStmts, ...manifestStmts]);
+    const providerAuthStmts = (session.providerAuth ?? []).map((auth) =>
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO session_model_provider_auth (
+             session_id, provider, auth_mode, provider_account_id, selection_source,
+             inherited_from_session_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          session.id,
+          auth.provider,
+          auth.authMode,
+          "providerAccountId" in auth ? auth.providerAccountId : null,
+          auth.selectionSource,
+          auth.inheritedFromSessionId ?? null,
+          session.createdAt
+        )
+    );
+    const results = await this.db.batch([
+      sessionStmt,
+      ...repositoryStmts,
+      ...manifestStmts,
+      ...providerAuthStmts,
+    ]);
 
-    // INSERT OR IGNORE swallows every constraint violation, which would leave
-    // the session invisible to dashboards while the DO proceeds. Session ids
-    // are always freshly generated, so a skipped insert is a bug — surface it;
+    // Session ids are always freshly generated, so a skipped insert is a bug;
     // initialize.ts relies on D1 failures being caught before sandbox spawn.
     if ((results[0]?.meta?.changes ?? 0) === 0) {
       throw new Error(
@@ -363,6 +442,43 @@ export class SessionIndexStore {
       .first<SessionRow>();
 
     return result ? toEntry(result) : null;
+  }
+
+  private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT provider, auth_mode, provider_account_id, selection_source,
+                inherited_from_session_id
+         FROM session_model_provider_auth
+         WHERE session_id = ? ORDER BY provider`
+      )
+      .bind(sessionId)
+      .all<SessionModelProviderAuthRow>();
+    return (result.results ?? []).map(toProviderAuth);
+  }
+
+  async getCompleteProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
+    const providerAuth = await this.getProviderAuth(sessionId);
+    if (!isCompleteProviderAuth(providerAuth)) {
+      throw new Error(`Session provider auth snapshot is incomplete for session ${sessionId}`);
+    }
+    return providerAuth;
+  }
+
+  async getProviderAuthForProvider(
+    sessionId: string,
+    provider: ModelProviderId
+  ): Promise<SessionModelProviderAuthInput | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT provider, auth_mode, provider_account_id, selection_source,
+                inherited_from_session_id
+         FROM session_model_provider_auth
+         WHERE session_id = ? AND provider = ?`
+      )
+      .bind(sessionId, provider)
+      .first<SessionModelProviderAuthRow>();
+    return row ? toProviderAuth(row) : null;
   }
 
   /**

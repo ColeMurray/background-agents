@@ -181,6 +181,40 @@ describe("toAutomation", () => {
     const automation = toAutomation(sampleRow, []);
     expect(automation.repositories).toEqual([]);
   });
+
+  it("hydrates provider selections from auth rows", () => {
+    const automation = toAutomation(
+      sampleRow,
+      [],
+      [],
+      [
+        {
+          automation_id: sampleRow.id,
+          provider: "openai",
+          auth_mode: "provider_account",
+          provider_account_id: "0123456789abcdef0123456789abcdef",
+          created_at: now,
+          updated_at: now,
+        },
+        {
+          automation_id: sampleRow.id,
+          provider: "xai",
+          auth_mode: "api_key",
+          provider_account_id: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ]
+    );
+
+    expect(automation.providerSelections).toEqual({
+      openai: {
+        mode: "provider_account",
+        accountId: "0123456789abcdef0123456789abcdef",
+      },
+      xai: { mode: "api_key" },
+    });
+  });
 });
 
 describe("toAutomationRun", () => {

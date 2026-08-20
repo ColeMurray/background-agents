@@ -160,6 +160,8 @@ export {
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  createAutomationRequestSchema,
+  updateAutomationRequestSchema,
   listAutomationsResponseSchema,
 } from "./automations";
 export type {
@@ -173,6 +175,51 @@ export type {
   AutomationInvocation,
   ListAutomationInvocationsResponse,
 } from "./automations";
+
+export {
+  SUBSCRIPTION_PROVIDER_IDS,
+  SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
+  MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
+  subscriptionProviderIdSchema,
+  modelProviderAccountIdSchema,
+  providerAuthSelectionSchema,
+  providerAuthModeSchema,
+  modelProviderSelectionsSchema,
+  modelProviderAccountStatusSchema,
+  modelProviderAccountSchema,
+  modelProviderAccountResponseSchema,
+  createModelProviderAccountResponseSchema,
+  modelProviderAccountsResponseSchema,
+  modelProviderAccountDefaultSchema,
+  modelProviderAccountDefaultRequestSchema,
+  modelProviderAccountDefaultsResponseSchema,
+  sessionModelProviderAuthSchema,
+  sessionModelProviderAuthResponseSchema,
+  legacyProviderKeyLocationSchema,
+  legacyProviderCredentialsResponseSchema,
+  connectModelProviderAccountRequestSchema,
+  reconnectModelProviderAccountRequestSchema,
+} from "./provider-accounts";
+export type {
+  SubscriptionProviderId,
+  ProviderAuthSelection,
+  ProviderAuthMode,
+  SessionProviderAuthMode,
+  ModelProviderSelections,
+  ModelProviderAccountStatus,
+  ModelProviderAccount,
+  ModelProviderAccountResponse,
+  CreateModelProviderAccountResponse,
+  ModelProviderAccountsResponse,
+  ModelProviderAccountDefault,
+  ModelProviderAccountDefaultsResponse,
+  SessionModelProviderAuth,
+  SessionModelProviderAuthResponse,
+  LegacyProviderKeyLocation,
+  LegacyProviderCredentialsResponse,
+  ConnectModelProviderAccountRequest,
+  ReconnectModelProviderAccountRequest,
+} from "./provider-accounts";
 
 export type {
   ImageBuildStatus,

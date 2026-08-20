@@ -233,6 +233,11 @@ token_encryption_key = ""
 # Repo secrets encryption key (for encrypting repo secrets in D1)
 repo_secrets_encryption_key = ""
 
+# Optional existing provider account credential encryption key. Leave blank for
+# Terraform to generate and persist a dedicated key. Never change this after
+# storing provider account credentials.
+provider_accounts_encryption_key = ""
+
 # Modal API secret (for control plane -> Modal authentication)
 # Only required when sandbox_provider = "modal"
 # Generate with: openssl rand -hex 32

@@ -1,0 +1,241 @@
+import { describe, expect, it } from "vitest";
+import {
+  MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
+  SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
+  SUBSCRIPTION_PROVIDER_IDS,
+  connectModelProviderAccountRequestSchema,
+  modelProviderAccountDefaultRequestSchema,
+  modelProviderAccountDefaultsResponseSchema,
+  modelProviderAccountResponseSchema,
+  modelProviderAccountsResponseSchema,
+  modelProviderAccountStatusSchema,
+  modelProviderSelectionsSchema,
+  providerAuthModeSchema,
+  reconnectModelProviderAccountRequestSchema,
+  sessionModelProviderAuthResponseSchema,
+} from "./provider-accounts";
+
+const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+
+describe("subscription provider registry", () => {
+  it("exposes stable provider IDs and display metadata", () => {
+    expect(SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai"]);
+    expect(SUBSCRIPTION_PROVIDER_DISPLAY_METADATA).toEqual({
+      openai: { displayName: "OpenAI", subscriptionName: "ChatGPT" },
+      xai: { displayName: "xAI", subscriptionName: "SuperGrok" },
+    });
+  });
+
+  it("validates generated account IDs without accepting generic strings", () => {
+    expect(MODEL_PROVIDER_ACCOUNT_ID_PATTERN.test(ACCOUNT_ID)).toBe(true);
+    for (const value of ["", "account-1", "A".repeat(32), "0".repeat(31), "0".repeat(33)]) {
+      expect(
+        modelProviderSelectionsSchema.safeParse({
+          openai: { mode: "provider_account", accountId: value },
+        }).success
+      ).toBe(false);
+    }
+  });
+});
+
+describe("modelProviderSelectionsSchema", () => {
+  it("accepts a bounded partial map with strict discriminated selections", () => {
+    expect(modelProviderSelectionsSchema.parse({})).toEqual({});
+    expect(
+      modelProviderSelectionsSchema.parse({
+        openai: { mode: "provider_account", accountId: ACCOUNT_ID },
+        xai: { mode: "api_key" },
+      })
+    ).toEqual({
+      openai: { mode: "provider_account", accountId: ACCOUNT_ID },
+      xai: { mode: "api_key" },
+    });
+  });
+
+  it("rejects unknown provider keys and fields forbidden by each mode", () => {
+    for (const selections of [
+      { anthropic: { mode: "api_key" } },
+      { OpenAI: { mode: "api_key" } },
+      { openai: { mode: "api_key", accountId: ACCOUNT_ID } },
+      { xai: { mode: "provider_account" } },
+      { openai: { mode: "unknown" } },
+    ]) {
+      expect(modelProviderSelectionsSchema.safeParse(selections).success).toBe(false);
+    }
+  });
+});
+
+describe("provider account write requests", () => {
+  it("shares the bounded account status, auth mode, and default update contracts", () => {
+    expect(modelProviderAccountStatusSchema.options).toEqual([
+      "active",
+      "disabled",
+      "reconnect_required",
+    ]);
+    expect(providerAuthModeSchema.options).toEqual(["provider_account", "api_key"]);
+    expect(
+      modelProviderAccountDefaultRequestSchema.safeParse({
+        providerAccountId: ACCOUNT_ID,
+        unattendedMode: "legacy_scoped_oauth",
+      }).success
+    ).toBe(false);
+    expect(
+      modelProviderAccountDefaultRequestSchema.parse({
+        providerAccountId: ACCOUNT_ID,
+        unattendedMode: "provider_account",
+      })
+    ).toEqual({ providerAccountId: ACCOUNT_ID, unattendedMode: "provider_account" });
+    expect(
+      modelProviderAccountDefaultRequestSchema.safeParse({
+        providerAccountId: ACCOUNT_ID,
+        unattendedMode: "provider_account",
+        unexpected: true,
+      }).success
+    ).toBe(false);
+  });
+
+  it("accepts only the provider-specific connect fields", () => {
+    expect(
+      connectModelProviderAccountRequestSchema.safeParse({
+        provider: "openai",
+        displayName: "Team ChatGPT",
+        refreshToken: "refresh-token",
+        accountId: "acct_external",
+      }).success
+    ).toBe(true);
+    expect(
+      connectModelProviderAccountRequestSchema.safeParse({
+        provider: "xai",
+        displayName: "Team SuperGrok",
+        refreshToken: "refresh-token",
+      }).success
+    ).toBe(true);
+    expect(
+      connectModelProviderAccountRequestSchema.safeParse({
+        provider: "xai",
+        displayName: "Team SuperGrok",
+        refreshToken: "refresh-token",
+        accountId: "not-an-xai-field",
+      }).success
+    ).toBe(false);
+  });
+
+  it("requires OpenAI account identity when reconnecting and rejects display updates", () => {
+    expect(
+      reconnectModelProviderAccountRequestSchema.safeParse({
+        provider: "openai",
+        refreshToken: "new-refresh-token",
+        accountId: "acct_external",
+      }).success
+    ).toBe(true);
+    expect(
+      reconnectModelProviderAccountRequestSchema.safeParse({
+        provider: "openai",
+        refreshToken: "new-refresh-token",
+      }).success
+    ).toBe(false);
+    expect(
+      reconnectModelProviderAccountRequestSchema.safeParse({
+        provider: "xai",
+        refreshToken: "new-refresh-token",
+        displayName: "rename through reconnect",
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe("provider account response schemas", () => {
+  const account = {
+    id: ACCOUNT_ID,
+    provider: "openai",
+    displayName: "Team ChatGPT",
+    externalAccountId: "acct_external",
+    status: "active",
+    createdBy: "user-1",
+    updatedBy: "user-1",
+    lastVerifiedAt: 10,
+    lastUsedAt: null,
+    createdAt: 1,
+    updatedAt: 10,
+    archivedAt: null,
+  };
+
+  it("accepts secret-free account, default, and session auth responses", () => {
+    expect(modelProviderAccountResponseSchema.safeParse({ account }).success).toBe(true);
+    expect(modelProviderAccountsResponseSchema.safeParse({ accounts: [account] }).success).toBe(
+      true
+    );
+    expect(
+      modelProviderAccountDefaultsResponseSchema.safeParse({
+        defaults: [
+          {
+            provider: "openai",
+            providerAccountId: ACCOUNT_ID,
+            unattendedMode: "provider_account",
+            createdBy: "user-1",
+            updatedBy: "user-1",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        ],
+      }).success
+    ).toBe(true);
+    expect(
+      sessionModelProviderAuthResponseSchema.safeParse({
+        providerAuth: [
+          {
+            provider: "openai",
+            authMode: "provider_account",
+            providerAccountId: ACCOUNT_ID,
+            selectionSource: "explicit",
+          },
+          {
+            provider: "xai",
+            authMode: "legacy_scoped_oauth",
+            selectionSource: "legacy_fallback",
+          },
+        ],
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects credential leakage and inconsistent auth modes", () => {
+    expect(
+      modelProviderAccountResponseSchema.safeParse({
+        account: { ...account, refreshToken: "must-not-leak" },
+      }).success
+    ).toBe(false);
+    for (const removed of [{ externalAccountKind: "account" }, { providerMetadata: {} }]) {
+      expect(
+        modelProviderAccountResponseSchema.safeParse({ account: { ...account, ...removed } })
+          .success
+      ).toBe(false);
+    }
+    expect(modelProviderAccountStatusSchema.safeParse("verification_failed").success).toBe(false);
+    expect(
+      sessionModelProviderAuthResponseSchema.safeParse({
+        providerAuth: [
+          {
+            provider: "openai",
+            authMode: "provider_account",
+            providerAccountId: ACCOUNT_ID,
+            selectionSource: "installation_default",
+            routingSourceType: "provider_default",
+          },
+        ],
+      }).success
+    ).toBe(false);
+    expect(
+      sessionModelProviderAuthResponseSchema.safeParse({
+        providerAuth: [
+          {
+            provider: "openai",
+            authMode: "api_key",
+            providerAccountId: ACCOUNT_ID,
+            selectionSource: "explicit",
+          },
+        ],
+      }).success
+    ).toBe(false);
+  });
+});

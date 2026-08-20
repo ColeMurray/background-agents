@@ -319,6 +319,14 @@ variable "repo_secrets_encryption_key" {
   sensitive   = true
 }
 
+variable "provider_accounts_encryption_key" {
+  description = "Optional existing key for provider account credentials; when blank, Terraform generates and persists a dedicated key"
+  type        = string
+  sensitive   = true
+  nullable    = false
+  default     = ""
+}
+
 variable "modal_api_secret" {
   description = "Shared secret for authenticating control plane to Modal API calls (generate with: openssl rand -hex 32)"
   type        = string
