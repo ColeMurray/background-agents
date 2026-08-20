@@ -1,6 +1,7 @@
 import {
   cancelChildSessionRequestSchema,
   childFollowUpPromptRequestSchema,
+  sendPromptResponseSchema,
   type CancelChildSessionRequest,
 } from "@open-inspect/shared/types/session-api";
 import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
@@ -133,8 +134,8 @@ export async function handlePromptChild(
   if (response.ok) {
     let messageId: string | undefined;
     try {
-      const payload = (await response.clone().json()) as { messageId?: unknown };
-      if (typeof payload.messageId === "string") messageId = payload.messageId;
+      const parsed = sendPromptResponseSchema.safeParse(await response.clone().json());
+      if (parsed.success) messageId = parsed.data.messageId;
     } catch {
       // The child response remains authoritative; logging is best-effort.
     }
