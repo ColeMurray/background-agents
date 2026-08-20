@@ -40,6 +40,26 @@ jobs:
       - name: Run Knip (unused code detection)
         run: npm run knip -- --no-exit-code
 
+  test-sandbox-runtime-js:
+    name: Test (sandbox-runtime JS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run sandbox runtime JS tests
+        run: npm run test:sandbox-runtime-js
+
   typecheck-typescript:
     name: TypeCheck (TypeScript)
     runs-on: ubuntu-latest
