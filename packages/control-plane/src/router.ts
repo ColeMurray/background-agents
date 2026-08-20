@@ -44,6 +44,7 @@ import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
 import { skillRoutes } from "./routes/skills";
 import { sessionRoutes } from "./routes/sessions";
+import { modelProviderAccountRoutes } from "./routes/model-provider-accounts";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
 
@@ -54,6 +55,17 @@ function withCorsAndTraceHeaders(response: Response, ctx: RequestContext): Respo
   headers.set("Access-Control-Allow-Origin", "*");
   headers.set("x-request-id", ctx.request_id);
   headers.set("x-trace-id", ctx.trace_id);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function withRouteCachePolicy(response: Response, route: Route): Response {
+  if (!route.cacheControl) return response;
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", route.cacheControl);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -197,6 +209,26 @@ async function verifySandboxAuth(
   return null; // Auth passed
 }
 
+async function verifySandboxAuthSafely(
+  request: Request,
+  env: Env,
+  sessionId: string,
+  ctx: RequestContext
+): Promise<Response | null> {
+  try {
+    return await verifySandboxAuth(request, env, sessionId, ctx);
+  } catch (cause) {
+    logger.error("Sandbox authentication unavailable", {
+      event: "auth.sandbox_unavailable",
+      session_id: sessionId,
+      error: cause instanceof Error ? cause : String(cause),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Sandbox authentication unavailable", 503);
+  }
+}
+
 /**
  * Emit the per-request `auth.principal` line: who is acting, as a verified
  * identity — never token material.
@@ -301,6 +333,9 @@ export const routes: Route[] = [
 
   // Model preferences
   ...modelPreferencesRoutes,
+
+  // Subscription provider account management and sandbox access broker
+  ...modelProviderAccountRoutes,
 
   // Integration settings
   ...integrationSettingsRoutes,
@@ -410,7 +445,7 @@ export async function handleRequest(
 
     if (authentication.kind === "sandbox") {
       authError = sandboxSessionId
-        ? await verifySandboxAuth(request, env, sandboxSessionId, ctx)
+        ? await verifySandboxAuthSafely(request, env, sandboxSessionId, ctx)
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
@@ -428,7 +463,7 @@ export async function handleRequest(
           authentication.kind === "user-or-service-with-sandbox-fallback" &&
           sandboxSessionId
         ) {
-          authError = await verifySandboxAuth(request, env, sandboxSessionId, ctx);
+          authError = await verifySandboxAuthSafely(request, env, sandboxSessionId, ctx);
         }
       } else {
         authError = null;
@@ -444,7 +479,7 @@ export async function handleRequest(
         logPrincipal(ctx.principal, ctx, path);
         logRequest(authError, ctx, method, path, startTime);
       }
-      return withCorsAndTraceHeaders(authError, ctx);
+      return withCorsAndTraceHeaders(withRouteCachePolicy(authError, matchedRoute.route), ctx);
     }
 
     if (ctx.principal) {
@@ -454,7 +489,7 @@ export async function handleRequest(
 
   const providerCheck = enforceImplementedScmProvider(matchedRoute.route, path, env, ctx);
   if (providerCheck) {
-    return providerCheck;
+    return withRouteCachePolicy(providerCheck, matchedRoute.route);
   }
 
   let response: Response;
@@ -477,11 +512,14 @@ export async function handleRequest(
         error: e instanceof Error ? e : String(e),
         ...ctx.metrics.summarize(),
       });
-      return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
+      return withCorsAndTraceHeaders(
+        withRouteCachePolicy(error("Internal server error", 500), matchedRoute.route),
+        ctx
+      );
     }
   }
 
   logRequest(response, ctx, method, path, startTime);
 
-  return withCorsAndTraceHeaders(response, ctx);
+  return withCorsAndTraceHeaders(withRouteCachePolicy(response, matchedRoute.route), ctx);
 }

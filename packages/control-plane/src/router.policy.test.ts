@@ -26,6 +26,11 @@ describe("route policy table", () => {
     ["POST", "/image-builds/build-failed", "handler-authenticated"],
     ["GET", "/api/auth/get-session", "web-service"],
     ["GET", "/internal/auth/sign-in-providers", "web-service"],
+    ["GET", "/model-provider-accounts", "user"],
+    ["POST", "/model-provider-accounts", "user"],
+    ["GET", "/model-provider-accounts/legacy-credentials", "user"],
+    ["GET", "/model-provider-account-defaults", "user"],
+    ["PUT", "/model-provider-account-defaults/openai", "user"],
   ])("owns the auth policy for %s %s", (method, path, expectedKind) => {
     expect(routeFor(method, path)?.authentication.kind).toBe(expectedKind);
   });
@@ -87,6 +92,10 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/sessions/session-1/diff/retry")?.authentication.kind).toBe(
       "user-or-service"
     );
+  });
+
+  it("marks provider account management routes as non-cacheable", () => {
+    expect(routeFor("GET", "/model-provider-accounts")?.cacheControl).toBe("private, no-store");
   });
 
   it.each([

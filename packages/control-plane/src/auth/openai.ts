@@ -3,10 +3,10 @@
  */
 
 import { z } from "zod";
+import { PROVIDER_TOKEN_REFRESH_TIMEOUT_MS } from "./provider-token-timeouts";
 
 const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OPENAI_TOKEN_REQUEST_TIMEOUT_MS = 10_000;
 
 const openAITokenResponseSchema = z.object({
   id_token: z.string(),
@@ -33,7 +33,7 @@ export class OpenAITokenRefreshError extends Error {
 export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITokenResponse> {
   const response = await fetch(OPENAI_TOKEN_URL, {
     method: "POST",
-    signal: AbortSignal.timeout(OPENAI_TOKEN_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(PROVIDER_TOKEN_REFRESH_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
     },
