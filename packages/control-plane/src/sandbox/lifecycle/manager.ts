@@ -761,7 +761,19 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * changing state, and that distinction is theirs to make.
    */
   reportSandboxError(reason: string): void {
-    this.storage.setLastSpawnError(reason, Date.now());
+    // Persisting is best effort. `updateSandboxSpawnError` is a bare synchronous
+    // sql.exec, so a storage failure would otherwise also cost the broadcast —
+    // the one signal an already-open tab gets — and, from the message queue's
+    // spawn catch, would replace the spawn error being reported with the
+    // storage error. Losing durability is bad; losing both is worse.
+    try {
+      this.storage.setLastSpawnError(reason, Date.now());
+    } catch (error) {
+      this.log.warn("Failed to persist sandbox failure reason", {
+        event: "sandbox.error_persist_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     this.broadcaster.broadcast({ type: "sandbox_error", error: reason });
   }
 

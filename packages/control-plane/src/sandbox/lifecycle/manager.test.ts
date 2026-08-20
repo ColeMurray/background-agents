@@ -1032,6 +1032,38 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_error).toContain("temporarily disabled");
     });
 
+    it("still broadcasts the reason when persisting it throws", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "pending",
+        spawn_failure_count: 3,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      // updateSandboxSpawnError is a bare synchronous sql.exec in the DO, so
+      // this is a real failure mode, not a hypothetical one.
+      vi.mocked(storage.setLastSpawnError).mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      // Losing durability must not also cost the live broadcast, which is the
+      // only signal an already-open tab gets.
+      await expect(manager.spawnSandbox()).resolves.toBeUndefined();
+      expect(
+        broadcaster.messages.some((m) => (m as { type?: string }).type === "sandbox_error")
+      ).toBe(true);
+    });
+
     it("resets circuit breaker when window passes", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
