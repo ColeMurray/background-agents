@@ -606,7 +606,9 @@ are replaced with non-secret provider markers before sandbox creation. The sandb
 auth token to request short-lived model access from a provider-specific broker. Refresh-token
 rotation is persisted back to the global, repository, or environment scope that supplied it. See
 [Using OpenAI Models](./OPENAI_MODELS.md) and
-[Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
+[Using Grok with a SuperGrok Subscription](./GROK_MODELS.md). A plain provider API key visible to
+the session (`OPENAI_API_KEY`, `XAI_API_KEY`) disables broker mode for that provider and is injected
+into the sandbox like any other secret, because OpenCode reads those variables directly.
 
 > **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
 > added as global secrets. Modal injects these automatically via its own secrets mechanism.

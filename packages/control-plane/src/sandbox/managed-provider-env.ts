@@ -10,6 +10,25 @@ const CONTROL_PLANE_OAUTH_KEYS = new Set([
   "XAI_OAUTH_MANAGED",
 ]);
 
+/**
+ * Providers whose subscription OAuth the control plane brokers. An explicit
+ * API key for the same provider wins: OpenCode's provider loader keeps the
+ * OAuth plugin's dummy key ahead of the env var, so leaving broker mode on
+ * would silently ignore the key the operator just installed.
+ */
+const MANAGED_PROVIDERS = [
+  {
+    refreshTokenKey: "OPENAI_OAUTH_REFRESH_TOKEN",
+    markerKey: "OPENAI_OAUTH_MANAGED",
+    apiKey: "OPENAI_API_KEY",
+  },
+  {
+    refreshTokenKey: "XAI_OAUTH_REFRESH_TOKEN",
+    markerKey: "XAI_OAUTH_MANAGED",
+    apiKey: "XAI_API_KEY",
+  },
+] as const;
+
 interface ManagedProviderEnvOptions {
   exposedSecrets: Record<string, string>;
   brokerSecrets: Record<string, string>;
@@ -22,7 +41,10 @@ export function prepareManagedProviderEnv({
   const env = Object.fromEntries(
     Object.entries(exposedSecrets).filter(([key]) => !CONTROL_PLANE_OAUTH_KEYS.has(key))
   );
-  if (brokerSecrets.OPENAI_OAUTH_REFRESH_TOKEN) env.OPENAI_OAUTH_MANAGED = "1";
-  if (brokerSecrets.XAI_OAUTH_REFRESH_TOKEN) env.XAI_OAUTH_MANAGED = "1";
+  for (const provider of MANAGED_PROVIDERS) {
+    if (brokerSecrets[provider.refreshTokenKey] && !env[provider.apiKey]) {
+      env[provider.markerKey] = "1";
+    }
+  }
   return env;
 }
