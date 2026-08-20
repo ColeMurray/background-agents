@@ -46,4 +46,22 @@ describe("XaiProviderDeviceAuthorization", () => {
       "user info returned invalid data"
     );
   });
+
+  it("uses the canonical provider access-token lifetime when xAI omits expiry", async () => {
+    const authorization = new XaiProviderDeviceAuthorization({
+      start: vi.fn(),
+      check: vi.fn().mockResolvedValue({
+        status: "connected",
+        tokens: { access_token: "access", refresh_token: "refresh" },
+      }),
+      accountId: vi.fn().mockResolvedValue("xai-user"),
+      now: () => 1_000,
+    });
+
+    await expect(authorization.poll({ deviceCode: "device-secret" }, 5_000)).resolves.toMatchObject(
+      {
+        connection: { accessTokenExpiresAt: 3_601_000 },
+      }
+    );
+  });
 });

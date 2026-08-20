@@ -118,6 +118,17 @@ export class XaiModelProviderAccountAdapter implements ModelProviderAccountAdapt
       : null;
   }
 
+  validateReconnectInputIdentity(
+    _input: XaiProviderConnectInput,
+    expectedExternalAccountId: string | null
+  ): void {
+    if (expectedExternalAccountId) {
+      throw new ProviderIdentityError(
+        "Identity-bound xAI accounts must reconnect through device authorization"
+      );
+    }
+  }
+
   runtimeMetadata(_credential: XaiProviderCredential, _externalAccountId: string | null) {
     return {};
   }

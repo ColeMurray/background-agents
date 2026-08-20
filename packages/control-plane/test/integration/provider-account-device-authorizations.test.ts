@@ -311,10 +311,12 @@ describe("provider account device authorization routes", () => {
 
   it("expires locally without allowing a provider completion", async () => {
     const { result } = await start();
+    const expiredAt = Date.now() - 1;
     await env.DB.prepare(
-      "UPDATE model_provider_account_authorizations SET expires_at = ? WHERE id = ?"
+      `UPDATE model_provider_account_authorizations
+       SET created_at = ?, expires_at = ? WHERE id = ?`
     )
-      .bind(Date.now() - 1, result.transactionId)
+      .bind(expiredAt - 1, expiredAt, result.transactionId)
       .run();
     const response = await request(
       `/model-provider-accounts/openai/device-authorizations/${result.transactionId}/poll`,

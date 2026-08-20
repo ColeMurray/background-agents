@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { PROVIDER_TOKEN_REFRESH_TIMEOUT_MS } from "./provider-token-timeouts";
+import {
+  fetchProvider,
+  parseProviderResponse,
+  readBoundedProviderBody,
+  type ProviderResponseErrorFactory,
+} from "./provider-response";
 
 const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const XAI_DEVICE_CODE_URL = "https://auth.x.ai/oauth2/device/code";
@@ -7,7 +12,6 @@ const XAI_USERINFO_URL = "https://auth.x.ai/oauth2/userinfo";
 const XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_DEVICE_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
-const XAI_RESPONSE_MAX_BYTES = 64 * 1024;
 
 const xaiTokenResponseSchema = z.object({
   id_token: z.string().min(1).max(16_384).optional(),
@@ -30,6 +34,10 @@ const xaiDeviceAuthorizationSchema = z.object({
 });
 
 const xaiOAuthErrorSchema = z.object({ error: z.string().min(1) });
+const xaiDeviceTokenExchangeResponseSchema = z.union([
+  xaiDeviceTokenResponseSchema,
+  xaiOAuthErrorSchema,
+]);
 const xaiUserInfoSchema = z.object({ sub: z.string().min(1).max(512) });
 
 export type XaiTokenResponse = z.infer<typeof xaiTokenResponseSchema>;
@@ -57,48 +65,18 @@ export class XaiTokenRefreshError extends Error {
   }
 }
 
-async function readBoundedBody(response: Response): Promise<string> {
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > XAI_RESPONSE_MAX_BYTES) {
-    throw new Error("xAI returned an oversized response");
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return response.text();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > XAI_RESPONSE_MAX_BYTES) {
-      await reader.cancel();
-      throw new Error("xAI returned an oversized response");
-    }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(body);
-}
-
-function providerFetch(url: string, init: RequestInit): Promise<Response> {
-  return fetch(url, { ...init, signal: AbortSignal.timeout(PROVIDER_TOKEN_REFRESH_TIMEOUT_MS) });
-}
-
-function parseJson(body: string): unknown {
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw new Error("xAI returned invalid JSON");
-  }
+function xaiResponseError(operation: string): ProviderResponseErrorFactory {
+  return (reason, status, invalidFields) => {
+    if (reason === "oversized") return new Error(`xAI ${operation} returned an oversized response`);
+    if (reason === "http") return new Error(`xAI ${operation} failed: ${status}`);
+    if (reason === "invalid_json") return new Error(`xAI ${operation} returned invalid JSON`);
+    const fieldSuffix = invalidFields?.length ? ` (${invalidFields.join(", ")})` : "";
+    return new Error(`xAI ${operation} returned invalid data${fieldSuffix}`);
+  };
 }
 
 export async function startXaiDeviceAuthorization(): Promise<XaiDeviceAuthorization> {
-  const response = await providerFetch(XAI_DEVICE_CODE_URL, {
+  const response = await fetchProvider(XAI_DEVICE_CODE_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -111,16 +89,17 @@ export async function startXaiDeviceAuthorization(): Promise<XaiDeviceAuthorizat
       referrer: "opencode",
     }).toString(),
   });
-  const body = await readBoundedBody(response);
-  if (!response.ok) throw new Error(`xAI device authorization failed: ${response.status}`);
-  const result = xaiDeviceAuthorizationSchema.safeParse(parseJson(body));
-  if (!result.success) throw new Error("xAI device authorization returned invalid data");
+  const result = await parseProviderResponse(
+    response,
+    xaiDeviceAuthorizationSchema,
+    xaiResponseError("device authorization")
+  );
   return {
-    deviceCode: result.data.device_code,
-    userCode: result.data.user_code,
-    verificationUrl: result.data.verification_uri_complete ?? result.data.verification_uri,
-    expiresInMs: result.data.expires_in ? result.data.expires_in * 1000 : undefined,
-    intervalMs: (result.data.interval ?? 5) * 1000,
+    deviceCode: result.device_code,
+    userCode: result.user_code,
+    verificationUrl: result.verification_uri_complete ?? result.verification_uri,
+    expiresInMs: result.expires_in ? result.expires_in * 1000 : undefined,
+    intervalMs: (result.interval ?? 5) * 1000,
   };
 }
 
@@ -128,7 +107,7 @@ export async function checkXaiDeviceAuthorization(
   deviceCode: string,
   intervalMs: number
 ): Promise<XaiDeviceStatus> {
-  const response = await providerFetch(XAI_TOKEN_URL, {
+  const response = await fetchProvider(XAI_TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -141,34 +120,41 @@ export async function checkXaiDeviceAuthorization(
       device_code: deviceCode,
     }).toString(),
   });
-  const body = await readBoundedBody(response);
-  const parsed = parseJson(body);
+  const parsed = await parseProviderResponse(
+    response,
+    xaiDeviceTokenExchangeResponseSchema,
+    xaiResponseError("device token exchange"),
+    { acceptErrorStatus: true }
+  );
   if (response.ok) {
-    const tokens = xaiDeviceTokenResponseSchema.safeParse(parsed);
-    if (!tokens.success) throw new Error("xAI device token exchange returned invalid data");
-    return { status: "connected", tokens: tokens.data };
+    if ("error" in parsed) {
+      throw xaiResponseError("device token exchange")("invalid_data", response.status);
+    }
+    return { status: "connected", tokens: parsed };
   }
-  const error = xaiOAuthErrorSchema.safeParse(parsed);
-  if (!error.success) throw new Error(`xAI device token exchange failed: ${response.status}`);
-  if (error.data.error === "authorization_pending") return { status: "pending" };
-  if (error.data.error === "slow_down")
+  if (!("error" in parsed)) {
+    throw xaiResponseError("device token exchange")("invalid_data", response.status);
+  }
+  if (parsed.error === "authorization_pending") return { status: "pending" };
+  if (parsed.error === "slow_down")
     return { status: "pending", intervalMs: Math.min(intervalMs + 5_000, 60_000) };
-  if (error.data.error === "access_denied" || error.data.error === "authorization_denied") {
+  if (parsed.error === "access_denied" || parsed.error === "authorization_denied") {
     return { status: "denied" };
   }
-  if (error.data.error === "expired_token") return { status: "expired" };
+  if (parsed.error === "expired_token") return { status: "expired" };
   return { status: "failed" };
 }
 
 export async function fetchXaiAccountId(accessToken: string): Promise<string> {
-  const response = await providerFetch(XAI_USERINFO_URL, {
+  const response = await fetchProvider(XAI_USERINFO_URL, {
     headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
   });
-  const body = await readBoundedBody(response);
-  if (!response.ok) throw new Error(`xAI user info request failed: ${response.status}`);
-  const result = xaiUserInfoSchema.safeParse(parseJson(body));
-  if (!result.success) throw new Error("xAI user info returned invalid data");
-  return result.data.sub;
+  const result = await parseProviderResponse(
+    response,
+    xaiUserInfoSchema,
+    xaiResponseError("user info request")
+  );
+  return result.sub;
 }
 
 function classifyRefreshError(status: number, body: string): XaiTokenRefreshErrorReason {
@@ -189,7 +175,7 @@ function classifyRefreshError(status: number, body: string): XaiTokenRefreshErro
 }
 
 export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenResponse> {
-  const response = await providerFetch(XAI_TOKEN_URL, {
+  const response = await fetchProvider(XAI_TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -201,9 +187,17 @@ export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenRes
       client_id: XAI_CLIENT_ID,
     }).toString(),
   });
-  const body = await readBoundedBody(response);
 
   if (!response.ok) {
+    const body = await readBoundedProviderBody(
+      response,
+      () =>
+        new XaiTokenRefreshError(
+          "xAI token refresh returned an oversized response",
+          502,
+          "invalid_response"
+        )
+    );
     throw new XaiTokenRefreshError(
       `xAI token refresh failed: ${response.status}`,
       response.status,
@@ -211,23 +205,14 @@ export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenRes
     );
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    throw new XaiTokenRefreshError(
-      "xAI token refresh returned invalid JSON",
-      response.status,
-      "invalid_response"
-    );
-  }
-  const result = xaiTokenResponseSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new XaiTokenRefreshError(
-      `xAI token refresh returned invalid response: ${response.status}`,
-      response.status,
-      "invalid_response"
-    );
-  }
-  return result.data;
+  return parseProviderResponse(
+    response,
+    xaiTokenResponseSchema,
+    (_reason, status) =>
+      new XaiTokenRefreshError(
+        `xAI token refresh returned invalid response: ${status}`,
+        status,
+        "invalid_response"
+      )
+  );
 }

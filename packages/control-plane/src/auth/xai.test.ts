@@ -169,6 +169,16 @@ describe("xAI device authorization", () => {
       Authorization: "Bearer access-secret",
     });
   });
+
+  it("uses the canonical bounded provider-response path", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response("x", {
+        headers: { "Content-Length": String(64 * 1024 + 1) },
+      })
+    );
+
+    await expect(startXaiDeviceAuthorization()).rejects.toThrow("oversized response");
+  });
 });
 
 function makeJwt(payload: Record<string, unknown>): string {

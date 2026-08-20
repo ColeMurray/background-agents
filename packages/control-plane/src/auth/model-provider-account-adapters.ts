@@ -64,6 +64,10 @@ export interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
   parseCredential(payload: unknown, schemaVersion: number): TCredential;
   refresh(credential: TCredential, now?: number): Promise<ProviderRefreshResult<TCredential>>;
   cachedAccess(credential: TCredential): CachedProviderAccess | null;
+  validateReconnectInputIdentity(
+    input: TConnectInput,
+    expectedExternalAccountId: string | null
+  ): void;
   runtimeMetadata(
     credential: TCredential,
     externalAccountId: string | null

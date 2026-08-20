@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type {
-  ProviderDeviceAuthorizationCapability,
-  ProviderDeviceAuthorizationPollResult,
+import {
+  DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS,
+  type ProviderDeviceAuthorizationCapability,
+  type ProviderDeviceAuthorizationPollResult,
 } from "./model-provider-account-adapters";
 import type { XaiProviderCredential } from "./model-provider-account-xai-adapter";
 import { checkXaiDeviceAuthorization, fetchXaiAccountId, startXaiDeviceAuthorization } from "./xai";
@@ -63,7 +64,8 @@ export class XaiProviderDeviceAuthorization implements ProviderDeviceAuthorizati
 
     const externalAccountId = await this.dependencies.accountId(result.tokens.access_token);
     const accessTokenExpiresAt =
-      this.dependencies.now() + (result.tokens.expires_in ?? 60 * 60) * 1000;
+      this.dependencies.now() +
+      (result.tokens.expires_in ?? DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS / 1000) * 1000;
     return {
       status: "connected",
       connection: {

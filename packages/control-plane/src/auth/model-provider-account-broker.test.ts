@@ -79,6 +79,7 @@ function adapter(
             accessTokenExpiresAt: credential.accessTokenExpiresAt,
           }
         : null,
+    validateReconnectInputIdentity: vi.fn() as never,
     runtimeMetadata: (_credential, externalAccountId): Record<string, string> =>
       externalAccountId ? { accountId: externalAccountId } : {},
     validateExternalIdentity: (actual, expected) => {
