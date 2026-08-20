@@ -1,8 +1,11 @@
 import useSWR from "swr";
+import type { ZodType } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   modelProviderAccountDefaultsResponseSchema,
+  modelProviderAccountDefaultResponseSchema,
+  modelProviderAccountResponseSchema,
   modelProviderAccountsResponseSchema,
   providerDeviceAuthorizationIdSchema,
   providerDeviceAuthorizationStatusResponseSchema,
@@ -41,18 +44,15 @@ export class ProviderResourceError extends Error {
   }
 }
 
-async function mutateProviderResource<T>(
+async function requestProviderResponse(
   path: BrowserApiPath,
-  method: string,
-  body?: unknown,
-  inspectResponse?: (response: Response) => void
-): Promise<T> {
+  init?: { method?: string; body?: unknown }
+): Promise<Response> {
   const response = await browserApiFetch(path, {
-    method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    method: init?.method,
+    headers: init?.body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: init?.body === undefined ? undefined : JSON.stringify(init.body),
   });
-  inspectResponse?.(response);
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
       error?: string;
@@ -64,24 +64,36 @@ async function mutateProviderResource<T>(
       typeof payload.retryable === "boolean" ? payload.retryable : undefined
     );
   }
-  return response.status === 204 ? (undefined as T) : response.json();
+  return response;
+}
+
+async function requestProviderResource<T>(
+  path: BrowserApiPath,
+  schema: ZodType<T>,
+  init?: { method?: string; body?: unknown }
+): Promise<T> {
+  const response = await requestProviderResponse(path, init);
+  const parsed = schema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) throw new Error("Invalid provider account response");
+  return parsed.data;
+}
+
+async function requestProviderResourceWithoutContent(
+  path: BrowserApiPath,
+  init: { method: string; body?: unknown }
+): Promise<void> {
+  const response = await requestProviderResponse(path, init);
+  if (response.status !== 204) throw new Error("Invalid provider account response");
 }
 
 export function useProviderAccounts() {
   const { data: session } = useAuthSession();
   const accounts = useSWR(session ? ACCOUNTS_KEY : null, async (path) => {
-    const parsed = modelProviderAccountsResponseSchema.safeParse(
-      await browserApiFetch(path).then((response) => response.json())
-    );
-    if (!parsed.success) throw new Error("Invalid provider accounts response");
-    return parsed.data.accounts;
+    return (await requestProviderResource(path, modelProviderAccountsResponseSchema)).accounts;
   });
   const defaults = useSWR(session ? DEFAULTS_KEY : null, async (path) => {
-    const parsed = modelProviderAccountDefaultsResponseSchema.safeParse(
-      await browserApiFetch(path).then((response) => response.json())
-    );
-    if (!parsed.success) throw new Error("Invalid provider account defaults response");
-    return parsed.data.defaults;
+    return (await requestProviderResource(path, modelProviderAccountDefaultsResponseSchema))
+      .defaults;
   });
 
   return {
@@ -102,11 +114,7 @@ export function useLegacyProviderCredentials() {
   const result = useSWR<LegacyProviderCredentialsResponse>(
     session ? LEGACY_CREDENTIALS_KEY : null,
     async (path: BrowserApiPath) => {
-      const response = await browserApiFetch(path);
-      if (!response.ok) throw new Error("Failed to load legacy provider credentials");
-      const parsed = legacyProviderCredentialsResponseSchema.safeParse(await response.json());
-      if (!parsed.success) throw new Error("Invalid legacy provider credentials response");
-      return parsed.data;
+      return requestProviderResource(path, legacyProviderCredentialsResponseSchema);
     }
   );
   return {
@@ -118,10 +126,12 @@ export function useLegacyProviderCredentials() {
 }
 
 export async function connectProviderAccount(input: ConnectModelProviderAccountRequest) {
-  const payload = await mutateProviderResource<unknown>(ACCOUNTS_KEY, "POST", input);
-  const parsed = createModelProviderAccountResponseSchema.safeParse(payload);
-  if (!parsed.success) throw new Error("Invalid provider account response");
-  return parsed.data.account;
+  return (
+    await requestProviderResource(ACCOUNTS_KEY, createModelProviderAccountResponseSchema, {
+      method: "POST",
+      body: input,
+    })
+  ).account;
 }
 
 export async function startProviderDeviceAuthorization(
@@ -130,14 +140,11 @@ export async function startProviderDeviceAuthorization(
 ): Promise<StartProviderDeviceAuthorizationResponse> {
   const parsedProvider = subscriptionProviderIdSchema.parse(provider);
   const request = startProviderDeviceAuthorizationRequestSchema.parse(input);
-  const payload = await mutateProviderResource<unknown>(
+  return requestProviderResource(
     `${ACCOUNTS_KEY}/device-authorizations/${parsedProvider}`,
-    "POST",
-    request
+    startProviderDeviceAuthorizationResponseSchema,
+    { method: "POST", body: request }
   );
-  const parsed = startProviderDeviceAuthorizationResponseSchema.safeParse(payload);
-  if (!parsed.success) throw new Error("Invalid device authorization response");
-  return parsed.data;
 }
 
 export async function pollProviderDeviceAuthorization(
@@ -146,14 +153,11 @@ export async function pollProviderDeviceAuthorization(
 ) {
   const parsedProvider = subscriptionProviderIdSchema.parse(provider);
   const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
-  const payload = await mutateProviderResource<unknown>(
+  return requestProviderResource(
     `${ACCOUNTS_KEY}/device-authorizations/${parsedProvider}/${id}/poll`,
-    "POST",
-    {}
+    providerDeviceAuthorizationStatusResponseSchema,
+    { method: "POST", body: {} }
   );
-  const parsed = providerDeviceAuthorizationStatusResponseSchema.safeParse(payload);
-  if (!parsed.success) throw new Error("Invalid device authorization status response");
-  return parsed.data;
 }
 
 export async function cancelProviderDeviceAuthorization(
@@ -162,32 +166,49 @@ export async function cancelProviderDeviceAuthorization(
 ) {
   const parsedProvider = subscriptionProviderIdSchema.parse(provider);
   const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
-  await mutateProviderResource<void>(
+  await requestProviderResourceWithoutContent(
     `${ACCOUNTS_KEY}/device-authorizations/${parsedProvider}/${id}`,
-    "DELETE"
+    { method: "DELETE" }
   );
 }
 
 export async function renameProviderAccount(id: string, displayName: string) {
-  return mutateProviderResource(`${ACCOUNTS_KEY}/${id}`, "PATCH", { displayName });
+  return (
+    await requestProviderResource(`${ACCOUNTS_KEY}/${id}`, modelProviderAccountResponseSchema, {
+      method: "PATCH",
+      body: { displayName },
+    })
+  ).account;
 }
 
 export async function reconnectProviderAccount(
   id: string,
   input: ReconnectModelProviderAccountRequest
 ) {
-  return mutateProviderResource(`${ACCOUNTS_KEY}/${id}/reconnect`, "POST", input);
+  return (
+    await requestProviderResource(
+      `${ACCOUNTS_KEY}/${id}/reconnect`,
+      modelProviderAccountResponseSchema,
+      { method: "POST", body: input }
+    )
+  ).account;
 }
 
 export async function runProviderAccountAction(
   id: string,
   action: "verify" | "disable" | "enable"
 ) {
-  return mutateProviderResource(`${ACCOUNTS_KEY}/${id}/${action}`, "POST", {});
+  return (
+    await requestProviderResource(
+      `${ACCOUNTS_KEY}/${id}/${action}`,
+      modelProviderAccountResponseSchema,
+      { method: "POST", body: {} }
+    )
+  ).account;
 }
 
 export async function archiveProviderAccount(id: string) {
-  return mutateProviderResource(`${ACCOUNTS_KEY}/${id}`, "DELETE");
+  return requestProviderResourceWithoutContent(`${ACCOUNTS_KEY}/${id}`, { method: "DELETE" });
 }
 
 export async function setProviderAccountDefault(
@@ -195,12 +216,20 @@ export async function setProviderAccountDefault(
   providerAccountId: string,
   unattendedMode: "provider_account" | "api_key"
 ) {
-  return mutateProviderResource(`${DEFAULTS_KEY}/${provider}`, "PUT", {
-    providerAccountId,
-    unattendedMode,
-  });
+  return (
+    await requestProviderResource(
+      `${DEFAULTS_KEY}/${provider}`,
+      modelProviderAccountDefaultResponseSchema,
+      {
+        method: "PUT",
+        body: { providerAccountId, unattendedMode },
+      }
+    )
+  ).default;
 }
 
 export async function clearProviderAccountDefault(provider: SubscriptionProviderId) {
-  return mutateProviderResource(`${DEFAULTS_KEY}/${provider}`, "DELETE");
+  return requestProviderResourceWithoutContent(`${DEFAULTS_KEY}/${provider}`, {
+    method: "DELETE",
+  });
 }

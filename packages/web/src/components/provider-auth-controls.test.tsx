@@ -56,4 +56,30 @@ describe("ProviderAuthControls menu", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No account" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
   });
+
+  it("shows the effective unattended API-key default", () => {
+    render(
+      <ProviderAuthControls
+        provider="openai"
+        accounts={[account]}
+        defaultValue={{
+          provider: "openai",
+          providerAccountId: account.id,
+          unattendedMode: "api_key",
+          createdBy: null,
+          updatedBy: null,
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        policyLabel="Use defaults when each run starts"
+        unattended
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("combobox")).toHaveTextContent(
+      "Use defaults when each run starts: No account"
+    );
+    expect(screen.queryByText(/Use defaults when each run starts: Team ChatGPT/)).toBeNull();
+  });
 });

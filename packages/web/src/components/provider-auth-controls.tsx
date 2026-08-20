@@ -40,6 +40,7 @@ export function ProviderAuthControls({
   value,
   onChange,
   policyLabel = "Use default",
+  unattended = false,
   variant = "select",
 }: {
   provider: SubscriptionProviderId;
@@ -48,6 +49,7 @@ export function ProviderAuthControls({
   value?: ProviderAuthSelection;
   onChange: (value: ProviderAuthSelection | undefined) => void;
   policyLabel?: string;
+  unattended?: boolean;
   variant?: "select" | "menu";
 }) {
   const available = accounts.filter(
@@ -61,8 +63,12 @@ export function ProviderAuthControls({
   const defaultAccount = available.find(
     (account) => account.id === defaultValue?.providerAccountId
   );
-  const policyDescription = defaultAccount
-    ? `${policyLabel}: ${defaultAccount.displayName}`
+  const effectiveDefaultLabel =
+    unattended && defaultValue?.unattendedMode === "api_key"
+      ? "No account"
+      : defaultAccount?.displayName;
+  const policyDescription = effectiveDefaultLabel
+    ? `${policyLabel}: ${effectiveDefaultLabel}`
     : policyLabel;
   const providerName = SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].displayName;
   const handleChange = (next: string) => {

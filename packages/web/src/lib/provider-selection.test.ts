@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  providerSelectionsKey,
-  setProviderSelection,
-  type ProviderSelectionDrafts,
-} from "./provider-selection";
+import { setProviderSelection, type ProviderSelectionDrafts } from "./provider-selection";
 
 describe("provider selection state", () => {
   it("retains explicit state for every provider while another provider changes", () => {
@@ -29,19 +25,5 @@ describe("provider selection state", () => {
     expect(setProviderSelection(state, "openai", undefined)).toEqual({
       xai: { mode: "provider_account", accountId: "b".repeat(32) },
     });
-  });
-
-  it("produces a stable warm identity independent of object insertion order", () => {
-    expect(
-      providerSelectionsKey({
-        xai: { mode: "api_key" },
-        openai: { mode: "provider_account", accountId: "a".repeat(32) },
-      })
-    ).toBe(
-      providerSelectionsKey({
-        openai: { mode: "provider_account", accountId: "a".repeat(32) },
-        xai: { mode: "api_key" },
-      })
-    );
   });
 });

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import {
+  modelProviderAccountReconnectMethod,
   SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
   type ModelProviderAccount,
   type SubscriptionProviderId,
@@ -79,7 +80,7 @@ const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> 
   xai: {
     add: () => ({ kind: "device", target: { provider: "xai", operation: "create" } }),
     reconnect: (account) =>
-      account.externalAccountId
+      modelProviderAccountReconnectMethod(account) === "device_authorization"
         ? {
             kind: "device",
             target: {
@@ -135,34 +136,61 @@ function connectionToastMessage(
     : `Existing ${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account reconnected`;
 }
 
+function LegacyReconnectForm({
+  account,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  account: ModelProviderAccount;
+  saving: boolean;
+  onSave: (refreshToken: string) => void;
+  onCancel: () => void;
+}) {
+  const [refreshToken, setRefreshToken] = useState("");
+
+  return (
+    <div className="space-y-3 rounded-md border border-border-muted p-4">
+      <h3 className="font-medium">Reconnect {account.displayName}</h3>
+      <p className="text-xs text-muted-foreground">
+        This legacy account predates device authorization. Enter a fresh xAI refresh token once; new
+        SuperGrok accounts connect through xAI directly.
+      </p>
+      <div>
+        <Label htmlFor="provider-refresh-token">Refresh token</Label>
+        <Input
+          id="provider-refresh-token"
+          type="password"
+          autoComplete="off"
+          value={refreshToken}
+          onChange={(event) => setRefreshToken(event.target.value)}
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={saving || !refreshToken} onClick={() => onSave(refreshToken)}>
+          Save
+        </Button>
+        <Button size="sm" variant="subtle" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function ProviderAccountsSettings() {
   const { providers, accounts, defaults, loading, error, refresh } = useProviderAccounts();
   const legacyCredentials = useLegacyProviderCredentials();
-  const [deviceAuthorization, setDeviceAuthorization] =
-    useState<ProviderDeviceAuthorizationTarget | null>(null);
-  const [legacyReconnect, setLegacyReconnect] = useState<ModelProviderAccount | null>(null);
-  const [legacyRefreshToken, setLegacyRefreshToken] = useState("");
+  const [connection, setConnection] = useState<Connection | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [saving, setSaving] = useState(false);
-
-  function openConnection(connection: Connection) {
-    if (connection.kind === "device") {
-      setLegacyReconnect(null);
-      setLegacyRefreshToken("");
-      setDeviceAuthorization(connection.target);
-      return;
-    }
-    setDeviceAuthorization(null);
-    setLegacyReconnect(connection.account);
-  }
 
   async function run(operation: () => Promise<unknown>, success: string) {
     setSaving(true);
     try {
       await operation();
       await refresh();
-      setLegacyReconnect(null);
-      setLegacyRefreshToken("");
+      setConnection(null);
       setConfirm(null);
       toast.success(success);
     } catch (caught) {
@@ -232,9 +260,7 @@ export function ProviderAccountsSettings() {
                   {providers.map((provider) => (
                     <DropdownMenuItem
                       key={provider.provider}
-                      onSelect={() =>
-                        openConnection(CONNECTION_STRATEGIES[provider.provider].add())
-                      }
+                      onSelect={() => setConnection(CONNECTION_STRATEGIES[provider.provider].add())}
                     >
                       <ProviderIcon provider={provider.provider} className="size-5" />
                       <span>{provider.subscriptionName}</span>
@@ -306,7 +332,7 @@ export function ProviderAccountsSettings() {
                           size="xs"
                           variant="subtle"
                           onClick={() =>
-                            openConnection(
+                            setConnection(
                               CONNECTION_STRATEGIES[account.provider].reconnect(account)
                             )
                           }
@@ -476,75 +502,43 @@ export function ProviderAccountsSettings() {
         </>
       )}
 
-      {deviceAuthorization && (
+      {connection?.kind === "device" && (
         <ProviderDeviceAuthorizationDialog
           key={
-            deviceAuthorization.operation === "create"
-              ? `${deviceAuthorization.provider}:create`
-              : `${deviceAuthorization.provider}:reconnect:${deviceAuthorization.providerAccountId}`
+            connection.target.operation === "create"
+              ? `${connection.target.provider}:create`
+              : `${connection.target.provider}:reconnect:${connection.target.providerAccountId}`
           }
-          target={deviceAuthorization}
-          onClose={() => setDeviceAuthorization(null)}
+          target={connection.target}
+          onClose={() => setConnection(null)}
           onConnected={(result) => {
-            setDeviceAuthorization(null);
+            const target = connection.target;
+            setConnection(null);
             void refresh();
             toast.success(
-              connectionToastMessage(
-                deviceAuthorization.provider,
-                result.reconnectedExisting,
-                deviceAuthorization.operation
-              )
+              connectionToastMessage(target.provider, result.reconnectedExisting, target.operation)
             );
           }}
         />
       )}
 
-      {legacyReconnect && (
-        <div className="space-y-3 rounded-md border border-border-muted p-4">
-          <h3 className="font-medium">Reconnect {legacyReconnect.displayName}</h3>
-          <p className="text-xs text-muted-foreground">
-            This legacy account predates device authorization. Enter a fresh xAI refresh token once;
-            new SuperGrok accounts connect through xAI directly.
-          </p>
-          <div>
-            <Label htmlFor="provider-refresh-token">Refresh token</Label>
-            <Input
-              id="provider-refresh-token"
-              type="password"
-              autoComplete="off"
-              value={legacyRefreshToken}
-              onChange={(event) => setLegacyRefreshToken(event.target.value)}
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              disabled={saving || !legacyRefreshToken}
-              onClick={() =>
-                void run(
-                  () =>
-                    reconnectProviderAccount(legacyReconnect.id, {
-                      provider: "xai",
-                      refreshToken: legacyRefreshToken,
-                    }),
-                  "Account reconnected"
-                )
-              }
-            >
-              Save
-            </Button>
-            <Button
-              size="sm"
-              variant="subtle"
-              onClick={() => {
-                setLegacyReconnect(null);
-                setLegacyRefreshToken("");
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
+      {connection?.kind === "legacy-xai" && (
+        <LegacyReconnectForm
+          key={connection.account.id}
+          account={connection.account}
+          saving={saving}
+          onSave={(refreshToken) =>
+            void run(
+              () =>
+                reconnectProviderAccount(connection.account.id, {
+                  provider: "xai",
+                  refreshToken,
+                }),
+              "Account reconnected"
+            )
+          }
+          onCancel={() => setConnection(null)}
+        />
       )}
 
       <AlertDialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>

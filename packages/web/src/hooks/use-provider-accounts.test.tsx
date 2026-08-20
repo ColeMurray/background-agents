@@ -7,8 +7,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   cancelProviderDeviceAuthorization,
+  archiveProviderAccount,
   connectProviderAccount,
   pollProviderDeviceAuthorization,
+  renameProviderAccount,
+  setProviderAccountDefault,
   startProviderDeviceAuthorization,
   type ProviderResourceError,
   useLegacyProviderCredentials,
@@ -26,6 +29,21 @@ function wrapper({ children }: { children: ReactNode }) {
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>{children}</SWRConfig>
   );
 }
+
+const account = {
+  id: "a".repeat(32),
+  provider: "openai" as const,
+  displayName: "Primary",
+  externalAccountId: "external-1",
+  status: "active" as const,
+  createdBy: null,
+  updatedBy: null,
+  lastVerifiedAt: null,
+  lastUsedAt: null,
+  createdAt: 1,
+  updatedAt: 1,
+  archivedAt: null,
+};
 
 describe("useLegacyProviderCredentials", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -94,20 +112,6 @@ describe("connectProviderAccount", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("accepts the create response with reconnection metadata", async () => {
-    const account = {
-      id: "a".repeat(32),
-      provider: "openai",
-      displayName: "Primary",
-      externalAccountId: "external-1",
-      status: "active",
-      createdBy: null,
-      updatedBy: null,
-      lastVerifiedAt: null,
-      lastUsedAt: null,
-      createdAt: 1,
-      updatedAt: 1,
-      archivedAt: null,
-    };
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ account, reconnectedExisting: false }, { status: 201 })
     );
@@ -120,6 +124,57 @@ describe("connectProviderAccount", () => {
         accountId: "external-1",
       })
     ).resolves.toEqual(account);
+  });
+});
+
+describe("provider account API response boundaries", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("validates account and default mutation responses", async () => {
+    const providerDefault = {
+      provider: "openai",
+      providerAccountId: account.id,
+      unattendedMode: "provider_account",
+      createdBy: null,
+      updatedBy: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ account }))
+      .mockResolvedValueOnce(Response.json({ default: providerDefault }));
+
+    await expect(renameProviderAccount(account.id, "Primary")).resolves.toEqual(account);
+    await expect(
+      setProviderAccountDefault("openai", account.id, "provider_account")
+    ).resolves.toEqual(providerDefault);
+  });
+
+  it("rejects malformed mutation payloads and non-204 empty responses", async () => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ account: { id: "unsafe" } }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+
+    await expect(renameProviderAccount(account.id, "Primary")).rejects.toThrow(
+      "Invalid provider account response"
+    );
+    await expect(archiveProviderAccount(account.id)).rejects.toThrow(
+      "Invalid provider account response"
+    );
+  });
+
+  it("uses the same status policy for query resources", async () => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ error: "Accounts unavailable" }, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+
+    const { result } = renderHook(() => useProviderAccounts(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toMatchObject({
+      name: "ProviderResourceError",
+      message: "Accounts unavailable",
+      status: 503,
+    });
   });
 });
 
@@ -192,7 +247,7 @@ describe("provider device authorization requests", () => {
         operation: "create",
         displayName: "ChatGPT account",
       })
-    ).rejects.toThrow("Invalid device authorization response");
+    ).rejects.toThrow("Invalid provider account response");
   });
 
   it("preserves status and retryability from API errors", async () => {

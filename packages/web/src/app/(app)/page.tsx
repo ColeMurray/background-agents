@@ -51,8 +51,8 @@ import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion"
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
-import { providerSelectionsKey, setProviderSelection } from "@/lib/provider-selection";
-import { retireWarmDraftSession } from "@/lib/warm-session";
+import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
+import { setProviderSelection } from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
@@ -79,7 +79,7 @@ export default function Home() {
   const { data: session } = useAuthSession();
   const router = useRouter();
   const picker = useSessionTargetPicker();
-  const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
+  const { sessionTarget, buildRequestFields, isLaunchable } = picker;
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
@@ -88,32 +88,15 @@ export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
-  const providerSelectionKey = providerSelectionsKey(providerSelections);
   const providerAccounts = useProviderAccounts();
-  const skillSelectionKey =
-    skillSelection.mode === "profile" ? `profile:${skillSelection.profileId}` : skillSelection.mode;
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
-  const pendingSessionIdRef = useRef<string | null>(null);
-  const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const submitInFlightRef = useRef(false);
-  // Keyed by the picker's configKey so environment/ad-hoc selections
-  // invalidate a warmed session exactly like repo/branch changes do.
-  const pendingConfigRef = useRef<{
-    target: string;
-    model: string;
-    reasoningEffort?: string;
-    branch: string;
-    skills: string;
-    providers: string;
-  } | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
-  const currentSkillPreviewTarget = session ? skillPreviewTarget(buildRequestFields()) : null;
+  const targetRequestFields = buildRequestFields();
+  const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
   const {
     preview: skillPreview,
     loading: skillPreviewLoading,
@@ -137,120 +120,22 @@ export default function Home() {
     loadingEnabledModels ? undefined : enabledModels
   );
 
-  // Skills are pinned while the session warms, so any identity input change
-  // must discard that session rather than submit a prompt with stale skills.
-  useEffect(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    if (pendingSessionIdRef.current) void retireWarmDraftSession(pendingSessionIdRef.current);
-    pendingSessionIdRef.current = null;
-    setPendingSessionId(null);
-    setIsCreatingSession(false);
-    sessionCreationPromise.current = null;
-    pendingConfigRef.current = null;
-  }, [
-    sessionTarget,
-    selectedModel,
-    reasoningEffort,
-    selectedBranch,
-    skillSelectionKey,
-    providerSelectionKey,
-  ]);
-
-  useEffect(
-    () => () => {
-      if (pendingSessionIdRef.current) void retireWarmDraftSession(pendingSessionIdRef.current);
-    },
-    []
-  );
-
-  const createSessionForWarming = useCallback(async () => {
-    if (loadingEnabledModels) return null;
-    if (pendingSessionId) return pendingSessionId;
-    if (sessionCreationPromise.current) return sessionCreationPromise.current;
-    const targetRequestFields = buildRequestFields();
-    if (!targetRequestFields) return null;
-
-    setIsCreatingSession(true);
-    const currentConfig = {
-      target: configKey,
-      model: selectedModel,
-      reasoningEffort,
-      branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
-      skills: skillSelectionKey,
-      providers: providerSelectionKey,
-    };
-    pendingConfigRef.current = currentConfig;
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
-    const promise = (async () => {
-      try {
-        const res = await browserApiFetch("/api/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...targetRequestFields,
-            model: selectedModel,
-            reasoningEffort,
-            skillSelection,
-            providerSelections,
-          }),
-          signal: abortController.signal,
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (
-            pendingConfigRef.current?.target === currentConfig.target &&
-            pendingConfigRef.current?.model === currentConfig.model &&
-            pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
-            pendingConfigRef.current?.branch === currentConfig.branch &&
-            pendingConfigRef.current?.skills === currentConfig.skills &&
-            pendingConfigRef.current?.providers === currentConfig.providers
-          ) {
-            setPendingSessionId(data.sessionId);
-            pendingSessionIdRef.current = data.sessionId;
-            return data.sessionId as string;
-          }
-          void retireWarmDraftSession(data.sessionId as string);
-          return null;
+  const warmRequest =
+    session && !loadingEnabledModels && targetRequestFields
+      ? {
+          ...targetRequestFields,
+          model: selectedModel,
+          reasoningEffort,
+          skillSelection,
+          providerSelections,
         }
-        return null;
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          return null;
-        }
-        console.error("Failed to create session for warming:", error);
-        return null;
-      } finally {
-        if (abortControllerRef.current === abortController) {
-          setIsCreatingSession(false);
-          sessionCreationPromise.current = null;
-          abortControllerRef.current = null;
-        }
-      }
-    })();
-
-    sessionCreationPromise.current = promise;
-    return promise;
-  }, [
-    sessionTarget,
-    selectedBranch,
-    configKey,
-    buildRequestFields,
-    selectedModel,
-    reasoningEffort,
-    skillSelection,
-    skillSelectionKey,
-    providerSelections,
-    providerSelectionKey,
-    pendingSessionId,
-    loadingEnabledModels,
-  ]);
+      : null;
+  const {
+    sessionId: pendingSessionId,
+    isWarming: isCreatingSession,
+    warm: createSessionForWarming,
+    consume: consumeWarmSession,
+  } = useWarmDraftSession(warmRequest);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -348,9 +233,7 @@ export default function Home() {
       });
 
       if (res.ok) {
-        pendingSessionIdRef.current = null;
-        setPendingSessionId(null);
-        pendingConfigRef.current = null;
+        consumeWarmSession(sessionId);
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         mutate(isSessionInboxKey);

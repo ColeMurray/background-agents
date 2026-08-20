@@ -783,6 +783,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             defaultValue={providerAccounts.defaults.find((item) => item.provider === provider)}
             value={providerSelections[provider]}
             policyLabel="Use defaults when each run starts"
+            unattended
             onChange={(selection) =>
               setProviderSelections((current) => setProviderSelection(current, provider, selection))
             }
