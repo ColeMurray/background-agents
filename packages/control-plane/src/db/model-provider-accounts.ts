@@ -25,6 +25,7 @@ interface AccountRow {
   created_at: number;
   updated_at: number;
   archived_at: number | null;
+  lifecycle_version: number;
 }
 
 export interface CreateModelProviderAccount {
@@ -36,6 +37,11 @@ export interface CreateModelProviderAccount {
   actorId?: string | null;
   lastVerifiedAt?: number | null;
   now?: number;
+}
+
+export interface ModelProviderAccountLifecycleSnapshot {
+  account: ModelProviderAccount;
+  lifecycleVersion: number;
 }
 
 function toAccount(row: AccountRow): ModelProviderAccount {
@@ -54,6 +60,10 @@ function toAccount(row: AccountRow): ModelProviderAccount {
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
   };
+}
+
+function toLifecycleSnapshot(row: AccountRow): ModelProviderAccountLifecycleSnapshot {
+  return { account: toAccount(row), lifecycleVersion: row.lifecycle_version };
 }
 
 export class ModelProviderAccountStore {
@@ -96,6 +106,14 @@ export class ModelProviderAccountStore {
     return row ? toAccount(row) : null;
   }
 
+  async getLifecycleSnapshot(id: string): Promise<ModelProviderAccountLifecycleSnapshot | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM model_provider_accounts WHERE id = ?")
+      .bind(id)
+      .first<AccountRow>();
+    return row ? toLifecycleSnapshot(row) : null;
+  }
+
   async findByExternalIdentity(
     provider: ModelProviderId,
     externalAccountId: string
@@ -110,6 +128,22 @@ export class ModelProviderAccountStore {
       .bind(provider, externalAccountId)
       .first<AccountRow>();
     return row ? toAccount(row) : null;
+  }
+
+  async findLifecycleSnapshotByExternalIdentity(
+    provider: ModelProviderId,
+    externalAccountId: string
+  ): Promise<ModelProviderAccountLifecycleSnapshot | null> {
+    assertModelProviderId(provider);
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM model_provider_accounts
+         WHERE provider = ? AND external_account_id = ?
+           AND archived_at IS NULL`
+      )
+      .bind(provider, externalAccountId)
+      .first<AccountRow>();
+    return row ? toLifecycleSnapshot(row) : null;
   }
 
   bindUpdateConnection(
@@ -128,7 +162,8 @@ export class ModelProviderAccountStore {
     return this.db
       .prepare(
         `UPDATE model_provider_accounts
-         SET external_account_id = ?, status = ?, updated_by = ?, last_verified_at = ?, updated_at = ?
+         SET external_account_id = ?, status = ?, updated_by = ?, last_verified_at = ?,
+             updated_at = ?, lifecycle_version = lifecycle_version + 1
          WHERE id = ? AND archived_at IS NULL AND EXISTS (
            SELECT 1 FROM model_provider_account_credentials
            WHERE provider_account_id = model_provider_accounts.id
@@ -194,7 +229,8 @@ export class ModelProviderAccountStore {
     const result = await this.db
       .prepare(
         `UPDATE model_provider_accounts
-         SET status = ?, updated_by = ?, updated_at = ?
+         SET status = ?, updated_by = ?, updated_at = ?,
+             lifecycle_version = lifecycle_version + 1
          WHERE id = ? AND archived_at IS NULL`
       )
       .bind(status, actorId, now, id)
@@ -206,7 +242,8 @@ export class ModelProviderAccountStore {
     const result = await this.db
       .prepare(
         `UPDATE model_provider_accounts
-         SET archived_at = ?, updated_by = ?, updated_at = ?
+         SET archived_at = ?, updated_by = ?, updated_at = ?,
+             lifecycle_version = lifecycle_version + 1
          WHERE id = ? AND archived_at IS NULL`
       )
       .bind(now, actorId, now, id)

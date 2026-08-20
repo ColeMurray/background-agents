@@ -16,6 +16,12 @@ export const subscriptionProviderIdSchema = z.enum(SUBSCRIPTION_PROVIDER_IDS);
 export const MODEL_PROVIDER_ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/;
 export const modelProviderAccountIdSchema = z.string().regex(MODEL_PROVIDER_ACCOUNT_ID_PATTERN);
 
+/** Device authorization transaction IDs use 32 random bytes encoded as lowercase hex. */
+export const PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN = /^[0-9a-f]{64}$/;
+export const providerDeviceAuthorizationIdSchema = z
+  .string()
+  .regex(PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN);
+
 export const providerAuthSelectionSchema = z.discriminatedUnion("mode", [
   z.strictObject({
     mode: z.literal("provider_account"),
@@ -187,4 +193,59 @@ export const reconnectModelProviderAccountRequestSchema = z.discriminatedUnion("
 ]);
 export type ReconnectModelProviderAccountRequest = z.infer<
   typeof reconnectModelProviderAccountRequestSchema
+>;
+
+export const startProviderDeviceAuthorizationRequestSchema = z.discriminatedUnion("operation", [
+  z.strictObject({
+    operation: z.literal("create"),
+    displayName: displayNameSchema,
+  }),
+  z.strictObject({
+    operation: z.literal("reconnect"),
+    providerAccountId: modelProviderAccountIdSchema,
+  }),
+]);
+export type StartProviderDeviceAuthorizationRequest = z.infer<
+  typeof startProviderDeviceAuthorizationRequestSchema
+>;
+
+export const startProviderDeviceAuthorizationResponseSchema = z.strictObject({
+  transactionId: providerDeviceAuthorizationIdSchema,
+  provider: subscriptionProviderIdSchema,
+  operation: z.enum(["create", "reconnect"]),
+  userCode: z.string().min(1).max(128),
+  verificationUrl: z.url(),
+  expiresAt: z.number().int().positive(),
+  expiresInMs: z.number().int().positive(),
+  pollIntervalMs: z.number().int().min(1_000).max(60_000),
+});
+export type StartProviderDeviceAuthorizationResponse = z.infer<
+  typeof startProviderDeviceAuthorizationResponseSchema
+>;
+
+const pendingProviderDeviceAuthorizationSchema = z.strictObject({
+  status: z.literal("pending"),
+  expiresAt: z.number().int().positive(),
+  pollIntervalMs: z.number().int().min(1_000).max(60_000),
+  nextPollAt: z.number().int().positive(),
+});
+
+const terminalProviderDeviceAuthorizationErrorSchema = z.strictObject({
+  status: z.enum(["denied", "expired", "failed", "cancelled", "superseded"]),
+  error: z.string().min(1).max(512),
+  retryable: z.boolean(),
+});
+
+export const providerDeviceAuthorizationStatusResponseSchema = z.discriminatedUnion("status", [
+  pendingProviderDeviceAuthorizationSchema,
+  z.strictObject({
+    status: z.literal("connected"),
+    account: modelProviderAccountSchema,
+    reconnectedExisting: z.boolean(),
+    completedAt: z.number().int().positive(),
+  }),
+  terminalProviderDeviceAuthorizationErrorSchema,
+]);
+export type ProviderDeviceAuthorizationStatusResponse = z.infer<
+  typeof providerDeviceAuthorizationStatusResponseSchema
 >;

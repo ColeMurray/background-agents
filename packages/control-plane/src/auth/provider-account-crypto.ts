@@ -8,6 +8,12 @@ export interface ProviderAccountCryptoContext {
   credentialSchemaVersion: number;
 }
 
+export interface ProviderAuthorizationCryptoContext {
+  transactionId: string;
+  provider: string;
+  stateSchemaVersion: number;
+}
+
 function decodeBase64(value: string): Uint8Array {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
@@ -37,22 +43,72 @@ function additionalData(context: ProviderAccountCryptoContext): Uint8Array {
   );
 }
 
-export async function encryptProviderAccountPayload(
+function authorizationAdditionalData(context: ProviderAuthorizationCryptoContext): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify([
+      FORMAT_VERSION,
+      "device-authorization",
+      context.transactionId,
+      context.provider,
+      context.stateSchemaVersion,
+    ])
+  );
+}
+
+async function encryptPayload(
   payload: unknown,
   encryptionKey: string,
-  context: ProviderAccountCryptoContext
+  aad: Uint8Array
 ): Promise<string> {
   const key = await importKey(encryptionKey);
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
   const serialized = JSON.stringify(payload);
-  if (serialized === undefined) throw new Error("Provider credential payload must be JSON encoded");
-  const plaintext = new TextEncoder().encode(serialized);
+  if (serialized === undefined) throw new Error("Provider payload must be JSON encoded");
   const ciphertext = await crypto.subtle.encrypt(
-    { name: ALGORITHM, iv, additionalData: additionalData(context) },
+    { name: ALGORITHM, iv, additionalData: aad },
     key,
-    plaintext
+    new TextEncoder().encode(serialized)
   );
   return `${FORMAT_VERSION}.${encodeBase64(iv)}.${encodeBase64(new Uint8Array(ciphertext))}`;
+}
+
+async function decryptPayload<T>(
+  encrypted: string,
+  encryptionKey: string,
+  aad: Uint8Array,
+  payloadName: string
+): Promise<T> {
+  const [version, encodedIv, encodedCiphertext, extra] = encrypted.split(".");
+  if (version !== FORMAT_VERSION) {
+    throw new Error(`Unsupported ${payloadName} encryption format version: ${version}`);
+  }
+  if (!encodedIv || !encodedCiphertext || extra !== undefined) {
+    throw new Error(`Malformed ${payloadName} ciphertext`);
+  }
+  const iv = decodeBase64(encodedIv);
+  if (iv.byteLength !== IV_LENGTH) throw new Error(`Malformed ${payloadName} IV`);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: ALGORITHM, iv, additionalData: aad },
+    await importKey(encryptionKey),
+    decodeBase64(encodedCiphertext)
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+}
+
+export function encryptProviderAccountPayload(
+  payload: unknown,
+  encryptionKey: string,
+  context: ProviderAccountCryptoContext
+): Promise<string> {
+  return encryptPayload(payload, encryptionKey, additionalData(context));
+}
+
+export function encryptProviderAuthorizationPayload(
+  payload: unknown,
+  encryptionKey: string,
+  context: ProviderAuthorizationCryptoContext
+): Promise<string> {
+  return encryptPayload(payload, encryptionKey, authorizationAdditionalData(context));
 }
 
 export async function decryptProviderAccountPayload<T = unknown>(
@@ -60,19 +116,18 @@ export async function decryptProviderAccountPayload<T = unknown>(
   encryptionKey: string,
   context: ProviderAccountCryptoContext
 ): Promise<T> {
-  const [version, encodedIv, encodedCiphertext, extra] = encrypted.split(".");
-  if (version !== FORMAT_VERSION) {
-    throw new Error(`Unsupported provider credential encryption format version: ${version}`);
-  }
-  if (!encodedIv || !encodedCiphertext || extra !== undefined) {
-    throw new Error("Malformed provider credential ciphertext");
-  }
-  const iv = decodeBase64(encodedIv);
-  if (iv.byteLength !== IV_LENGTH) throw new Error("Malformed provider credential IV");
-  const plaintext = await crypto.subtle.decrypt(
-    { name: ALGORITHM, iv, additionalData: additionalData(context) },
-    await importKey(encryptionKey),
-    decodeBase64(encodedCiphertext)
+  return decryptPayload(encrypted, encryptionKey, additionalData(context), "provider credential");
+}
+
+export async function decryptProviderAuthorizationPayload<T = unknown>(
+  encrypted: string,
+  encryptionKey: string,
+  context: ProviderAuthorizationCryptoContext
+): Promise<T> {
+  return decryptPayload(
+    encrypted,
+    encryptionKey,
+    authorizationAdditionalData(context),
+    "provider authorization"
   );
-  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
 }

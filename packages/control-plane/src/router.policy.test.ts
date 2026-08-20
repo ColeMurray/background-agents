@@ -28,6 +28,13 @@ describe("route policy table", () => {
     ["GET", "/internal/auth/sign-in-providers", "web-service"],
     ["GET", "/model-provider-accounts", "user"],
     ["POST", "/model-provider-accounts", "user"],
+    ["POST", "/model-provider-accounts/openai/device-authorizations", "user"],
+    [
+      "POST",
+      `/model-provider-accounts/openai/device-authorizations/${"0".repeat(64)}/poll`,
+      "user",
+    ],
+    ["DELETE", `/model-provider-accounts/openai/device-authorizations/${"0".repeat(64)}`, "user"],
     ["GET", "/model-provider-accounts/legacy-credentials", "user"],
     ["GET", "/model-provider-account-defaults", "user"],
     ["PUT", "/model-provider-account-defaults/openai", "user"],
@@ -97,6 +104,9 @@ describe("route policy table", () => {
 
   it("marks management and broker routes as non-cacheable", () => {
     expect(routeFor("GET", "/model-provider-accounts")?.cacheControl).toBe("private, no-store");
+    expect(
+      routeFor("POST", "/model-provider-accounts/openai/device-authorizations")?.cacheControl
+    ).toBe("private, no-store");
     expect(
       routeFor("POST", "/sessions/session-1/provider-auth/openai/access-token")?.cacheControl
     ).toBe("no-store");

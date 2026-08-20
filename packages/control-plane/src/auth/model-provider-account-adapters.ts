@@ -9,6 +9,35 @@ export interface ProviderConnectionResult<TCredential> {
   accessTokenExpiresAt?: number;
 }
 
+export interface ProviderDeviceAuthorizationStart<TProviderState> {
+  providerState: TProviderState;
+  userCode: string;
+  verificationUrl: string;
+  intervalMs: number;
+  expiresInMs?: number;
+}
+
+export type ProviderDeviceAuthorizationPollResult<TCredential> =
+  | { status: "pending"; intervalMs?: number }
+  | { status: "connected"; connection: ProviderConnectionResult<TCredential> }
+  | { status: "denied" | "expired" | "failed" };
+
+export interface ProviderDeviceAuthorizationCapability<TCredential, TProviderState> {
+  readonly stateSchemaVersion: number;
+  start(): Promise<ProviderDeviceAuthorizationStart<TProviderState>>;
+  parseState(payload: unknown, schemaVersion: number): TProviderState;
+  poll(providerState: TProviderState): Promise<ProviderDeviceAuthorizationPollResult<TCredential>>;
+}
+
+interface ErasedProviderDeviceAuthorizationCapability {
+  readonly stateSchemaVersion: number;
+  start(): Promise<ProviderDeviceAuthorizationStart<unknown>>;
+  pollPersisted(
+    payload: unknown,
+    schemaVersion: number
+  ): Promise<ProviderDeviceAuthorizationPollResult<unknown>>;
+}
+
 export interface ProviderRefreshResult<TCredential> {
   credential: TCredential;
   accessToken: string;
@@ -25,6 +54,7 @@ export interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
   readonly provider: ModelProviderId;
   readonly credentialSchemaVersion: number;
   readonly refreshBufferMs: number;
+  readonly deviceAuthorization?: ProviderDeviceAuthorizationCapability<TCredential, unknown>;
   parseConnectInput(input: unknown): TConnectInput;
   connect(input: TConnectInput): Promise<ProviderConnectionResult<TCredential>>;
   parseCredential(payload: unknown, schemaVersion: number): TCredential;
@@ -75,4 +105,23 @@ export class ModelProviderAccountAdapterRegistry {
     if (!adapter) throw new Error(`Model provider account adapter unavailable: ${provider}`);
     return adapter;
   }
+
+  requireDeviceAuthorization(
+    provider: ModelProviderId
+  ): ErasedProviderDeviceAuthorizationCapability {
+    const capability = this.require(provider).deviceAuthorization;
+    if (!capability) throw new Error(`Device authorization unavailable: ${provider}`);
+    return eraseDeviceAuthorizationCapability(capability);
+  }
+}
+
+function eraseDeviceAuthorizationCapability<TCredential, TProviderState>(
+  capability: ProviderDeviceAuthorizationCapability<TCredential, TProviderState>
+): ErasedProviderDeviceAuthorizationCapability {
+  return {
+    stateSchemaVersion: capability.stateSchemaVersion,
+    start: () => capability.start(),
+    pollPersisted: (payload, schemaVersion) =>
+      capability.poll(capability.parseState(payload, schemaVersion)),
+  };
 }

@@ -5,17 +5,23 @@ import {
   type ConnectModelProviderAccountRequest,
   type ReconnectModelProviderAccountRequest,
 } from "@open-inspect/shared/types/provider-accounts";
-import { extractOpenAIAccountId, refreshOpenAIToken, OpenAITokenRefreshError } from "./openai";
 import {
-  DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS,
+  extractOpenAIAccountId,
+  openAIAccessTokenLifetimeMs,
+  refreshOpenAIToken,
+  OpenAITokenRefreshError,
+} from "./openai";
+import {
   DEFAULT_PROVIDER_REFRESH_BUFFER_MS,
   ProviderCredentialError,
   ProviderIdentityError,
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
+  type ProviderDeviceAuthorizationCapability,
   type ProviderConnectionResult,
   type ProviderRefreshResult,
 } from "./model-provider-account-adapters";
+import { OpenAIProviderDeviceAuthorization } from "./model-provider-account-openai-device-authorization";
 
 const credentialSchema = z.object({
   refreshToken: z.string().min(1),
@@ -36,13 +42,7 @@ export type OpenAIProviderConnectInput =
 type RefreshOpenAI = typeof refreshOpenAIToken;
 
 function isUnauthorized(error: OpenAITokenRefreshError): boolean {
-  if (error.status === 401) return true;
-  try {
-    const body: unknown = JSON.parse(error.body);
-    return !!body && typeof body === "object" && "error" in body && body.error === "invalid_grant";
-  } catch {
-    return false;
-  }
+  return error.status === 401 || error.errorCode === "invalid_grant";
 }
 
 export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAdapter<
@@ -52,8 +52,13 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
   readonly provider = "openai" as const;
   readonly credentialSchemaVersion = 1;
   readonly refreshBufferMs = DEFAULT_PROVIDER_REFRESH_BUFFER_MS;
-
-  constructor(private readonly refreshToken: RefreshOpenAI = refreshOpenAIToken) {}
+  constructor(
+    private readonly refreshToken: RefreshOpenAI = refreshOpenAIToken,
+    readonly deviceAuthorization: ProviderDeviceAuthorizationCapability<
+      OpenAIProviderCredential,
+      unknown
+    > = new OpenAIProviderDeviceAuthorization()
+  ) {}
 
   parseConnectInput(input: unknown): OpenAIProviderConnectInput {
     return connectInputSchema.parse(input);
@@ -94,8 +99,7 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
           "ambiguous"
         );
       }
-      const accessTokenExpiresAt =
-        now + (tokens.expires_in ?? DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS / 1000) * 1000;
+      const accessTokenExpiresAt = now + openAIAccessTokenLifetimeMs(tokens.expires_in);
       const accountId = extractOpenAIAccountId(tokens);
       return {
         credential: {

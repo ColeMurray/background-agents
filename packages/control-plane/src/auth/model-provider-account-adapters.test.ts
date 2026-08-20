@@ -79,14 +79,10 @@ describe("model provider account adapters", () => {
 
   it("distinguishes a definitive OpenAI invalid_grant from an ambiguous failure", async () => {
     const unauthorized = new OpenAIModelProviderAccountAdapter(
-      vi
-        .fn()
-        .mockRejectedValue(
-          new OpenAITokenRefreshError("failed", 400, JSON.stringify({ error: "invalid_grant" }))
-        )
+      vi.fn().mockRejectedValue(new OpenAITokenRefreshError("failed", 400, "invalid_grant"))
     );
     const ambiguous = new OpenAIModelProviderAccountAdapter(
-      vi.fn().mockRejectedValue(new OpenAITokenRefreshError("failed", 500, "upstream failure"))
+      vi.fn().mockRejectedValue(new OpenAITokenRefreshError("failed", 500))
     );
 
     await expect(unauthorized.refresh({ refreshToken: "old" })).rejects.toMatchObject({
@@ -136,5 +132,19 @@ describe("model provider account adapters", () => {
       accountId: "stored-account",
     });
     expect(xai.runtimeMetadata({ refreshToken: "secret" }, null)).toEqual({});
+  });
+
+  it("validates persisted OpenAI device state and its schema version before polling", async () => {
+    const capability = modelProviderAccountAdapterRegistry.requireDeviceAuthorization("openai");
+
+    await expect(async () =>
+      capability.pollPersisted({ deviceAuthId: "device" }, 1)
+    ).rejects.toThrow();
+    await expect(async () =>
+      capability.pollPersisted({ deviceAuthId: "device", userCode: "CODE" }, 2)
+    ).rejects.toThrow(/version/i);
+    await expect(async () =>
+      capability.pollPersisted({ deviceAuthId: "device", userCode: "CODE", unexpected: true }, 1)
+    ).rejects.toThrow();
   });
 });

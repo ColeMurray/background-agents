@@ -1,10 +1,12 @@
 import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
+  PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN,
   connectModelProviderAccountRequestSchema,
   modelProviderAccountDisplayNameSchema,
   modelProviderAccountDefaultRequestSchema,
   modelProviderAccountStatusSchema,
   reconnectModelProviderAccountRequestSchema,
+  startProviderDeviceAuthorizationRequestSchema,
   subscriptionProviderIdSchema,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
@@ -19,6 +21,8 @@ import {
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { D1ModelProviderAccountAtomicWriter } from "../db/model-provider-account-atomic-writer";
 import { ProviderCredentialStore } from "../db/provider-account-credentials";
+import { ProviderAccountAuthorizationStore } from "../db/provider-account-authorizations";
+import { ProviderAccountAuthorizationFinalizationWriter } from "../db/provider-account-authorization-finalization";
 import { ProviderDefaultStore } from "../db/provider-account-defaults";
 import { SessionIndexStore } from "../db/session-index";
 import { listLegacyProviderCredentials } from "../model-provider-accounts/legacy-provider-credentials";
@@ -26,6 +30,12 @@ import {
   ModelProviderAccountService,
   ProviderAccountServiceError,
 } from "../model-provider-accounts/service";
+import {
+  ProviderDeviceAuthorizationError,
+  ProviderDeviceAuthorizationService,
+} from "../model-provider-accounts/device-authorization-service";
+import { ProviderDeviceAuthorizationFinalizer } from "../model-provider-accounts/device-authorization-finalizer";
+import { createLogger } from "../logger";
 import {
   ProviderAccountSelectionPolicy,
   ProviderAccountSelectionPolicyError,
@@ -60,6 +70,7 @@ const LEGACY_REFRESH_PATH = {
   openai: SessionInternalPaths.openaiTokenRefresh,
   xai: SessionInternalPaths.xaiTokenRefresh,
 } as const;
+const providerAuthorizationLogger = createLogger("provider-device-authorization");
 
 function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
   const accounts = new ModelProviderAccountStore(ctx.db);
@@ -70,6 +81,27 @@ function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
     new D1ModelProviderAccountAtomicWriter(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY),
     modelProviderAccountAdapterRegistry,
     { generateId: () => generateId(), now: () => Date.now() }
+  );
+}
+
+function authorizationService(env: Env, ctx: RequestContext): ProviderDeviceAuthorizationService {
+  const accounts = new ModelProviderAccountStore(ctx.db);
+  const credentials = new ProviderCredentialStore(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
+  const finalizer = new ProviderDeviceAuthorizationFinalizer(
+    accounts,
+    credentials,
+    new ProviderAccountAuthorizationFinalizationWriter(ctx.db),
+    env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY,
+    () => generateId(16)
+  );
+  return new ProviderDeviceAuthorizationService(
+    new ProviderAccountAuthorizationStore(ctx.db),
+    accounts,
+    finalizer,
+    env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY,
+    modelProviderAccountAdapterRegistry,
+    { generateId, now: () => Date.now() },
+    providerAuthorizationLogger
   );
 }
 
@@ -109,6 +141,24 @@ async function accountOperation(
     }
     return error("Provider account operation failed", 502);
   }
+}
+
+async function authorizationOperation(operation: () => Promise<Response>): Promise<Response> {
+  try {
+    return await operation();
+  } catch (cause) {
+    if (cause instanceof ProviderDeviceAuthorizationError) {
+      return json({ error: cause.message, retryable: cause.retryable }, cause.status);
+    }
+    return error("Provider authorization failed", 502);
+  }
+}
+
+function authorizationId(match: RegExpMatchArray): string | Response {
+  const id = match.groups?.id;
+  return id && PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN.test(id)
+    ? id
+    : error("Authorization transaction not found", 404);
 }
 
 function managementRoute(
@@ -167,6 +217,55 @@ const managementRoutes: Route[] = [
       return json(result, result.reconnectedExisting ? 200 : 201);
     });
   }),
+  managementRoute(
+    "POST",
+    "/model-provider-accounts/:provider/device-authorizations",
+    async (request, env, match, ctx) => {
+      const parsedProvider = provider(match.groups?.provider);
+      if (parsedProvider instanceof Response) return parsedProvider;
+      const body = await parseJsonBody<unknown>(request);
+      if (body instanceof Response) return body;
+      const parsed = startProviderDeviceAuthorizationRequestSchema.safeParse(body);
+      if (!parsed.success) return error("Invalid device authorization request", 400);
+      return authorizationOperation(async () =>
+        json(
+          await authorizationService(env, ctx).start(
+            ctx.principal.userId,
+            parsedProvider,
+            parsed.data
+          ),
+          201
+        )
+      );
+    }
+  ),
+  managementRoute(
+    "POST",
+    "/model-provider-accounts/:provider/device-authorizations/:id/poll",
+    async (_request, env, match, ctx) => {
+      const parsedProvider = provider(match.groups?.provider);
+      if (parsedProvider instanceof Response) return parsedProvider;
+      const id = authorizationId(match);
+      if (id instanceof Response) return id;
+      return authorizationOperation(async () =>
+        json(await authorizationService(env, ctx).poll(ctx.principal.userId, parsedProvider, id))
+      );
+    }
+  ),
+  managementRoute(
+    "DELETE",
+    "/model-provider-accounts/:provider/device-authorizations/:id",
+    async (_request, env, match, ctx) => {
+      const parsedProvider = provider(match.groups?.provider);
+      if (parsedProvider instanceof Response) return parsedProvider;
+      const id = authorizationId(match);
+      if (id instanceof Response) return id;
+      return authorizationOperation(async () => {
+        await authorizationService(env, ctx).cancel(ctx.principal.userId, parsedProvider, id);
+        return new Response(null, { status: 204 });
+      });
+    }
+  ),
   managementRoute("GET", "/model-provider-accounts/:id", async (_request, env, match, ctx) => {
     const id = accountId(match);
     if (id instanceof Response) return id;

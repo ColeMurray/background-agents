@@ -54,9 +54,25 @@ export default defineConfig({
             if (url.hostname.endsWith(".modal.run")) {
               return new Response("Modal is unavailable in integration tests", { status: 404 });
             }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
+              return Response.json({
+                device_auth_id: "integration-device",
+                user_code: "TEST-CODE",
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/token") {
+              return Response.json({
+                authorization_code: "integration-authorization",
+                code_verifier: "integration-verifier",
+              });
+            }
             if (url.href === "https://auth.openai.com/oauth/token") {
               const body = await request.text();
-              if (!body.includes("integration-openai")) {
+              if (
+                !body.includes("integration-openai") &&
+                !body.includes("integration-authorization")
+              ) {
                 throw new Error("Unexpected OpenAI integration-test credential");
               }
               return Response.json({

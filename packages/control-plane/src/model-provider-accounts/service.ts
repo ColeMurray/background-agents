@@ -133,6 +133,7 @@ export class ModelProviderAccountService {
         reconnectedExisting: false,
       };
     } catch (cause) {
+      // A concurrent create may win the unique provider identity; converge on that account.
       let winner: ModelProviderAccount | null = null;
       if (externalAccountId) {
         try {
