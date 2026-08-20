@@ -5,15 +5,21 @@ import type { SessionAttachmentRepository } from "./session-attachment-repositor
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
-import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
+import type {
+  MessageRow,
+  ParticipantRow,
+  SandboxCommand,
+  SessionRow,
+  SessionAttachmentRow,
+} from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
-import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
+import { SandboxDeliveryUnavailableError } from "./connections";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -167,7 +173,6 @@ function buildQueue() {
   };
 
   const wsManager = {
-    getSandboxSocket: vi.fn(() => null as WebSocket | null),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
   };
 
@@ -182,7 +187,12 @@ function buildQueue() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
+  const messenger = {
+    broadcast,
+    sendToSandbox: vi.fn<(command: SandboxCommand) => Promise<void>>(async () => {
+      throw new SandboxDeliveryUnavailableError();
+    }),
+  };
   const sessionStatus = {
     transition: vi.fn(async (_status: string) => true),
     reconcileAfterExecution: vi.fn(async (_success: boolean) => {}),
@@ -208,7 +218,7 @@ function buildQueue() {
     repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,
-    wsManager as unknown as SessionWebSocketManager,
+    wsManager,
     messenger,
     participantService as unknown as ParticipantService,
     callbackService as unknown as CallbackNotificationService,
@@ -238,6 +248,7 @@ function buildQueue() {
     repository,
     attachmentRepository,
     wsManager,
+    messenger,
     participantService,
     broadcast,
     sessionStatus,
@@ -311,7 +322,8 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_spawning" });
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(1);
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
-    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).toHaveBeenCalled();
+    expect(h.repository.updateMessageToPending).toHaveBeenCalled();
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
   });
 
@@ -643,9 +655,8 @@ describe("SessionMessageQueue", () => {
 
   it("materializes the user_message at processing start", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
@@ -677,7 +688,7 @@ describe("SessionMessageQueue", () => {
     h.repository.getNextPendingMessage.mockReturnValue(
       createMessage({ author_id: participant.id, source: "slack" })
     );
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
@@ -693,9 +704,8 @@ describe("SessionMessageQueue", () => {
 
   it("dispatches prompt command when sandbox socket exists", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-42" }));
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
@@ -704,8 +714,7 @@ describe("SessionMessageQueue", () => {
       expect.any(Number),
       expect.objectContaining({ type: "user_message", messageId: "msg-42" })
     );
-    expect(h.wsManager.send).toHaveBeenCalledWith(
-      sandboxWs,
+    expect(h.messenger.sendToSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ type: "prompt", messageId: "msg-42" })
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
@@ -718,8 +727,7 @@ describe("SessionMessageQueue", () => {
   it("leaves the prompt pending and timeline untouched when sandbox send fails", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-unsent" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
-    h.wsManager.send.mockReturnValue(false);
+    h.messenger.sendToSandbox.mockRejectedValue(new SandboxDeliveryUnavailableError("send_failed"));
 
     await h.queue.processMessageQueue();
 
@@ -744,11 +752,11 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-lost" }));
     h.repository.startMessageProcessing.mockReturnValue(false);
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
-    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.messenger.sendToSandbox).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "processing_status" })
     );
@@ -769,17 +777,15 @@ describe("SessionMessageQueue", () => {
 
   it("drops a persisted reasoning effort that the session model does not support", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
     h.repository.getSession.mockReturnValue(
       createSession({ model: "xai/grok-build-0.1", reasoning_effort: "high" })
     );
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
-    expect(h.wsManager.send).toHaveBeenCalledWith(
-      sandboxWs,
+    expect(h.messenger.sendToSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "xai/grok-build-0.1",
         reasoningEffort: undefined,
@@ -789,7 +795,6 @@ describe("SessionMessageQueue", () => {
 
   it("falls back atomically when GitHub author mapping is incomplete", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-agent-only" }));
     h.repository.getParticipantById.mockReturnValue(
       createParticipant({
@@ -799,12 +804,11 @@ describe("SessionMessageQueue", () => {
         scm_email: "private@example.com",
       })
     );
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
-    expect(h.wsManager.send).toHaveBeenCalledWith(
-      sandboxWs,
+    expect(h.messenger.sendToSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
         author: {
           userId: "user-1",
@@ -816,8 +820,7 @@ describe("SessionMessageQueue", () => {
 
   it("resolves each dispatched prompt's Git author from its current participant", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
     h.repository.getNextPendingMessage
       .mockReturnValueOnce(createMessage({ id: "msg-ada", author_id: "part-ada" }))
       .mockReturnValueOnce(createMessage({ id: "msg-grace", author_id: "part-grace" }));
@@ -844,7 +847,7 @@ describe("SessionMessageQueue", () => {
     await h.queue.processMessageQueue();
     await h.queue.processMessageQueue();
 
-    expect(h.wsManager.send.mock.calls.map(([, command]) => command)).toEqual([
+    expect(h.messenger.sendToSandbox.mock.calls.map(([command]) => command)).toEqual([
       expect.objectContaining({
         author: {
           userId: "user-ada",
@@ -870,9 +873,8 @@ describe("SessionMessageQueue", () => {
 
   it("notifies the integration after a prompt is dispatched to the sandbox", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-linear" }));
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
@@ -883,8 +885,7 @@ describe("SessionMessageQueue", () => {
   it("does not notify the integration when sandbox dispatch fails", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-failed" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
-    h.wsManager.send.mockReturnValue(false);
+    h.messenger.sendToSandbox.mockRejectedValue(new SandboxDeliveryUnavailableError("send_failed"));
 
     await h.queue.processMessageQueue();
 
@@ -895,7 +896,7 @@ describe("SessionMessageQueue", () => {
   describe("execution timeout scheduling", () => {
     function dispatchPrompt(h: ReturnType<typeof buildQueue>) {
       h.repository.getNextPendingMessage.mockReturnValue(createMessage());
-      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.messenger.sendToSandbox.mockResolvedValue(undefined);
       return h.queue.processMessageQueue();
     }
 
@@ -946,8 +947,7 @@ describe("SessionMessageQueue", () => {
 
   it("delegates stop finalization before broadcasting idle and stopping the sandbox", async () => {
     const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
       id: "msg-9",
       created_at: 900,
@@ -970,14 +970,14 @@ describe("SessionMessageQueue", () => {
       expect.any(Number)
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.messenger.sendToSandbox).toHaveBeenCalledWith({ type: "stop" });
     expect(h.repository.recordMessageCompletion.mock.invocationCallOrder[0]).toBeLessThan(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
     );
     expect(h.projectTerminalMessage).toHaveBeenCalledWith("msg-9", 1000, expect.any(Number));
     expect(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
-    ).toBeLessThan(h.wsManager.send.mock.invocationCallOrder[0]);
+    ).toBeLessThan(h.messenger.sendToSandbox.mock.invocationCallOrder[0]);
   });
 
   it("projects terminal unread state before broadcasting synthetic completion", async () => {
@@ -1013,7 +1013,7 @@ describe("SessionMessageQueue", () => {
       created_at: 900,
     });
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.stopExecution();
 
@@ -1021,9 +1021,8 @@ describe("SessionMessageQueue", () => {
       "msg-next",
       expect.any(Number)
     );
-    expect(h.wsManager.send).toHaveBeenCalledWith(expect.anything(), { type: "stop" });
-    expect(h.wsManager.send).not.toHaveBeenCalledWith(
-      expect.anything(),
+    expect(h.messenger.sendToSandbox).toHaveBeenCalledWith({ type: "stop" });
+    expect(h.messenger.sendToSandbox).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "prompt", messageId: "msg-next" })
     );
     expect(h.setAlarm).toHaveBeenCalledOnce();
@@ -1036,7 +1035,7 @@ describe("SessionMessageQueue", () => {
       created_at: 900,
     });
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
-    h.wsManager.getSandboxSocket.mockReturnValue(null);
+    h.messenger.sendToSandbox.mockRejectedValue(new SandboxDeliveryUnavailableError());
 
     await h.queue.stopExecution();
 
@@ -1052,8 +1051,7 @@ describe("SessionMessageQueue", () => {
       id: "msg-running",
       created_at: 900,
     });
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
-    h.wsManager.send.mockReturnValue(false);
+    h.messenger.sendToSandbox.mockRejectedValue(new SandboxDeliveryUnavailableError("send_failed"));
 
     await h.queue.stopExecution();
 
@@ -1095,12 +1093,12 @@ describe("SessionMessageQueue", () => {
       deadline: Date.now() + 10_000,
     });
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.messenger.sendToSandbox.mockResolvedValue(undefined);
 
     await h.queue.processMessageQueue();
 
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
-    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.messenger.sendToSandbox).not.toHaveBeenCalled();
   });
 
   it("suppresses session status reconcile when stopExecution is called with suppress flag", async () => {
@@ -1121,7 +1119,7 @@ describe("SessionMessageQueue", () => {
     await h.queue.failStuckProcessingMessage();
 
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
-    expect(h.wsManager.send).not.toHaveBeenCalledWith(expect.anything(), { type: "stop" });
+    expect(h.messenger.sendToSandbox).not.toHaveBeenCalledWith({ type: "stop" });
     expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
   });
 

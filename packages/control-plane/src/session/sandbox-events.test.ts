@@ -11,7 +11,7 @@ import type { ArtifactRepository } from "./artifact-repository";
 import type { EventRepository } from "./event-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SessionStatusService } from "./session-status-service";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import { SandboxDeliveryUnavailableError } from "./connections";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -58,11 +58,6 @@ function createProcessor() {
     notifyComplete: vi.fn(async () => {}),
   };
 
-  const wsManager = {
-    getSandboxSocket: vi.fn(() => null as WebSocket | null),
-    send: vi.fn(() => true),
-  };
-
   const broadcast = vi.fn((_message: ServerMessage) => {});
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const diffService = { pinBaselines: vi.fn() };
@@ -95,7 +90,6 @@ function createProcessor() {
     eventRepository,
     artifactRepository,
     callbackService as unknown as CallbackNotificationService,
-    wsManager as unknown as SessionWebSocketManager,
     messenger,
     diffService as unknown as SessionDiffService,
     applySessionTitleUpdate,
@@ -113,7 +107,7 @@ function createProcessor() {
     artifactRepository,
     repository,
     eventRepository,
-    wsManager,
+    messenger,
     callbackService,
     broadcast,
     diffService,
@@ -442,9 +436,7 @@ describe("SessionSandboxEventProcessor", () => {
 
   it("waits for terminal projection before snapshot, queue drain, and acknowledgement", async () => {
     const h = createProcessor();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
     let resolveCompletion!: () => void;
     h.projectTerminalMessage.mockReturnValue(
       new Promise<void>((resolve) => {
@@ -463,14 +455,14 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.triggerSnapshot).not.toHaveBeenCalled();
     expect(h.processMessageQueue).not.toHaveBeenCalled();
-    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.messenger.sendToSandbox).not.toHaveBeenCalled();
 
     resolveCompletion();
     await processing;
 
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "ack", ackId: "ack-1" });
+    expect(h.messenger.sendToSandbox).toHaveBeenCalledWith({ type: "ack", ackId: "ack-1" });
   });
 
   it("delegates a late terminal event with no processing owner", async () => {
@@ -511,9 +503,6 @@ describe("SessionSandboxEventProcessor", () => {
 
   it("resolves pending push when push_complete event arrives", async () => {
     const h = createProcessor();
-    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-
     const pushPromise = h.processor.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")
     );
@@ -527,17 +516,40 @@ describe("SessionSandboxEventProcessor", () => {
     });
 
     await expect(pushPromise).resolves.toEqual({ success: true });
-    expect(h.wsManager.send).toHaveBeenCalledWith(
-      sandboxWs,
+    expect(h.messenger.sendToSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ type: "push" })
     );
   });
 
+  it("treats a missing sandbox as an already-manual push", async () => {
+    const h = createProcessor();
+    h.messenger.sendToSandbox.mockRejectedValue(new SandboxDeliveryUnavailableError());
+    const legacyPushSpec = {
+      ...createPushSpec("acme", "web", "feature/test"),
+      repoOwner: undefined,
+      repoName: undefined,
+    } as unknown as GitPushSpec;
+
+    await expect(h.processor.pushBranchToRemote(legacyPushSpec)).resolves.toEqual({
+      success: true,
+    });
+  });
+
+  it("reports a sandbox transport send failure", async () => {
+    const h = createProcessor();
+    h.messenger.sendToSandbox.mockRejectedValue(new SandboxDeliveryUnavailableError("send_failed"));
+
+    await expect(
+      h.processor.pushBranchToRemote(createPushSpec("acme", "web", "feature/test"))
+    ).resolves.toEqual({
+      success: false,
+      error: expect.stringContaining("Failed to send to sandbox"),
+    });
+  });
+
   describe("push resolver keying", () => {
     function connectSandbox(h: ReturnType<typeof createProcessor>) {
-      const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-      return sandboxWs;
+      h.messenger.sendToSandbox.mockResolvedValue(undefined);
     }
 
     it("settles the matching push when two repos push the same branch name", async () => {
@@ -780,8 +792,6 @@ describe("SessionSandboxEventProcessor", () => {
   describe("ACK mechanism", () => {
     it("sends ACK after execution_complete when ackId is present", async () => {
       const h = createProcessor();
-      const sandboxWs = {} as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
       h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
 
       const event = {
@@ -795,7 +805,7 @@ describe("SessionSandboxEventProcessor", () => {
 
       await h.processor.processSandboxEvent(event);
 
-      expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+      expect(h.messenger.sendToSandbox).toHaveBeenCalledWith({
         type: "ack",
         ackId: "execution_complete:msg-1",
       });
@@ -803,8 +813,6 @@ describe("SessionSandboxEventProcessor", () => {
 
     it("sends ACK for push_complete when ackId is present", async () => {
       const h = createProcessor();
-      const sandboxWs = {} as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
       const event = {
         type: "push_complete",
@@ -815,7 +823,7 @@ describe("SessionSandboxEventProcessor", () => {
 
       await h.processor.processSandboxEvent(event);
 
-      expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+      expect(h.messenger.sendToSandbox).toHaveBeenCalledWith({
         type: "ack",
         ackId: "push_complete:msg-2",
       });
@@ -823,8 +831,6 @@ describe("SessionSandboxEventProcessor", () => {
 
     it("sends ACK for error events when ackId is present", async () => {
       const h = createProcessor();
-      const sandboxWs = {} as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
       const event = {
         type: "error",
@@ -837,7 +843,7 @@ describe("SessionSandboxEventProcessor", () => {
 
       await h.processor.processSandboxEvent(event);
 
-      expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+      expect(h.messenger.sendToSandbox).toHaveBeenCalledWith({
         type: "ack",
         ackId: "error:msg-3",
       });
@@ -845,8 +851,6 @@ describe("SessionSandboxEventProcessor", () => {
 
     it("does not send ACK when ackId is absent (backward compatibility)", async () => {
       const h = createProcessor();
-      const sandboxWs = {} as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
       h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
 
       const event: SandboxEvent = {
@@ -859,13 +863,11 @@ describe("SessionSandboxEventProcessor", () => {
 
       await h.processor.processSandboxEvent(event);
 
-      expect(h.wsManager.send).not.toHaveBeenCalled();
+      expect(h.messenger.sendToSandbox).not.toHaveBeenCalled();
     });
 
     it("sends ACK on already_stopped path for execution_complete", async () => {
       const h = createProcessor();
-      const sandboxWs = {} as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
       // No processing message — triggers the "already_stopped" branch
       h.repository.getProcessingMessage.mockReturnValue(null);
 
@@ -880,7 +882,7 @@ describe("SessionSandboxEventProcessor", () => {
 
       await h.processor.processSandboxEvent(event);
 
-      expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+      expect(h.messenger.sendToSandbox).toHaveBeenCalledWith({
         type: "ack",
         ackId: "execution_complete:msg-1",
       });
@@ -889,8 +891,6 @@ describe("SessionSandboxEventProcessor", () => {
 
     it("does not send ACK for non-critical events even with ackId", async () => {
       const h = createProcessor();
-      const sandboxWs = {} as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
       const event = {
         type: "token",
@@ -904,7 +904,30 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent(event);
 
       // Token events return early before ACK logic
-      expect(h.wsManager.send).not.toHaveBeenCalled();
+      expect(h.messenger.sendToSandbox).not.toHaveBeenCalled();
+    });
+
+    it("logs failed ACK delivery without failing event processing", async () => {
+      const h = createProcessor();
+      h.messenger.sendToSandbox.mockRejectedValue(
+        new SandboxDeliveryUnavailableError("send_failed")
+      );
+
+      await expect(
+        h.processor.processSandboxEvent({
+          type: "error",
+          error: "failed",
+          sandboxId: "sb-1",
+          timestamp: 3000,
+          ackId: "error:msg-1",
+        } as SandboxEvent & { ackId: string })
+      ).resolves.toBeUndefined();
+      await Promise.resolve();
+
+      expect(h.log.warn).toHaveBeenCalledWith(
+        "Failed to send sandbox event ACK",
+        expect.objectContaining({ ack_id: "error:msg-1" })
+      );
     });
   });
 });

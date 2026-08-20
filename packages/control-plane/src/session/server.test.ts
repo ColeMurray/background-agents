@@ -8,7 +8,7 @@ import {
   type SessionClientCommands,
   type SessionMessageRouterDeps,
 } from "./message-router";
-import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
+import type { Clock, SocketRegistry, SandboxDisconnectMonitor, SessionBroadcaster } from "./ports";
 import { SessionServer } from "./server";
 
 interface TestClient {

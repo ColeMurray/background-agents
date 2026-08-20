@@ -6,8 +6,9 @@
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxCommand } from "./types";
 import type { SessionConnections } from "./connections";
+import type { SandboxCommandSender } from "./ports";
 
-export interface SessionMessenger {
+export interface SessionMessenger extends SandboxCommandSender {
   /** Broadcast a message to all authenticated client sockets. */
   broadcast(message: ServerMessage): void;
 

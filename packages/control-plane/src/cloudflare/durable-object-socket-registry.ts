@@ -1,6 +1,5 @@
 /**
- * SessionWebSocketManager — centralizes all Cloudflare WebSocket API usage
- * into a single, testable module.
+ * DurableObjectSocketRegistry - the Cloudflare implementation of the session socket port.
  *
  * The manager is a registry for ClientInfo, not a factory. The DO builds
  * ClientInfo and stores it here via setClient/getClient.
@@ -8,85 +7,22 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { ConnectionClassification } from "./ports";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { ConnectionClassification, SocketRegistry } from "../session/ports";
+import type { SandboxRepository } from "../session/sandbox-repository";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
-} from "./ws-client-mapping-repository";
+} from "../session/ws-client-mapping-repository";
 
-/** Configuration for the WebSocket manager. */
-export interface WebSocketManagerConfig {
+export interface SocketRegistryConfig {
   authTimeoutMs: number;
-}
-
-// ---------------------------------------------------------------------------
-// Interface
-// ---------------------------------------------------------------------------
-
-export interface SessionWebSocketManager {
-  /** Accept a client WebSocket with a wsId tag for hibernation recovery. */
-  acceptClientSocket(ws: WebSocket, wsId: string): void;
-
-  /**
-   * Accept a sandbox WebSocket, close any existing sandbox socket, and set
-   * as the active sandbox connection.
-   */
-  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean };
-
-  /** Parse a WebSocket's tags to determine its kind and identity. */
-  classify(ws: WebSocket): ConnectionClassification;
-
-  /**
-   * Get the active sandbox socket, recovering from hibernation if needed.
-   * Validates sandbox ID against the repository during hibernation recovery.
-   */
-  getSandboxSocket(): WebSocket | null;
-
-  /** Clear the in-memory sandbox socket reference. */
-  clearSandboxSocket(): void;
-
-  /** Clear and close all active sandbox sockets without consulting persisted dispatch status. */
-  detachSandboxSocket(code: number, reason: string): void;
-
-  /** Clear sandbox socket only if ws matches current reference. Returns true if it was the active socket. */
-  clearSandboxSocketIfMatch(ws: WebSocket): boolean;
-
-  setClient(ws: WebSocket, info: ClientInfo): void;
-  getClient(ws: WebSocket): ClientInfo | null;
-  removeClient(ws: WebSocket): ClientInfo | null;
-
-  /** Returns raw DB mapping for hibernation recovery. The DO builds ClientInfo from this. */
-  recoverClientMapping(ws: WebSocket): WsClientMappingResult | null;
-
-  /** Persist ws-to-participant mapping for hibernation survival. */
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
-
-  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
-  isClientSynchronizing(ws: WebSocket): boolean;
-  isClientAuthenticated(ws: WebSocket): boolean;
-
-  /** Check if a wsId has a persisted mapping (used by auth timeout). */
-  hasPersistedMapping(wsId: string): boolean;
-
-  send(ws: WebSocket, message: string | object): boolean;
-  close(ws: WebSocket, code: number, reason: string): void;
-
-  forEachClientSocket(
-    mode: "all_clients" | "authenticated_only",
-    fn: (ws: WebSocket) => void
-  ): void;
-
-  enforceAuthTimeout(ws: WebSocket, wsId: string): Promise<void>;
-  getAuthenticatedClients(): IterableIterator<ClientInfo>;
-  getConnectedClientCount(): number;
 }
 
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
 
-export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
+export class DurableObjectSocketRegistry implements SocketRegistry<WebSocket, ClientInfo> {
   private clients = new Map<WebSocket, ClientInfo>();
   private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
@@ -95,9 +31,27 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     private readonly ctx: DurableObjectState,
     private readonly sandboxRepository: SandboxRepository,
     private readonly wsClientMappingRepository: WsClientMappingRepository,
-    private readonly log: Logger,
-    private readonly config: WebSocketManagerConfig
+    private readonly getLog: () => Logger,
+    private readonly createRecoveredClient: (
+      ws: WebSocket,
+      mapping: WsClientMappingResult
+    ) => ClientInfo,
+    private readonly config: SocketRegistryConfig
   ) {}
+
+  private get log(): Logger {
+    return this.getLog();
+  }
+
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket } {
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    return { client, server };
+  }
+
+  configureAutoPing(request: string, response: string): void {
+    this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(request, response));
+  }
 
   // -------------------------------------------------------------------------
   // Accept
@@ -157,11 +111,8 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     if (sandbox && terminalStatuses.includes(sandbox.status)) {
       this.sandboxWs = null;
       // Close any lingering sandbox WebSockets so they don't persist
-      for (const ws of this.ctx.getWebSockets()) {
-        const parsed = this.classify(ws);
-        if (parsed.kind === "sandbox") {
-          this.close(ws, 1000, "Sandbox terminated");
-        }
+      for (const ws of this.ctx.getWebSockets("sandbox")) {
+        this.close(ws, 1000, "Sandbox terminated");
       }
       return null;
     }
@@ -172,7 +123,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
     // Hibernation recovery: scan all WebSockets, validate sandbox identity
 
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.ctx.getWebSockets("sandbox")) {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
 
@@ -199,14 +150,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   detachSandboxSocket(code: number, reason: string): void {
     const sockets = new Set<WebSocket>();
     if (this.sandboxWs) sockets.add(this.sandboxWs);
-    for (const ws of this.ctx.getWebSockets()) {
-      if (this.classify(ws).kind === "sandbox") sockets.add(ws);
-    }
+    for (const ws of this.ctx.getWebSockets("sandbox")) sockets.add(ws);
     this.sandboxWs = null;
     for (const ws of sockets) this.close(ws, code, reason);
   }
 
-  clearSandboxSocketIfMatch(ws: WebSocket): boolean {
+  clearSandboxIfMatch(ws: WebSocket): boolean {
     if (this.sandboxWs === ws) {
       this.sandboxWs = null;
       return true;
@@ -225,7 +174,20 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   getClient(ws: WebSocket): ClientInfo | null {
-    return this.clients.get(ws) ?? null;
+    const cached = this.clients.get(ws);
+    if (cached) return cached;
+
+    const mapping = this.recoverClientMapping(ws);
+    if (!mapping) {
+      this.log.warn("No client mapping found after hibernation, closing WebSocket");
+      this.close(ws, 4002, "Session expired, please reconnect");
+      return null;
+    }
+
+    this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
+    const client = this.createRecoveredClient(ws, mapping);
+    this.clients.set(ws, client);
+    return client;
   }
 
   removeClient(ws: WebSocket): ClientInfo | null {
@@ -353,6 +315,13 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   getAuthenticatedClients(): IterableIterator<ClientInfo> {
     return this.clients.values();
+  }
+
+  hasParticipant(participantId: string): boolean {
+    for (const client of this.clients.values()) {
+      if (client.participantId === participantId) return true;
+    }
+    return false;
   }
 
   getConnectedClientCount(): number {

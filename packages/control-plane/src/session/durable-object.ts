@@ -72,8 +72,8 @@ import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 import { resolveParticipantName } from "./participant-name";
 import { validateReasoningEffort } from "./reasoning-effort";
 import { parseTunnelUrls } from "./tunnel-urls";
-import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
-import { DurableObjectSessionConnections } from "./durable-object-session-connections";
+import { DurableObjectSocketRegistry } from "../cloudflare/durable-object-socket-registry";
+import { DurableObjectSessionConnections } from "../cloudflare/durable-object-session-connections";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
@@ -148,7 +148,7 @@ import { SessionServer } from "./server";
 import { SessionHttpDispatcher } from "./http/dispatcher";
 import { SessionMessageRouter, type SessionClientCommands } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
-import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
+import type { Clock, SocketRegistry, SandboxDisconnectMonitor, SessionBroadcaster } from "./ports";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -196,7 +196,7 @@ export class SessionDO extends DurableObject<Env> {
   // (with trace_id / request_id) threaded explicitly from fetch().
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
-  private _wsManager: SessionWebSocketManager | null = null;
+  private _wsManager: DurableObjectSocketRegistry | null = null;
   private _connections: DurableObjectSessionConnections | null = null;
   // Session messenger (constructed in ensureInitialized once the session logger exists)
   private messenger!: SessionMessenger;
@@ -215,7 +215,7 @@ export class SessionDO extends DurableObject<Env> {
   // Presence service (lazily initialized)
   private _presenceService: PresenceService | null = null;
   // Message queue service (lazily initialized)
-  private _messageQueue: SessionMessageQueue | null = null;
+  private _messageQueue: SessionMessageQueue<WebSocket> | null = null;
   // Message service (lazily initialized)
   private _messageService: MessageService | null = null;
   private _eventStream: SessionEventStream | null = null;
@@ -326,18 +326,7 @@ export class SessionDO extends DurableObject<Env> {
       nowMs: () => Date.now(),
       monotonicNowMs: () => performance.now(),
     };
-    const sockets: SocketRegistry<WebSocket, ClientInfo> = {
-      classify: (ws) => this.wsManager.classify(ws),
-      send: (ws, message) => this.safeSend(ws, message),
-      getClient: (ws) => this.getClientInfo(ws),
-      close: (ws, code, reason) => this.wsManager.close(ws, code, reason),
-      clearSandboxIfMatch: (ws) => this.wsManager.clearSandboxSocketIfMatch(ws),
-      removeClient: (ws) => this.wsManager.removeClient(ws),
-      hasParticipant: (participantId) =>
-        Array.from(this.wsManager.getAuthenticatedClients()).some(
-          (client) => client.participantId === participantId
-        ),
-    };
+    const sockets: SocketRegistry<WebSocket, ClientInfo> = this.wsManager;
     const clientCommands: SessionClientCommands<WebSocket, ClientInfo> = {
       subscribe: (ws, message) => this.handleSubscribe(ws, message),
       submitPrompt: (ws, client, message) => this.handlePromptMessage(ws, client, message),
@@ -476,18 +465,24 @@ export class SessionDO extends DurableObject<Env> {
     return this._presenceService;
   }
 
-  /**
-   * Get the WebSocket manager, creating it lazily if needed.
-   * Lazy initialization ensures the logger has session_id context
-   * (set by ensureInitialized()) by the time the manager is created.
-   */
-  private get wsManager(): SessionWebSocketManager {
+  /** Get the WebSocket manager while resolving its current request-scoped logger on demand. */
+  private get wsManager(): DurableObjectSocketRegistry {
     if (!this._wsManager) {
-      this._wsManager = new SessionWebSocketManagerImpl(
+      this._wsManager = new DurableObjectSocketRegistry(
         this.ctx,
         this.sandboxRepository,
         this.wsClientMappingRepository,
-        this.log,
+        () => this.log,
+        (ws, mapping) => ({
+          participantId: mapping.participant_id,
+          userId: mapping.canonical_user_id ?? mapping.user_id,
+          name: resolveParticipantName(mapping),
+          avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
+          status: "active",
+          lastSeen: Date.now(),
+          clientId: mapping.client_id || `client-${Date.now()}`,
+          ws,
+        }),
         { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
       );
     }
@@ -496,7 +491,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get connections(): DurableObjectSessionConnections {
     if (!this._connections) {
-      this._connections = new DurableObjectSessionConnections(this.ctx, this.wsManager);
+      this._connections = new DurableObjectSessionConnections(this.wsManager);
     }
     return this._connections;
   }
@@ -525,7 +520,7 @@ export class SessionDO extends DurableObject<Env> {
     return this._alarmScheduler;
   }
 
-  private get messageQueue(): SessionMessageQueue {
+  private get messageQueue(): SessionMessageQueue<WebSocket> {
     if (!this._messageQueue) {
       this._messageQueue = new SessionMessageQueue(
         this.backgroundTasks,
@@ -840,7 +835,6 @@ export class SessionDO extends DurableObject<Env> {
         this.eventRepository,
         this.artifactRepository,
         this.callbackService,
-        this.wsManager,
         this.messenger,
         this.diffService,
         (title, options) => this.applySessionTitleUpdate(title, options),
@@ -1427,40 +1421,6 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
     return true;
-  }
-
-  /**
-   * Get client info for a WebSocket, reconstructing from storage if needed after hibernation.
-   */
-  private getClientInfo(ws: WebSocket): ClientInfo | null {
-    // 1. In-memory cache (manager)
-    const cached = this.wsManager.getClient(ws);
-    if (cached) return cached;
-
-    // 2. DB recovery (manager handles tag parsing + DB lookup)
-    const mapping = this.wsManager.recoverClientMapping(ws);
-    if (!mapping) {
-      this.log.warn("No client mapping found after hibernation, closing WebSocket");
-      this.wsManager.close(ws, 4002, "Session expired, please reconnect");
-      return null;
-    }
-
-    // 3. Build ClientInfo (DO owns domain logic)
-    this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
-    const clientInfo: ClientInfo = {
-      participantId: mapping.participant_id,
-      userId: mapping.canonical_user_id ?? mapping.user_id,
-      name: resolveParticipantName(mapping),
-      avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
-      status: "active",
-      lastSeen: Date.now(),
-      clientId: mapping.client_id || `client-${Date.now()}`,
-      ws,
-    };
-
-    // 4. Re-cache
-    this.wsManager.setClient(ws, clientInfo);
-    return clientInfo;
   }
 
   /**

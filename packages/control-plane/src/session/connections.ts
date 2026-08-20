@@ -1,5 +1,6 @@
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxCommand } from "./types";
+import type { SandboxCommandSender } from "./ports";
 
 export interface ConnectedParticipant {
   participantId: string;
@@ -27,7 +28,10 @@ export interface DisconnectReason {
 }
 
 export class SandboxDeliveryUnavailableError extends Error {
-  constructor(message = "No sandbox connected") {
+  constructor(
+    readonly reason: "not_connected" | "send_failed" = "not_connected",
+    message = reason === "not_connected" ? "No sandbox connected" : "Failed to send to sandbox"
+  ) {
     super(message);
     this.name = "SandboxDeliveryUnavailableError";
   }
@@ -58,13 +62,8 @@ export function projectConnectedParticipants(
 }
 
 /** Platform-neutral connection and fan-out boundary consumed by the session engine. */
-export interface SessionConnections {
-  registerBrowser(input: BrowserConnection): Promise<void>;
-  registerSandbox(input: SandboxConnection): Promise<void>;
-  sendToSandbox(message: SandboxCommand): Promise<void>;
+export interface SessionConnections extends SandboxCommandSender {
   broadcastToBrowsers(message: ServerMessage): Promise<void>;
-  disconnectSandbox(reason: DisconnectReason): Promise<void>;
-  listParticipants(): Promise<ConnectedParticipant[]>;
 }
 
 /** Deterministic connection adapter for application tests and non-WebSocket runtimes. */

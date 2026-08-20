@@ -4,12 +4,8 @@ import type { SessionConnections } from "./connections";
 
 function harness() {
   const connections = {
-    registerBrowser: vi.fn(async () => {}),
-    registerSandbox: vi.fn(async () => {}),
     sendToSandbox: vi.fn(async () => {}),
     broadcastToBrowsers: vi.fn(async () => {}),
-    disconnectSandbox: vi.fn(async () => {}),
-    listParticipants: vi.fn(async () => []),
   } satisfies SessionConnections;
   return { messenger: new SessionMessengerImpl(connections), connections };
 }
