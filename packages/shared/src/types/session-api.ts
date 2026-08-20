@@ -4,6 +4,7 @@ import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
+import { modelProviderSelectionsSchema } from "./provider-accounts";
 import {
   messageSourceSchema,
   sessionStatusSchema,
@@ -229,6 +230,8 @@ const createSessionRequestBaseSchema = z.object({
   environmentId: z.string().trim().min(1).nullish(),
   /** Managed skills are resolved and pinned when the session is created. */
   skillSelection: sessionSkillSelectionSchema.optional(),
+  /** Explicit account/API-key choices. Omission resolves provider policy. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema

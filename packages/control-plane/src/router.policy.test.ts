@@ -26,6 +26,18 @@ describe("route policy table", () => {
     ["POST", "/image-builds/build-failed", "handler-authenticated"],
     ["GET", "/api/auth/get-session", "web-service"],
     ["GET", "/internal/auth/sign-in-providers", "web-service"],
+    ["GET", "/model-provider-accounts", "user"],
+    ["POST", "/model-provider-accounts", "user"],
+    ["POST", "/model-provider-accounts/openai/device-authorizations", "user"],
+    [
+      "POST",
+      `/model-provider-accounts/openai/device-authorizations/${"0".repeat(64)}/poll`,
+      "user",
+    ],
+    ["DELETE", `/model-provider-accounts/openai/device-authorizations/${"0".repeat(64)}`, "user"],
+    ["GET", "/model-provider-accounts/legacy-credentials", "user"],
+    ["GET", "/model-provider-account-defaults", "user"],
+    ["PUT", "/model-provider-account-defaults/openai", "user"],
   ])("owns the auth policy for %s %s", (method, path, expectedKind) => {
     expect(routeFor(method, path)?.authentication.kind).toBe(expectedKind);
   });
@@ -59,6 +71,7 @@ describe("route policy table", () => {
     ["POST", "/sessions/session-1/openai-token-refresh"],
     ["POST", "/sessions/session-1/xai-token-refresh"],
     ["GET", "/sessions/session-1/sandbox-skills"],
+    ["POST", "/sessions/session-1/provider-auth/openai/access-token"],
   ])("requires the bound sandbox for %s %s", (method, path) => {
     const route = routeFor(method, path);
     const match = path.match(route!.pattern)!;
@@ -87,6 +100,16 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/sessions/session-1/diff/retry")?.authentication.kind).toBe(
       "user-or-service"
     );
+  });
+
+  it("marks management and broker routes as non-cacheable", () => {
+    expect(routeFor("GET", "/model-provider-accounts")?.cacheControl).toBe("private, no-store");
+    expect(
+      routeFor("POST", "/model-provider-accounts/openai/device-authorizations")?.cacheControl
+    ).toBe("private, no-store");
+    expect(
+      routeFor("POST", "/sessions/session-1/provider-auth/openai/access-token")?.cacheControl
+    ).toBe("no-store");
   });
 
   it.each([
@@ -161,6 +184,31 @@ describe("route policy dispatch ordering", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Invalid SCM_PROVIDER value 'invalid'. Supported values: github, bitbucket, gitlab.",
     });
+  });
+
+  it("applies broker cache policy when sandbox authentication is unavailable", async () => {
+    const testEnv = env("github") as ReturnType<typeof env> & {
+      SESSION: {
+        idFromName: (name: string) => string;
+        get: () => { fetch: () => Promise<Response> };
+      };
+    };
+    testEnv.SESSION = {
+      idFromName: (name) => name,
+      get: () => ({ fetch: async () => Promise.reject(new Error("DO unavailable")) }),
+    };
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/provider-auth/openai/access-token", {
+        method: "POST",
+        headers: { Authorization: "Bearer sandbox-token" },
+      }),
+      testEnv as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 });
 

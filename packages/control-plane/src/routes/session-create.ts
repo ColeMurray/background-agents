@@ -19,6 +19,8 @@ import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
+import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
+import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -200,6 +202,16 @@ async function handleCreateSession(
   );
 
   const sessionId = generateId();
+  let providerAuth;
+  try {
+    providerAuth = await resolveSessionProviderAuth(ctx.db, {
+      explicit: body.providerSelections,
+      unattended: spawnSource !== undefined && spawnSource !== "user",
+    });
+  } catch (e) {
+    if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
+    throw e;
+  }
 
   let managedSkillsManifest;
   try {
@@ -244,6 +256,7 @@ async function handleCreateSession(
     spawnSource,
     githubReview: body.githubReview,
     managedSkillsManifest,
+    providerAuth,
   };
 
   try {

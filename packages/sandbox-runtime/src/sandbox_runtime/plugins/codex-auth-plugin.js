@@ -10,16 +10,19 @@
  * and deduplicates by provider ID (last wins), so this replaces the built-in.
  */
 
+import { createProviderTokenBroker } from "./provider-token-broker.js";
+
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1/responses";
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
-const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes before expiry
+const tokenBroker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
 
 /**
  * Optional per-token key used only once the ChatGPT subscription cannot serve a
- * request. Deliberately not named OPENAI_API_KEY: that name switches the whole
- * deployment to metered billing (the control plane then never enables broker
- * mode), whereas this one keeps the subscription first and spills over.
+ * request. Deliberately not named OPENAI_API_KEY: prepareManagedProviderEnv
+ * strips that variable from sessions routed to a subscription, because it
+ * selects metered billing outright. This one rides along and stays unused
+ * until the subscription cannot answer.
  */
 const FALLBACK_KEY_ENV = "OPENAI_API_KEY_FALLBACK";
 
@@ -53,11 +56,6 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex",
 ]);
 
-// In-memory token cache (reset on sandbox restart - fresh refresh via bridge)
-let cachedAccessToken = null;
-let cachedAccountId = null;
-let cachedExpiresAt = 0;
-
 // Latched for the rest of the sandbox's life once the subscription is spent, so
 // a doomed Codex call is not repeated on every later turn.
 let spilloverLatched = false;
@@ -66,78 +64,28 @@ let spilloverLatched = false;
 // numbers in its headers for free.
 let usageProbed = false;
 
-function getSessionId() {
-  try {
-    const config = JSON.parse(process.env.SESSION_CONFIG || "{}");
-    return config.sessionId || config.session_id || "";
-  } catch {
-    return "";
-  }
-}
-
-async function refreshViaControlPlane() {
-  const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
-  const authToken = process.env.SANDBOX_AUTH_TOKEN;
-  const sessionId = getSessionId();
-
-  if (!controlPlaneUrl || !authToken || !sessionId) {
-    throw new Error(
-      "Missing environment for token refresh: " +
-        [
-          !controlPlaneUrl && "CONTROL_PLANE_URL",
-          !authToken && "SANDBOX_AUTH_TOKEN",
-          !sessionId && "SESSION_CONFIG.sessionId",
-        ]
-          .filter(Boolean)
-          .join(", ")
-    );
-  }
-
-  const response = await fetch(`${controlPlaneUrl}/sessions/${sessionId}/openai-token-refresh`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-    },
-  });
-
-  if (!response.ok) {
-    const body = (await response.text()).slice(0, 200);
-    throw new Error(`Token refresh failed (${response.status}): ${body}`);
-  }
-
-  return response.json();
-}
-
 async function ensureAccessToken(getAuth, setAuth) {
-  const now = Date.now();
-
-  // Return cached token if still fresh
-  if (cachedAccessToken && cachedExpiresAt - now > REFRESH_BUFFER_MS) {
-    return { accessToken: cachedAccessToken, accountId: cachedAccountId };
-  }
-
-  // Refresh via control plane
-  const result = await refreshViaControlPlane();
-
-  cachedAccessToken = result.access_token;
-  cachedAccountId = result.account_id || null;
-  cachedExpiresAt = now + (result.expires_in ?? 3600) * 1000;
-
-  // Update OpenCode's auth state for consistency
-  try {
-    const currentAuth = await getAuth();
-    await setAuth({
-      type: "oauth",
-      refresh: currentAuth?.refresh || "managed-by-control-plane",
-      access: result.access_token,
-      expires: cachedExpiresAt,
-      ...(cachedAccountId && { accountId: cachedAccountId }),
-    });
-  } catch {
-    // Non-fatal: the in-memory cache is the source of truth
-  }
-
-  return { accessToken: cachedAccessToken, accountId: cachedAccountId };
+  const result = await tokenBroker.getAccessToken(async (refreshed) => {
+    // Update OpenCode's auth state for consistency. The broker cache remains
+    // authoritative when the local auth store cannot be updated.
+    try {
+      const currentAuth = await getAuth();
+      const accountId = refreshed.providerMetadata?.accountId || null;
+      await setAuth({
+        type: "oauth",
+        refresh: currentAuth?.refresh || "managed-by-control-plane",
+        access: refreshed.accessToken,
+        expires: refreshed.expiresAt,
+        ...(accountId && { accountId }),
+      });
+    } catch {
+      // Non-fatal: the in-memory cache is the source of truth
+    }
+  });
+  return {
+    accessToken: result.accessToken,
+    accountId: result.providerMetadata?.accountId || null,
+  };
 }
 
 function headersFrom(init) {

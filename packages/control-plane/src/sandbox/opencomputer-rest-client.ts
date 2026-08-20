@@ -8,6 +8,7 @@
 
 import { createLogger } from "../logger";
 import { z } from "zod";
+import { SANDBOX_RUNTIME_VERSION } from "./runtime-manifest";
 
 const log = createLogger("opencomputer-rest-client");
 
@@ -225,9 +226,8 @@ const RUNTIME_HOSTS_BOOTSTRAP =
 // OpenComputer launches the runtime via `exec`, which does NOT inherit the
 // image's baked env, so SANDBOX_VERSION must be re-exported here — otherwise the
 // runtime reports an empty version and the build-complete callback is rejected
-// (runtime-version floor check). Keep in sync with the value baked in
-// packages/opencomputer-infra/src/build-template.ts (SANDBOX_VERSION).
-const OPENCOMPUTER_SANDBOX_VERSION = "v59-vnc-opencode-1-18-18";
+// (runtime-version floor check).
+export const OPENCOMPUTER_SANDBOX_VERSION = SANDBOX_RUNTIME_VERSION;
 const RUNTIME_ENV_EXPORTS =
   "export HOME=/home/sandbox " +
   `VIRTUAL_ENV=${PYTHON_VENV} ` +

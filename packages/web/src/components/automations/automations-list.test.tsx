@@ -48,6 +48,7 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
     triggerConfig: null,
     repositories: [{ repoOwner: "acme", repoName: "web-app", repoId: 1, baseBranch: "main" }],
     environmentIds: [],
+    providerSelections: {},
     ...overrides,
   };
 }

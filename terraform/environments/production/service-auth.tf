@@ -31,3 +31,14 @@ resource "random_password" "image_callback_token_pepper" {
   length  = 64
   special = false
 }
+
+# Dedicated encryption key for provider-account credentials. Operators may
+# supply an existing key during upgrades; new installations use this generated
+# value, which remains stable in Terraform state.
+resource "random_bytes" "provider_accounts_encryption_key" {
+  length = 32
+}
+
+locals {
+  effective_provider_accounts_encryption_key = trimspace(var.provider_accounts_encryption_key) != "" ? trimspace(var.provider_accounts_encryption_key) : random_bytes.provider_accounts_encryption_key.base64
+}

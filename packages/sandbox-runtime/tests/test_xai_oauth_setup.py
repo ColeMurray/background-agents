@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from sandbox_runtime.opencode_server import OpenCodeServer
 from tests.runtime_helpers import make_opencode_server
@@ -112,7 +112,9 @@ def test_xai_plugin_uses_broker_without_refresh_token_environment():
     ).read_text()
 
     assert 'provider: "xai"' in plugin
-    assert "/xai-token-refresh" in plugin
+    assert "/xai-token-refresh" not in plugin
+    assert "providerMetadata" not in plugin
+    assert "externalAccountId" not in plugin
     assert "XAI_OAUTH_REFRESH_TOKEN" not in plugin
     assert "reasoningEffort" not in plugin
 
@@ -126,6 +128,8 @@ async def test_start_deploys_xai_plugin_from_marker(tmp_path):
     plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "xai-auth-plugin.js"
     plugin_source.parent.mkdir(parents=True)
     plugin_source.write_text("export const XaiAuthProxy = async () => ({});")
+    broker_source = plugin_source.parent / "provider-token-broker.js"
+    broker_source.write_text("export function createProviderTokenBroker() {}")
     fake_proc = MagicMock(stdout=None)
     original_path = Path
 
@@ -143,11 +147,10 @@ async def test_start_deploys_xai_plugin_from_marker(tmp_path):
             side_effect=lambda coro: coro.close(),
         ),
     ):
-        mock_path.side_effect = lambda value: (
-            plugin_source
-            if value == "/app/sandbox_runtime/plugins/xai-auth-plugin.js"
-            else original_path(value)
-        )
+        mock_path.side_effect = lambda value: {
+            "/app/sandbox_runtime/plugins/xai-auth-plugin.js": plugin_source,
+            "/app/sandbox_runtime/plugins/provider-token-broker.js": broker_source,
+        }.get(value, original_path(value))
         supervisor._setup_managed_oauth = MagicMock()
         supervisor._install_tools = MagicMock()
         supervisor._install_skills = MagicMock()
@@ -156,11 +159,20 @@ async def test_start_deploys_xai_plugin_from_marker(tmp_path):
 
         await supervisor.start((), supervisor.workspace_path)
 
-    mock_copy.assert_called_once_with(
-        plugin_source,
-        supervisor.workspace_path / ".opencode" / "plugins" / "xai-auth-plugin.js",
-    )
+    assert mock_copy.call_args_list == [
+        call(
+            broker_source,
+            supervisor.workspace_path / ".opencode" / "plugins" / "provider-token-broker.js",
+        ),
+        call(
+            plugin_source,
+            supervisor.workspace_path / ".opencode" / "plugins" / "xai-auth-plugin.js",
+        ),
+    ]
     mock_excludes.assert_called_once_with(
         supervisor.workspace_path,
-        {".opencode/plugins/xai-auth-plugin.js"},
+        {
+            ".opencode/plugins/provider-token-broker.js",
+            ".opencode/plugins/xai-auth-plugin.js",
+        },
     )

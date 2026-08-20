@@ -175,6 +175,20 @@ async function handleSpawnChild(
       ? requestedReasoningEffort
       : null;
 
+  let providerAuth;
+  try {
+    providerAuth = await sessionStore.getCompleteProviderAuth(parentId);
+  } catch (cause) {
+    logger.error("Failed to load parent provider auth", {
+      event: "session.spawn_child_provider_auth_failed",
+      parent_id: parentId,
+      error: cause instanceof Error ? cause.message : String(cause),
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+    });
+    return error("Parent provider auth unavailable", 503);
+  }
+
   const childDepth = parentDepth + 1;
   const childId = generateId();
 
@@ -228,6 +242,10 @@ async function handleSpawnChild(
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkillsSourceSessionId: parentId,
+    providerAuth: providerAuth.map((auth) => ({
+      ...auth,
+      inheritedFromSessionId: parentId,
+    })),
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(

@@ -15,6 +15,10 @@ import type {
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
+import {
+  toProviderSelections,
+  type AutomationModelProviderAuthRow,
+} from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { AutomationListCursor } from "./automation-list-cursor";
 
@@ -171,7 +175,8 @@ function toAutomationRepository(row: AutomationRepositoryRow): AutomationReposit
 export function toAutomation(
   row: AutomationRow,
   repositoryRows: AutomationRepositoryRow[],
-  environmentRows: AutomationEnvironmentRow[] = []
+  environmentRows: AutomationEnvironmentRow[],
+  providerAuthRows: AutomationModelProviderAuthRow[]
 ): Automation {
   const triggerConfig: TriggerConfig | null = row.trigger_config
     ? JSON.parse(row.trigger_config)
@@ -197,6 +202,7 @@ export function toAutomation(
     triggerConfig,
     repositories: repositoryRows.map(toAutomationRepository),
     environmentIds: environmentRows.map((environment) => environment.environment_id),
+    providerSelections: toProviderSelections(providerAuthRows),
   };
 }
 

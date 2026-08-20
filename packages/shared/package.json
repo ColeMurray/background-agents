@@ -110,6 +110,10 @@
       "import": "./dist/types/automations.js",
       "types": "./dist/types/automations.d.ts"
     },
+    "./types/provider-accounts": {
+      "import": "./dist/types/provider-accounts.js",
+      "types": "./dist/types/provider-accounts.d.ts"
+    },
     "./types/websocket": {
       "import": "./dist/types/websocket.js",
       "types": "./dist/types/websocket.d.ts"
