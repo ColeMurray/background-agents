@@ -167,6 +167,27 @@ describe("ClaimedProviderCredentialExchange", () => {
     expect(terminalFailure).not.toHaveBeenCalled();
   });
 
+  it("preserves a retry-safe refresh failure when clearing the claim also fails", async () => {
+    const failure = new ProviderRefreshError("retry", "retry_safe");
+    const { complete, exchange, providerAdapter, store } = setup(
+      adapter(vi.fn().mockRejectedValue(failure))
+    );
+    vi.mocked(store.clearSafeFailure).mockRejectedValue(new Error("D1 unavailable"));
+
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner-1",
+        now: () => NOW,
+        complete,
+      })
+    ).rejects.toMatchObject({ phase: "refresh", cause: failure });
+  });
+
   it.each(["ambiguous", "unauthorized"] as const)(
     "atomically fences the claim and requires reconnect after a %s refresh failure",
     async (classification) => {
@@ -247,6 +268,28 @@ describe("ClaimedProviderCredentialExchange", () => {
     expect(store.clearSafeFailure).toHaveBeenCalledWith("account-1", 3, 7, "owner-1", NOW);
   });
 
+  it("preserves a parse failure when clearing the claim also fails", async () => {
+    const { complete, exchange, providerAdapter, store } = setup();
+    const parseFailure = new Error("invalid credential");
+    vi.mocked(providerAdapter.parseCredential).mockImplementation(() => {
+      throw parseFailure;
+    });
+    vi.mocked(store.clearSafeFailure).mockRejectedValue(new Error("D1 unavailable"));
+
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner-1",
+        now: () => NOW,
+        complete,
+      })
+    ).rejects.toMatchObject({ phase: "parse", cause: parseFailure });
+  });
+
   it("atomically fences when the caller's completion cannot commit", async () => {
     const { exchange, providerAdapter, terminalFailure } = setup();
     const complete = vi.fn().mockResolvedValue(false);
@@ -285,6 +328,24 @@ describe("ClaimedProviderCredentialExchange", () => {
   it("reports when terminal fencing loses a failed completion claim", async () => {
     const { exchange, providerAdapter, terminalFailure } = setup();
     terminalFailure.mockResolvedValue(false);
+
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner-1",
+        now: () => NOW,
+        complete: vi.fn().mockResolvedValue(false),
+      })
+    ).rejects.toMatchObject({ phase: "completion", terminalFence: "lost" });
+  });
+
+  it("preserves a failed completion when terminal fencing also fails", async () => {
+    const { exchange, providerAdapter, terminalFailure } = setup();
+    terminalFailure.mockRejectedValue(new Error("D1 unavailable"));
 
     await expect(
       exchange.run({

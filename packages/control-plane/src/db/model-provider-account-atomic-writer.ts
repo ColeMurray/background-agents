@@ -149,8 +149,9 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
              AND exchange_generation = ? AND exchange_owner = ? AND exchange_state = 'in_flight'
              AND EXISTS (
                SELECT 1 FROM model_provider_accounts
-               WHERE id = provider_account_id AND status = 'reconnect_required'
-                 AND archived_at IS NULL
+               WHERE model_provider_accounts.id = model_provider_account_credentials.provider_account_id
+                 AND model_provider_accounts.status = 'reconnect_required'
+                 AND model_provider_accounts.archived_at IS NULL
              )`
         )
         .bind(

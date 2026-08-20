@@ -49,7 +49,7 @@ function adapter(
       if (accountId) validateExternalIdentity(result.externalAccountId, accountId);
       return result;
     }),
-    parseCredential: (value) => value as Credential,
+    parseCredential: vi.fn((value) => value as Credential),
     refresh: vi.fn(
       async () =>
         options.refresh ?? {
@@ -398,6 +398,55 @@ describe("ModelProviderAccountService", () => {
     expect(store.credentials.readCredentialState).not.toHaveBeenCalled();
   });
 
+  it("maps only the default-account constraint for status and archive writes", async () => {
+    const store = stores();
+    const service = createService(store, new ModelProviderAccountAdapterRegistry([adapter()]), {
+      generateId: () => ACCOUNT_ID,
+      now: () => 1_000,
+    });
+    vi.mocked(store.accounts.setStatus).mockRejectedValueOnce(
+      new Error("provider default account must remain active")
+    );
+    vi.mocked(store.accounts.archive).mockRejectedValueOnce(
+      new Error("provider default account must remain active")
+    );
+
+    await expect(service.setStatus(ACCOUNT_ID, "disabled", "user-1")).rejects.toMatchObject({
+      status: 409,
+      message: "A default account must remain active",
+    });
+    await expect(service.archive(ACCOUNT_ID, "user-1")).rejects.toMatchObject({
+      status: 409,
+      message: "A default account cannot be archived",
+    });
+  });
+
+  it("preserves unexpected status and archive storage failures", async () => {
+    const store = stores();
+    const service = createService(store, new ModelProviderAccountAdapterRegistry([adapter()]), {
+      generateId: () => ACCOUNT_ID,
+      now: () => 1_000,
+    });
+    const statusFailure = new Error("D1 unavailable while updating status");
+    const archiveFailure = new Error("D1 unavailable while archiving");
+    vi.mocked(store.accounts.setStatus).mockRejectedValueOnce(statusFailure);
+    vi.mocked(store.accounts.archive).mockRejectedValueOnce(archiveFailure);
+
+    await expect(service.setStatus(ACCOUNT_ID, "disabled", "user-1")).rejects.toBe(statusFailure);
+    await expect(service.archive(ACCOUNT_ID, "user-1")).rejects.toBe(archiveFailure);
+  });
+
+  it("keeps archive idempotent when no row changes", async () => {
+    const store = stores();
+    vi.mocked(store.accounts.archive).mockResolvedValue(false);
+    const service = createService(store, new ModelProviderAccountAdapterRegistry([adapter()]), {
+      generateId: () => ACCOUNT_ID,
+      now: () => 1_000,
+    });
+
+    await expect(service.archive(ACCOUNT_ID, "user-1")).resolves.toBeUndefined();
+  });
+
   it("safely reconnects an existing account with the trusted external identity", async () => {
     const existing = providerAccount({ id: "22222222222222222222222222222222" });
     const store = stores(existing);
@@ -520,9 +569,10 @@ describe("ModelProviderAccountService", () => {
         { generateId: () => ACCOUNT_ID, now: () => 1_000 }
       );
 
-      await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toBeInstanceOf(
-        ProviderRefreshError
-      );
+      await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toMatchObject({
+        status: 409,
+        message: "Provider account requires reconnection",
+      });
       expect(store.atomicWriter.fenceExchangeAndRequireReconnect).toHaveBeenCalledWith({
         providerAccountId: ACCOUNT_ID,
         credentialVersion: 1,
@@ -532,6 +582,43 @@ describe("ModelProviderAccountService", () => {
       });
     }
   );
+
+  it("maps retry-safe verification refresh failure without requiring reconnect", async () => {
+    const store = stores();
+    const providerAdapter = adapter();
+    vi.mocked(providerAdapter.refresh).mockRejectedValue(
+      new ProviderRefreshError("refresh failed", "retry_safe")
+    );
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([providerAdapter]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toMatchObject({
+      status: 502,
+      message: "Provider credential verification failed safely; retry the operation",
+    });
+    expect(store.atomicWriter.fenceExchangeAndRequireReconnect).not.toHaveBeenCalled();
+  });
+
+  it("maps an invalid stored verification credential to a stable conflict", async () => {
+    const store = stores();
+    const providerAdapter = adapter();
+    vi.mocked(providerAdapter.parseCredential).mockImplementation(() => {
+      throw new Error("secret parse detail");
+    });
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([providerAdapter]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toMatchObject({
+      status: 409,
+      message: "Stored provider credential is invalid",
+    });
+  });
 
   it("uses authoritative account state when verification terminal fencing loses its claim", async () => {
     const store = stores();

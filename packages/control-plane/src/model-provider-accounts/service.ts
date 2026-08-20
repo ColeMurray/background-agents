@@ -18,6 +18,7 @@ import {
   type ModelProviderAccountAdapterRegistry,
   type ProviderConnectionResult,
   ProviderIdentityError,
+  ProviderRefreshError,
 } from "../auth/model-provider-account-adapters";
 import {
   ClaimedProviderCredentialExchange,
@@ -53,6 +54,16 @@ export class ProviderAccountServiceError extends Error {
   ) {
     super(message, options);
   }
+}
+
+function mapDefaultAccountConstraint(cause: unknown, message: string): never {
+  if (
+    !(cause instanceof Error) ||
+    !/provider default account must remain active/i.test(cause.message)
+  ) {
+    throw cause;
+  }
+  throw new ProviderAccountServiceError(message, 409, { cause });
 }
 
 export class ModelProviderAccountService {
@@ -171,7 +182,7 @@ export class ModelProviderAccountService {
       }
     } catch (cause) {
       if (cause instanceof ProviderAccountServiceError) throw cause;
-      throw new ProviderAccountServiceError("A default account must remain active", 409);
+      mapDefaultAccountConstraint(cause, "A default account must remain active");
     }
     return this.get(id);
   }
@@ -179,8 +190,8 @@ export class ModelProviderAccountService {
   async archive(id: string, actorId: string): Promise<void> {
     try {
       await this.accounts.archive(id, actorId, this.dependencies.now());
-    } catch {
-      throw new ProviderAccountServiceError("A default account cannot be archived", 409);
+    } catch (cause) {
+      mapDefaultAccountConstraint(cause, "A default account cannot be archived");
     }
   }
 
@@ -232,7 +243,26 @@ export class ModelProviderAccountService {
       if (cause.terminalFence === "lost") {
         return this.reconcileVerificationFenceLoss(account, current);
       }
-      if (cause.phase !== "completion") throw cause.cause;
+      if (cause.phase === "parse") {
+        throw new ProviderAccountServiceError("Stored provider credential is invalid", 409, {
+          cause: cause.cause,
+        });
+      }
+      if (cause.phase === "refresh") {
+        if (
+          cause.cause instanceof ProviderRefreshError &&
+          cause.cause.classification === "retry_safe"
+        ) {
+          throw new ProviderAccountServiceError(
+            "Provider credential verification failed safely; retry the operation",
+            502,
+            { cause: cause.cause }
+          );
+        }
+        throw new ProviderAccountServiceError("Provider account requires reconnection", 409, {
+          cause: cause.cause,
+        });
+      }
       if (cause.cause instanceof ProviderAccountServiceError) throw cause.cause;
       throw this.consumedCredentialError(cause);
     }

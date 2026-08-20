@@ -156,6 +156,7 @@ export class ModelProviderAccountBroker {
           if (fenced) {
             throw this.reconnectError(account.provider, "A credential exchange became stale");
           }
+          return this.reconcileLostTerminalFence(account, adapter, state);
         }
         await this.sleep(this.pollDelayMs);
         state = await this.readState(account.id, account.provider);

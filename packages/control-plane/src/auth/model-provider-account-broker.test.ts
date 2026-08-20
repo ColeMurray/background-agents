@@ -302,6 +302,27 @@ describe("ModelProviderAccountBroker", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("observes reconnect state when another caller wins stale fencing", async () => {
+    const stale = state({
+      exchangeState: "in_flight",
+      exchangeGeneration: 4,
+      exchangeOwner: "slow-owner",
+      exchangeStartedAt: NOW - 20_000,
+    });
+    const { broker, stores, refresh } = setup({
+      credentialStates: [stale],
+      terminalFailure: vi.fn().mockResolvedValue(false),
+    });
+    vi.mocked(stores.accounts.getById)
+      .mockResolvedValueOnce(account())
+      .mockResolvedValue(account({ status: "reconnect_required" }));
+
+    await expect(broker.getAccess("account-1", "openai")).rejects.toMatchObject({
+      code: "reconnect_required",
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it.each(["unauthorized", "ambiguous"] as const)(
     "marks %s refresh failures reconnect required",
     async (classification) => {

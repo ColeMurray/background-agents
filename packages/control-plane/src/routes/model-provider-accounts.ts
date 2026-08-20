@@ -1,6 +1,7 @@
 import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
   connectModelProviderAccountRequestSchema,
+  modelProviderAccountDisplayNameSchema,
   modelProviderAccountDefaultRequestSchema,
   modelProviderAccountStatusSchema,
   reconnectModelProviderAccountRequestSchema,
@@ -38,7 +39,7 @@ import {
 } from "./shared";
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
-const renameSchema = z.strictObject({ displayName: z.string().trim().min(1).max(100) });
+const renameSchema = z.strictObject({ displayName: modelProviderAccountDisplayNameSchema });
 const logger = createLogger("router:model-provider-accounts");
 
 function service(env: Env, ctx: RequestContext): ModelProviderAccountService {

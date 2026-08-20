@@ -149,19 +149,19 @@ export type LegacyProviderCredentialsResponse = z.infer<
   typeof legacyProviderCredentialsResponseSchema
 >;
 
-const displayNameSchema = z.string().trim().min(1).max(100);
+export const modelProviderAccountDisplayNameSchema = z.string().trim().min(1).max(100);
 const credentialStringSchema = z.string().min(1).max(65_536);
 const externalAccountIdSchema = z.string().trim().min(1).max(512);
 
 export const connectOpenAIModelProviderAccountRequestSchema = z.strictObject({
   provider: z.literal("openai"),
-  displayName: displayNameSchema,
+  displayName: modelProviderAccountDisplayNameSchema,
   refreshToken: credentialStringSchema,
   accountId: externalAccountIdSchema,
 });
 export const connectXaiModelProviderAccountRequestSchema = z.strictObject({
   provider: z.literal("xai"),
-  displayName: displayNameSchema,
+  displayName: modelProviderAccountDisplayNameSchema,
   refreshToken: credentialStringSchema,
 });
 export const connectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [

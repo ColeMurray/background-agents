@@ -192,6 +192,7 @@ export {
   modelProviderAccountsResponseSchema,
   modelProviderAccountDefaultSchema,
   modelProviderAccountDefaultRequestSchema,
+  modelProviderAccountDisplayNameSchema,
   modelProviderAccountDefaultsResponseSchema,
   sessionModelProviderAuthSchema,
   sessionModelProviderAuthResponseSchema,

@@ -9,7 +9,7 @@ import { providerAccountIneligibility } from "./account-lifecycle-policy";
 type ProviderAccountPolicyStatus = 400 | 404 | 409;
 
 export interface ProviderAccountAdapterLookup {
-  get(provider: ModelProviderId): unknown | undefined;
+  get(provider: ModelProviderId): object | undefined;
 }
 
 export class ProviderAccountSelectionPolicyError extends Error {

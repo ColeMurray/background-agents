@@ -81,7 +81,7 @@ export class ClaimedProviderCredentialExchange {
         request.state.credentialSchemaVersion
       );
     } catch (cause) {
-      await this.clear(request, claim.generation);
+      await this.clearAfterFailure(request, claim.generation);
       throw new ClaimedProviderCredentialExchangeError("parse", cause);
     }
 
@@ -90,7 +90,7 @@ export class ClaimedProviderCredentialExchange {
       refreshed = await request.adapter.refresh(credential, request.now());
     } catch (cause) {
       if (cause instanceof ProviderRefreshError && cause.classification === "retry_safe") {
-        await this.clear(request, claim.generation);
+        await this.clearAfterFailure(request, claim.generation);
         throw new ClaimedProviderCredentialExchangeError("refresh", cause);
       }
       const fenced = await this.failTerminally(request, claim.generation);
@@ -145,13 +145,34 @@ export class ClaimedProviderCredentialExchange {
     );
   }
 
-  private failTerminally(request: ClaimedProviderCredentialExchangeRequest, generation: number) {
-    return this.terminalFailure({
-      providerAccountId: request.providerAccountId,
-      credentialVersion: request.state.credentialVersion,
-      exchangeGeneration: generation,
-      exchangeOwner: request.owner,
-      now: request.now(),
-    });
+  private async clearAfterFailure(
+    request: ClaimedProviderCredentialExchangeRequest,
+    generation: number
+  ): Promise<void> {
+    try {
+      await this.clear(request, generation);
+    } catch {
+      // The original classified failure is authoritative. A failed clear leaves
+      // the durable lease in flight until the stale-exchange path reconciles it.
+    }
+  }
+
+  private async failTerminally(
+    request: ClaimedProviderCredentialExchangeRequest,
+    generation: number
+  ): Promise<boolean> {
+    try {
+      return await this.terminalFailure({
+        providerAccountId: request.providerAccountId,
+        credentialVersion: request.state.credentialVersion,
+        exchangeGeneration: generation,
+        exchangeOwner: request.owner,
+        now: request.now(),
+      });
+    } catch {
+      // Preserve the original exchange failure and force the caller through
+      // authoritative reconciliation when terminal fencing cannot be observed.
+      return false;
+    }
   }
 }

@@ -229,7 +229,7 @@ describe("provider account management routes", () => {
       env.DB.prepare(
         `INSERT INTO repo_secrets
          (repo_id, repo_owner, repo_name, key, encrypted_value, created_at, updated_at)
-         VALUES (7, 'acme', 'repo', 'XAI_OAUTH_ACCESS_TOKEN', 'ciphertext', ?, ?)`
+         VALUES (7, 'acme/platform', 'repo', 'XAI_OAUTH_ACCESS_TOKEN', 'ciphertext', ?, ?)`
       ).bind(now, now),
       env.DB.prepare(
         `INSERT INTO environments (id, name, created_at, updated_at)
@@ -251,7 +251,7 @@ describe("provider account management routes", () => {
       {
         scope: "repository",
         scopeId: "7",
-        repository: "acme/repo",
+        repository: "acme/platform/repo",
         key: "XAI_OAUTH_ACCESS_TOKEN",
       },
     ]);
