@@ -5,75 +5,10 @@
  * only short-lived access tokens to the ephemeral sandbox.
  */
 
+import { createProviderTokenBroker } from "./provider-token-broker.js";
+
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
-const REFRESH_BUFFER_MS = 5 * 60 * 1000;
-const CONTROL_PLANE_TOKEN_REQUEST_TIMEOUT_MS = 30_000;
-
-let cachedAccessToken = null;
-let cachedExpiresAt = 0;
-let refreshPromise = null;
-
-function getSessionId() {
-  try {
-    const config = JSON.parse(process.env.SESSION_CONFIG || "{}");
-    return config.sessionId || config.session_id || "";
-  } catch {
-    return "";
-  }
-}
-
-async function refreshViaControlPlane() {
-  const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
-  const authToken = process.env.SANDBOX_AUTH_TOKEN;
-  const sessionId = getSessionId();
-  if (!controlPlaneUrl || !authToken || !sessionId) {
-    throw new Error("Missing environment for xAI token refresh");
-  }
-
-  const response = await fetch(
-    `${controlPlaneUrl}/sessions/${sessionId}/provider-auth/xai/access-token`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${authToken}` },
-      signal: AbortSignal.timeout(CONTROL_PLANE_TOKEN_REQUEST_TIMEOUT_MS),
-    }
-  );
-  if (!response.ok) {
-    const body = (await response.text()).slice(0, 200);
-    throw new Error(`xAI token refresh failed (${response.status}): ${body}`);
-  }
-  const result = await response.json();
-  if (
-    !result ||
-    typeof result.accessToken !== "string" ||
-    !result.accessToken.trim() ||
-    (result.expiresIn !== undefined &&
-      (typeof result.expiresIn !== "number" ||
-        !Number.isFinite(result.expiresIn) ||
-        result.expiresIn <= 0))
-  ) {
-    throw new Error("Invalid xAI token broker response");
-  }
-  return result;
-}
-
-async function ensureAccessToken() {
-  if (cachedAccessToken && cachedExpiresAt - Date.now() > REFRESH_BUFFER_MS) {
-    return cachedAccessToken;
-  }
-  if (!refreshPromise) {
-    refreshPromise = refreshViaControlPlane()
-      .then((result) => {
-        cachedAccessToken = result.accessToken;
-        cachedExpiresAt = Date.now() + (result.expiresIn ?? 3600) * 1000;
-        return cachedAccessToken;
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
-  }
-  return refreshPromise;
-}
+const tokenBroker = createProviderTokenBroker({ provider: "xai", providerLabel: "xAI" });
 
 export const XaiAuthProxy = async () => ({
   provider: {
@@ -137,7 +72,8 @@ export const XaiAuthProxy = async () => ({
               if (value !== undefined) headers.set(key, String(value));
             }
           }
-          headers.set("authorization", `Bearer ${await ensureAccessToken()}`);
+          const { accessToken } = await tokenBroker.getAccessToken();
+          headers.set("authorization", `Bearer ${accessToken}`);
           return fetch(requestInput, { ...init, headers });
         },
       };

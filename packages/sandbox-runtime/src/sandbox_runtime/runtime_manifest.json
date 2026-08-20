@@ -1,0 +1,6 @@
+{
+  "runtimeVersion": "v60-provider-account-broker",
+  "generation": 60,
+  "minimumCompatibleGeneration": 60,
+  "minimumRebuildGeneration": 60
+}

@@ -16,6 +16,7 @@ from pathlib import Path
 import modal
 
 import sandbox_runtime
+from sandbox_runtime.runtime_manifest import RUNTIME_VERSION
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
@@ -49,7 +50,7 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # it, so bump every provider's label together.
 # v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
 # v60: generic provider-account token broker plugin
-CACHE_BUSTER = "v60-provider-account-broker"
+CACHE_BUSTER = RUNTIME_VERSION
 
 # Base image with all development tools
 base_image = (

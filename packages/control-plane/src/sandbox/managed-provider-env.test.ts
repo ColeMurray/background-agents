@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { prepareManagedProviderEnv } from "./managed-provider-env";
+import { prepareLegacyManagedProviderEnv, prepareManagedProviderEnv } from "./managed-provider-env";
 
-describe("prepareManagedProviderEnv", () => {
+describe("prepareLegacyManagedProviderEnv", () => {
   it("replaces durable OAuth credentials with provider markers", () => {
     expect(
-      prepareManagedProviderEnv({
+      prepareLegacyManagedProviderEnv({
         exposedSecrets: {
           USER_VALUE: "visible",
           OPENAI_OAUTH_REFRESH_TOKEN: "openai-refresh",
@@ -29,7 +29,7 @@ describe("prepareManagedProviderEnv", () => {
 
   it("does not advertise a provider without a refresh token", () => {
     expect(
-      prepareManagedProviderEnv({
+      prepareLegacyManagedProviderEnv({
         exposedSecrets: {
           XAI_OAUTH_ACCESS_TOKEN: "orphaned",
           XAI_OAUTH_MANAGED: "user-controlled",
@@ -41,13 +41,15 @@ describe("prepareManagedProviderEnv", () => {
 
   it("uses broker-compatible scopes to choose managed markers", () => {
     expect(
-      prepareManagedProviderEnv({
+      prepareLegacyManagedProviderEnv({
         exposedSecrets: { XAI_OAUTH_REFRESH_TOKEN: "secondary", USER_VALUE: "visible" },
         brokerSecrets: { OPENAI_OAUTH_REFRESH_TOKEN: "primary" },
       })
     ).toEqual({ USER_VALUE: "visible", OPENAI_OAUTH_MANAGED: "1" });
   });
+});
 
+describe("prepareManagedProviderEnv", () => {
   it("makes provider-account mode override legacy OAuth and canonical API keys", () => {
     expect(
       prepareManagedProviderEnv({

@@ -381,6 +381,24 @@ export class SchedulerDO extends DurableObject<Env> {
       children.push({ ...childBase(), status: "starting" });
     }
 
+    const launchCandidates = children.filter((child) => child.status === "starting");
+    // Resolve provider routing before admission, alongside the already-built
+    // target children. Together these values are the immutable launch snapshot
+    // for this firing: edits made after the guarded insert cannot change which
+    // account an admitted child uses.
+    let providerAuthSnapshot:
+      | { providerAuth: SessionModelProviderAuthInput[] }
+      | { error: unknown } = { providerAuth: [] };
+    if (launchCandidates.length > 0) {
+      try {
+        providerAuthSnapshot = {
+          providerAuth: await resolveAutomationProviderAuth(this.db, automation.id),
+        };
+      } catch (error) {
+        providerAuthSnapshot = { error };
+      }
+    }
+
     const invocation: AutomationInvocationRow = {
       id: invocationId,
       automation_id: automation.id,
@@ -445,27 +463,13 @@ export class SchedulerDO extends DurableObject<Env> {
       }
     }
 
-    const launchCandidates = children.filter((child) => child.status === "starting");
-    let providerAuthResolution:
-      | { providerAuth: SessionModelProviderAuthInput[] }
-      | { error: unknown } = { providerAuth: [] };
-    if (launchCandidates.length > 0) {
-      try {
-        providerAuthResolution = {
-          providerAuth: await resolveAutomationProviderAuth(this.db, automation.id),
-        };
-      } catch (error) {
-        providerAuthResolution = { error };
-      }
-    }
-
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
-        if ("error" in providerAuthResolution) throw providerAuthResolution.error;
+        if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
         const { sessionId } = await this.createSessionForAutomationRun(
           automation,
           child,
-          providerAuthResolution.providerAuth
+          providerAuthSnapshot.providerAuth
         );
         const claimed = await store.updateRun(child.id, {
           status: "running",

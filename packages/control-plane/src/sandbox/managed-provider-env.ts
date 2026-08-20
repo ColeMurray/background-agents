@@ -19,8 +19,10 @@ const CONTROL_PLANE_OAUTH_KEYS = new Set([
 interface ManagedProviderEnvOptions {
   exposedSecrets: Record<string, string>;
   brokerSecrets: Record<string, string>;
-  providerAuthModes?: Partial<Record<SubscriptionProviderId, SessionProviderAuthMode>>;
+  providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>;
 }
+
+type LegacyManagedProviderEnvOptions = Omit<ManagedProviderEnvOptions, "providerAuthModes">;
 
 const PROVIDER_ENV = {
   openai: {
@@ -49,15 +51,37 @@ export function prepareManagedProviderEnv({
 
   for (const provider of SUBSCRIPTION_PROVIDER_IDS) {
     const config = PROVIDER_ENV[provider];
-    const mode = providerAuthModes?.[provider];
+    const mode = providerAuthModes[provider];
     const managed =
       mode === "provider_account" ||
-      ((mode === "legacy_scoped_oauth" || mode === undefined) &&
-        Boolean(brokerSecrets[config.legacyRefreshToken]));
+      (mode === "legacy_scoped_oauth" && Boolean(brokerSecrets[config.legacyRefreshToken]));
     if (managed) {
       delete env[config.apiKey];
       env[config.marker] = "1";
     }
   }
   return env;
+}
+
+/**
+ * Image builds predate session provider-routing snapshots. Infer legacy
+ * managed OAuth only in that compatibility path; live sessions must call
+ * prepareManagedProviderEnv with a complete providerAuthModes record.
+ */
+export function prepareLegacyManagedProviderEnv({
+  exposedSecrets,
+  brokerSecrets,
+}: LegacyManagedProviderEnvOptions): Record<string, string> {
+  return prepareManagedProviderEnv({
+    exposedSecrets,
+    brokerSecrets,
+    providerAuthModes: Object.fromEntries(
+      SUBSCRIPTION_PROVIDER_IDS.map((provider) => [
+        provider,
+        brokerSecrets[PROVIDER_ENV[provider].legacyRefreshToken]
+          ? "legacy_scoped_oauth"
+          : "api_key",
+      ])
+    ) as Record<SubscriptionProviderId, SessionProviderAuthMode>,
+  });
 }

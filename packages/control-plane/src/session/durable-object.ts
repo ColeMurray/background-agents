@@ -54,6 +54,10 @@ import {
   type GitPushSpec,
 } from "../source-control";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
+import type {
+  SessionProviderAuthMode,
+  SubscriptionProviderId,
+} from "@open-inspect/shared/types/provider-accounts";
 import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
@@ -1839,7 +1843,7 @@ export class SessionDO extends DurableObject<Env> {
     );
     const providerAuthModes = Object.fromEntries(
       providerAuth.map(({ provider, authMode }) => [provider, authMode])
-    );
+    ) as Record<SubscriptionProviderId, SessionProviderAuthMode>;
 
     if (!this.env.REPO_SECRETS_ENCRYPTION_KEY) {
       this.log.debug("Ordinary secrets not configured, skipping secret loading", {

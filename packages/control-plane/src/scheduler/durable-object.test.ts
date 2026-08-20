@@ -641,6 +641,56 @@ describe("SchedulerDO", () => {
       ]);
     });
 
+    it("freezes provider routing before invocation admission", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      const firstAccountId = "a".repeat(32);
+      const editedAccountId = "b".repeat(32);
+      let selectedAccountId = firstAccountId;
+      mockProviderAuthList.mockReset();
+      mockProviderAuthList.mockImplementation(async () => [
+        {
+          automation_id: "auto-1",
+          provider: "openai",
+          auth_mode: "provider_account",
+          provider_account_id: selectedAccountId,
+          created_at: 1,
+          updated_at: 1,
+        },
+      ]);
+      mockResolveSessionProviderAuth.mockReset();
+      mockResolveSessionProviderAuth.mockImplementation(async (_db, options) => [
+        {
+          provider: "openai",
+          authMode: "provider_account",
+          providerAccountId: options.explicit.openai.accountId,
+          selectionSource: "explicit",
+        },
+        { provider: "xai", authMode: "api_key", selectionSource: "unattended_policy" },
+      ]);
+      mockStore.insertInvocationGuarded.mockImplementation(async (params: unknown) => {
+        capturedInvocationParams.push(
+          structuredClone(params) as { children: Array<Record<string, unknown>> }
+        );
+        // Simulate an automation edit racing immediately after the firing is
+        // admitted. The launched session must retain the pre-admission pin.
+        selectedAccountId = editedAccountId;
+        return { inserted: true };
+      });
+
+      const scheduler = createSchedulerDO();
+      const response = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockSessionStoreCreate.mock.calls[0][0].providerAuth).toContainEqual({
+        provider: "openai",
+        authMode: "provider_account",
+        providerAccountId: firstAccountId,
+        selectionSource: "automation_pin",
+      });
+    });
+
     it("starts later child launches before earlier child sessions finish initializing", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [

@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from sandbox_runtime.opencode_server import OpenCodeServer
 from tests.runtime_helpers import make_opencode_server
@@ -66,11 +66,9 @@ class TestCodexAuthPluginSetup:
             / "codex-auth-plugin.js"
         ).read_text()
 
-        assert "/provider-auth/openai/access-token" in plugin_source
+        assert 'provider: "openai"' in plugin_source
         assert "/openai-token-refresh" not in plugin_source
-        assert "result.accessToken" in plugin_source
         assert "result.providerMetadata?.accountId" in plugin_source
-        assert "Invalid OpenAI token broker response" in plugin_source
         assert "result.account_id" not in plugin_source
         assert "result.externalAccountId" not in plugin_source
 
@@ -125,6 +123,8 @@ class TestCodexAuthPluginSetup:
         plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "codex-auth-plugin.js"
         plugin_source.parent.mkdir(parents=True)
         plugin_source.write_text("export const CodexAuthProxy = async () => ({});")
+        broker_source = plugin_source.parent / "provider-token-broker.js"
+        broker_source.write_text("export function createProviderTokenBroker() {}")
 
         fake_proc = MagicMock()
         fake_proc.stdout = None
@@ -145,11 +145,10 @@ class TestCodexAuthPluginSetup:
                 side_effect=lambda coro: coro.close(),
             ),
         ):
-            mock_path.side_effect = lambda p: (
-                plugin_source
-                if p == "/app/sandbox_runtime/plugins/codex-auth-plugin.js"
-                else original_path(p)
-            )
+            mock_path.side_effect = lambda p: {
+                "/app/sandbox_runtime/plugins/codex-auth-plugin.js": plugin_source,
+                "/app/sandbox_runtime/plugins/provider-token-broker.js": broker_source,
+            }.get(p, original_path(p))
             sup._setup_managed_oauth = MagicMock()
             sup._install_tools = MagicMock()
             sup._install_skills = MagicMock()
@@ -158,11 +157,20 @@ class TestCodexAuthPluginSetup:
 
             await sup.start((), sup.workspace_path)
 
-        mock_copy.assert_called_once_with(
-            plugin_source,
-            sup.workspace_path / ".opencode" / "plugins" / "codex-auth-plugin.js",
-        )
+        assert mock_copy.call_args_list == [
+            call(
+                broker_source,
+                sup.workspace_path / ".opencode" / "plugins" / "provider-token-broker.js",
+            ),
+            call(
+                plugin_source,
+                sup.workspace_path / ".opencode" / "plugins" / "codex-auth-plugin.js",
+            ),
+        ]
         mock_excludes.assert_called_once_with(
             sup.workspace_path,
-            {".opencode/plugins/codex-auth-plugin.js"},
+            {
+                ".opencode/plugins/codex-auth-plugin.js",
+                ".opencode/plugins/provider-token-broker.js",
+            },
         )
