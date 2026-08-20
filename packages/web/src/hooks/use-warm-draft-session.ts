@@ -41,8 +41,10 @@ export function useWarmDraftSession(request: WarmDraftSessionRequest | null) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isWarming, setIsWarming] = useState(false);
 
-  requestRef.current = request;
-  identityRef.current = identity;
+  useEffect(() => {
+    requestRef.current = request;
+    identityRef.current = identity;
+  }, [identity, request]);
 
   useEffect(() => {
     abortControllerRef.current?.abort();
