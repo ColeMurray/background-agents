@@ -138,13 +138,29 @@ describe("model provider account adapters", () => {
     const capability = modelProviderAccountAdapterRegistry.requireDeviceAuthorization("openai");
 
     await expect(async () =>
-      capability.pollPersisted({ deviceAuthId: "device" }, 1)
+      capability.pollPersisted({ deviceAuthId: "device" }, 1, 5_000)
     ).rejects.toThrow();
     await expect(async () =>
-      capability.pollPersisted({ deviceAuthId: "device", userCode: "CODE" }, 2)
+      capability.pollPersisted({ deviceAuthId: "device", userCode: "CODE" }, 2, 5_000)
     ).rejects.toThrow(/version/i);
     await expect(async () =>
-      capability.pollPersisted({ deviceAuthId: "device", userCode: "CODE", unexpected: true }, 1)
+      capability.pollPersisted(
+        { deviceAuthId: "device", userCode: "CODE", unexpected: true },
+        1,
+        5_000
+      )
+    ).rejects.toThrow();
+  });
+
+  it("registers and validates persisted xAI device authorization state", async () => {
+    const capability = modelProviderAccountAdapterRegistry.requireDeviceAuthorization("xai");
+
+    await expect(async () => capability.pollPersisted({}, 1, 5_000)).rejects.toThrow();
+    await expect(async () =>
+      capability.pollPersisted({ deviceCode: "device" }, 2, 5_000)
+    ).rejects.toThrow(/version/i);
+    await expect(async () =>
+      capability.pollPersisted({ deviceCode: "device", unexpected: true }, 1, 5_000)
     ).rejects.toThrow();
   });
 });

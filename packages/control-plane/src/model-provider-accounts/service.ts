@@ -279,6 +279,12 @@ export class ModelProviderAccountService {
     if (account.provider !== input.provider) {
       throw new ProviderAccountServiceError("Provider account does not match provider", 400);
     }
+    if (account.provider === "xai" && account.externalAccountId) {
+      throw new ProviderAccountServiceError(
+        "Identity-bound xAI accounts must reconnect through device authorization",
+        409
+      );
+    }
     const adapter = this.requireAdapter(account.provider);
     const connected = await this.connect(adapter, input);
     this.validateExternalIdentity(adapter, connected.externalAccountId, account.externalAccountId);

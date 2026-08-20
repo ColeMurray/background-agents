@@ -83,16 +83,37 @@ export default defineConfig({
                 expires_in: 3600,
               });
             }
+            if (url.href === "https://auth.x.ai/oauth2/device/code") {
+              return Response.json({
+                device_code: "integration-xai-device",
+                user_code: "XAI-CODE",
+                verification_uri: "https://accounts.x.ai/oauth2/device",
+                verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=XAI-CODE",
+                expires_in: 300,
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/userinfo") {
+              return Response.json({ sub: "xai-integration" });
+            }
             if (url.href === "https://auth.x.ai/oauth2/token") {
               const body = await request.text();
-              if (!body.includes("integration-xai")) {
-                throw new Error("Unexpected xAI integration-test credential");
+              if (body.includes("integration-xai-device")) {
+                return Response.json({
+                  id_token: "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4YWktaW50ZWdyYXRpb24ifQ.",
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-refresh-token",
+                  expires_in: 3600,
+                });
               }
-              return Response.json({
-                access_token: "integration-xai-access-token",
-                refresh_token: "integration-xai-rotated-refresh",
-                expires_in: 3600,
-              });
+              if (body.includes("integration-xai")) {
+                return Response.json({
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-rotated-refresh",
+                  expires_in: 3600,
+                });
+              }
+              throw new Error("Unexpected xAI integration-test credential");
             }
             throw new Error(`Unexpected outbound request: ${request.url}`);
           },
