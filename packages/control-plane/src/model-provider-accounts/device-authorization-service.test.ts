@@ -1,38 +1,103 @@
 import { describe, expect, it, vi } from "vitest";
 import { ModelProviderAccountAdapterRegistry } from "../auth/model-provider-account-adapters";
-import type { ProviderAuthorizationRow } from "../db/provider-account-authorizations";
+import type {
+  ConnectedProviderAuthorization,
+  PendingProviderAuthorization,
+  ProcessingProviderAuthorization,
+  ProviderAuthorization,
+  ProviderAuthorizationTerminalState,
+  TerminalProviderAuthorization,
+} from "../db/provider-account-authorizations";
 import { ProviderDeviceAuthorizationService } from "./device-authorization-service";
 
 const TRANSACTION_ID = "01".repeat(32);
+type CreatePendingProviderAuthorization = Extract<
+  PendingProviderAuthorization,
+  { operation: "create" }
+>;
 
-function row(overrides: Partial<ProviderAuthorizationRow> = {}): ProviderAuthorizationRow {
+function pending(
+  overrides: Partial<CreatePendingProviderAuthorization> = {}
+): CreatePendingProviderAuthorization {
   return {
     id: TRANSACTION_ID,
-    user_id: "user-1",
+    userId: "user-1",
     provider: "openai",
     operation: "create",
-    provider_account_id: null,
-    target_account_status: null,
-    target_account_lifecycle_version: null,
-    display_name: "OpenAI",
-    encrypted_provider_data: "encrypted",
-    provider_state_version: 1,
-    interval_ms: 5_000,
-    next_poll_at: 20_000,
-    expires_at: 100_000,
+    displayName: "OpenAI",
+    encryptedProviderData: "encrypted",
+    providerStateVersion: 1,
+    intervalMs: 5_000,
+    nextPollAt: 20_000,
+    expiresAt: 100_000,
     state: "pending",
-    processing_owner: null,
-    processing_started_at: null,
-    result_provider_account_id: null,
-    reconnected_existing: null,
-    created_at: 1,
-    updated_at: 1,
-    completed_at: null,
+    createdAt: 1,
+    updatedAt: 1,
     ...overrides,
   };
 }
 
-function service(now: number, transaction: ProviderAuthorizationRow) {
+function processing(
+  authorization: PendingProviderAuthorization,
+  processingOwner: string,
+  processingStartedAt: number
+): ProcessingProviderAuthorization {
+  return {
+    ...authorization,
+    state: "processing",
+    processingOwner,
+    processingStartedAt,
+  };
+}
+
+function connected(completedAt: number): ConnectedProviderAuthorization {
+  return {
+    id: TRANSACTION_ID,
+    userId: "user-1",
+    provider: "openai",
+    operation: "create",
+    displayName: "OpenAI",
+    intervalMs: 5_000,
+    nextPollAt: 0,
+    expiresAt: 100_000,
+    state: "connected",
+    resultProviderAccountId: "account-1",
+    reconnectedExisting: false,
+    createdAt: 1,
+    updatedAt: completedAt,
+    completedAt,
+  };
+}
+
+function terminal(
+  authorization: ProviderAuthorization,
+  state: ProviderAuthorizationTerminalState,
+  completedAt: number
+): TerminalProviderAuthorization {
+  const common = {
+    id: authorization.id,
+    userId: authorization.userId,
+    provider: authorization.provider,
+    intervalMs: authorization.intervalMs,
+    nextPollAt: authorization.nextPollAt,
+    expiresAt: authorization.expiresAt,
+    createdAt: authorization.createdAt,
+    updatedAt: completedAt,
+    completedAt,
+    state,
+  };
+  return authorization.operation === "create"
+    ? { ...common, operation: "create", displayName: authorization.displayName }
+    : {
+        ...common,
+        operation: "reconnect",
+        providerAccountId: authorization.providerAccountId,
+        targetAccountStatus: authorization.targetAccountStatus,
+        targetAccountLifecycleVersion: authorization.targetAccountLifecycleVersion,
+      };
+}
+
+function service(now: number, transaction: ProviderAuthorization) {
   let current = transaction;
   const transactions = {
     recordAttempt: vi.fn(async () => true),
@@ -43,34 +108,22 @@ function service(now: number, transaction: ProviderAuthorizationRow) {
       async (
         _id: string,
         _userId: string,
-        state: "denied" | "expired" | "failed" | "cancelled" | "superseded",
+        state: ProviderAuthorizationTerminalState,
         completedAt: number
       ) => {
-        current = {
-          ...current,
-          state,
-          encrypted_provider_data: null,
-          provider_state_version: null,
-          processing_owner: null,
-          processing_started_at: null,
-          completed_at: completedAt,
-        };
+        current = terminal(current, state, completedAt);
         return true;
       }
     ),
-    expire: vi.fn(async (_id, _userId, _state, _owner, completedAt) => {
-      current = {
-        ...current,
-        state: "expired",
-        encrypted_provider_data: null,
-        provider_state_version: null,
-        processing_owner: null,
-        processing_started_at: null,
-        completed_at: completedAt,
-      };
+    expire: vi.fn(async (authorization: ProviderAuthorization, completedAt: number) => {
+      current = terminal(authorization, "expired", completedAt);
       return true;
     }),
-    claim: vi.fn(async () => true),
+    claim: vi.fn(async (_id: string, _userId: string, owner: string, claimedAt: number) => {
+      if (current.state !== "pending") return null;
+      current = processing(current, owner, claimedAt);
+      return current;
+    }),
     returnPending: vi.fn(async () => true),
   };
   const account = {
@@ -104,13 +157,13 @@ function service(now: number, transaction: ProviderAuthorizationRow) {
     subject,
     transactions,
     logger,
-    setCurrent: (next: ProviderAuthorizationRow) => (current = next),
+    setCurrent: (next: ProviderAuthorization) => (current = next),
   };
 }
 
 describe("ProviderDeviceAuthorizationService polling", () => {
   it("returns an early poll from durable state without dispatching a provider", async () => {
-    const { subject } = service(10_000, row());
+    const { subject } = service(10_000, pending());
     await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toEqual({
       status: "pending",
       expiresAt: 100_000,
@@ -120,11 +173,7 @@ describe("ProviderDeviceAuthorizationService polling", () => {
   });
 
   it("fails a stale processing claim closed instead of stealing it", async () => {
-    const transaction = row({
-      state: "processing",
-      processing_owner: "old-owner",
-      processing_started_at: 10_000,
-    });
+    const transaction = processing(pending(), "old-owner", 10_000);
     const { subject, transactions } = service(40_000, transaction);
     await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({
       status: "failed",
@@ -140,14 +189,14 @@ describe("ProviderDeviceAuthorizationService polling", () => {
   });
 
   it("does not reveal whether another provider owns a transaction ID", async () => {
-    const { subject } = service(10_000, row({ provider: "xai" }));
+    const { subject } = service(10_000, pending({ provider: "xai" }));
     await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).rejects.toMatchObject({
       status: 404,
     });
   });
 
   it("logs a provider poll failure before failing closed", async () => {
-    const { subject, logger } = service(10_000, row({ next_poll_at: 0 }));
+    const { subject, logger } = service(10_000, pending({ nextPollAt: 0 }));
 
     await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({
       status: "failed",
@@ -162,29 +211,13 @@ describe("ProviderDeviceAuthorizationService polling", () => {
   it.each(["connected", "cancelled"] as const)(
     "returns the durable %s winner when a claim CAS loses",
     async (winner) => {
-      const initial = row({ next_poll_at: 0 });
+      const initial = pending({ nextPollAt: 0 });
       const { subject, transactions, setCurrent } = service(10_000, initial);
       transactions.claim.mockImplementationOnce(async () => {
         setCurrent(
-          row(
-            winner === "connected"
-              ? {
-                  state: "connected",
-                  encrypted_provider_data: null,
-                  provider_state_version: null,
-                  result_provider_account_id: "account-1",
-                  reconnected_existing: 0,
-                  completed_at: 10_000,
-                }
-              : {
-                  state: "cancelled",
-                  encrypted_provider_data: null,
-                  provider_state_version: null,
-                  completed_at: 10_000,
-                }
-          )
+          winner === "connected" ? connected(10_000) : terminal(initial, "cancelled", 10_000)
         );
-        return false;
+        return null;
       });
 
       await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({

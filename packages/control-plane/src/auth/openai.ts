@@ -41,6 +41,15 @@ const deviceStatusSchema = z.object({
   code_verifier: z.string().min(1).max(4096),
 });
 
+const openAIAccountIdSchema = z.string().trim().min(1);
+const openAIIdentityClaimsSchema = z.object({
+  chatgpt_account_id: openAIAccountIdSchema.optional(),
+  "https://api.openai.com/auth": z
+    .object({ chatgpt_account_id: openAIAccountIdSchema.optional() })
+    .optional(),
+  organizations: z.array(z.object({ id: openAIAccountIdSchema })).optional(),
+});
+
 export type OpenAITokenResponse = z.infer<typeof openAITokenResponseSchema>;
 export type OpenAIDeviceAuthorization = {
   deviceAuthId: string;
@@ -260,15 +269,17 @@ export function extractOpenAIAccountId(tokens: OpenAITokenResponse): string | un
       if (parts.length < 2) continue;
       // JWTs use base64url encoding; atob() requires standard base64 with padding
       const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-      const payload = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")));
-
-      // Try different claim locations
+      const parsed = openAIIdentityClaimsSchema.safeParse(
+        JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")))
+      );
+      if (!parsed.success) continue;
+      const payload = parsed.data;
       const accountId =
         payload.chatgpt_account_id ??
         payload["https://api.openai.com/auth"]?.chatgpt_account_id ??
         payload.organizations?.[0]?.id;
 
-      if (accountId) return String(accountId);
+      if (accountId) return accountId;
     } catch {
       // Malformed token, try next
     }

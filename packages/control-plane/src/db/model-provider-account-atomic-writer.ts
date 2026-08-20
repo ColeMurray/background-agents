@@ -1,11 +1,14 @@
 import type { ModelProviderId } from "../model-provider-accounts/provider-auth-contracts";
+import { encryptProviderAccountPayload } from "../auth/provider-account-crypto";
+import type { ProcessingProviderAuthorization } from "./provider-account-authorizations";
+import { ProviderAccountAuthorizationStore } from "./provider-account-authorizations";
 import type { ModelProviderAccount, ModelProviderAccountStatus } from "./model-provider-accounts";
 import { ModelProviderAccountStore } from "./model-provider-accounts";
 import {
   ProviderCredentialStore,
   type ProviderCredentialExchangeAccountStatus,
 } from "./provider-account-credentials";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 interface CredentialWriteInput {
   providerAccountId: string;
@@ -51,6 +54,34 @@ export interface CreateAccountWithCredentialInput {
   >;
 }
 
+interface DeviceAuthorizationCredentialInput {
+  authorization: ProcessingProviderAuthorization;
+  externalAccountId: string;
+  credential: unknown;
+  credentialSchemaVersion: number;
+  accessTokenExpiresAt: number | null;
+  now: number;
+}
+
+export interface FinalizeDeviceAuthorizationCreateInput extends DeviceAuthorizationCredentialInput {
+  authorization: ProcessingProviderAuthorization & { operation: "create" };
+  accountId: string;
+}
+
+export interface FinalizeDeviceAuthorizationReconnectInput extends DeviceAuthorizationCredentialInput {
+  accountId: string;
+}
+
+export type DeviceAuthorizationCreateOutcome =
+  | { type: "created" }
+  | { type: "identity_conflict" }
+  | { type: "claim_lost" };
+
+export type DeviceAuthorizationReconnectOutcome =
+  | { type: "connected" }
+  | { type: "claim_lost" }
+  | { type: "target_changed" };
+
 export interface ModelProviderAccountAtomicWriter {
   createAccountWithCredential(
     input: CreateAccountWithCredentialInput
@@ -59,19 +90,27 @@ export interface ModelProviderAccountAtomicWriter {
   completeVerificationCredentialAndAccount(
     input: CompleteVerificationCredentialAndAccountInput
   ): Promise<boolean>;
+  finalizeDeviceAuthorizationCreate(
+    input: FinalizeDeviceAuthorizationCreateInput
+  ): Promise<DeviceAuthorizationCreateOutcome>;
+  finalizeDeviceAuthorizationReconnect(
+    input: FinalizeDeviceAuthorizationReconnectInput
+  ): Promise<DeviceAuthorizationReconnectOutcome>;
   fenceExchangeAndRequireReconnect(input: FenceProviderCredentialExchangeInput): Promise<boolean>;
 }
 
 export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountAtomicWriter {
   private readonly accounts: ModelProviderAccountStore;
   private readonly credentials: ProviderCredentialStore;
+  private readonly authorizations: ProviderAccountAuthorizationStore;
 
   constructor(
     private readonly db: SqlDatabase,
-    encryptionKey: string
+    private readonly encryptionKey: string
   ) {
     this.accounts = new ModelProviderAccountStore(db);
     this.credentials = new ProviderCredentialStore(db, encryptionKey);
+    this.authorizations = new ProviderAccountAuthorizationStore(db);
   }
 
   async createAccountWithCredential(
@@ -116,6 +155,252 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       }),
     ]);
     return results[0].meta.changes === 1 && results[1].meta.changes === 1;
+  }
+
+  async finalizeDeviceAuthorizationCreate(
+    input: FinalizeDeviceAuthorizationCreateInput
+  ): Promise<DeviceAuthorizationCreateOutcome> {
+    const encryptedPayload = await this.encryptDeviceCredential(input, input.accountId);
+    const authorizationGuard = this.deviceAuthorizationGuard();
+    const guardValues = this.deviceAuthorizationGuardValues(input.authorization, input.now);
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO model_provider_accounts
+            (id, provider, display_name, external_account_id, status, created_by, updated_by,
+             last_verified_at, created_at, updated_at)
+           SELECT ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?
+           WHERE EXISTS (${authorizationGuard})
+             AND NOT EXISTS (SELECT 1 FROM model_provider_accounts
+               WHERE provider = ? AND external_account_id = ? AND archived_at IS NULL)`
+        )
+        .bind(
+          input.accountId,
+          input.authorization.provider,
+          input.authorization.displayName,
+          input.externalAccountId,
+          input.authorization.userId,
+          input.authorization.userId,
+          input.now,
+          input.now,
+          input.now,
+          ...guardValues,
+          input.authorization.provider,
+          input.externalAccountId
+        ),
+      this.db
+        .prepare(
+          `INSERT INTO model_provider_account_credentials
+            (provider_account_id, encrypted_payload, credential_schema_version,
+             access_token_expires_at, updated_at)
+           SELECT ?, ?, ?, ?, ? WHERE changes() = 1
+             AND EXISTS (SELECT 1 FROM model_provider_accounts
+               WHERE id = ? AND provider = ? AND external_account_id = ?
+                 AND status = 'active' AND archived_at IS NULL AND lifecycle_version = 0)`
+        )
+        .bind(
+          input.accountId,
+          encryptedPayload,
+          input.credentialSchemaVersion,
+          input.accessTokenExpiresAt,
+          input.now,
+          input.accountId,
+          input.authorization.provider,
+          input.externalAccountId
+        ),
+      this.connectedAuthorizationStatement({
+        ...input,
+        encryptedPayload,
+        credentialVersion: 1,
+        accountLifecycleVersion: 0,
+        reconnectedExisting: false,
+      }),
+    ]);
+    if (results.every((result) => result.meta.changes === 1)) return { type: "created" };
+    if (results.some((result) => result.meta.changes !== 0)) {
+      throw new Error("Provider authorization create finalization violated atomic invariants");
+    }
+    if (!(await this.ownsDeviceAuthorizationClaim(input.authorization, input.now))) {
+      return { type: "claim_lost" };
+    }
+    const conflict = await this.accounts.findLifecycleSnapshotByExternalIdentity(
+      input.authorization.provider,
+      input.externalAccountId
+    );
+    if (conflict) return { type: "identity_conflict" };
+    throw new Error("Provider authorization create finalization rejected without a conflict");
+  }
+
+  async finalizeDeviceAuthorizationReconnect(
+    input: FinalizeDeviceAuthorizationReconnectInput
+  ): Promise<DeviceAuthorizationReconnectOutcome> {
+    if (!(await this.ownsDeviceAuthorizationClaim(input.authorization, input.now))) {
+      return { type: "claim_lost" };
+    }
+    const snapshot = await this.accounts.getLifecycleSnapshot(input.accountId);
+    if (
+      !snapshot ||
+      snapshot.account.archivedAt !== null ||
+      snapshot.account.provider !== input.authorization.provider ||
+      snapshot.account.externalAccountId !== input.externalAccountId ||
+      (input.authorization.operation === "create" && snapshot.account.status === "disabled") ||
+      (input.authorization.operation === "reconnect" &&
+        (input.authorization.providerAccountId !== input.accountId ||
+          input.authorization.targetAccountStatus !== snapshot.account.status ||
+          input.authorization.targetAccountLifecycleVersion !== snapshot.lifecycleVersion))
+    ) {
+      return { type: "target_changed" };
+    }
+    const currentCredential = await this.credentials.readCredentialState(
+      input.accountId,
+      input.authorization.provider
+    );
+    if (!currentCredential) return { type: "target_changed" };
+
+    const encryptedPayload = await this.encryptDeviceCredential(input, input.accountId);
+    const nextCredentialVersion = currentCredential.credentialVersion + 1;
+    const nextLifecycleVersion = snapshot.lifecycleVersion + 1;
+    const authorizationGuard = this.deviceAuthorizationGuard();
+    const guardValues = this.deviceAuthorizationGuardValues(input.authorization, input.now);
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE model_provider_accounts
+           SET status = 'active', updated_by = ?, last_verified_at = ?, updated_at = ?,
+               lifecycle_version = lifecycle_version + 1
+           WHERE id = ? AND provider = ? AND external_account_id = ?
+             AND archived_at IS NULL AND status = ? AND lifecycle_version = ?
+             AND EXISTS (${authorizationGuard})
+             AND EXISTS (SELECT 1 FROM model_provider_account_credentials
+               WHERE provider_account_id = ? AND credential_version = ?)`
+        )
+        .bind(
+          input.authorization.userId,
+          input.now,
+          input.now,
+          input.accountId,
+          input.authorization.provider,
+          input.externalAccountId,
+          snapshot.account.status,
+          snapshot.lifecycleVersion,
+          ...guardValues,
+          input.accountId,
+          currentCredential.credentialVersion
+        ),
+      this.db
+        .prepare(
+          `UPDATE model_provider_account_credentials
+           SET encrypted_payload = ?, credential_schema_version = ?,
+               credential_version = credential_version + 1,
+               exchange_state = 'idle', exchange_owner = NULL, exchange_started_at = NULL,
+               access_token_expires_at = ?, updated_at = ?
+           WHERE changes() = 1 AND provider_account_id = ? AND credential_version = ?`
+        )
+        .bind(
+          encryptedPayload,
+          input.credentialSchemaVersion,
+          input.accessTokenExpiresAt,
+          input.now,
+          input.accountId,
+          currentCredential.credentialVersion
+        ),
+      this.connectedAuthorizationStatement({
+        ...input,
+        encryptedPayload,
+        credentialVersion: nextCredentialVersion,
+        accountLifecycleVersion: nextLifecycleVersion,
+        reconnectedExisting: true,
+      }),
+    ]);
+    if (results.every((result) => result.meta.changes === 1)) return { type: "connected" };
+    if (results.some((result) => result.meta.changes !== 0)) {
+      throw new Error("Provider authorization reconnect finalization violated atomic invariants");
+    }
+    return (await this.ownsDeviceAuthorizationClaim(input.authorization, input.now))
+      ? { type: "target_changed" }
+      : { type: "claim_lost" };
+  }
+
+  private encryptDeviceCredential(
+    input: DeviceAuthorizationCredentialInput,
+    providerAccountId: string
+  ): Promise<string> {
+    if (!Number.isInteger(input.credentialSchemaVersion) || input.credentialSchemaVersion <= 0) {
+      throw new Error("Credential schema version must be a positive integer");
+    }
+    return encryptProviderAccountPayload(input.credential, this.encryptionKey, {
+      providerAccountId,
+      provider: input.authorization.provider,
+      credentialSchemaVersion: input.credentialSchemaVersion,
+    });
+  }
+
+  private deviceAuthorizationGuard(): string {
+    return `SELECT 1 FROM model_provider_account_authorizations
+      WHERE id = ? AND user_id = ? AND state = 'processing' AND processing_owner = ?
+        AND expires_at > ?`;
+  }
+
+  private deviceAuthorizationGuardValues(
+    authorization: ProcessingProviderAuthorization,
+    now: number
+  ): unknown[] {
+    return [authorization.id, authorization.userId, authorization.processingOwner, now];
+  }
+
+  private async ownsDeviceAuthorizationClaim(
+    authorization: ProcessingProviderAuthorization,
+    now: number
+  ): Promise<boolean> {
+    const current = await this.authorizations.getOwned(authorization.userId, authorization.id);
+    return (
+      current?.state === "processing" &&
+      current.processingOwner === authorization.processingOwner &&
+      current.expiresAt > now
+    );
+  }
+
+  private connectedAuthorizationStatement(
+    input: DeviceAuthorizationCredentialInput & {
+      accountId: string;
+      encryptedPayload: string;
+      credentialVersion: number;
+      accountLifecycleVersion: number;
+      reconnectedExisting: boolean;
+    }
+  ): SqlStatement {
+    return this.db
+      .prepare(
+        `UPDATE model_provider_account_authorizations
+         SET state = 'connected', encrypted_provider_data = NULL, provider_state_version = NULL,
+             processing_owner = NULL, processing_started_at = NULL,
+             result_provider_account_id = ?, reconnected_existing = ?,
+             completed_at = ?, updated_at = ?
+         WHERE changes() = 1
+           AND id = ? AND user_id = ? AND state = 'processing' AND processing_owner = ?
+           AND expires_at > ?
+           AND EXISTS (SELECT 1 FROM model_provider_accounts
+             WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
+               AND lifecycle_version = ?)
+           AND EXISTS (SELECT 1 FROM model_provider_account_credentials
+             WHERE provider_account_id = ? AND credential_version = ? AND encrypted_payload = ?)`
+      )
+      .bind(
+        input.accountId,
+        input.reconnectedExisting ? 1 : 0,
+        input.now,
+        input.now,
+        input.authorization.id,
+        input.authorization.userId,
+        input.authorization.processingOwner,
+        input.now,
+        input.accountId,
+        input.authorization.provider,
+        input.accountLifecycleVersion,
+        input.accountId,
+        input.credentialVersion,
+        input.encryptedPayload
+      );
   }
 
   async fenceExchangeAndRequireReconnect(

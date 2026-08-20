@@ -198,7 +198,7 @@ export type ReconnectModelProviderAccountRequest = z.infer<
 export const startProviderDeviceAuthorizationRequestSchema = z.discriminatedUnion("operation", [
   z.strictObject({
     operation: z.literal("create"),
-    displayName: displayNameSchema,
+    displayName: modelProviderAccountDisplayNameSchema,
   }),
   z.strictObject({
     operation: z.literal("reconnect"),

@@ -1,4 +1,5 @@
 import type {
+  ModelProviderAccountStatus,
   ProviderDeviceAuthorizationStatusResponse,
   StartProviderDeviceAuthorizationRequest,
   StartProviderDeviceAuthorizationResponse,
@@ -12,9 +13,11 @@ import {
   PROVIDER_AUTHORIZATION_LIVE_STATES,
   PROVIDER_AUTHORIZATION_TERMINAL_STATES,
   type ProviderAccountAuthorizationStore,
+  type ConnectedProviderAuthorization,
+  type ProviderAuthorization,
+  type ProviderAuthorizationLive,
   type ProviderAuthorizationLiveState,
   type ProviderAuthorizationTerminalState,
-  type ProviderAuthorizationRow,
 } from "../db/provider-account-authorizations";
 import type { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { Logger } from "../logger";
@@ -79,7 +82,7 @@ export class ProviderDeviceAuthorizationService {
         409
       );
     }
-    let targetAccountStatus: ProviderAuthorizationRow["target_account_status"] = null;
+    let targetAccountStatus: ModelProviderAccountStatus | null = null;
     let targetAccountLifecycleVersion: number | null = null;
     if (input.operation === "reconnect") {
       const snapshot = await this.accounts.getLifecycleSnapshot(input.providerAccountId);
@@ -184,40 +187,41 @@ export class ProviderDeviceAuthorizationService {
     if (row.state === "connected") return this.connected(row);
     if (this.isTerminal(row)) return this.terminal(row.state);
     if (row.state === "processing") {
-      if (row.processing_started_at! + PROCESSING_CLAIM_TIMEOUT_MS <= now) {
-        return this.finishAndResolve(userId, provider, id, "failed", now, row.processing_owner!);
+      if (row.processingStartedAt + PROCESSING_CLAIM_TIMEOUT_MS <= now) {
+        return this.finishAndResolve(userId, provider, id, "failed", now, row.processingOwner);
       }
       return this.pending(row);
     }
-    if (row.state === "initiating" || row.next_poll_at > now) return this.pending(row);
+    if (row.state === "initiating" || row.nextPollAt > now) return this.pending(row);
 
     const owner = this.dependencies.generateId(32);
-    if (!(await this.transactions.claim(id, userId, owner, now))) {
+    const claimed = await this.transactions.claim(id, userId, owner, now);
+    if (!claimed) {
       return this.resolveDurableResponse(userId, provider, id, now);
     }
-    row = await this.owned(userId, provider, id);
+    row = claimed;
     try {
       const providerState = await decryptProviderAuthorizationPayload(
-        row.encrypted_provider_data!,
+        row.encryptedProviderData,
         this.encryptionKey,
         {
           transactionId: id,
           provider,
-          stateSchemaVersion: row.provider_state_version!,
+          stateSchemaVersion: row.providerStateVersion,
         }
       );
       const capability = this.adapters.requireDeviceAuthorization(provider);
-      const result = await capability.pollPersisted(providerState, row.provider_state_version!);
+      const result = await capability.pollPersisted(providerState, row.providerStateVersion);
       now = this.dependencies.now();
       if (result.status === "pending") {
-        const intervalMs = result.intervalMs ?? row.interval_ms;
+        const intervalMs = result.intervalMs ?? row.intervalMs;
         const nextPollAt = now + intervalMs;
-        if (!(await this.transactions.returnPending(id, owner, nextPollAt, intervalMs, now))) {
+        if (!(await this.transactions.returnPending(row, nextPollAt, intervalMs, now))) {
           return this.resolveDurableResponse(userId, provider, id, now);
         }
         return {
           status: "pending",
-          expiresAt: row.expires_at,
+          expiresAt: row.expiresAt,
           pollIntervalMs: intervalMs,
           nextPollAt,
         };
@@ -227,7 +231,6 @@ export class ProviderDeviceAuthorizationService {
       }
       const finalized = await this.finalizer.finalizeTrustedConnection(
         row,
-        owner,
         result.connection,
         this.adapters.require(provider),
         now
@@ -284,13 +287,13 @@ export class ProviderDeviceAuthorizationService {
     provider: ModelProviderId,
     id: string,
     now: number
-  ): Promise<ProviderAuthorizationRow> {
+  ): Promise<ProviderAuthorization> {
     while (true) {
       const current = await this.owned(userId, provider, id);
-      if (!this.isLive(current) || current.expires_at > now) {
+      if (!this.isLive(current) || current.expiresAt > now) {
         return current;
       }
-      await this.transactions.expire(id, userId, current.state, current.processing_owner, now);
+      await this.transactions.expire(current, now);
     }
   }
 
@@ -298,7 +301,7 @@ export class ProviderDeviceAuthorizationService {
     userId: string,
     provider: ModelProviderId,
     id: string
-  ): Promise<ProviderAuthorizationRow> {
+  ): Promise<ProviderAuthorization> {
     const row = await this.transactions.getOwned(userId, id);
     if (!row || row.provider !== provider) {
       throw new ProviderDeviceAuthorizationError("Authorization transaction not found", 404);
@@ -307,39 +310,37 @@ export class ProviderDeviceAuthorizationService {
   }
 
   private async connected(
-    row: ProviderAuthorizationRow
+    row: ConnectedProviderAuthorization
   ): Promise<ProviderDeviceAuthorizationStatusResponse> {
-    const account = await this.accounts.getById(row.result_provider_account_id!);
+    const account = await this.accounts.getById(row.resultProviderAccountId);
     if (!account) throw new ProviderDeviceAuthorizationError("Connected account not found", 409);
     return {
       status: "connected",
       account,
-      reconnectedExisting: row.reconnected_existing === 1,
-      completedAt: row.completed_at!,
+      reconnectedExisting: row.reconnectedExisting,
+      completedAt: row.completedAt,
     };
   }
 
-  private pending(row: ProviderAuthorizationRow): ProviderDeviceAuthorizationStatusResponse {
+  private pending(row: ProviderAuthorizationLive): ProviderDeviceAuthorizationStatusResponse {
     return {
       status: "pending",
-      expiresAt: row.expires_at,
+      expiresAt: row.expiresAt,
       // Initiating reservations have interval 0 until provider activation completes.
-      pollIntervalMs: Math.max(row.interval_ms, 1_000),
-      nextPollAt: row.next_poll_at,
+      pollIntervalMs: Math.max(row.intervalMs, 1_000),
+      nextPollAt: row.nextPollAt,
     };
   }
 
-  private isTerminal(row: ProviderAuthorizationRow): row is ProviderAuthorizationRow & {
-    state: ProviderAuthorizationTerminalState;
-  } {
+  private isTerminal(
+    row: ProviderAuthorization
+  ): row is Extract<ProviderAuthorization, { state: ProviderAuthorizationTerminalState }> {
     return PROVIDER_AUTHORIZATION_TERMINAL_STATES.includes(
       row.state as ProviderAuthorizationTerminalState
     );
   }
 
-  private isLive(row: ProviderAuthorizationRow): row is ProviderAuthorizationRow & {
-    state: ProviderAuthorizationLiveState;
-  } {
+  private isLive(row: ProviderAuthorization): row is ProviderAuthorizationLive {
     return PROVIDER_AUTHORIZATION_LIVE_STATES.includes(row.state as ProviderAuthorizationLiveState);
   }
 

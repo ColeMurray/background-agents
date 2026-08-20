@@ -129,6 +129,8 @@ function stores(account: ModelProviderAccount | null = providerAccount()): {
       })),
       reconnectCredentialAndAccount: vi.fn(async () => true),
       completeVerificationCredentialAndAccount: vi.fn(async () => true),
+      finalizeDeviceAuthorizationCreate: vi.fn(async () => ({ type: "created" as const })),
+      finalizeDeviceAuthorizationReconnect: vi.fn(async () => ({ type: "connected" as const })),
       fenceExchangeAndRequireReconnect: vi.fn(async () => true),
     },
   };

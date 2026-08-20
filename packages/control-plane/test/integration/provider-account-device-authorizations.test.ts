@@ -2,12 +2,14 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
-import { ProviderAccountAuthorizationStore } from "../../src/db/provider-account-authorizations";
-import { ProviderAccountAuthorizationFinalizationWriter } from "../../src/db/provider-account-authorization-finalization";
+import {
+  ProviderAccountAuthorizationStore,
+  type ProcessingProviderAuthorization,
+} from "../../src/db/provider-account-authorizations";
+import { D1ModelProviderAccountAtomicWriter } from "../../src/db/model-provider-account-atomic-writer";
 import { ModelProviderAccountAdapterRegistry } from "../../src/auth/model-provider-account-adapters";
 import { OpenAIModelProviderAccountAdapter } from "../../src/auth/model-provider-account-openai-adapter";
 import { encryptProviderAuthorizationPayload } from "../../src/auth/provider-account-crypto";
-import type { ProviderAuthorizationRow } from "../../src/db/provider-account-authorizations";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { ProviderDeviceAuthorizationFinalizer } from "../../src/model-provider-accounts/device-authorization-finalizer";
 import { ProviderDeviceAuthorizationService } from "../../src/model-provider-accounts/device-authorization-service";
@@ -303,15 +305,12 @@ describe("provider account device authorization routes", () => {
       },
     });
     const accounts = new ModelProviderAccountStore(env.DB);
-    const credentials = new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!);
     const service = new ProviderDeviceAuthorizationService(
       new ProviderAccountAuthorizationStore(env.DB),
       accounts,
       new ProviderDeviceAuthorizationFinalizer(
         accounts,
-        credentials,
-        new ProviderAccountAuthorizationFinalizationWriter(env.DB),
-        env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!,
+        new D1ModelProviderAccountAtomicWriter(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!),
         () => (++sequence).toString(16).padStart(32, "0")
       ),
       env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!,
@@ -411,12 +410,11 @@ describe("provider account device authorization routes", () => {
     )
       .bind(owner, now, result.transactionId)
       .run();
-    const transaction = await env.DB.prepare(
-      "SELECT * FROM model_provider_account_authorizations WHERE id = ?"
-    )
-      .bind(result.transactionId)
-      .first<ProviderAuthorizationRow>();
-    expect(transaction).not.toBeNull();
+    const transaction = await new ProviderAccountAuthorizationStore(env.DB).getOwned(
+      "11111111111111111111111111111111",
+      result.transactionId
+    );
+    expect(transaction?.state).toBe("processing");
     let injected = false;
     const racingDb: SqlDatabase = {
       prepare: (query: string) => env.DB.prepare(query) as SqlStatement,
@@ -436,16 +434,13 @@ describe("provider account device authorization routes", () => {
     };
     const finalizer = new ProviderDeviceAuthorizationFinalizer(
       new ModelProviderAccountStore(env.DB),
-      new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!),
-      new ProviderAccountAuthorizationFinalizationWriter(racingDb),
-      env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!,
+      new D1ModelProviderAccountAtomicWriter(racingDb, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!),
       () => "33".repeat(16)
     );
 
     await expect(
       finalizer.finalizeTrustedConnection(
-        transaction!,
-        owner,
+        transaction as ProcessingProviderAuthorization,
         {
           credential: { refreshToken: "new-secret" },
           externalAccountId: "acct-integration",
@@ -488,6 +483,62 @@ describe("provider account device authorization routes", () => {
     expect(credential?.credentialVersion).toBe(1);
   });
 
+  it("leaves account, credential, and authorization rows unchanged when finalization is rejected", async () => {
+    await ensureAuthenticatedUser();
+    await seedAccount();
+    const { result } = await start({ operation: "reconnect", providerAccountId: ACCOUNT_ID });
+    const owner = "stale-target-owner";
+    const now = Date.now();
+    await env.DB.prepare(
+      `UPDATE model_provider_account_authorizations
+       SET state = 'processing', processing_owner = ?, processing_started_at = ?
+       WHERE id = ?`
+    )
+      .bind(owner, now, result.transactionId)
+      .run();
+    const authorizations = new ProviderAccountAuthorizationStore(env.DB);
+    const transaction = await authorizations.getOwned(
+      "11111111111111111111111111111111",
+      result.transactionId
+    );
+    expect(transaction?.state).toBe("processing");
+
+    // Invalidate the target fence before the writer begins. The rejected call
+    // itself must not partially mutate any of its three persistence rows.
+    await new ModelProviderAccountStore(env.DB).setStatus(ACCOUNT_ID, "disabled", null, now + 1);
+    const readRows = () =>
+      Promise.all([
+        env.DB.prepare("SELECT * FROM model_provider_accounts WHERE id = ?")
+          .bind(ACCOUNT_ID)
+          .first(),
+        env.DB.prepare(
+          "SELECT * FROM model_provider_account_credentials WHERE provider_account_id = ?"
+        )
+          .bind(ACCOUNT_ID)
+          .first(),
+        env.DB.prepare("SELECT * FROM model_provider_account_authorizations WHERE id = ?")
+          .bind(result.transactionId)
+          .first(),
+      ]);
+    const before = await readRows();
+
+    await expect(
+      new D1ModelProviderAccountAtomicWriter(
+        env.DB,
+        env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!
+      ).finalizeDeviceAuthorizationReconnect({
+        authorization: transaction as ProcessingProviderAuthorization,
+        accountId: ACCOUNT_ID,
+        externalAccountId: "acct-integration",
+        credential: { refreshToken: "new-secret" },
+        credentialSchemaVersion: 1,
+        accessTokenExpiresAt: null,
+        now: now + 2,
+      })
+    ).resolves.toEqual({ type: "target_changed" });
+    await expect(readRows()).resolves.toEqual(before);
+  });
+
   it("reconnects an account that was already disabled when authorization started", async () => {
     await ensureAuthenticatedUser();
     await seedAccount();
@@ -520,12 +571,11 @@ describe("provider account device authorization routes", () => {
     )
       .bind(owner, now, result.transactionId)
       .run();
-    const transaction = await env.DB.prepare(
-      "SELECT * FROM model_provider_account_authorizations WHERE id = ?"
-    )
-      .bind(result.transactionId)
-      .first<ProviderAuthorizationRow>();
-    expect(transaction).not.toBeNull();
+    const transaction = await new ProviderAccountAuthorizationStore(env.DB).getOwned(
+      "11111111111111111111111111111111",
+      result.transactionId
+    );
+    expect(transaction?.state).toBe("processing");
 
     let injected = false;
     const racingDb: SqlDatabase = {
@@ -543,16 +593,13 @@ describe("provider account device authorization routes", () => {
     const credentials = new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!);
     const finalizer = new ProviderDeviceAuthorizationFinalizer(
       accounts,
-      credentials,
-      new ProviderAccountAuthorizationFinalizationWriter(racingDb),
-      env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!,
+      new D1ModelProviderAccountAtomicWriter(racingDb, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!),
       () => "33".repeat(16)
     );
 
     await expect(
       finalizer.finalizeTrustedConnection(
-        transaction!,
-        owner,
+        transaction as ProcessingProviderAuthorization,
         {
           credential: { refreshToken: "new-secret" },
           externalAccountId: "acct-integration",

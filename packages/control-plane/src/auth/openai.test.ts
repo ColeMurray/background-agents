@@ -389,14 +389,28 @@ describe("openai", () => {
       expect(extractOpenAIAccountId(tokens)).toBe("ab");
     });
 
-    it("converts numeric account ID to string", () => {
+    it("rejects non-string account IDs", () => {
       const tokens: OpenAITokenResponse = {
         id_token: makeJwt({ chatgpt_account_id: 12345 }),
         access_token: makeJwt({}),
         refresh_token: "rt",
       };
 
-      expect(extractOpenAIAccountId(tokens)).toBe("12345");
+      expect(extractOpenAIAccountId(tokens)).toBeUndefined();
+    });
+
+    it.each([
+      ["object", { nested: "account" }],
+      ["array", ["account"]],
+      ["blank string", "   "],
+    ])("rejects %s account IDs", (_label, accountId) => {
+      const tokens: OpenAITokenResponse = {
+        id_token: makeJwt({ chatgpt_account_id: accountId }),
+        access_token: makeJwt({}),
+        refresh_token: "rt",
+      };
+
+      expect(extractOpenAIAccountId(tokens)).toBeUndefined();
     });
   });
 });

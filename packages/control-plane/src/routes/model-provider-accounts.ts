@@ -22,7 +22,6 @@ import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { D1ModelProviderAccountAtomicWriter } from "../db/model-provider-account-atomic-writer";
 import { ProviderCredentialStore } from "../db/provider-account-credentials";
 import { ProviderAccountAuthorizationStore } from "../db/provider-account-authorizations";
-import { ProviderAccountAuthorizationFinalizationWriter } from "../db/provider-account-authorization-finalization";
 import { ProviderDefaultStore } from "../db/provider-account-defaults";
 import { SessionIndexStore } from "../db/session-index";
 import { listLegacyProviderCredentials } from "../model-provider-accounts/legacy-provider-credentials";
@@ -35,7 +34,6 @@ import {
   ProviderDeviceAuthorizationService,
 } from "../model-provider-accounts/device-authorization-service";
 import { ProviderDeviceAuthorizationFinalizer } from "../model-provider-accounts/device-authorization-finalizer";
-import { createLogger } from "../logger";
 import {
   ProviderAccountSelectionPolicy,
   ProviderAccountSelectionPolicyError,
@@ -86,12 +84,9 @@ function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
 
 function authorizationService(env: Env, ctx: RequestContext): ProviderDeviceAuthorizationService {
   const accounts = new ModelProviderAccountStore(ctx.db);
-  const credentials = new ProviderCredentialStore(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
   const finalizer = new ProviderDeviceAuthorizationFinalizer(
     accounts,
-    credentials,
-    new ProviderAccountAuthorizationFinalizationWriter(ctx.db),
-    env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY,
+    new D1ModelProviderAccountAtomicWriter(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY),
     () => generateId(16)
   );
   return new ProviderDeviceAuthorizationService(
