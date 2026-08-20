@@ -214,7 +214,7 @@ describe("provider account atomic persistence", () => {
     ).resolves.toEqual({ acquired: false });
   });
 
-  it("does not overwrite an operator disable while fencing a failed exchange", async () => {
+  it("reports a lost fence without clearing the lease after an operator disable", async () => {
     const { accounts, credentials, writer } = await seedAccount(
       "disabled-during-exchange",
       "active"
@@ -244,7 +244,7 @@ describe("provider account atomic persistence", () => {
         exchangeOwner: "owner-a",
         now: NOW + 4,
       })
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(accounts.getById("disabled-during-exchange")).resolves.toMatchObject({
       status: "disabled",
       updatedBy: "user-1",
@@ -253,9 +253,39 @@ describe("provider account atomic persistence", () => {
     await expect(
       credentials.readCredentialState("disabled-during-exchange", "openai")
     ).resolves.toMatchObject({
-      exchangeState: "idle",
-      exchangeGeneration: 2,
-      exchangeOwner: null,
+      exchangeState: "in_flight",
+      exchangeGeneration: 1,
+      exchangeOwner: "owner-a",
+    });
+  });
+
+  it("reports a lost fence without clearing the lease after archival", async () => {
+    const { accounts, credentials, writer } = await seedAccount(
+      "archived-during-exchange",
+      "active"
+    );
+    await credentials.tryBeginExchange("archived-during-exchange", 1, "owner-a", "active", NOW + 1);
+    await accounts.archive("archived-during-exchange", "user-1", NOW + 2);
+
+    await expect(
+      writer.fenceExchangeAndRequireReconnect({
+        providerAccountId: "archived-during-exchange",
+        credentialVersion: 1,
+        exchangeGeneration: 1,
+        exchangeOwner: "owner-a",
+        now: NOW + 3,
+      })
+    ).resolves.toBe(false);
+    await expect(accounts.getById("archived-during-exchange")).resolves.toMatchObject({
+      status: "active",
+      archivedAt: NOW + 2,
+    });
+    await expect(
+      credentials.readCredentialState("archived-during-exchange", "openai")
+    ).resolves.toMatchObject({
+      exchangeState: "in_flight",
+      exchangeGeneration: 1,
+      exchangeOwner: "owner-a",
     });
   });
 

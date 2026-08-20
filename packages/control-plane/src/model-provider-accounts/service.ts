@@ -8,7 +8,6 @@ import type {
   ModelProviderAccountStore,
 } from "../db/model-provider-accounts";
 import type {
-  ProviderCredentialExchangeAccountStatus,
   ProviderCredentialState,
   ProviderCredentialStore,
 } from "../db/provider-account-credentials";
@@ -18,11 +17,16 @@ import {
   type ModelProviderAccountAdapter,
   type ModelProviderAccountAdapterRegistry,
   type ProviderConnectionResult,
+  ProviderIdentityError,
 } from "../auth/model-provider-account-adapters";
 import {
   ClaimedProviderCredentialExchange,
   ClaimedProviderCredentialExchangeError,
 } from "../auth/claimed-provider-credential-exchange";
+import {
+  providerAccountIneligibility,
+  type ProviderAccountOperation,
+} from "./account-lifecycle-policy";
 
 type ErasedProviderAccountAdapter = ModelProviderAccountAdapter<unknown, unknown>;
 
@@ -82,22 +86,11 @@ export class ModelProviderAccountService {
     actorId: string
   ): Promise<{ account: ModelProviderAccount; reconnectedExisting: boolean }> {
     const adapter = this.requireAdapter(input.provider);
-    const preflight =
-      input.provider === "openai"
-        ? await this.accounts.findByExternalIdentity(input.provider, input.accountId)
-        : null;
-    const connected = await adapter.connect(adapter.parseConnectInput(input));
-    if (input.provider === "openai") {
-      this.requireTrustedOpenAIIdentity(
-        input.provider,
-        connected.externalAccountId,
-        input.accountId
-      );
-    }
+    const connected = await this.connect(adapter, input);
     const now = this.dependencies.now();
     const externalAccountId = connected.externalAccountId ?? null;
-    let existing = preflight;
-    if (!existing && externalAccountId) {
+    let existing: ModelProviderAccount | null = null;
+    if (externalAccountId) {
       try {
         existing = await this.accounts.findByExternalIdentity(input.provider, externalAccountId);
       } catch (cause) {
@@ -192,7 +185,7 @@ export class ModelProviderAccountService {
   }
 
   async verify(id: string, actorId: string): Promise<ModelProviderAccount> {
-    const account = await this.getUsableAccount(id);
+    const account = await this.getAccountForOperation(id, "active_use");
     const adapter = this.requireAdapter(account.provider);
     const current = await this.credentials.readCredentialState(account.id, account.provider);
     if (!current) throw new ProviderAccountServiceError("Provider credential not found", 409);
@@ -209,13 +202,13 @@ export class ModelProviderAccountService {
         providerAccountId: account.id,
         provider: account.provider,
         state: current,
-        expectedAccountStatus: account.status,
+        expectedAccountStatus: "active",
         adapter,
         owner,
         now: this.dependencies.now,
         complete: ({ write, refreshed }) => {
-          this.requireTrustedOpenAIIdentity(
-            account.provider,
+          this.validateExternalIdentity(
+            adapter,
             refreshed.externalAccountId,
             account.externalAccountId
           );
@@ -236,6 +229,9 @@ export class ModelProviderAccountService {
       }
     } catch (cause) {
       if (!(cause instanceof ClaimedProviderCredentialExchangeError)) throw cause;
+      if (cause.terminalFence === "lost") {
+        return this.reconcileVerificationFenceLoss(account, current);
+      }
       if (cause.phase !== "completion") throw cause.cause;
       if (cause.cause instanceof ProviderAccountServiceError) throw cause.cause;
       throw this.consumedCredentialError(cause);
@@ -248,30 +244,13 @@ export class ModelProviderAccountService {
     input: ReconnectModelProviderAccountRequest,
     actorId: string
   ): Promise<ModelProviderAccount> {
-    const account = await this.get(id);
+    const account = await this.getAccountForOperation(id, "reconnect");
     if (account.provider !== input.provider) {
       throw new ProviderAccountServiceError("Provider account does not match provider", 400);
     }
     const adapter = this.requireAdapter(account.provider);
-    const connected = await adapter.connect(adapter.parseConnectInput(input));
-    if (input.provider === "openai") {
-      this.requireTrustedOpenAIIdentity(
-        input.provider,
-        connected.externalAccountId,
-        input.accountId
-      );
-      this.requireTrustedOpenAIIdentity(
-        input.provider,
-        connected.externalAccountId,
-        account.externalAccountId
-      );
-    } else if (
-      account.externalAccountId &&
-      connected.externalAccountId &&
-      connected.externalAccountId !== account.externalAccountId
-    ) {
-      throw new ProviderAccountServiceError("Provider account identity did not match", 409);
-    }
+    const connected = await this.connect(adapter, input);
+    this.validateExternalIdentity(adapter, connected.externalAccountId, account.externalAccountId);
     return this.persistConnectedCredential(
       account,
       connected,
@@ -281,17 +260,15 @@ export class ModelProviderAccountService {
     );
   }
 
-  private async getUsableAccount(
-    id: string
-  ): Promise<ModelProviderAccount & { status: ProviderCredentialExchangeAccountStatus }> {
+  private async getAccountForOperation(
+    id: string,
+    operation: ProviderAccountOperation
+  ): Promise<ModelProviderAccount> {
     const account = await this.get(id);
-    if (account.archivedAt !== null) {
+    if (providerAccountIneligibility(account, operation)) {
       throw new ProviderAccountServiceError("Provider account is not active", 409);
     }
-    if (account.status === "disabled") {
-      throw new ProviderAccountServiceError("Provider account is not active", 409);
-    }
-    return { ...account, status: account.status };
+    return account;
   }
 
   private async persistConnectedCredential(
@@ -324,6 +301,27 @@ export class ModelProviderAccountService {
     return this.get(account.id);
   }
 
+  private async reconcileVerificationFenceLoss(
+    previousAccount: ModelProviderAccount,
+    previousState: ProviderCredentialState
+  ): Promise<ModelProviderAccount> {
+    const account = await this.get(previousAccount.id);
+    const ineligibility = providerAccountIneligibility(account, "active_use");
+    if (ineligibility === "reconnect_required") {
+      throw new ProviderAccountServiceError("Provider account requires reconnection", 409);
+    }
+    if (ineligibility) {
+      throw new ProviderAccountServiceError("Provider account is not active", 409);
+    }
+    const state = await this.credentials.readCredentialState(account.id, account.provider);
+    if (!state) throw new ProviderAccountServiceError("Provider credential not found", 409);
+    if (state.credentialVersion !== previousState.credentialVersion) return account;
+    throw new ProviderAccountServiceError(
+      "Provider credential verification lost its durable claim",
+      409
+    );
+  }
+
   private consumedCredentialError(cause?: unknown): ProviderAccountServiceError {
     return new ProviderAccountServiceError(
       "The submitted credential may have been consumed and could not be saved safely. Obtain a fresh credential and reconnect.",
@@ -338,17 +336,32 @@ export class ModelProviderAccountService {
     return adapter;
   }
 
-  private requireTrustedOpenAIIdentity(
-    provider: ModelProviderId,
+  private async connect(
+    adapter: ErasedProviderAccountAdapter,
+    input: ConnectModelProviderAccountRequest | ReconnectModelProviderAccountRequest
+  ): Promise<ProviderConnectionResult<unknown>> {
+    try {
+      return await adapter.connect(adapter.parseConnectInput(input));
+    } catch (cause) {
+      if (cause instanceof ProviderIdentityError) {
+        throw new ProviderAccountServiceError(cause.message, 409, { cause });
+      }
+      throw cause;
+    }
+  }
+
+  private validateExternalIdentity(
+    adapter: ErasedProviderAccountAdapter,
     actual: string | undefined,
     expected: string | null
   ): void {
-    if (provider !== "openai") return;
-    if (!actual) {
-      throw new ProviderAccountServiceError("OpenAI account identity could not be verified", 409);
-    }
-    if (!expected || actual !== expected) {
-      throw new ProviderAccountServiceError("OpenAI account identity did not match", 409);
+    try {
+      adapter.validateExternalIdentity(actual, expected);
+    } catch (cause) {
+      if (cause instanceof ProviderIdentityError) {
+        throw new ProviderAccountServiceError(cause.message, 409, { cause });
+      }
+      throw cause;
     }
   }
 }

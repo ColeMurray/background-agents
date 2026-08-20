@@ -7,7 +7,6 @@ import {
 } from "./model-provider-account-adapters";
 import {
   ClaimedProviderCredentialExchange,
-  ClaimedProviderCredentialExchangeError,
   type ClaimedProviderCredentialExchangeStore,
 } from "./claimed-provider-credential-exchange";
 
@@ -46,6 +45,7 @@ function adapter(
     refresh,
     cachedAccess: vi.fn(() => null),
     runtimeMetadata: vi.fn(() => ({})),
+    validateExternalIdentity: vi.fn(),
   };
 }
 
@@ -186,7 +186,10 @@ describe("ClaimedProviderCredentialExchange", () => {
           now: () => NOW,
           complete,
         })
-      ).rejects.toBeInstanceOf(ClaimedProviderCredentialExchangeError);
+      ).rejects.toMatchObject({
+        phase: "refresh",
+        terminalFence: "committed",
+      });
       expect(terminalFailure).toHaveBeenCalledWith({
         providerAccountId: "account-1",
         credentialVersion: 3,
@@ -197,6 +200,31 @@ describe("ClaimedProviderCredentialExchange", () => {
       expect(store.clearSafeFailure).not.toHaveBeenCalled();
     }
   );
+
+  it("reports when terminal fencing loses the refresh claim", async () => {
+    const failure = new ProviderRefreshError("ambiguous", "ambiguous");
+    const { complete, exchange, providerAdapter, terminalFailure } = setup(
+      adapter(vi.fn().mockRejectedValue(failure))
+    );
+    terminalFailure.mockResolvedValue(false);
+
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner-1",
+        now: () => NOW,
+        complete,
+      })
+    ).rejects.toMatchObject({
+      phase: "refresh",
+      cause: failure,
+      terminalFence: "lost",
+    });
+  });
 
   it("clears the claim when credential parsing fails before refresh dispatch", async () => {
     const { complete, exchange, providerAdapter, store } = setup();
@@ -252,5 +280,23 @@ describe("ClaimedProviderCredentialExchange", () => {
       exchangeOwner: "owner-1",
       now: NOW,
     });
+  });
+
+  it("reports when terminal fencing loses a failed completion claim", async () => {
+    const { exchange, providerAdapter, terminalFailure } = setup();
+    terminalFailure.mockResolvedValue(false);
+
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner-1",
+        now: () => NOW,
+        complete: vi.fn().mockResolvedValue(false),
+      })
+    ).rejects.toMatchObject({ phase: "completion", terminalFence: "lost" });
   });
 });

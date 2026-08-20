@@ -153,33 +153,37 @@ const displayNameSchema = z.string().trim().min(1).max(100);
 const credentialStringSchema = z.string().min(1).max(65_536);
 const externalAccountIdSchema = z.string().trim().min(1).max(512);
 
+export const connectOpenAIModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("openai"),
+  displayName: displayNameSchema,
+  refreshToken: credentialStringSchema,
+  accountId: externalAccountIdSchema,
+});
+export const connectXaiModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("xai"),
+  displayName: displayNameSchema,
+  refreshToken: credentialStringSchema,
+});
 export const connectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
-  z.strictObject({
-    provider: z.literal("openai"),
-    displayName: displayNameSchema,
-    refreshToken: credentialStringSchema,
-    accountId: externalAccountIdSchema,
-  }),
-  z.strictObject({
-    provider: z.literal("xai"),
-    displayName: displayNameSchema,
-    refreshToken: credentialStringSchema,
-  }),
+  connectOpenAIModelProviderAccountRequestSchema,
+  connectXaiModelProviderAccountRequestSchema,
 ]);
 export type ConnectModelProviderAccountRequest = z.infer<
   typeof connectModelProviderAccountRequestSchema
 >;
 
+export const reconnectOpenAIModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("openai"),
+  refreshToken: credentialStringSchema,
+  accountId: externalAccountIdSchema,
+});
+export const reconnectXaiModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("xai"),
+  refreshToken: credentialStringSchema,
+});
 export const reconnectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
-  z.strictObject({
-    provider: z.literal("openai"),
-    refreshToken: credentialStringSchema,
-    accountId: externalAccountIdSchema,
-  }),
-  z.strictObject({
-    provider: z.literal("xai"),
-    refreshToken: credentialStringSchema,
-  }),
+  reconnectOpenAIModelProviderAccountRequestSchema,
+  reconnectXaiModelProviderAccountRequestSchema,
 ]);
 export type ReconnectModelProviderAccountRequest = z.infer<
   typeof reconnectModelProviderAccountRequestSchema

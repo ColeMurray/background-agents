@@ -4,6 +4,7 @@ import type {
   ModelProviderAccountStore,
 } from "../db/model-provider-accounts";
 import type { ModelProviderId } from "./provider-auth-contracts";
+import { providerAccountIneligibility } from "./account-lifecycle-policy";
 
 type ProviderAccountPolicyStatus = 400 | 404 | 409;
 
@@ -71,7 +72,7 @@ export class ProviderAccountSelectionPolicy {
         400
       );
     }
-    if (account.status !== "active" || account.archivedAt !== null) {
+    if (providerAccountIneligibility(account, "active_use")) {
       throw new ProviderAccountSelectionPolicyError(
         `${source} ${provider} provider account is unavailable`,
         409

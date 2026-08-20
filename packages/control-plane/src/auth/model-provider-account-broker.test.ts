@@ -3,6 +3,7 @@ import type { ModelProviderAccount } from "../db/model-provider-accounts";
 import type { ProviderCredentialState } from "../db/provider-account-credentials";
 import {
   ModelProviderAccountAdapterRegistry,
+  ProviderIdentityError,
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
 } from "./model-provider-account-adapters";
@@ -80,6 +81,11 @@ function adapter(
         : null,
     runtimeMetadata: (_credential, externalAccountId): Record<string, string> =>
       externalAccountId ? { accountId: externalAccountId } : {},
+    validateExternalIdentity: (actual, expected) => {
+      if (!actual || !expected || actual !== expected) {
+        throw new ProviderIdentityError("OpenAI account identity did not match");
+      }
+    },
   };
 }
 
@@ -313,6 +319,54 @@ describe("ModelProviderAccountBroker", () => {
       );
     }
   );
+
+  it("uses the authoritative lifecycle when terminal fencing loses its claim", async () => {
+    const { broker, stores } = setup({
+      refresh: vi.fn().mockRejectedValue(new ProviderRefreshError("failed", "ambiguous")),
+      terminalFailure: vi.fn().mockResolvedValue(false),
+    });
+    vi.mocked(stores.accounts.getById)
+      .mockResolvedValueOnce(account())
+      .mockResolvedValue(account({ status: "disabled" }));
+
+    await expect(broker.getAccess("account-1", "openai")).rejects.toMatchObject({
+      code: "account_inactive",
+    });
+    expect(stores.credentials.readCredentialState).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a concurrent credential replacement when terminal fencing loses its claim", async () => {
+    const completed = state({
+      payload: {
+        refreshToken: "next",
+        accessToken: "winner",
+        accessTokenExpiresAt: NOW + 600_000,
+      },
+      credentialVersion: 2,
+      accessTokenExpiresAt: NOW + 600_000,
+    });
+    const { broker } = setup({
+      credentialStates: [state(), completed],
+      refresh: vi.fn().mockRejectedValue(new ProviderRefreshError("failed", "ambiguous")),
+      terminalFailure: vi.fn().mockResolvedValue(false),
+    });
+
+    await expect(broker.getAccess("account-1", "openai")).resolves.toMatchObject({
+      accessToken: "winner",
+    });
+  });
+
+  it("does not claim reconnect when terminal fencing loses an unchanged claim", async () => {
+    const { broker } = setup({
+      credentialStates: [state(), state()],
+      refresh: vi.fn().mockRejectedValue(new ProviderRefreshError("failed", "ambiguous")),
+      terminalFailure: vi.fn().mockResolvedValue(false),
+    });
+
+    await expect(broker.getAccess("account-1", "openai")).rejects.toMatchObject({
+      code: "exchange_busy",
+    });
+  });
 
   it.each([undefined, "different-account"])(
     "rejects refreshed OpenAI identity %s before persisting rotated credentials",

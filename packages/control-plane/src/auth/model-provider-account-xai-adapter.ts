@@ -1,9 +1,16 @@
 import { z } from "zod";
+import {
+  connectXaiModelProviderAccountRequestSchema,
+  reconnectXaiModelProviderAccountRequestSchema,
+  type ConnectModelProviderAccountRequest,
+  type ReconnectModelProviderAccountRequest,
+} from "@open-inspect/shared/types/provider-accounts";
 import { refreshXaiToken, XaiTokenRefreshError } from "./xai";
 import {
   DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS,
   DEFAULT_PROVIDER_REFRESH_BUFFER_MS,
   ProviderCredentialError,
+  ProviderIdentityError,
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
   type ProviderConnectionResult,
@@ -15,10 +22,15 @@ const credentialSchema = z.object({
   accessToken: z.string().min(1).optional(),
   accessTokenExpiresAt: z.number().int().positive().optional(),
 });
-const connectInputSchema = z.object({ refreshToken: z.string().min(1) });
+const connectInputSchema = z.union([
+  connectXaiModelProviderAccountRequestSchema,
+  reconnectXaiModelProviderAccountRequestSchema,
+]);
 
 export type XaiProviderCredential = z.infer<typeof credentialSchema>;
-export type XaiProviderConnectInput = z.infer<typeof connectInputSchema>;
+export type XaiProviderConnectInput =
+  | Extract<ConnectModelProviderAccountRequest, { provider: "xai" }>
+  | Extract<ReconnectModelProviderAccountRequest, { provider: "xai" }>;
 
 type RefreshXai = typeof refreshXaiToken;
 
@@ -100,5 +112,11 @@ export class XaiModelProviderAccountAdapter implements ModelProviderAccountAdapt
 
   runtimeMetadata(_credential: XaiProviderCredential, _externalAccountId: string | null) {
     return {};
+  }
+
+  validateExternalIdentity(actual: string | undefined, expected: string | null): void {
+    if (actual && expected && actual !== expected) {
+      throw new ProviderIdentityError("xAI account identity did not match");
+    }
   }
 }

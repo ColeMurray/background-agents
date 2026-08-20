@@ -34,6 +34,7 @@ export interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
     credential: TCredential,
     externalAccountId: string | null
   ): Record<string, string>;
+  validateExternalIdentity(actual: string | undefined, expected: string | null): void;
 }
 
 export type ProviderRefreshFailureClassification = "unauthorized" | "ambiguous" | "retry_safe";
@@ -49,14 +50,15 @@ export class ProviderRefreshError extends Error {
 }
 
 export class ProviderCredentialError extends Error {}
+export class ProviderIdentityError extends Error {}
 
 type ErasedAdapter = ModelProviderAccountAdapter<unknown, unknown>;
 
 export class ModelProviderAccountAdapterRegistry {
   private readonly adapters = new Map<ModelProviderId, ErasedAdapter>();
 
-  constructor(adapters: readonly { readonly provider: ModelProviderId }[]) {
-    for (const adapter of adapters as readonly ErasedAdapter[]) {
+  constructor(adapters: readonly ErasedAdapter[]) {
+    for (const adapter of adapters) {
       if (this.adapters.has(adapter.provider)) {
         throw new Error(`Duplicate model provider account adapter: ${adapter.provider}`);
       }

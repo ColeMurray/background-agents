@@ -8,6 +8,7 @@ import {
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import { z } from "zod";
+import { createLogger } from "../logger";
 import { generateId } from "../auth/crypto";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
@@ -38,6 +39,7 @@ import {
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
 const renameSchema = z.strictObject({ displayName: z.string().trim().min(1).max(100) });
+const logger = createLogger("router:model-provider-accounts");
 
 function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
   const accounts = new ModelProviderAccountStore(ctx.db);
@@ -64,13 +66,27 @@ function accountId(match: RegExpMatchArray): string | Response {
     : error("Invalid provider account ID", 400);
 }
 
-async function accountOperation(operation: () => Promise<Response>): Promise<Response> {
+async function accountOperation(
+  ctx: RequestContext,
+  operation: () => Promise<Response>
+): Promise<Response> {
   try {
     return await operation();
   } catch (cause) {
     if (cause instanceof ProviderAccountServiceError) return error(cause.message, cause.status);
     const message = cause instanceof Error ? cause.message : "Provider account operation failed";
-    if (/UNIQUE constraint|default account/i.test(message)) return error(message, 409);
+    logger.error("provider_account.operation_failed", {
+      event: "provider_account.operation_failed",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+      error: cause instanceof Error ? cause : String(cause),
+    });
+    if (/UNIQUE constraint/i.test(message)) {
+      return error("Provider account conflicts with an existing account", 409);
+    }
+    if (/default account/i.test(message)) {
+      return error("A default provider account cannot be changed", 409);
+    }
     return error("Provider account operation failed", 502);
   }
 }
@@ -126,7 +142,7 @@ const managementRoutes: Route[] = [
     const parsed = connectModelProviderAccountRequestSchema.safeParse(body);
     if (!parsed.success) return error("Invalid provider account", 400);
     const accounts = service(env, ctx);
-    return accountOperation(async () => {
+    return accountOperation(ctx, async () => {
       const result = await accounts.create(parsed.data, ctx.principal.userId);
       return json(result, result.reconnectedExisting ? 200 : 201);
     });
@@ -135,7 +151,7 @@ const managementRoutes: Route[] = [
     const id = accountId(match);
     if (id instanceof Response) return id;
     const accounts = service(env, ctx);
-    return accountOperation(async () => json({ account: await accounts.get(id) }));
+    return accountOperation(ctx, async () => json({ account: await accounts.get(id) }));
   }),
   managementRoute("PATCH", "/model-provider-accounts/:id", async (request, env, match, ctx) => {
     const id = accountId(match);
@@ -145,7 +161,7 @@ const managementRoutes: Route[] = [
     const parsed = renameSchema.safeParse(body);
     if (!parsed.success) return error("Invalid provider account name", 400);
     const accounts = service(env, ctx);
-    return accountOperation(async () =>
+    return accountOperation(ctx, async () =>
       json({ account: await accounts.rename(id, parsed.data.displayName, ctx.principal.userId) })
     );
   }),
@@ -157,7 +173,7 @@ const managementRoutes: Route[] = [
         const id = accountId(match);
         if (id instanceof Response) return id;
         const accounts = service(env, ctx);
-        return accountOperation(async () => {
+        return accountOperation(ctx, async () => {
           const account =
             action === "verify"
               ? await accounts.verify(id, ctx.principal.userId)
@@ -182,7 +198,7 @@ const managementRoutes: Route[] = [
       const parsed = reconnectModelProviderAccountRequestSchema.safeParse(body);
       if (!parsed.success) return error("Invalid provider account reconnect request", 400);
       const accounts = service(env, ctx);
-      return accountOperation(async () =>
+      return accountOperation(ctx, async () =>
         json({ account: await accounts.reconnect(id, parsed.data, ctx.principal.userId) })
       );
     }
@@ -191,7 +207,7 @@ const managementRoutes: Route[] = [
     const id = accountId(match);
     if (id instanceof Response) return id;
     const accounts = service(env, ctx);
-    return accountOperation(async () => {
+    return accountOperation(ctx, async () => {
       await accounts.archive(id, ctx.principal.userId);
       return new Response(null, { status: 204 });
     });
@@ -226,7 +242,13 @@ const managementRoutes: Route[] = [
         if (cause instanceof ProviderAccountSelectionPolicyError) {
           return error(cause.message, cause.status);
         }
-        return error(cause instanceof Error ? cause.message : "Invalid provider default", 409);
+        logger.error("provider_account.default_update_failed", {
+          event: "provider_account.default_update_failed",
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+          error: cause instanceof Error ? cause : String(cause),
+        });
+        return error("Provider default could not be updated", 409);
       }
     }
   ),

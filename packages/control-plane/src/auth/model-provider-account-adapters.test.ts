@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { OpenAIModelProviderAccountAdapter } from "./model-provider-account-openai-adapter";
 import { XaiModelProviderAccountAdapter } from "./model-provider-account-xai-adapter";
 import { modelProviderAccountAdapterRegistry } from "./model-provider-account-default-adapters";
+import { ProviderIdentityError } from "./model-provider-account-adapters";
+import type { ModelProviderAccountAdapterRegistry } from "./model-provider-account-adapters";
 import { OpenAITokenRefreshError } from "./openai";
 
 describe("model provider account adapters", () => {
@@ -14,6 +16,39 @@ describe("model provider account adapters", () => {
     );
   });
 
+  it("requires complete adapters at the registry boundary", () => {
+    type RegistryAdapters = ConstructorParameters<typeof ModelProviderAccountAdapterRegistry>[0];
+    expectTypeOf<
+      readonly [{ readonly provider: "openai" }]
+    >().not.toMatchTypeOf<RegistryAdapters>();
+  });
+
+  it("uses the canonical provider request schemas", () => {
+    const openai = new OpenAIModelProviderAccountAdapter();
+    const xai = new XaiModelProviderAccountAdapter();
+
+    expect(() =>
+      openai.parseConnectInput({
+        provider: "openai",
+        refreshToken: "refresh-token",
+      })
+    ).toThrow();
+    expect(() =>
+      openai.parseConnectInput({
+        provider: "openai",
+        refreshToken: "x".repeat(65_537),
+        accountId: "acct-1",
+      })
+    ).toThrow();
+    expect(() =>
+      xai.parseConnectInput({
+        provider: "xai",
+        refreshToken: "refresh-token",
+        accountId: "unexpected",
+      })
+    ).toThrow();
+  });
+
   it("requires OpenAI to return a replacement refresh token", async () => {
     const adapter = new OpenAIModelProviderAccountAdapter(
       vi.fn().mockResolvedValue({ id_token: "id", access_token: "access" })
@@ -24,7 +59,7 @@ describe("model provider account adapters", () => {
     });
   });
 
-  it("does not use a claimed OpenAI account ID when trusted extraction fails", async () => {
+  it("rejects a claimed OpenAI account ID when trusted extraction fails", async () => {
     const adapter = new OpenAIModelProviderAccountAdapter(
       vi.fn().mockResolvedValue({
         id_token: "not-a-jwt",
@@ -33,10 +68,13 @@ describe("model provider account adapters", () => {
       })
     );
 
-    const result = await adapter.connect({ refreshToken: "old", accountId: "claimed-account" });
-
-    expect(result.externalAccountId).toBeUndefined();
-    expect(result.credential).not.toHaveProperty("accountId");
+    await expect(
+      adapter.connect({
+        provider: "openai",
+        refreshToken: "old",
+        accountId: "claimed-account",
+      })
+    ).rejects.toBeInstanceOf(ProviderIdentityError);
   });
 
   it("distinguishes a definitive OpenAI invalid_grant from an ambiguous failure", async () => {

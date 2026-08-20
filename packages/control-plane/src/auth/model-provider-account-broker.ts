@@ -17,6 +17,7 @@ import {
   ClaimedProviderCredentialExchange,
   ClaimedProviderCredentialExchangeError,
 } from "./claimed-provider-credential-exchange";
+import { providerAccountIneligibility } from "../model-provider-accounts/account-lifecycle-policy";
 
 type ErasedProviderAccountAdapter = ModelProviderAccountAdapter<unknown, unknown>;
 
@@ -171,7 +172,10 @@ export class ModelProviderAccountBroker {
           owner: this.createOwner(),
           now: this.now,
           complete: ({ write, refreshed }) => {
-            this.assertRefreshIdentity(account, refreshed.externalAccountId);
+            adapter.validateExternalIdentity(
+              refreshed.externalAccountId,
+              account.externalAccountId
+            );
             return this.stores.credentials.completeExchange(write);
           },
         });
@@ -204,6 +208,9 @@ export class ModelProviderAccountBroker {
             `${account.provider} credential refresh failed safely`,
             { cause: error.cause }
           );
+        }
+        if (error.terminalFence === "lost") {
+          return this.reconcileLostTerminalFence(account, adapter, state);
         }
         const reread = await this.readState(account.id, account.provider);
         if (reread.credentialVersion !== state.credentialVersion) {
@@ -269,28 +276,56 @@ export class ModelProviderAccountBroker {
         `Provider account does not belong to ${expectedProvider}`
       );
     }
-    if (account.archivedAt !== null) {
+    const ineligibility = providerAccountIneligibility(account, "active_use");
+    if (ineligibility === "archived") {
       throw new ModelProviderAccountBrokerError("account_archived", "Provider account is archived");
     }
-    if (account.status !== "active") {
+    if (ineligibility) {
       throw new ModelProviderAccountBrokerError(
         "account_inactive",
         `Provider account is ${account.status}`
       );
     }
-    return { ...account, status: account.status };
+    return { ...account, status: "active" };
   }
 
-  private assertRefreshIdentity(
-    account: ModelProviderAccount,
-    refreshedExternalAccountId: string | undefined
-  ): void {
-    if (
-      account.provider === "openai" &&
-      (!account.externalAccountId || refreshedExternalAccountId !== account.externalAccountId)
-    ) {
-      throw new Error("Refreshed OpenAI credential identity does not match the provider account");
+  private async reconcileLostTerminalFence(
+    previousAccount: ModelProviderAccount,
+    adapter: ErasedProviderAccountAdapter,
+    previousState: ProviderCredentialState
+  ): Promise<ProviderAccess> {
+    const account = await this.stores.accounts.getById(previousAccount.id);
+    if (!account) {
+      throw new ModelProviderAccountBrokerError("account_not_found", "Provider account not found");
     }
+    if (account.provider !== previousAccount.provider) {
+      throw new ModelProviderAccountBrokerError(
+        "provider_mismatch",
+        `Provider account does not belong to ${previousAccount.provider}`
+      );
+    }
+    const ineligibility = providerAccountIneligibility(account, "active_use");
+    if (ineligibility === "archived") {
+      throw new ModelProviderAccountBrokerError("account_archived", "Provider account is archived");
+    }
+    if (ineligibility === "reconnect_required") {
+      throw this.reconnectError(account.provider, "Credential refresh requires reconnection");
+    }
+    if (ineligibility) {
+      throw new ModelProviderAccountBrokerError(
+        "account_inactive",
+        `Provider account is ${account.status}`
+      );
+    }
+
+    const state = await this.readState(account.id, account.provider);
+    if (state.credentialVersion !== previousState.credentialVersion) {
+      return this.accessFromConcurrentUpdate(account, adapter, state);
+    }
+    throw new ModelProviderAccountBrokerError(
+      "exchange_busy",
+      `${account.provider} credential exchange lost its durable claim`
+    );
   }
 
   private async readState(

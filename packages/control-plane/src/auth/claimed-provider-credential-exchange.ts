@@ -49,7 +49,8 @@ export type ClaimedProviderCredentialExchangeResult =
 export class ClaimedProviderCredentialExchangeError extends Error {
   constructor(
     readonly phase: "parse" | "refresh" | "completion",
-    cause: unknown
+    cause: unknown,
+    readonly terminalFence: "not_attempted" | "committed" | "lost" = "not_attempted"
   ) {
     super(`Provider credential exchange failed during ${phase}`, { cause });
   }
@@ -90,10 +91,14 @@ export class ClaimedProviderCredentialExchange {
     } catch (cause) {
       if (cause instanceof ProviderRefreshError && cause.classification === "retry_safe") {
         await this.clear(request, claim.generation);
-      } else {
-        await this.failTerminally(request, claim.generation);
+        throw new ClaimedProviderCredentialExchangeError("refresh", cause);
       }
-      throw new ClaimedProviderCredentialExchangeError("refresh", cause);
+      const fenced = await this.failTerminally(request, claim.generation);
+      throw new ClaimedProviderCredentialExchangeError(
+        "refresh",
+        cause,
+        fenced ? "committed" : "lost"
+      );
     }
 
     const write: CompleteProviderExchangeInput & { now: number } = {
@@ -117,9 +122,14 @@ export class ClaimedProviderCredentialExchange {
         );
       }
     } catch (cause) {
-      await this.failTerminally(request, claim.generation);
-      if (cause instanceof ClaimedProviderCredentialExchangeError) throw cause;
-      throw new ClaimedProviderCredentialExchangeError("completion", cause);
+      const fenced = await this.failTerminally(request, claim.generation);
+      const underlying =
+        cause instanceof ClaimedProviderCredentialExchangeError ? cause.cause : cause;
+      throw new ClaimedProviderCredentialExchangeError(
+        "completion",
+        underlying,
+        fenced ? "committed" : "lost"
+      );
     }
 
     return { kind: "completed", refreshed };

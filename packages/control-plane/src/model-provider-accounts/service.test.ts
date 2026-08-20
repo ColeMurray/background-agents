@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ModelProviderAccountAdapterRegistry,
+  ProviderIdentityError,
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
   type ProviderConnectionResult,
@@ -24,19 +25,30 @@ function adapter(
     refresh?: ProviderRefreshResult<Credential>;
   } = {}
 ): ModelProviderAccountAdapter<Credential, unknown> {
+  const validateExternalIdentity = (actual: string | undefined, expected: string | null) => {
+    if (!actual) {
+      throw new ProviderIdentityError("OpenAI account identity could not be verified");
+    }
+    if (!expected || actual !== expected) {
+      throw new ProviderIdentityError("OpenAI account identity did not match");
+    }
+  };
   return {
     provider: "openai",
     credentialSchemaVersion: 1,
     refreshBufferMs: 300_000,
     parseConnectInput: (input) => input,
-    connect: vi.fn(
-      async () =>
-        options.connect ?? {
-          credential: { refreshToken: "rotated-secret", accessToken: "access-secret" },
-          externalAccountId: "acct-1",
-          accessTokenExpiresAt: 2_000,
-        }
-    ),
+    connect: vi.fn(async (input) => {
+      const result = options.connect ?? {
+        credential: { refreshToken: "rotated-secret", accessToken: "access-secret" },
+        externalAccountId: "acct-1",
+        accessTokenExpiresAt: 2_000,
+      };
+      const accountId =
+        input && typeof input === "object" && "accountId" in input ? String(input.accountId) : null;
+      if (accountId) validateExternalIdentity(result.externalAccountId, accountId);
+      return result;
+    }),
     parseCredential: (value) => value as Credential,
     refresh: vi.fn(
       async () =>
@@ -49,6 +61,7 @@ function adapter(
     ),
     cachedAccess: vi.fn(() => null),
     runtimeMetadata: vi.fn(() => ({})),
+    validateExternalIdentity,
   };
 }
 
@@ -317,6 +330,20 @@ describe("ModelProviderAccountService", () => {
     expect(providerAdapter.refresh).not.toHaveBeenCalled();
   });
 
+  it("does not dispatch verification for an account that requires reconnect", async () => {
+    const store = stores(providerAccount({ status: "reconnect_required" }));
+    const providerAdapter = adapter();
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([providerAdapter]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toMatchObject({ status: 409 });
+    expect(providerAdapter.refresh).not.toHaveBeenCalled();
+    expect(store.credentials.readCredentialState).not.toHaveBeenCalled();
+  });
+
   it("reconnects credential and account identity in one persistence operation", async () => {
     const store = stores();
     const service = createService(
@@ -351,7 +378,27 @@ describe("ModelProviderAccountService", () => {
     expect(store.accounts.setStatus).not.toHaveBeenCalled();
   });
 
-  it("preflights duplicate identity and safely reconnects the existing account", async () => {
+  it("rejects archived reconnects before consuming the submitted credential", async () => {
+    const store = stores(providerAccount({ archivedAt: 999, status: "reconnect_required" }));
+    const providerAdapter = adapter();
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([providerAdapter]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    await expect(
+      service.reconnect(
+        ACCOUNT_ID,
+        { provider: "openai", refreshToken: "submitted-secret", accountId: "acct-1" },
+        "user-1"
+      )
+    ).rejects.toMatchObject({ status: 409 });
+    expect(providerAdapter.connect).not.toHaveBeenCalled();
+    expect(store.credentials.readCredentialState).not.toHaveBeenCalled();
+  });
+
+  it("safely reconnects an existing account with the trusted external identity", async () => {
     const existing = providerAccount({ id: "22222222222222222222222222222222" });
     const store = stores(existing);
     vi.mocked(store.accounts.findByExternalIdentity).mockResolvedValue(existing);
@@ -381,7 +428,6 @@ describe("ModelProviderAccountService", () => {
     const winner = providerAccount({ id: "22222222222222222222222222222222" });
     const store = stores(winner);
     vi.mocked(store.accounts.findByExternalIdentity)
-      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(winner);
     vi.mocked(store.atomicWriter.createAccountWithCredential).mockRejectedValue(
@@ -486,4 +532,26 @@ describe("ModelProviderAccountService", () => {
       });
     }
   );
+
+  it("uses authoritative account state when verification terminal fencing loses its claim", async () => {
+    const store = stores();
+    const providerAdapter = adapter();
+    vi.mocked(providerAdapter.refresh).mockRejectedValue(
+      new ProviderRefreshError("refresh failed", "ambiguous")
+    );
+    vi.mocked(store.atomicWriter.fenceExchangeAndRequireReconnect).mockResolvedValue(false);
+    vi.mocked(store.accounts.getById)
+      .mockResolvedValueOnce(providerAccount())
+      .mockResolvedValue(providerAccount({ status: "disabled" }));
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([providerAdapter]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    const error = await service.verify(ACCOUNT_ID, "user-1").catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({ status: 409 });
+    expect((error as Error).message).toMatch(/not active/i);
+  });
 });

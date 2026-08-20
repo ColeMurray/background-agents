@@ -1,9 +1,16 @@
 import { z } from "zod";
+import {
+  connectOpenAIModelProviderAccountRequestSchema,
+  reconnectOpenAIModelProviderAccountRequestSchema,
+  type ConnectModelProviderAccountRequest,
+  type ReconnectModelProviderAccountRequest,
+} from "@open-inspect/shared/types/provider-accounts";
 import { extractOpenAIAccountId, refreshOpenAIToken, OpenAITokenRefreshError } from "./openai";
 import {
   DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS,
   DEFAULT_PROVIDER_REFRESH_BUFFER_MS,
   ProviderCredentialError,
+  ProviderIdentityError,
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
   type ProviderConnectionResult,
@@ -16,13 +23,15 @@ const credentialSchema = z.object({
   accessTokenExpiresAt: z.number().int().positive().optional(),
   accountId: z.string().min(1).optional(),
 });
-const connectInputSchema = z.object({
-  refreshToken: z.string().min(1),
-  accountId: z.string().min(1).optional(),
-});
+const connectInputSchema = z.union([
+  connectOpenAIModelProviderAccountRequestSchema,
+  reconnectOpenAIModelProviderAccountRequestSchema,
+]);
 
 export type OpenAIProviderCredential = z.infer<typeof credentialSchema>;
-export type OpenAIProviderConnectInput = z.infer<typeof connectInputSchema>;
+export type OpenAIProviderConnectInput =
+  | Extract<ConnectModelProviderAccountRequest, { provider: "openai" }>
+  | Extract<ReconnectModelProviderAccountRequest, { provider: "openai" }>;
 
 type RefreshOpenAI = typeof refreshOpenAIToken;
 
@@ -54,6 +63,7 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
     input: OpenAIProviderConnectInput
   ): Promise<ProviderConnectionResult<OpenAIProviderCredential>> {
     const result = await this.refresh({ refreshToken: input.refreshToken });
+    this.validateExternalIdentity(result.externalAccountId, input.accountId);
     return {
       credential: result.credential,
       externalAccountId: result.externalAccountId,
@@ -126,5 +136,14 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
   ): Record<string, string> {
     const accountId = credential.accountId ?? externalAccountId;
     return accountId ? { accountId } : {};
+  }
+
+  validateExternalIdentity(actual: string | undefined, expected: string | null): void {
+    if (!actual) {
+      throw new ProviderIdentityError("OpenAI account identity could not be verified");
+    }
+    if (!expected || actual !== expected) {
+      throw new ProviderIdentityError("OpenAI account identity did not match");
+    }
   }
 }

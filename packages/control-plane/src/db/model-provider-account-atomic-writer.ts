@@ -129,11 +129,8 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       this.db
         .prepare(
           `UPDATE model_provider_accounts
-            SET status = CASE WHEN status = 'active' THEN 'reconnect_required' ELSE status END,
-                updated_by = CASE WHEN status = 'active' THEN NULL ELSE updated_by END,
-                updated_at = CASE WHEN status = 'active' THEN ? ELSE updated_at END
-            WHERE id = ? AND archived_at IS NULL
-              AND status IN ('active', 'disabled', 'reconnect_required')
+            SET status = 'reconnect_required', updated_by = NULL, updated_at = ?
+            WHERE id = ? AND archived_at IS NULL AND status = 'active'
               AND EXISTS (${leaseGuard})`
         )
         .bind(
@@ -152,7 +149,8 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
              AND exchange_generation = ? AND exchange_owner = ? AND exchange_state = 'in_flight'
              AND EXISTS (
                SELECT 1 FROM model_provider_accounts
-               WHERE id = provider_account_id AND archived_at IS NULL
+               WHERE id = provider_account_id AND status = 'reconnect_required'
+                 AND archived_at IS NULL
              )`
         )
         .bind(

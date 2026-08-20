@@ -197,7 +197,11 @@ export {
   sessionModelProviderAuthResponseSchema,
   legacyProviderKeyLocationSchema,
   legacyProviderCredentialsResponseSchema,
+  connectOpenAIModelProviderAccountRequestSchema,
+  connectXaiModelProviderAccountRequestSchema,
   connectModelProviderAccountRequestSchema,
+  reconnectOpenAIModelProviderAccountRequestSchema,
+  reconnectXaiModelProviderAccountRequestSchema,
   reconnectModelProviderAccountRequestSchema,
 } from "./provider-accounts";
 export type {
