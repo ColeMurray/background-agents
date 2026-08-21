@@ -44,6 +44,8 @@ jobs:
     name: Test (sandbox-runtime JS)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
