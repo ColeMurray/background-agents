@@ -1244,6 +1244,56 @@ describe("handleReviewComment", () => {
     expect(content).not.toContain("comments/201/replies");
   });
 
+  it("carries the thread's anchored range from the webhook payload into the prompt", async () => {
+    const env = createMockEnv();
+    // Parse through the webhook schema, as index.ts does: a field the schema drops never reaches
+    // the prompt, and a fence on a range the agent cannot see deletes the lines it leaves out.
+    const payload = reviewCommentPayloadSchema.parse({
+      ...reviewCommentPayload,
+      comment: {
+        ...reviewCommentPayload.comment,
+        start_line: 10,
+        line: 14,
+        side: "RIGHT",
+        start_side: "RIGHT",
+      },
+    });
+
+    await handleReviewComment(env, createMockLogger(), payload, "trace-3");
+
+    const content = promptSendBody(getControlPlaneFetch(env)).content;
+    expect(content).toContain("`src/cache.ts`, anchored at lines 10–14 of the head (RIGHT) side");
+    expect(content).toContain("## Applyable Suggestions");
+  });
+
+  it("offers no suggestion on an outdated thread, whose line GitHub has nulled", async () => {
+    const env = createMockEnv();
+    const payload = reviewCommentPayloadSchema.parse({
+      ...reviewCommentPayload,
+      comment: { ...reviewCommentPayload.comment, line: null, side: "RIGHT" },
+    });
+
+    await handleReviewComment(env, createMockLogger(), payload, "trace-3");
+
+    const content = promptSendBody(getControlPlaneFetch(env)).content;
+    expect(content).toContain("comments/200/replies");
+    expect(content).not.toContain("## Applyable Suggestions");
+  });
+
+  it("still handles a thread whose side GitHub reports as an unexpected value", async () => {
+    const env = createMockEnv();
+    const payload = reviewCommentPayloadSchema.parse({
+      ...reviewCommentPayload,
+      comment: { ...reviewCommentPayload.comment, line: 14, side: "UNEXPECTED" },
+    });
+
+    await handleReviewComment(env, createMockLogger(), payload, "trace-3");
+
+    const content = promptSendBody(getControlPlaneFetch(env)).content;
+    expect(content).toContain("comments/200/replies");
+    expect(content).not.toContain("## Applyable Suggestions");
+  });
+
   it("returns early if no @mention", async () => {
     const env = createMockEnv();
     const log = createMockLogger();

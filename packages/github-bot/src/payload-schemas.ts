@@ -75,6 +75,14 @@ export const reviewCommentPayloadSchema = z.object({
     body: z.string(),
     path: z.string(),
     diff_hunk: z.string(),
+    // The comment's line anchor. GitHub nulls `line` on an outdated or file-level comment and
+    // `start_line`/`start_side` on a single-line one.
+    start_line: z.number().nullish(),
+    line: z.number().nullish(),
+    // Plain strings: an unexpected side value must not fail parsing of the whole webhook; anything
+    // other than "RIGHT" just makes the anchor non-suggestable.
+    side: z.string().nullish(),
+    start_side: z.string().nullish(),
     user: githubUserSchema,
   }),
   repository: repositorySchema,

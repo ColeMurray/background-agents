@@ -211,7 +211,8 @@ Two prompt templates in `src/prompts.ts`:
 
 - Run `gh pr diff` for the full diff
 - Submit a review via `gh api .../reviews`
-- Post inline comments via `gh api .../comments`
+- Post inline comments inside that same review's `comments` array
+- Emit applyable `suggestion` fences in the review's inline comment bodies (see below)
 
 **`buildCommentActionPrompt`** — Includes the user's request (with @mention stripped) and
 instructions to:
@@ -219,7 +220,56 @@ instructions to:
 - Check prior conversation via `gh pr view --comments`
 - Make code changes and push, or respond with analysis
 - Post a summary comment via `gh api .../issues/{n}/comments`
-- Reply to a specific review thread (when `commentId` is present)
+- Reply to a specific review thread when `reviewThread` is present (an inline review comment). It
+  offers an applyable `suggestion` fence only when the thread has a current head-side anchor; the
+  summary comment cannot carry one, since an issue comment has no line anchor.
+
+### Applyable Suggestions
+
+`buildSuggestionGuidelines` serves both prompt paths, each with its own entry in a per-mode table
+(`SUGGESTION_MODES`). A fenced `suggestion` block inside a **line-anchored** comment is what GitHub
+renders with a "Commit suggestion" button; the fence content replaces the anchored lines verbatim.
+Nothing in this package calls a special suggestion API—the review's `comments` array and the
+thread-reply route already carry the markdown body.
+
+A fence contains backticks, so how the body reaches `gh` matters. Review bodies (summary and inline
+comments alike) ship inside the single JSON review payload, where each `body` is a JSON string and
+its line breaks are `\n`. Thread-reply and summary-comment bodies are passed as `-F body=@<file>`
+rather than an inline `-f body="…"` argument, since backticks inside a double-quoted shell argument
+are command substitution. The comment-action prompt states this once, in its own "Posting Comment
+Bodies" section: write the file with the file-write tool, and if the shell is used instead, quote
+the heredoc delimiter (an unquoted one substitutes commands out of untrusted review text) and prove
+it absent from the body, since a quoted heredoc still ends at the first line equal to its delimiter
+and a fence quoting a script's own `EOF` is exactly such a line.
+
+For a full review, the agent selects the anchor and must prove every selected line falls inside a
+diff hunk. One bad anchor rejects the whole review with HTTP 422, so the prompt gives a recovery
+path: resubmit once with suggestions rewritten as prose, range fields removed, and unconfirmed
+comments moved into the summary, then, if that fails too, with an empty `comments` array.
+
+A thread reply inherits the parent comment's anchor. The webhook's `start_line`, `line`, `side` and
+`start_side` reach the prompt as `reviewThread`, which names the exact anchored range, since a fence
+replaces every line of it. The suggestion contract is included only when `line` is non-null (GitHub
+nulls it on an outdated or file-level comment) and the anchor is on the head (`RIGHT`) side;
+otherwise the reply is prose only. In a thread reply, a request to change the code is still answered
+with a pushed commit, and a suggestion is only for review-only or advisory replies.
+
+Both anchored paths require verbatim replacement, exact indentation, and a prose fallback when the
+replacement cannot be proved safe. Checking a suggestion never modifies the working tree: an
+optional, syntax-only check runs on a copy under `mktemp -d`, never a full-repository type check per
+suggestion. The anchored lines are read with the agent's file-read tool rather than a shell command,
+because a PR can add a file whose name is shell syntax and a path interpolated into shell source is
+command substitution.
+
+### Repository Identity in API Routes
+
+Every `gh api repos/...` route embedded in these prompts uses
+`encodeRepositoryPathSegments({ repoOwner: owner, repoName: repo })`
+(`@open-inspect/shared/types/repositories`) rather than maintaining another route-construction rule.
+GitHub login owners are currently single segments, so this is behavior-preserving for webhook
+traffic; using the shared helper keeps the prompt aligned with the repository-wide identity
+contract, which also permits nested namespaces on other source-control providers. Human-readable
+`${owner}/${repo}` prose stays unencoded.
 
 The prompts embed only metadata from the webhook payload. The agent gathers everything else.
 

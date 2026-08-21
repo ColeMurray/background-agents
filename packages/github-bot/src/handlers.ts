@@ -192,9 +192,15 @@ export async function handleReviewComment(
         commentBody: inlineFlags.ok ? inlineFlags.text : "",
         commenter: sender.login,
         isPublic: !repo.private,
-        filePath: comment.path,
-        diffHunk: comment.diff_hunk,
-        commentId: comment.in_reply_to_id ?? comment.id,
+        reviewThread: {
+          commentId: comment.in_reply_to_id ?? comment.id,
+          path: comment.path,
+          diffHunk: comment.diff_hunk,
+          startLine: comment.start_line ?? null,
+          line: comment.line ?? null,
+          side: comment.side ?? null,
+          startSide: comment.start_side ?? null,
+        },
         commentActionInstructions: config.commentActionInstructions,
       }),
   });
