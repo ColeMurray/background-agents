@@ -434,9 +434,11 @@ export class SkillStore {
           `${repository.repoOwner.toLowerCase()}\0${repository.repoName.toLowerCase()}`
       )
     );
-    const assignmentsBySkill = await this.assignmentsForSkills(
-      (rows.results ?? []).map((row) => row.id)
-    );
+    const applicableIds = (rows.results ?? []).map((row) => row.id);
+    const [assignmentsBySkill, sourcesBySkill] = await Promise.all([
+      this.assignmentsForSkills(applicableIds),
+      this.sourcesForSkills(applicableIds),
+    ]);
     const applicable: ApplicableSkill[] = [];
     for (const row of rows.results ?? []) {
       const assignments = assignmentsBySkill.get(row.id) ?? [];
@@ -450,7 +452,10 @@ export class SkillStore {
         );
       });
       if (matching.length === 0) continue;
-      applicable.push({ ...(await this.toSummary(row, matching)), totalBytes: row.total_bytes });
+      applicable.push({
+        ...(await this.toSummary(row, matching, sourcesBySkill.get(row.id) ?? null)),
+        totalBytes: row.total_bytes,
+      });
     }
     return applicable;
   }
@@ -516,6 +521,8 @@ export class SkillStore {
       lastEditorDisplayName: row.last_editor_display_name,
       revisionAuthorDisplayName: row.revision_author_display_name,
       assignments: assignments ?? (await this.assignmentsForSkill(row.id)),
+      // Callers that summarize more than one row pass both of these in, batched.
+      // Leaving either out costs a query per row.
       source: source === undefined ? await this.latestImportSource(row.id) : source,
       createdBy: row.created_by,
       updatedBy: row.updated_by,

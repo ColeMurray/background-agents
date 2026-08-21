@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { skillImportSourceInputSchema } from "@open-inspect/shared/types/skills";
+import {
+  MAX_SKILL_REVISION_BYTES,
+  skillImportSourceInputSchema,
+} from "@open-inspect/shared/types/skills";
 import type { GetRepositoryConfig, RepositoryTree, SourceControlProvider } from "../source-control";
 import { fetchSkillImport, SkillImportError } from "./git-import";
 
@@ -22,6 +25,10 @@ function fakeProvider(
     truncated?: boolean;
     defaultBranch?: string;
     otherEntries?: string[];
+    /** Mimic GitLab, whose tree listing reports no blob sizes. */
+    sizelessTree?: boolean;
+    normalizedIdentity?: { repoOwner: string; repoName: string };
+    blobLimits?: number[];
   } = {}
 ): SourceControlProvider {
   const encoder = new TextEncoder();
@@ -35,7 +42,7 @@ function fakeProvider(
       path,
       type: "file",
       blobId,
-      sizeBytes: bytes.byteLength,
+      sizeBytes: overrides.sizelessTree ? null : bytes.byteLength,
       executable: file.executable ?? false,
     });
   }
@@ -58,14 +65,15 @@ function fakeProvider(
         ? null
         : {
             repoId: 1,
-            repoOwner: config.owner,
-            repoName: config.name,
+            repoOwner: overrides.normalizedIdentity?.repoOwner ?? config.owner,
+            repoName: overrides.normalizedIdentity?.repoName ?? config.name,
             defaultBranch: overrides.defaultBranch ?? "main",
           },
     resolveCommit: async () =>
       overrides.commit === null ? null : { sha: overrides.commit ?? COMMIT },
     listTree: async () => ({ entries, truncated: overrides.truncated ?? false }),
-    readBlob: async ({ blobId }) => {
+    readBlob: async ({ blobId, maxBytes }) => {
+      overrides.blobLimits?.push(maxBytes);
       const bytes = blobs.get(blobId);
       if (!bytes) throw new Error(`missing blob ${blobId}`);
       return bytes;
@@ -309,6 +317,60 @@ describe("fetchSkillImport", () => {
     expect(error).toBeInstanceOf(SkillImportError);
     expect((error as SkillImportError).message).toMatch(message);
     expect((error as SkillImportError).status).toBe(status);
+  });
+
+  it("records the provider's normalized repository identity, not the request's", async () => {
+    const provider = fakeProvider(
+      { "SKILL.md": { content: SKILL_MD } },
+      { normalizedIdentity: { repoOwner: "acme-group/platform", repoName: "skills" } }
+    );
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.source.repoOwner).toBe("acme-group/platform");
+    expect(result.source.repoName).toBe("skills");
+  });
+
+  it("tells the provider the per-file limit so it can refuse before buffering", async () => {
+    const blobLimits: number[] = [];
+    const provider = fakeProvider({ "SKILL.md": { content: SKILL_MD } }, { blobLimits });
+
+    await fetchSkillImport(provider, source());
+
+    expect(blobLimits).toEqual([256 * 1024]);
+  });
+
+  it("enforces the revision limit on a tree that reports no sizes", async () => {
+    const half = "x".repeat(200 * 1024);
+    const provider = fakeProvider(
+      {
+        "SKILL.md": { content: SKILL_MD },
+        "references/a.md": { content: half },
+        "references/b.md": { content: half },
+        "references/c.md": { content: half },
+        "references/d.md": { content: half },
+        "references/e.md": { content: half },
+        "references/f.md": { content: half },
+      },
+      { sizelessTree: true }
+    );
+
+    await expect(fetchSkillImport(provider, source())).rejects.toThrow(
+      /Imported content exceeds the 1048576-byte skill limit/
+    );
+  });
+
+  it("rejects an oversized SKILL.md from the declared sizes alone", async () => {
+    const blobLimits: number[] = [];
+    const provider = fakeProvider(
+      { "SKILL.md": { content: `${SKILL_MD}${"x".repeat(MAX_SKILL_REVISION_BYTES)}` } },
+      { blobLimits }
+    );
+
+    await expect(fetchSkillImport(provider, source())).rejects.toThrow(
+      /exceeds the 1048576-byte skill limit/
+    );
+    expect(blobLimits).toEqual([]);
   });
 
   it("rejects a file over the per-file size limit", async () => {

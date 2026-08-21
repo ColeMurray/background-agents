@@ -26,7 +26,11 @@ import type {
   ResolvedCommit,
   RepositoryTree,
 } from "../types";
-import { SourceControlProviderError, parseProviderResponse } from "../errors";
+import {
+  assertBlobWithinLimit,
+  SourceControlProviderError,
+  parseProviderResponse,
+} from "../errors";
 import {
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
@@ -601,6 +605,8 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     );
     return {
       truncated: data.truncated === true,
+      // GitHub reports blob sizes in the tree, so callers get a usable
+      // pre-download budget check from listTree alone.
       entries: data.tree.map((entry) => ({
         path: entry.path,
         type: entry.type === "blob" ? "file" : entry.type === "tree" ? "directory" : "other",
@@ -611,7 +617,9 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     };
   }
 
-  async readBlob(config: GetRepositoryConfig & { blobId: string }): Promise<Uint8Array> {
+  async readBlob(
+    config: GetRepositoryConfig & { blobId: string; maxBytes: number }
+  ): Promise<Uint8Array> {
     try {
       const response = await this.appFetch(
         `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
@@ -621,6 +629,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         "application/vnd.github.raw"
       );
       if (!response.ok) throw await githubResponseError(response, "read blob");
+      assertBlobWithinLimit(response, config.maxBytes, config.blobId);
       return new Uint8Array(await response.arrayBuffer());
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;

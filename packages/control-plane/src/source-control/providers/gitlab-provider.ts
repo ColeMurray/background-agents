@@ -27,7 +27,11 @@ import type {
   RepositoryTree,
   RepositoryTreeEntry,
 } from "../types";
-import { SourceControlProviderError, parseProviderResponse } from "../errors";
+import {
+  assertBlobWithinLimit,
+  SourceControlProviderError,
+  parseProviderResponse,
+} from "../errors";
 import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
@@ -641,6 +645,8 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         "Failed to list repository tree"
       );
       for (const entry of data) {
+        // GitLab's tree endpoint reports no blob sizes, so sizeBytes is always
+        // null here and callers must enforce size budgets when reading blobs.
         entries.push({
           path: entry.path,
           type: entry.type === "blob" ? "file" : entry.type === "tree" ? "directory" : "other",
@@ -656,13 +662,18 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     return { entries, truncated: true };
   }
 
-  async readBlob(config: GetRepositoryConfig & { blobId: string }): Promise<Uint8Array> {
+  async readBlob(
+    config: GetRepositoryConfig & { blobId: string; maxBytes: number }
+  ): Promise<Uint8Array> {
     const projectPath = encodeProjectPath(config.owner, config.name);
     const response = await this.patFetch(
       `/projects/${projectPath}/repository/blobs/${encodeURIComponent(config.blobId)}/raw`,
       "read blob"
     );
     if (!response.ok) throw await gitlabResponseError(response, "read blob");
+    // GitLab's tree listing carries no sizes, so this header is the only
+    // chance to refuse an oversized blob before buffering it.
+    assertBlobWithinLimit(response, config.maxBytes, config.blobId);
     return new Uint8Array(await response.arrayBuffer());
   }
 

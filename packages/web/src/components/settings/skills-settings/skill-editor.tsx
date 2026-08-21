@@ -287,7 +287,9 @@ export function SkillEditor({
         </div>
       )}
 
-      {skill?.source && <SkillReimport skill={skill} onReimported={() => onSaved(skill.id)} />}
+      {skill?.source && (
+        <SkillReimport skill={skill} dirty={dirty} onReimported={() => onSaved(skill.id)} />
+      )}
 
       <SkillFiles files={files} onChange={setFiles} />
       {assignmentsUnavailable && (

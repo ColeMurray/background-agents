@@ -272,6 +272,11 @@ async function handleImportSkill(
 /**
  * Resolve the source a re-import reads: the recorded repository and
  * subdirectory, with only the ref allowed to move.
+ *
+ * An absent ref — omitted or null — means the recorded one, which is what the
+ * editor's empty ref field offers. Returning to the default branch is done by
+ * naming that branch, not by clearing the field, so a re-import never silently
+ * jumps to a different branch than the one it was pinned to.
  */
 async function recordedImportSource(
   ctx: RequestContext,

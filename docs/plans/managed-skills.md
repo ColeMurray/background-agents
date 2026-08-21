@@ -900,8 +900,10 @@ Build `@open-inspect/shared` before dependent packages.
 
 - Expose revision history, diff, rollback, and immutable release labels.
 - Add draft/review/publish/promotion lifecycle and evaluations.
-- Add Git import/export with source URL, commit SHA, and content digest provenance. User-initiated
-  import shipped; export and bulk import of skill-collection repositories remain open.
+- Add Git import/export with source, commit SHA, and content digest provenance. User-initiated
+  import shipped, recording provider, repository identity, requested and resolved ref, commit SHA,
+  subdirectory, and a digest of the imported bytes; export and bulk import of skill-collection
+  repositories remain open.
 - Move large or binary packages to a dedicated R2 bucket.
 - Add shared profiles, real team ownership, and operation-specific ACLs.
 - Add signed packages, approval gates, emergency revocation, and staged rollout channels.

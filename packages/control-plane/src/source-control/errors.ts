@@ -102,6 +102,22 @@ export class SourceControlProviderError extends Error {
  * SourceControlProviderError naming the offending fields — provider/schema
  * drift must fail loudly rather than flow onward as apparently-valid state.
  */
+/**
+ * Refuse a blob whose declared length exceeds the caller's budget, before the
+ * body is buffered. A response without Content-Length is read and checked by
+ * the caller instead — this is the cheap guard, not the only one.
+ */
+export function assertBlobWithinLimit(response: Response, maxBytes: number, blobId: string): void {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new SourceControlProviderError(
+      `Blob ${blobId} is ${declared} bytes, over the ${maxBytes}-byte limit`,
+      "permanent",
+      413
+    );
+  }
+}
+
 export async function parseProviderResponse<Schema extends z.ZodType>(
   response: Response,
   schema: Schema,

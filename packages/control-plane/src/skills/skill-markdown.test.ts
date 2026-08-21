@@ -37,6 +37,21 @@ describe("parseSkillMarkdown", () => {
     expect(scalar("---\ndescription: 'it''s here'\n---\n", "description")).toBe("it's here");
   });
 
+  it("allows a comment after a quoted scalar", () => {
+    expect(scalar('---\nname: "deploy" # canonical\n---\n', "name")).toBe("deploy");
+    expect(scalar("---\nname: 'deploy'   # canonical\n---\n", "name")).toBe("deploy");
+  });
+
+  it("keeps commas and escaped quotes inside quoted flow entries", () => {
+    expect(parseSkillMarkdown('---\ntools: ["a,b", c]\n---\n').frontmatter.get("tools")).toEqual({
+      kind: "sequence",
+      value: ["a,b", "c"],
+    });
+    expect(
+      parseSkillMarkdown('---\ntools: ["say \\"hi\\"", c]\n---\n').frontmatter.get("tools")
+    ).toEqual({ kind: "sequence", value: ['say "hi"', "c"] });
+  });
+
   it("reads literal and folded block scalars", () => {
     expect(scalar("---\ndescription: |\n  first\n  second\n---\n", "description")).toBe(
       "first\nsecond\n"
@@ -94,6 +109,10 @@ describe("parseSkillMarkdown", () => {
     ["unterminated quotes", '---\nname: "deploy\n---\n'],
     ["deeper nesting", "---\nmetadata:\n  team:\n    name: platform\n---\n"],
     ["mixed sequence and map", "---\ntools:\n  - read\n  write: yes\n---\n"],
+    ["a code point above the Unicode range", '---\nname: "\\U0011FFFF"\n---\n'],
+    ["a lone surrogate escape", '---\nname: "\\uD800"\n---\n'],
+    ["text after a quoted scalar", '---\nname: "deploy" trailing\n---\n'],
+    ["the keep chomping indicator", "---\ndescription: |+\n  text\n---\n"],
   ])("rejects %s", (_case, markdown) => {
     expect(() => parseSkillMarkdown(markdown)).toThrow(SkillMarkdownError);
   });

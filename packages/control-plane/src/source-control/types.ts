@@ -171,7 +171,11 @@ export interface RepositoryTreeEntry {
   type: "file" | "directory" | "other";
   /** Provider blob ID, for files. */
   blobId: string;
-  /** Byte size when the provider reports one, otherwise null. */
+  /**
+   * Byte size when the provider reports one, otherwise null. Null means
+   * unknown, never zero — a caller enforcing a size budget cannot treat a
+   * listing as size-bearing unless every entry reports one.
+   */
   sizeBytes: number | null;
   /** Whether the file carries the executable mode bit. */
   executable: boolean;
@@ -435,10 +439,17 @@ export interface SourceControlProvider {
    * App-authenticated. Blob IDs come from `listTree`, so the content read is
    * pinned to the same commit no matter what the ref does meanwhile.
    *
-   * @param config - Repository identifier plus the blob ID from listTree
-   * @throws SourceControlProviderError
+   * `maxBytes` is a refusal threshold, not a truncation point: a blob the
+   * provider can tell is larger is rejected before its body is buffered, so a
+   * caller with a size budget never has to hold an oversized blob in memory to
+   * discover it is oversized. Providers that cannot know the size up front
+   * still return the full body, so callers must re-check what they receive.
+   *
+   * @param config - Repository identifier, the blob ID from listTree, and the
+   *   largest body the caller is willing to accept
+   * @throws SourceControlProviderError, including when the blob is too large
    */
-  readBlob(config: GetRepositoryConfig & { blobId: string }): Promise<Uint8Array>;
+  readBlob(config: GetRepositoryConfig & { blobId: string; maxBytes: number }): Promise<Uint8Array>;
 
   /**
    * Read the current state of a pull request.

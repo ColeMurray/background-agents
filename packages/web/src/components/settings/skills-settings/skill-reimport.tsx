@@ -15,7 +15,16 @@ import { errorMessage } from "./shared";
  * repository and subdirectory come from what was recorded, and there is no
  * background sync — the update happens when someone asks for it.
  */
-export function SkillReimport({ skill, onReimported }: { skill: Skill; onReimported: () => void }) {
+export function SkillReimport({
+  skill,
+  dirty,
+  onReimported,
+}: {
+  skill: Skill;
+  /** Whether the surrounding editor holds unsaved changes this would discard. */
+  dirty: boolean;
+  onReimported: () => void;
+}) {
   const source = skill.source;
   const [ref, setRef] = useState("");
   const [preview, setPreview] = useState<SkillImportPreviewResponse | null>(null);
@@ -39,6 +48,14 @@ export function SkillReimport({ skill, onReimported }: { skill: Skill; onReimpor
 
   async function confirm() {
     if (!preview) return;
+    // A new revision remounts the editor, so unsaved edits would vanish
+    // without a word. Same guard the editor's Close button uses.
+    if (
+      dirty &&
+      !window.confirm("Discard your unsaved changes and replace them with the source's content?")
+    ) {
+      return;
+    }
     setSaving(true);
     try {
       const result = await reimportSkill(skill.id, skill.currentRevisionId, {

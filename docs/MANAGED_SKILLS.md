@@ -116,7 +116,8 @@ save.
 ## Importing a Skill from a Repository
 
 Skills usually live in Git already. **Settings > Skills > Shared skills > Import from repository**
-reads a `SKILL.md` directory from a connected repository instead of retyping it.
+reads a skill directory — a `SKILL.md` file plus its supporting files — from a connected repository
+instead of retyping it.
 
 ### Choosing a source
 
@@ -138,8 +139,9 @@ everything after the frontmatter becomes the instructions. Every other frontmatt
 `allowed-tools` or `version` — has no managed-skill field and is reported in the preview rather than
 dropped silently. All other files in the directory are imported as supporting files.
 
-Open-Inspect regenerates `SKILL.md` from the mapped fields, so the stored file is equivalent to the
-upstream one but not byte-identical.
+Open-Inspect regenerates `SKILL.md` from the mapped fields alone. The stored file is therefore
+neither byte-identical to the upstream one nor a superset of it: unmapped frontmatter keys are
+reported in the preview and then left behind.
 
 ### Reviewing before saving
 

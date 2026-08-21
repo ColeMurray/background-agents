@@ -128,8 +128,12 @@ async function readBlobs(
         owner: repository.owner,
         name: repository.name,
         blobId: entry.blobId,
+        maxBytes: MAX_SKILL_FILE_BYTES,
       });
       const path = entry.path.slice(prefix.length);
+      // The provider refuses an oversized blob before buffering when it can
+      // tell the size up front. GitLab's tree carries no sizes, so this is the
+      // check that actually holds for that provider.
       if (bytes.byteLength > MAX_SKILL_FILE_BYTES) {
         throw new SkillImportError(
           `${path} is ${bytes.byteLength} bytes, over the ${MAX_SKILL_FILE_BYTES}-byte per-file limit`,
@@ -348,7 +352,13 @@ export async function fetchSkillImport(
       400
     );
   }
-  const declaredBytes = blobs.reduce((total, entry) => total + (entry.sizeBytes ?? 0), 0);
+  // Providers that report sizes let an oversized import fail before a single
+  // blob is fetched. Providers that do not report a null size, which sums to
+  // nothing here and leaves the post-read checks in readBlobs to catch it.
+  const declaredBytes = [skillMarkdownEntry, ...blobs].reduce(
+    (total, entry) => total + (entry.sizeBytes ?? 0),
+    0
+  );
   if (declaredBytes > MAX_SKILL_REVISION_BYTES) {
     throw new SkillImportError(
       `Imported content exceeds the ${MAX_SKILL_REVISION_BYTES}-byte skill limit`,
@@ -401,8 +411,12 @@ export async function fetchSkillImport(
     })),
     source: {
       provider: provider.name,
-      repoOwner: repository.owner,
-      repoName: repository.name,
+      // The provider's own view of the identity, not the request's. A caller
+      // may name a different case or a partial namespace; re-import replays
+      // exactly what is stored here, so it has to be what the provider
+      // resolves to rather than what someone typed.
+      repoOwner: access.repoOwner,
+      repoName: access.repoName,
       requestedRef,
       resolvedRef,
       commitSha: commit.sha,

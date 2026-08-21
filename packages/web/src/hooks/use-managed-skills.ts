@@ -42,6 +42,15 @@ const errorResponseSchema = z.object({ error: z.string() });
 const SKILLS_KEY = "/api/skills";
 const SKILL_PROFILES_KEY = "/api/skill-profiles";
 
+/**
+ * IDs are opaque and reach the BFF as one path segment. browserApiFetch sends
+ * the path as written, so an ID containing "/" has to be encoded here or it
+ * silently addresses a different route.
+ */
+function pathSegment(id: string): string {
+  return encodeURIComponent(id);
+}
+
 async function validatedFetcher<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
   const response = await browserApiFetch(path);
   if (!response.ok) throw new Error("Managed skills request failed");
@@ -81,7 +90,7 @@ export function useSkills() {
 export function useSkill(id: string | null) {
   const { data: session } = useAuthSession();
   const { data, isLoading, error, mutate } = useSWR(
-    session && id ? (`${SKILLS_KEY}/${id}` as const) : null,
+    session && id ? (`${SKILLS_KEY}/${pathSegment(id)}` as const) : null,
     (path) => validatedFetcher(path, skillResponseSchema)
   );
   return { skill: data?.skill, loading: isLoading, error, mutate };
@@ -111,7 +120,7 @@ export async function createSkill(input: CreateSkillInput): Promise<Skill> {
 
 export async function setSkillEnabled(id: string, input: SetSkillEnabledInput): Promise<Skill> {
   return (
-    await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {
+    await apiRequest(`${SKILLS_KEY}/${pathSegment(id)}`, skillResponseSchema, {
       method: "PATCH",
       body: JSON.stringify(input),
     })
@@ -124,7 +133,7 @@ export async function replaceSkillContentAndAssignments(
   input: ReplaceSkillContentAndAssignmentsInput
 ): Promise<Skill> {
   return (
-    await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {
+    await apiRequest(`${SKILLS_KEY}/${pathSegment(id)}`, skillResponseSchema, {
       method: "PUT",
       headers: { "If-Match": revisionId },
       body: JSON.stringify(input),
@@ -164,10 +173,11 @@ export async function previewSkillReimport(
   id: string,
   ref: string | null
 ): Promise<SkillImportPreviewResponse> {
-  return apiRequest(`${SKILLS_KEY}/${id}/reimport/preview`, skillImportPreviewResponseSchema, {
-    method: "POST",
-    body: JSON.stringify({ ref }),
-  });
+  return apiRequest(
+    `${SKILLS_KEY}/${pathSegment(id)}/reimport/preview`,
+    skillImportPreviewResponseSchema,
+    { method: "POST", body: JSON.stringify({ ref }) }
+  );
 }
 
 export async function reimportSkill(
@@ -175,7 +185,7 @@ export async function reimportSkill(
   revisionId: string,
   input: ReimportSkillInput
 ): Promise<{ skill: Skill; revisionCreated: boolean }> {
-  return apiRequest(`${SKILLS_KEY}/${id}/reimport`, reimportSkillResponseSchema, {
+  return apiRequest(`${SKILLS_KEY}/${pathSegment(id)}/reimport`, reimportSkillResponseSchema, {
     method: "POST",
     headers: { "If-Match": revisionId },
     body: JSON.stringify(input),
@@ -183,7 +193,7 @@ export async function reimportSkill(
 }
 
 export async function deleteSkill(id: string): Promise<void> {
-  await apiRequest(`${SKILLS_KEY}/${id}`, okResponseSchema, { method: "DELETE" });
+  await apiRequest(`${SKILLS_KEY}/${pathSegment(id)}`, okResponseSchema, { method: "DELETE" });
 }
 
 export async function createSkillProfile(input: {
@@ -203,7 +213,7 @@ export async function updateSkillProfile(
   input: { name?: string; skillIds?: string[] }
 ): Promise<SkillProfile> {
   return (
-    await apiRequest(`${SKILL_PROFILES_KEY}/${id}`, skillProfileResponseSchema, {
+    await apiRequest(`${SKILL_PROFILES_KEY}/${pathSegment(id)}`, skillProfileResponseSchema, {
       method: "PATCH",
       body: JSON.stringify(input),
     })
@@ -211,7 +221,9 @@ export async function updateSkillProfile(
 }
 
 export async function deleteSkillProfile(id: string): Promise<void> {
-  await apiRequest(`${SKILL_PROFILES_KEY}/${id}`, okResponseSchema, { method: "DELETE" });
+  await apiRequest(`${SKILL_PROFILES_KEY}/${pathSegment(id)}`, okResponseSchema, {
+    method: "DELETE",
+  });
 }
 
 export async function resolveSkillPreview(

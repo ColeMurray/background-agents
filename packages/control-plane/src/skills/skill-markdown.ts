@@ -22,6 +22,11 @@ export interface ParsedSkillMarkdown {
 export class SkillMarkdownError extends Error {}
 
 const KEY_PATTERN = /^([A-Za-z0-9][A-Za-z0-9_.-]*)\s*:(?:\s+(.*))?$/;
+/** Fixed patterns per escape width, keyed by the digit count \u and \U take. */
+const HEX_ESCAPE_PATTERN: Record<number, RegExp> = {
+  4: /^[0-9a-fA-F]{4}$/,
+  8: /^[0-9a-fA-F]{8}$/,
+};
 const FRONTMATTER_FENCE = /^(?:---|\.\.\.)\s*$/;
 
 function stripBom(text: string): string {
@@ -63,10 +68,16 @@ function unescapeDoubleQuoted(raw: string, line: number): string {
     else if (escape === "u" || escape === "U") {
       const width = escape === "u" ? 4 : 8;
       const digits = raw.slice(index + 1, index + 1 + width);
-      if (!new RegExp(`^[0-9a-fA-F]{${width}}$`).test(digits)) {
+      if (!HEX_ESCAPE_PATTERN[width].test(digits)) {
         throw new SkillMarkdownError(`invalid unicode escape on line ${line}`);
       }
-      result += String.fromCodePoint(Number.parseInt(digits, 16));
+      const codePoint = Number.parseInt(digits, 16);
+      // Anything outside the Unicode scalar range would throw a RangeError out
+      // of String.fromCodePoint, escaping this module's error type.
+      if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        throw new SkillMarkdownError(`invalid unicode escape on line ${line}`);
+      }
+      result += String.fromCodePoint(codePoint);
       index += width;
     } else if (escape === '"' || escape === "\\" || escape === "/") result += escape;
     else throw new SkillMarkdownError(`unsupported escape \\${escape} on line ${line}`);
@@ -74,20 +85,47 @@ function unescapeDoubleQuoted(raw: string, line: number): string {
   return result;
 }
 
+/**
+ * Index of the quote closing the scalar that starts at `value[0]`, or -1.
+ * Honors a backslash-escaped quote inside double quotes and `''` inside single
+ * quotes, so the terminator is found rather than assumed to be the last
+ * character.
+ */
+function closingQuoteIndex(value: string): number {
+  const quote = value[0];
+  for (let index = 1; index < value.length; index++) {
+    if (quote === '"' && value[index] === "\\") {
+      index++;
+      continue;
+    }
+    if (value[index] !== quote) continue;
+    if (quote === "'" && value[index + 1] === "'") {
+      index++;
+      continue;
+    }
+    return index;
+  }
+  return -1;
+}
+
+/** Everything a quoted scalar may be followed by is whitespace and a comment. */
+function assertOnlyTrailingComment(trailing: string, line: number): void {
+  if (trailing.trim() !== "" && !/^\s+#/.test(trailing)) {
+    throw new SkillMarkdownError(`unexpected text after quoted value on line ${line}`);
+  }
+}
+
 /** Read one inline scalar, rejecting flow maps and multi-document markers. */
 function parseInlineScalar(raw: string, line: number): string {
   const value = raw.trim();
-  if (value.startsWith('"')) {
-    if (!value.endsWith('"') || value.length < 2) {
+  if (value.startsWith('"') || value.startsWith("'")) {
+    const end = closingQuoteIndex(value);
+    if (end === -1) {
       throw new SkillMarkdownError(`unterminated quoted value on line ${line}`);
     }
-    return unescapeDoubleQuoted(value.slice(1, -1), line);
-  }
-  if (value.startsWith("'")) {
-    if (!value.endsWith("'") || value.length < 2) {
-      throw new SkillMarkdownError(`unterminated quoted value on line ${line}`);
-    }
-    return value.slice(1, -1).replace(/''/g, "'");
+    assertOnlyTrailingComment(value.slice(end + 1), line);
+    const inner = value.slice(1, end);
+    return value.startsWith('"') ? unescapeDoubleQuoted(inner, line) : inner.replace(/''/g, "'");
   }
   if (value.startsWith("{")) {
     throw new SkillMarkdownError(`inline maps are not supported (line ${line})`);
@@ -100,10 +138,31 @@ function parseInlineScalar(raw: string, line: number): string {
   return stripInlineComment(value);
 }
 
+/** Split a flow sequence on commas that sit outside quoted entries. */
+function splitFlowEntries(inner: string, line: number): string[] {
+  const entries: string[] = [];
+  let start = 0;
+  for (let index = 0; index < inner.length; index++) {
+    const character = inner[index];
+    if (character === '"' || character === "'") {
+      const end = closingQuoteIndex(inner.slice(index));
+      if (end === -1) throw new SkillMarkdownError(`unterminated quoted value on line ${line}`);
+      index += end;
+      continue;
+    }
+    if (character === ",") {
+      entries.push(inner.slice(start, index));
+      start = index + 1;
+    }
+  }
+  entries.push(inner.slice(start));
+  return entries;
+}
+
 function parseFlowSequence(raw: string, line: number): string[] {
   const inner = raw.trim().slice(1, -1).trim();
   if (inner === "") return [];
-  return inner.split(",").map((entry) => parseInlineScalar(entry, line));
+  return splitFlowEntries(inner, line).map((entry) => parseInlineScalar(entry, line));
 }
 
 /**
@@ -116,7 +175,7 @@ function parseBlockScalar(
   start: number,
   line: number
 ): { value: string; next: number } {
-  const match = /^([|>])([-+]?)$/.exec(header.trim());
+  const match = /^([|>])(-?)$/.exec(header.trim());
   if (!match) throw new SkillMarkdownError(`unsupported block scalar header on line ${line}`);
   const [, style, chomping] = match;
   const collected: string[] = [];
