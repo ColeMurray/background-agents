@@ -25,6 +25,32 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     reasoningEffort?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: parentName,
+      title: "Parent",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: opts?.model ?? "anthropic/claude-sonnet-4-6",
+      reasoningEffort: opts?.reasoningEffort ?? null,
+      baseBranch: null,
+      status: "active",
+      parentSessionId: opts?.parentSessionId ?? null,
+      spawnSource: opts?.spawnSource ?? "user",
+      spawnDepth: opts?.spawnDepth ?? 0,
+      automationId: opts?.automationId ?? null,
+      automationRunId: opts?.automationRunId ?? null,
+      environmentId: opts?.environmentId ?? null,
+      userId: opts?.canonicalUserId ?? null,
+      providerAuth: [
+        { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+        { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
     const { stub } = await initNamedSessionDO(parentName, {
       repoOwner: "acme",
       repoName: "web-app",
@@ -51,28 +77,6 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       status: "processing",
       createdAt: Date.now(),
       startedAt: Date.now(),
-    });
-
-    const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
-    await store.create({
-      id: parentName,
-      title: "Parent",
-      repoOwner: "acme",
-      repoName: "web-app",
-      model: opts?.model ?? "anthropic/claude-sonnet-4-6",
-      reasoningEffort: opts?.reasoningEffort ?? null,
-      baseBranch: null,
-      status: "active",
-      parentSessionId: opts?.parentSessionId ?? null,
-      spawnSource: opts?.spawnSource ?? "user",
-      spawnDepth: opts?.spawnDepth ?? 0,
-      automationId: opts?.automationId ?? null,
-      automationRunId: opts?.automationRunId ?? null,
-      environmentId: opts?.environmentId ?? null,
-      userId: opts?.canonicalUserId ?? null,
-      createdAt: now,
-      updatedAt: now,
     });
 
     return { parentName, stub, sandboxToken, store, now };

@@ -4,7 +4,17 @@ import {
   generateInstallationToken,
   postReaction,
   checkSenderPermission,
+  GITHUB_API_REQUEST_TIMEOUT_MS,
 } from "../src/github-auth";
+
+function stalledFetch() {
+  return vi.mocked(globalThis.fetch).mockImplementation(
+    (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      })
+  );
+}
 
 /** Generate a PKCS#8 PEM RSA key pair for testing. */
 async function generateTestKeyPair(): Promise<{ privateKeyPem: string }> {
@@ -67,6 +77,7 @@ describe("postReaction", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
   it("calls fetch with correct parameters", async () => {
@@ -84,6 +95,7 @@ describe("postReaction", () => {
         "User-Agent": "Open-Inspect",
       },
       body: JSON.stringify({ content: "eyes" }),
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -134,6 +146,18 @@ describe("postReaction", () => {
       })
     );
   });
+
+  it("returns false when a stalled reaction reaches its deadline", async () => {
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    stalledFetch();
+
+    const resultPromise = postReaction("tok", "https://api.github.com/test", "eyes");
+    timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
+
+    await expect(resultPromise).resolves.toBe(false);
+    expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
+  });
 });
 
 describe("generateInstallationToken", () => {
@@ -145,6 +169,7 @@ describe("generateInstallationToken", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
   it("returns the token from a valid GitHub response", async () => {
@@ -189,6 +214,24 @@ describe("generateInstallationToken", () => {
       })
     ).rejects.toThrow("Failed to get installation token: invalid response");
   });
+
+  it("rejects when a stalled installation-token request reaches its deadline", async () => {
+    const { privateKeyPem } = await generateTestKeyPair();
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    stalledFetch();
+
+    const tokenPromise = generateInstallationToken({
+      appId: "12345",
+      privateKey: privateKeyPem,
+      installationId: "67890",
+    });
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
+
+    await expect(tokenPromise).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
+  });
 });
 
 describe("checkSenderPermission", () => {
@@ -200,6 +243,7 @@ describe("checkSenderPermission", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
   it("returns hasPermission true for write permission", async () => {
@@ -277,6 +321,7 @@ describe("checkSenderPermission", () => {
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": "Open-Inspect",
         },
+        signal: expect.any(AbortSignal),
       }
     );
   });
@@ -293,5 +338,17 @@ describe("checkSenderPermission", () => {
         headers: expect.objectContaining({ "User-Agent": "Acme Bot" }),
       })
     );
+  });
+
+  it("fails closed when a stalled permission check reaches its deadline", async () => {
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    stalledFetch();
+
+    const resultPromise = checkSenderPermission("tok", "acme", "widgets", "alice");
+    timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
+
+    await expect(resultPromise).resolves.toEqual({ hasPermission: false, error: true });
+    expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
   });
 });

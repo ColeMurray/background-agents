@@ -29,6 +29,7 @@ function createProcessor() {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
+    recordReportedSandboxRuntimeVersion: vi.fn(),
     getProcessingMessage,
     addSessionCost: vi.fn(),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
@@ -64,7 +65,7 @@ function createProcessor() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
   const projectTerminalMessage = vi.fn(async () => {});
@@ -74,7 +75,6 @@ function createProcessor() {
   const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
-  const waitUntil = vi.fn();
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -82,9 +82,13 @@ function createProcessor() {
     error: vi.fn(),
     child: vi.fn(),
   };
+  const waitUntil = vi.fn((task: Promise<unknown>) =>
+    task.catch((error) => log.error("background_task.failed", { error }))
+  );
+  const backgroundTasks = { submit: waitUntil };
 
   const processor = new SessionSandboxEventProcessor(
-    { waitUntil },
+    backgroundTasks,
     () => log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as SandboxRepository,
@@ -157,10 +161,9 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2000,
     });
 
-    const settled = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
+    const settled = await Promise.allSettled(h.waitUntil.mock.results.map(({ value }) => value));
     expect(settled.every(({ status }) => status === "fulfilled")).toBe(true);
-    expect(h.log.error).toHaveBeenCalledWith("snapshot.trigger.background_error", {
-      reason: "execution_complete",
+    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
       error: expect.any(Error),
     });
   });
@@ -210,6 +213,37 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
 
     expect(h.diffService.pinBaselines).toHaveBeenCalledWith(event);
+  });
+
+  it("records the reported runtime version on ready", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent({
+      type: "ready",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      runtimeVersion: "v59-opencode-1-18-18",
+    });
+
+    expect(h.repository.recordReportedSandboxRuntimeVersion).toHaveBeenCalledWith(
+      "v59-opencode-1-18-18"
+    );
+  });
+
+  it("records a null runtime version when the sandbox reports none", async () => {
+    const h = createProcessor();
+
+    // A replacement sandbox that reports nothing must not inherit its
+    // predecessor's version, or a snapshot it takes is stamped with a runtime
+    // that never produced it. Spawn clears the column; this write keeps it
+    // clear rather than filling it in.
+    await h.processor.processSandboxEvent({
+      type: "ready",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+    });
+
+    expect(h.repository.recordReportedSandboxRuntimeVersion).toHaveBeenCalledWith(null);
   });
 
   it("persists token event and broadcasts it", async () => {

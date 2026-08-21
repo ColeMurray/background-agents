@@ -1,6 +1,7 @@
 import type { Logger } from "../../logger";
 import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
-import type { AlarmScheduler, SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
+import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
+import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
 import type { MessageRepository } from "../message-repository";
 
@@ -56,7 +57,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
           // An earlier lifecycle alarm has consumed the Durable Object's single
           // alarm slot. Reassert this message's deadline before lifecycle handling
           // schedules its next check so stuck-message recovery cannot be delayed.
-          await deps.alarmScheduler.scheduleAlarm(processing.started_at + deps.executionTimeoutMs);
+          await deps.alarmScheduler.schedule(processing.started_at + deps.executionTimeoutMs);
         }
       }
 

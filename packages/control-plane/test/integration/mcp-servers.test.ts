@@ -5,6 +5,7 @@ import { serviceFetch } from "./helpers";
 
 interface McpServerMetadata {
   id: string;
+  revision: number;
   name: string;
   type: "local" | "remote";
   command?: string[];
@@ -37,6 +38,7 @@ describe("MCP Servers API", () => {
       expect(body.hasEnv).toBe(true);
       expect(body.enabled).toBe(true);
       expect(body.id).toBeTruthy();
+      expect(body.revision).toBe(1);
     });
 
     it("creates a remote server", async () => {
@@ -258,6 +260,73 @@ describe("MCP Servers API", () => {
       const body = await response.json<McpServerMetadata>();
       expect(body.name).toBe("updated-name");
       expect(body.url).toBe("https://new.example.com");
+      expect(body.revision).toBe(2);
+    });
+
+    it("rejects a stale revision and accepts a retry from the latest revision", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "concurrent-update",
+          type: "remote",
+          url: "https://original.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const updates = await Promise.all(
+        ["first-writer", "second-writer"].map((name) =>
+          serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ name, revision: created.revision }),
+          })
+        )
+      );
+      expect(updates.map((response) => response.status).sort()).toEqual([200, 409]);
+      const successfulUpdate = updates.find((response) => response.status === 200);
+      expect(successfulUpdate).toBeDefined();
+      const revised = await successfulUpdate!.json<McpServerMetadata>();
+
+      const retry = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: "retry-writer", revision: revised.revision }),
+      });
+      expect(retry.status).toBe(200);
+      await expect(retry.json<McpServerMetadata>()).resolves.toMatchObject({
+        name: "retry-writer",
+        revision: 3,
+      });
+    });
+
+    it("rejects stale revisions before validating against newer row state", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "stale-validation",
+          type: "remote",
+          url: "https://original.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const typeChange = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          type: "local",
+          command: ["npx", "tool"],
+          revision: created.revision,
+        }),
+      });
+      expect(typeChange.status).toBe(200);
+
+      const staleUpdate = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          url: "https://stale.example.com",
+          revision: created.revision,
+        }),
+      });
+      expect(staleUpdate.status).toBe(409);
     });
 
     it("returns 404 for missing server", async () => {
@@ -290,7 +359,12 @@ describe("MCP Servers API", () => {
     it("changes a local server to remote without retaining command", async () => {
       const createRes = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        body: JSON.stringify({ name: "local-to-remote", type: "local", command: ["npx", "x"] }),
+        body: JSON.stringify({
+          name: "local-to-remote",
+          type: "local",
+          command: ["npx", "x"],
+          env: { TOKEN: "secret" },
+        }),
       });
       const created = await createRes.json<McpServerMetadata>();
 
@@ -304,10 +378,11 @@ describe("MCP Servers API", () => {
       expect(body.type).toBe("remote");
       expect(body.url).toBe("https://remote.example.com");
       expect(body.command).toBeUndefined();
-      const row = await env.DB.prepare("SELECT command FROM mcp_servers WHERE id = ?")
+      const row = await env.DB.prepare("SELECT command, env FROM mcp_servers WHERE id = ?")
         .bind(created.id)
-        .first<{ command: string | null }>();
+        .first<{ command: string | null; env: string }>();
       expect(row?.command).toBeNull();
+      expect(row?.env).toBe("{}");
     });
 
     it("changes a remote server to local without retaining URL", async () => {
@@ -317,6 +392,7 @@ describe("MCP Servers API", () => {
           name: "remote-to-local",
           type: "remote",
           url: "https://remote.example.com",
+          headers: { Authorization: "secret" },
         }),
       });
       const created = await createRes.json<McpServerMetadata>();
@@ -331,10 +407,11 @@ describe("MCP Servers API", () => {
       expect(body.type).toBe("local");
       expect(body.command).toEqual(["npx", "x"]);
       expect(body.url).toBeUndefined();
-      const row = await env.DB.prepare("SELECT url FROM mcp_servers WHERE id = ?")
+      const row = await env.DB.prepare("SELECT url, env FROM mcp_servers WHERE id = ?")
         .bind(created.id)
-        .first<{ url: string | null }>();
+        .first<{ url: string | null; env: string }>();
       expect(row?.url).toBeNull();
+      expect(row?.env).toBe("{}");
     });
 
     it.each([

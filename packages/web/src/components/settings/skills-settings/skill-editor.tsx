@@ -20,10 +20,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { assignmentKey, buildAssignments, SkillAssignments } from "./skill-assignments";
+import { SkillAssignments } from "./skill-assignments";
 import { SkillFiles } from "./skill-files";
 import { SkillReimport } from "./skill-reimport";
-import { errorMessage } from "./shared";
+import { assignmentKey, buildAssignments, errorMessage } from "./utils";
 
 export function SkillEditor({
   skill,

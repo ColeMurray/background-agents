@@ -6,7 +6,9 @@ import {
   reimportSkillPreviewInputSchema,
   replaceSkillContentAndAssignmentsInputSchema,
   setSkillEnabledInputSchema,
+  SKILL_LIST_PAGE_SIZE,
   skillImportPreviewInputSchema,
+  skillNameSchema,
   skillResolutionPreviewInputSchema,
   updateSkillProfileInputSchema,
   type SkillImportPreviewResponse,
@@ -34,6 +36,8 @@ import {
   parsePattern,
   type RequestContext,
   type Route,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
 } from "./shared";
 
 const log = createLogger("router:skills");
@@ -91,12 +95,29 @@ function resourceId(match: RegExpMatchArray): string | Response {
 }
 
 async function handleListSkills(
-  _request: Request,
+  request: Request,
   _env: Env,
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  return json({ skills: await new SkillStore(ctx.db).list() });
+  const url = new URL(request.url);
+  const limitValue = url.searchParams.get("limit");
+  const cursorValue = url.searchParams.get("cursor");
+  if (url.searchParams.getAll("limit").length > 1 || url.searchParams.getAll("cursor").length > 1) {
+    return error("Invalid skill list query", 400);
+  }
+  const limit = limitValue === null ? SKILL_LIST_PAGE_SIZE : Number(limitValue);
+  if (!Number.isInteger(limit) || limit < 1 || limit > SKILL_LIST_PAGE_SIZE) {
+    return error("Invalid limit", 400);
+  }
+  const parsedCursor = cursorValue === null ? null : skillNameSchema.safeParse(cursorValue);
+  if (parsedCursor !== null && !parsedCursor.success) return error("Invalid cursor", 400);
+  return json(
+    await new SkillStore(ctx.db).list({
+      limit,
+      cursor: parsedCursor === null ? null : parsedCursor.data,
+    })
+  );
 }
 
 async function handleGetSkill(
@@ -593,7 +614,7 @@ function profileWriteError(value: unknown): Response {
   throw value;
 }
 
-export const skillRoutes: Route[] = [
+export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
   { method: "GET", pattern: parsePattern("/skills"), handler: handleListSkills },
   { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
   {
@@ -650,4 +671,4 @@ export const skillRoutes: Route[] = [
     pattern: parsePattern("/skill-profiles/:id"),
     handler: handleDeleteProfile,
   },
-];
+]);

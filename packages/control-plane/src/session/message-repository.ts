@@ -242,13 +242,18 @@ export class MessageRepository {
     messageId: string,
     startedAt: number,
     userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>
-  ): void {
-    this.transactionSync(() => {
-      this.sql.exec(
-        `UPDATE messages SET status = 'processing', started_at = ? WHERE id = ?`,
+  ): boolean {
+    return this.transactionSync(() => {
+      const claimed = this.sql.exec(
+        `UPDATE messages SET status = 'processing', started_at = ?
+         WHERE id = ? AND status = 'pending'
+           AND NOT EXISTS (SELECT 1 FROM messages WHERE status = 'processing')
+         RETURNING id`,
         startedAt,
         messageId
       );
+      if (claimed.toArray().length !== 1) return false;
+
       this.eventRepository.createEvent({
         id: `user_message:${messageId}`,
         type: "user_message",
@@ -256,14 +261,22 @@ export class MessageRepository {
         messageId,
         createdAt: startedAt,
       });
+      return true;
     });
   }
 
   updateMessageToPending(messageId: string): void {
-    this.sql.exec(
-      `UPDATE messages SET status = 'pending', started_at = NULL WHERE id = ? AND status = 'processing'`,
-      messageId
-    );
+    this.transactionSync(() => {
+      const updated = this.sql.exec(
+        `UPDATE messages SET status = 'pending', started_at = NULL
+         WHERE id = ? AND status = 'processing'
+         RETURNING id`,
+        messageId
+      );
+      if (updated.toArray().length === 1) {
+        this.sql.exec(`DELETE FROM events WHERE id = ?`, `user_message:${messageId}`);
+      }
+    });
   }
 
   recordMessageCompletion(

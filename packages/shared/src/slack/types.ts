@@ -23,6 +23,7 @@ export const SLACK_DENIAL_REASONS = [
   "channel_not_found_or_forbidden",
   "rate_limited",
   "slack_api_error",
+  "delivery_unknown",
   "invalid_input",
   "bridge_error",
 ] as const;
@@ -40,6 +41,7 @@ export const SLACK_DENIAL_STATUS: Record<SlackWireDenialReason, number> = {
   channel_not_found_or_forbidden: 404,
   rate_limited: 429,
   slack_api_error: 502,
+  delivery_unknown: 502,
   invalid_input: 400,
 };
 

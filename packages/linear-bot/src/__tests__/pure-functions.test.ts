@@ -4,11 +4,9 @@ import {
   resolveSessionModelSettings,
   resolveStaticTarget,
 } from "../model-resolution";
-import { isValidPayload } from "../callbacks";
 import { buildOAuthSuccessHtml } from "../index";
 import { matchExplicitRepo } from "../target-resolution";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
-import type { CompletionCallback } from "../types";
 
 describe("buildOAuthSuccessHtml", () => {
   it("renders the configured app name in the heading", () => {
@@ -276,48 +274,5 @@ describe("resolveSessionModelSettings", () => {
 
     expect(result.model).toBe("anthropic/claude-opus-4-6");
     expect(result.reasoningEffort).toBe("max");
-  });
-});
-
-// ─── isValidPayload ─────────────────────────────────────────────────────────
-
-describe("isValidPayload", () => {
-  const validPayload: CompletionCallback = {
-    sessionId: "sess-1",
-    messageId: "msg-1",
-    success: true,
-    timestamp: Date.now(),
-    signature: "abc123",
-    context: {
-      source: "linear",
-      issueId: "issue-1",
-      issueIdentifier: "ENG-123",
-      issueUrl: "https://linear.app/issue/ENG-123",
-      repoFullName: "org/repo",
-      model: "claude-sonnet-4-5",
-    },
-  };
-
-  it("accepts a complete payload", () => {
-    expect(isValidPayload(validPayload)).toBe(true);
-  });
-
-  it("rejects null", () => {
-    expect(isValidPayload(null)).toBe(false);
-  });
-
-  it("rejects missing sessionId", () => {
-    const { sessionId: _sessionId, ...rest } = validPayload;
-    expect(isValidPayload(rest)).toBe(false);
-  });
-
-  it("rejects missing context.issueId", () => {
-    const bad = { ...validPayload, context: { ...validPayload.context, issueId: undefined } };
-    expect(isValidPayload(bad)).toBe(false);
-  });
-
-  it("rejects missing signature", () => {
-    const { signature: _signature, ...rest } = validPayload;
-    expect(isValidPayload(rest)).toBe(false);
   });
 });

@@ -145,7 +145,7 @@ function buildQueue() {
       () => null as { id: string; created_at: number } | null
     ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
-    startMessageProcessing: vi.fn(),
+    startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
     updateMessageToProcessing: vi.fn(),
     updateMessageToPending: vi.fn(),
     getParticipantById: vi.fn(() => createParticipant()),
@@ -182,7 +182,7 @@ function buildQueue() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const sessionStatus = {
     transition: vi.fn(async (_status: string) => true),
     reconcileAfterExecution: vi.fn(async (_success: boolean) => {}),
@@ -192,14 +192,18 @@ function buildQueue() {
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
+    reportSandboxError: vi.fn((_reason: string) => {}),
   };
-  const waitUntil = vi.fn();
+  const waitUntil = vi.fn((task: Promise<unknown>) =>
+    task.catch((error) => log.error("background_task.failed", { error }))
+  );
+  const backgroundTasks = { submit: waitUntil };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
-    { waitUntil },
+    backgroundTasks,
     log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
@@ -214,7 +218,19 @@ function buildQueue() {
     sandboxLifecycle,
     null,
     "github",
-    createEarliestAlarmScheduler({ getAlarm, setAlarm }),
+    createEarliestAlarmScheduler(
+      { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
+      {
+        pending: vi.fn(() => null),
+        earliest: vi.fn(() => null),
+        cancelled: vi.fn(() => false),
+        setPending: vi.fn(),
+        activate: vi.fn(),
+        clear: vi.fn(),
+        beginDelivery: vi.fn(() => null),
+        completeDelivery: vi.fn(),
+      }
+    ),
     EXECUTION_TIMEOUT_MS
   );
 
@@ -331,20 +347,25 @@ describe("SessionMessageQueue", () => {
 
     expect(h.waitUntil).toHaveBeenCalledTimes(1);
     resolveSpawn();
-    await h.waitUntil.mock.calls[0][0];
+    await h.waitUntil.mock.results[0]!.value;
   });
 
-  it("broadcasts sandbox_error when the background spawn throws", async () => {
+  it("reports sandbox_error when the background spawn throws", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
     h.sandboxLifecycle.spawnSandbox.mockRejectedValue(new Error("modal exploded"));
 
     await h.queue.processMessageQueue();
-    await h.waitUntil.mock.calls[0][0];
+    await h.waitUntil.mock.results[0]!.value;
 
-    expect(h.broadcast).toHaveBeenCalledWith({
-      type: "sandbox_error",
-      error: "modal exploded",
+    // Routed through the lifecycle manager rather than broadcast directly, so
+    // the reason is persisted too and survives the reload someone does to read it.
+    expect(h.sandboxLifecycle.reportSandboxError).toHaveBeenCalledWith("modal exploded");
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sandbox_error" })
+    );
+    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
+      error: expect.any(Error),
     });
   });
 
@@ -705,8 +726,12 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.processMessageQueue();
 
-    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
-    expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+      "msg-unsent",
+      expect.any(Number),
+      expect.objectContaining({ type: "user_message", messageId: "msg-unsent" })
+    );
+    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-unsent");
     expect(
       h.broadcast.mock.calls.filter(
         ([message]) => message.type === "sandbox_event" && message.event.type === "user_message"
@@ -715,6 +740,20 @@ describe("SessionMessageQueue", () => {
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "prompt_dispatch_send_failed"
+    );
+  });
+
+  it("does not dispatch when another worker wins the processing claim", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-lost" }));
+    h.repository.startMessageProcessing.mockReturnValue(false);
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "processing_status" })
     );
   });
 
@@ -942,6 +981,32 @@ describe("SessionMessageQueue", () => {
     expect(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
     ).toBeLessThan(h.wsManager.send.mock.invocationCallOrder[0]);
+  });
+
+  it("projects terminal unread state before broadcasting synthetic completion", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
+      createMessage({ id: "msg-ordered", status: "processing", created_at: 900 })
+    );
+    let resolveProjection!: () => void;
+    h.projectTerminalMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveProjection = resolve;
+      })
+    );
+
+    await h.queue.stopExecution();
+    expect(h.broadcast).not.toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({ type: "execution_complete" }),
+    });
+
+    resolveProjection();
+    await h.waitUntil.mock.calls[0][0];
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({ type: "execution_complete" }),
+    });
   });
 
   it("waits for sandbox stop confirmation before dispatching the next prompt", async () => {

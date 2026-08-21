@@ -14,7 +14,11 @@ import pytest
 
 from sandbox_runtime.opencode_server import OpenCodeServer
 from sandbox_runtime.repository_boot import RepositoryBoot
-from sandbox_runtime.repository_sync import RepositorySyncResult
+from sandbox_runtime.repository_sync import (
+    RepositorySyncOutcome,
+    RepositorySyncResult,
+    RepositorySyncStatus,
+)
 from sandbox_runtime.runtime_config import BootMode
 from tests.runtime_helpers import make_repository_boot, make_runtime_config
 
@@ -47,12 +51,25 @@ def _make_repository_boot(tmp_path, session_config: str = MULTI_SESSION_CONFIG) 
     )
 
 
+def _sync_result(
+    repositories, statuses: tuple[RepositorySyncStatus, ...] | None = None
+) -> RepositorySyncResult:
+    repositories = tuple(repositories)
+    if statuses is None:
+        statuses = (RepositorySyncStatus.SUCCEEDED,) * len(repositories)
+    return RepositorySyncResult(
+        repositories,
+        tuple(
+            RepositorySyncOutcome(repo, status)
+            for repo, status in zip(repositories, statuses, strict=True)
+        ),
+    )
+
+
 def _mock_repository_boot(sup: RepositoryBoot) -> None:
     sup._write_repo_manifest = MagicMock()
     sup.synchronizer.ensure_credentials_configured = AsyncMock()
-    sup.synchronizer.sync = AsyncMock(
-        return_value=RepositorySyncResult(tuple(sup.repositories), ())
-    )
+    sup.synchronizer.sync = AsyncMock(return_value=_sync_result(sup.repositories))
     sup.hooks.run_setup = AsyncMock(return_value=True)
     sup.hooks.run_start = AsyncMock(return_value=True)
 
@@ -191,7 +208,10 @@ class TestSyncRepositories:
         sup = _make_repository_boot(tmp_path)
         _mock_repository_boot(sup)
         sup.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(tuple(sup.repositories), (sup.repositories[1],))
+            return_value=_sync_result(
+                sup.repositories,
+                (RepositorySyncStatus.SUCCEEDED, RepositorySyncStatus.FAILED),
+            )
         )
 
         with (
@@ -209,7 +229,10 @@ class TestSyncRepositories:
         sup = _make_repository_boot(tmp_path)
         _mock_repository_boot(sup)
         sup.synchronizer.sync = AsyncMock(
-            return_value=RepositorySyncResult(tuple(sup.repositories), (sup.repositories[1],))
+            return_value=_sync_result(
+                sup.repositories,
+                (RepositorySyncStatus.SUCCEEDED, RepositorySyncStatus.FAILED),
+            )
         )
 
         with (
@@ -223,6 +246,43 @@ class TestSyncRepositories:
         warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
         assert warning["scope"] == "sync"
         assert warning["repoName"] == "backend"
+
+    @pytest.mark.parametrize("boot_mode", [BootMode.FRESH, BootMode.BUILD])
+    @pytest.mark.asyncio
+    async def test_fresh_and_build_timeouts_are_fatal(self, tmp_path, boot_mode):
+        sup = _make_repository_boot(tmp_path)
+        _mock_repository_boot(sup)
+        sup.synchronizer.sync = AsyncMock(
+            return_value=_sync_result(
+                sup.repositories,
+                (RepositorySyncStatus.SUCCEEDED, RepositorySyncStatus.TIMED_OUT),
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="git sync timed out for acme/backend"):
+            await sup.boot(boot_mode, [])
+
+    @pytest.mark.parametrize("boot_mode", [BootMode.SNAPSHOT_RESTORE, BootMode.REPO_IMAGE])
+    @pytest.mark.asyncio
+    async def test_restore_and_repo_image_timeouts_warn_and_continue(self, tmp_path, boot_mode):
+        sup = _make_repository_boot(tmp_path)
+        _mock_repository_boot(sup)
+        sup.synchronizer.sync = AsyncMock(
+            return_value=_sync_result(
+                sup.repositories,
+                (RepositorySyncStatus.SUCCEEDED, RepositorySyncStatus.TIMED_OUT),
+            )
+        )
+
+        with patch(
+            "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+            str(tmp_path / "warnings.jsonl"),
+        ):
+            await sup.boot(boot_mode, [])
+
+        warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
+        assert warning["repoName"] == "backend"
+        assert warning["message"].startswith("Timed out updating acme/backend")
 
 
 class TestHookOrchestration:

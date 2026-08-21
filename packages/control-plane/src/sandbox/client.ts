@@ -13,6 +13,7 @@ import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
 import type { SessionRepositoryInfo } from "./provider";
+import { withRequestDeadline } from "./request-deadline";
 
 const log = createLogger("modal-client");
 
@@ -21,6 +22,11 @@ const MODAL_APP_NAME = "open-inspect";
 
 // Modal's default environment name; unrelated to the git branch named "main".
 const DEFAULT_MODAL_ENVIRONMENT = "main";
+
+export const MODAL_SANDBOX_START_REQUEST_DEADLINE_MS = 60_000;
+// Allows Modal's provider-side snapshot timeout to settle before the client deadline.
+export const MODAL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
+export const MODAL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
 
 const modalErrorResponseSchema = z.object({
   success: z.literal(false),
@@ -172,6 +178,7 @@ export interface CreateSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
+  signal?: AbortSignal;
 }
 
 export interface CreateSandboxResponse {
@@ -206,6 +213,7 @@ export interface RestoreSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
+  signal?: AbortSignal;
 }
 
 export interface RestoreSandboxResponse {
@@ -257,6 +265,7 @@ export interface CreateImageBuildSandboxRequest {
   buildExecutionTimeoutSeconds: number;
   /** Provider-session lifetime, including deferred Queue finalization headroom. */
   providerSessionTimeoutSeconds: number;
+  signal?: AbortSignal;
 }
 
 export interface CreateImageBuildSandboxResponse {
@@ -267,6 +276,7 @@ export interface StartImageBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
   callbackToken: string;
+  signal?: AbortSignal;
 }
 
 export interface TerminateImageBuildSandboxRequest {
@@ -316,6 +326,33 @@ export class ModalClient {
   private deleteProviderImageUrl: string;
   private secret: string;
 
+  private async postJson<T>(
+    url: string,
+    endpoint: string,
+    deadlineMs: number,
+    body: unknown,
+    schema: z.ZodType<T>,
+    correlation: CorrelationContext | undefined,
+    callerSignal: AbortSignal | undefined,
+    onResponse: (status: number) => void
+  ): Promise<T> {
+    const headers = await this.getPostHeaders(correlation);
+    return withRequestDeadline("Modal", endpoint, deadlineMs, callerSignal, async (signal) => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        signal,
+        body: JSON.stringify(body),
+      });
+      onResponse(response.status);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+      }
+      return parseModalApiResponse(schema, await response.json());
+    });
+  }
+
   constructor(secret: string, workspace: string, environmentWebSuffix?: string) {
     if (!secret) {
       throw new Error("ModalClient requires MODAL_API_SECRET for authentication");
@@ -364,11 +401,11 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.createSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.createSandboxUrl,
+        endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+        {
           session_id: request.sessionId,
           sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
           repo_owner: request.repoOwner,
@@ -394,17 +431,12 @@ export class ModalClient {
           repositories: request.repositories?.length
             ? request.repositories.map(toRepositoryConfigPayload)
             : null,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(createSandboxModalResponseSchema, await response.json());
+        },
+        createSandboxModalResponseSchema,
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
+      );
 
       if (!result.success) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
@@ -451,11 +483,11 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.restoreSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.restoreSandboxUrl,
+        endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+        {
           snapshot_image_id: request.snapshotImageId,
           session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
@@ -467,19 +499,11 @@ export class ModalClient {
           vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         restoreSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
 
       if (!result.success) {
@@ -526,28 +550,19 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.snapshotSandboxUrl, {
-        method: "POST",
-        headers,
-        signal: request.signal,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.snapshotSandboxUrl,
+        endpoint,
+        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
+        {
           sandbox_id: request.providerObjectId,
           session_id: request.sessionId,
           reason: request.reason,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         snapshotSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
       if (!result.success) {
         return { success: false, error: result.error || "Unknown snapshot error" };
@@ -587,26 +602,18 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.snapshotBuildSandboxUrl, {
-        method: "POST",
-        headers,
-        signal: request.signal,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.snapshotBuildSandboxUrl,
+        endpoint,
+        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
+        {
           build_id: request.buildId,
           provider_session_id: request.providerSessionId,
-        }),
-      });
-
-      httpStatus = response.status;
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         snapshotSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
       if (!result.success) {
         return { success: false, error: result.error || "Unknown snapshot error" };
@@ -642,11 +649,11 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.createImageBuildSandboxUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.createImageBuildSandboxUrl,
+        endpoint,
+        MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+        {
           scope_kind: request.scopeKind,
           scope_id: request.scopeId,
           build_id: request.buildId,
@@ -659,19 +666,11 @@ export class ModalClient {
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
           provider_session_timeout_seconds: request.providerSessionTimeoutSeconds,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         createImageBuildSandboxModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
 
       if (result.success === false) {
@@ -705,6 +704,7 @@ export class ModalClient {
     await this.postImageBuildOperation(
       this.startImageBuildSandboxUrl,
       "startImageBuildSandbox",
+      MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
       request,
       {
         build_id: request.buildId,
@@ -722,6 +722,7 @@ export class ModalClient {
     await this.postImageBuildOperation(
       this.terminateImageBuildSandboxUrl,
       "terminateImageBuildSandbox",
+      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
       request,
       {
         build_id: request.buildId,
@@ -735,6 +736,7 @@ export class ModalClient {
   private async postImageBuildOperation(
     url: string,
     endpoint: string,
+    deadlineMs: number,
     request: { buildId: string; providerSessionId: string; signal?: AbortSignal },
     body: Record<string, unknown>,
     correlation?: CorrelationContext
@@ -743,22 +745,15 @@ export class ModalClient {
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: await this.getPostHeaders(correlation),
-        signal: request.signal,
-        body: JSON.stringify(body),
-      });
-      httpStatus = response.status;
-      if (!response.ok) {
-        throw new ModalApiError(
-          `Modal API error: ${response.status} ${await response.text()}`,
-          response.status
-        );
-      }
-      const result = parseModalApiResponse(
+      const result = await this.postJson(
+        url,
+        endpoint,
+        deadlineMs,
+        body,
         imageBuildOperationModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
       if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
@@ -792,26 +787,17 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.deleteProviderImageUrl, {
-        method: "POST",
-        headers,
-        signal: request.signal,
-        body: JSON.stringify({
+      const result = await this.postJson(
+        this.deleteProviderImageUrl,
+        endpoint,
+        MODAL_CLEANUP_REQUEST_DEADLINE_MS,
+        {
           provider_image_id: request.providerImageId,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = parseModalApiResponse(
+        },
         deleteProviderImageModalResponseSchema,
-        await response.json()
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
       );
 
       if (result.success === false) {

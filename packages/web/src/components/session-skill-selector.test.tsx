@@ -1,17 +1,14 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionSkillSelector } from "./session-skill-selector";
 
 expect.extend(matchers);
 
-const { resolveSkillPreviewMock } = vi.hoisted(() => ({ resolveSkillPreviewMock: vi.fn() }));
-
 vi.mock("@/hooks/use-managed-skills", () => ({
-  resolveSkillPreview: resolveSkillPreviewMock,
   useSkillProfiles: () => ({ profiles: [], loading: false }),
 }));
 
@@ -21,28 +18,32 @@ vi.mock("@/components/ui/combobox", () => ({
 
 afterEach(() => {
   cleanup();
-  resolveSkillPreviewMock.mockReset();
 });
 
 describe("SessionSkillSelector", () => {
-  it("clears preview state when the target becomes unavailable", async () => {
-    resolveSkillPreviewMock.mockResolvedValue({
-      skills: [{ id: "skill-1" }],
-      totalBytes: 1,
-      ignoredProfileSkillIds: ["skill-2", "skill-3"],
-    });
+  it("renders supplied preview counts and clears them without a target", () => {
     const { rerender } = render(
       <SessionSkillSelector
         value={{ mode: "all" }}
         onChange={vi.fn()}
         target={{ repositories: [] }}
+        preview={{ skills: [], totalBytes: 1, ignoredProfileSkillIds: ["skill-2", "skill-3"] }}
+        previewLoading={false}
       />
     );
-    await screen.findByText("2 ignored");
+    expect(screen.getByText("2 ignored")).toBeInTheDocument();
 
-    rerender(<SessionSkillSelector value={{ mode: "all" }} onChange={vi.fn()} target={null} />);
+    rerender(
+      <SessionSkillSelector
+        value={{ mode: "all" }}
+        onChange={vi.fn()}
+        target={null}
+        preview={null}
+        previewLoading={false}
+      />
+    );
 
-    await waitFor(() => expect(screen.queryByText("2 ignored")).not.toBeInTheDocument());
+    expect(screen.queryByText("2 ignored")).not.toBeInTheDocument();
     expect(screen.queryByText("...")).not.toBeInTheDocument();
   });
 });

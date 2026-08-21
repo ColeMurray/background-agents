@@ -1,9 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+  MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
   buildModalSandboxDashboardUrl,
   buildModalWorkspaceSlug,
   createModalClient,
 } from "./client";
+import { RequestDeadlineError } from "./request-deadline";
+
+function rejectWhenAborted(signal: AbortSignal): Promise<Response> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
+function stalledBodyResponse(signal: AbortSignal): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        if (signal.aborted) {
+          controller.error(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
 
 describe("buildModalWorkspaceSlug", () => {
   it("uses the raw workspace when the Modal environment has no web suffix", () => {
@@ -70,7 +95,85 @@ describe("buildModalSandboxDashboardUrl", () => {
 
 describe("ModalClient", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("times out image-build creation when response headers stall", async () => {
+    vi.useFakeTimers();
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => (markFetchStarted = resolve));
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      markFetchStarted();
+      return rejectWhenAborted(init?.signal as AbortSignal);
+    });
+
+    const request = createModalClient("secret", "acme").createImageBuildSandbox({
+      scopeKind: "repo",
+      scopeId: "acme/repo",
+      buildId: "imgb-1",
+      repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
+      callbackUrl: "https://cp.test/image-builds/build-complete",
+      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+      buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
+    });
+
+    const rejection = expect(request).rejects.toMatchObject({
+      name: RequestDeadlineError.name,
+      provider: "Modal",
+      endpoint: "createImageBuildSandbox",
+      timeoutMs: MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+    });
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(MODAL_SANDBOX_START_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
+  it("keeps the deadline armed while reading a Modal response body", async () => {
+    vi.useFakeTimers();
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => (markFetchStarted = resolve));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      markFetchStarted();
+      return Promise.resolve(stalledBodyResponse(init?.signal as AbortSignal));
+    });
+
+    const request = createModalClient("secret", "acme").snapshotSandbox({
+      providerObjectId: "mo-1",
+      sessionId: "session-1",
+      reason: "manual",
+    });
+
+    const rejection = expect(request).rejects.toThrow(
+      `Modal request timeout after ${MODAL_SNAPSHOT_REQUEST_DEADLINE_MS}ms (snapshotSandbox)`
+    );
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(MODAL_SNAPSHOT_REQUEST_DEADLINE_MS - 10_000);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+  });
+
+  it("combines caller cancellation with the Modal deadline", async () => {
+    const caller = new AbortController();
+    const callerReason = new DOMException("caller cancelled", "AbortError");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_url, init) => rejectWhenAborted(init?.signal as AbortSignal));
+
+    const request = createModalClient("secret", "acme").snapshotSandbox({
+      providerObjectId: "mo-1",
+      sessionId: "session-1",
+      reason: "manual",
+      signal: caller.signal,
+    });
+    caller.abort(callerReason);
+
+    await expect(request).rejects.toBe(callerReason);
+    const providerSignal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
+    expect(providerSignal).not.toBe(caller.signal);
+    expect(providerSignal.reason).toBe(callerReason);
   });
 
   it("routes the restore session_config through buildSessionConfig (carries mcp_servers)", async () => {

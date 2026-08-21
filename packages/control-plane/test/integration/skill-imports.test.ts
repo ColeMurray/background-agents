@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import type { SkillImportSource } from "@open-inspect/shared/types/skills";
+import { SKILL_LIST_PAGE_SIZE, type SkillImportSource } from "@open-inspect/shared/types/skills";
 import { SkillConflictError, SkillStore } from "../../src/db/skills";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
@@ -41,8 +41,8 @@ describe("managed skill import provenance", () => {
       revisionId: skill.currentRevisionId,
     });
     expect(skill.source?.importedAt).toBeGreaterThan(0);
-    const listed = await skills.list();
-    expect(listed[0].source?.commitSha).toBe(source.commitSha);
+    const listed = await skills.list({ limit: SKILL_LIST_PAGE_SIZE, cursor: null });
+    expect(listed.skills[0].source?.commitSha).toBe(source.commitSha);
   });
 
   it("leaves editor-authored skills without a source", async () => {

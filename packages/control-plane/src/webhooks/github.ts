@@ -1,7 +1,7 @@
 /**
  * GitHub automation event webhook route — internal endpoint that receives
  * pre-normalized GitHubAutomationEvents from the github-bot, proxies them to
- * the SchedulerDO for automation matching, and piggybacks PR lifecycle
+ * the scheduler for automation matching, and piggybacks PR lifecycle
  * tracking (design §5.2) on the same forward. The lifecycle step runs in the
  * background and is additive: its failure never affects automation matching.
  */
@@ -14,7 +14,7 @@ import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import type { RequestContext, Route } from "../routes/shared";
-import { error, parsePattern } from "../routes/shared";
+import { defineRoute, error, GITHUB_USER_OR_SERVICE_ROUTE, parsePattern } from "../routes/shared";
 import { requireEventPoster } from "../auth/identity-enforcement";
 import {
   forwardAutomationEventToScheduler,
@@ -118,13 +118,13 @@ async function handleGitHubAutomationEvent(
   }
 
   const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
-  ctx.executionCtx.waitUntil(lifecycleWork);
+  ctx.executionCtx.submit(lifecycleWork, { name: "github_webhook.lifecycle" });
 
-  return forwardAutomationEventToScheduler(env, validated.event);
+  return forwardAutomationEventToScheduler(env, validated.event, ctx);
 }
 
-export const githubAutomationEventRoute: Route = {
+export const githubAutomationEventRoute: Route = defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
   method: "POST",
   pattern: parsePattern("/internal/github-event"),
   handler: handleGitHubAutomationEvent,
-};
+});

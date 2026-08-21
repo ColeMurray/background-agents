@@ -57,19 +57,17 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   } as unknown as ArtifactRepository;
 
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) } as SessionMessenger;
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) } as SessionMessenger;
 
   const sessionIndex =
     options.sessionIndex === null
       ? null
       : {
           updateStatus: vi.fn(async () => true),
+          repairStatus: vi.fn(async () => true),
           finalizeChildAdmission: vi.fn(async () => {}),
           updateMetrics: vi.fn(async () => true),
         };
-
-  const waitUntil = vi.fn();
-  const ctx = { waitUntil };
 
   const parentFetch = vi.fn(async (_request: Request) => new Response(null, { status: 200 }));
   const parentStub = { fetch: parentFetch };
@@ -85,9 +83,13 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     error: vi.fn(),
     child: vi.fn(),
   };
+  const waitUntil = vi.fn((task: Promise<unknown>) =>
+    task.catch((error) => log.error("background_task.failed", { error }))
+  );
+  const backgroundTasks = { submit: waitUntil };
 
   const service = new SessionStatusService(
-    ctx,
+    backgroundTasks,
     log as unknown as Logger,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
@@ -212,7 +214,7 @@ describe("SessionStatusService.transition", () => {
     expect(h.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("notifies the parent session fire-and-forget via ctx.waitUntil", async () => {
+  it("submits the parent notification as a background job", async () => {
     const h = harness({
       session: createSession({ status: "active", parent_session_id: "parent-1" }),
     });
@@ -333,6 +335,61 @@ describe("SessionStatusService.reconcileAfterQueueRemoval", () => {
   });
 });
 
+describe("SessionStatusService.repairIndexStatus", () => {
+  it("repairs a stale created index row", async () => {
+    const h = harness({ session: createSession({ status: "completed" }) });
+
+    await h.service.repairIndexStatus();
+
+    expect(h.sessionIndex!.repairStatus).toHaveBeenCalledWith("public-session-1", "completed");
+  });
+
+  it("logs and propagates repair failures", async () => {
+    const h = harness({ session: createSession({ status: "completed" }) });
+    const error = new Error("d1 down");
+    h.sessionIndex!.repairStatus.mockRejectedValue(error);
+
+    await expect(h.service.repairIndexStatus()).rejects.toThrow(error);
+
+    expect(h.log.error).toHaveBeenCalledWith(
+      "session_index.update_status.background_error",
+      expect.objectContaining({
+        session_id: "public-session-1",
+        status: "completed",
+        error,
+      })
+    );
+  });
+});
+
+describe("SessionStatusService.settleFromMessageState", () => {
+  it("activates when work is pending", async () => {
+    const h = harness({ session: createSession({ status: "created" }) });
+    h.repository.getPendingOrProcessingCount.mockReturnValue(1);
+
+    await expect(h.service.settleFromMessageState()).resolves.toBe("active");
+
+    expect(h.repository.updateSessionStatus).toHaveBeenCalledWith(
+      "session-1",
+      "active",
+      expect.any(Number)
+    );
+  });
+
+  it("preserves failed as the latest terminal outcome", async () => {
+    const h = harness({ session: createSession({ status: "created" }) });
+    h.repository.getLatestTerminalMessage.mockReturnValue({ status: "failed" } as MessageRow);
+
+    await expect(h.service.settleFromMessageState()).resolves.toBe("failed");
+
+    expect(h.repository.updateSessionStatus).toHaveBeenCalledWith(
+      "session-1",
+      "failed",
+      expect.any(Number)
+    );
+  });
+});
+
 describe("SessionStatusService.notifyParentOfChildUpdate", () => {
   it("posts the child update to the parent Durable Object", async () => {
     const h = harness();
@@ -364,17 +421,11 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
     );
 
     // Drain the fire-and-forget promise handed to waitUntil.
-    await h.waitUntil.mock.calls[0][0];
+    await h.waitUntil.mock.results[0]!.value;
 
-    expect(h.log.error).toHaveBeenCalledWith(
-      "notify_parent.failed",
-      expect.objectContaining({
-        parent_id: "parent-1",
-        child_id: "public-session-1",
-        status: "failed",
-        error: expect.any(Error),
-      })
-    );
+    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
+      error: expect.any(Error),
+    });
   });
 
   it("is a no-op without a parent session id", () => {

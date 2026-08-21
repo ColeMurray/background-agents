@@ -12,9 +12,9 @@ import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { assignmentKey, buildAssignments, SkillAssignments } from "./skill-assignments";
+import { SkillAssignments } from "./skill-assignments";
 import { SkillImportReview } from "./skill-import-review";
-import { errorMessage } from "./shared";
+import { assignmentKey, buildAssignments, errorMessage } from "./utils";
 
 const INITIAL_ASSIGNMENTS: SkillAssignmentInput[] = [{ type: "global" }];
 

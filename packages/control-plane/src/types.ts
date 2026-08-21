@@ -16,9 +16,6 @@ export interface Env {
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
   LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
 
-  // Durable Objects
-  SCHEDULER?: DurableObjectNamespace; // SchedulerDO for automation engine
-
   // D1 database
   DB: D1Database;
 
@@ -35,6 +32,7 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
+  PROVIDER_ACCOUNTS_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
@@ -118,5 +116,5 @@ export interface ClientInfo {
   lastSeen: number;
   clientId: string;
   ws: WebSocket;
-  lastFetchHistoryAt?: number;
+  lastFetchHistoryAtMs?: number;
 }

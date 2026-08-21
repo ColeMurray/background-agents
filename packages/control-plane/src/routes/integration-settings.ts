@@ -27,6 +27,8 @@ import { createLogger } from "../logger";
 import {
   type Route,
   type RequestContext,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   parsePattern,
   json,
   error,
@@ -485,7 +487,7 @@ async function handleGetResolvedConfig(
   return error(`Unsupported integration: ${id}`, 400);
 }
 
-export const integrationSettingsRoutes: Route[] = [
+export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   // Integration settings — global
   {
     method: "GET",
@@ -546,4 +548,4 @@ export const integrationSettingsRoutes: Route[] = [
     pattern: parsePattern("/integration-settings/:id/resolved/:owner/:name"),
     handler: handleGetResolvedConfig,
   },
-];
+]);

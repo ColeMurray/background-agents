@@ -87,27 +87,45 @@ interface ApplicableSkill extends SkillSummary {
   totalBytes: number;
 }
 
+interface SkillListResult {
+  skills: SkillSummary[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+const MAX_D1_QUERY_PARAMETERS = 100;
+
 /** Mutable catalog operations backed by immutable content revisions. */
 export class SkillStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async list(): Promise<SkillSummary[]> {
+  async list(options: { limit: number; cursor: string | null }): Promise<SkillListResult> {
     const result = await this.db
       .prepare(
         `${this.currentSkillSelect()}
          WHERE s.deleted_at IS NULL
-         ORDER BY s.name`
+           ${options.cursor ? "AND s.name > ?" : ""}
+         ORDER BY s.name
+         LIMIT ?`
       )
+      .bind(...(options.cursor ? [options.cursor] : []), options.limit + 1)
       .all<SkillRow>();
-    const rows = result.results ?? [];
+    const fetchedRows = result.results ?? [];
+    const hasMore = fetchedRows.length > options.limit;
+    const rows = hasMore ? fetchedRows.slice(0, options.limit) : fetchedRows;
     const ids = rows.map((row) => row.id);
     const [assignments, sources] = await Promise.all([
       this.assignmentsForSkills(ids),
       this.sourcesForSkills(ids),
     ]);
-    return Promise.all(
+    const skills = await Promise.all(
       rows.map((row) => this.toSummary(row, assignments.get(row.id) ?? [], sources.get(row.id)))
     );
+    return {
+      skills,
+      hasMore,
+      nextCursor: hasMore ? rows[rows.length - 1].name : null,
+    };
   }
 
   async get(id: string): Promise<Skill | null> {
@@ -546,19 +564,26 @@ export class SkillStore {
     const sources = new Map<string, SkillImportProvenance | null>();
     for (const skillId of skillIds) sources.set(skillId, null);
     if (skillIds.length === 0) return sources;
-    const placeholders = skillIds.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(
-        `SELECT * FROM (
-           SELECT *, ROW_NUMBER() OVER (
-             PARTITION BY skill_id ORDER BY imported_at DESC, rowid DESC
-           ) AS recency
-           FROM skill_import_sources WHERE skill_id IN (${placeholders})
-         ) WHERE recency = 1`
-      )
-      .bind(...skillIds)
-      .all<ImportSourceRow>();
-    for (const row of result.results ?? []) {
+    // Chunked for the same reason as assignmentsForSkills: a target can match
+    // more skills than D1 accepts bound parameters in one statement.
+    const rows: ImportSourceRow[] = [];
+    for (let start = 0; start < skillIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = skillIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(
+          `SELECT * FROM (
+             SELECT *, ROW_NUMBER() OVER (
+               PARTITION BY skill_id ORDER BY imported_at DESC, rowid DESC
+             ) AS recency
+             FROM skill_import_sources WHERE skill_id IN (${placeholders})
+           ) WHERE recency = 1`
+        )
+        .bind(...chunk)
+        .all<ImportSourceRow>();
+      rows.push(...(result.results ?? []));
+    }
+    for (const row of rows) {
       sources.set(row.skill_id, {
         provider: row.provider,
         repoOwner: row.repo_owner,
@@ -615,18 +640,23 @@ export class SkillStore {
     const assignments = new Map<string, SkillAssignment[]>();
     for (const skillId of skillIds) assignments.set(skillId, []);
     if (skillIds.length === 0) return assignments;
-    const placeholders = skillIds.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(
-        `SELECT a.*, e.name AS environment_name
-         FROM skill_assignments a
-         LEFT JOIN environments e ON e.id = a.environment_id
-         WHERE a.skill_id IN (${placeholders})
-         ORDER BY a.skill_id, a.scope_type, a.id`
-      )
-      .bind(...skillIds)
-      .all<AssignmentRow>();
-    for (const row of result.results ?? []) {
+    const rows: AssignmentRow[] = [];
+    for (let start = 0; start < skillIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = skillIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(
+          `SELECT a.*, e.name AS environment_name
+           FROM skill_assignments a
+           LEFT JOIN environments e ON e.id = a.environment_id
+           WHERE a.skill_id IN (${placeholders})
+           ORDER BY a.skill_id, a.scope_type, a.id`
+        )
+        .bind(...chunk)
+        .all<AssignmentRow>();
+      rows.push(...(result.results ?? []));
+    }
+    for (const row of rows) {
       let assignment: SkillAssignment;
       if (row.scope_type === "repository") {
         assignment = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCompletionComment, formatToolAction, isValidToolCallPayload } from "./callbacks";
+import { formatCompletionComment, formatToolAction } from "./callbacks";
 
 // ─── formatToolAction ────────────────────────────────────────────────────────
 
@@ -117,66 +117,5 @@ describe("formatCompletionComment", () => {
     expect(formatCompletionComment("Open-Inspect", true, "ok")).toBe(
       "## 🤖 Open-Inspect completed\n\nok"
     );
-  });
-});
-
-// ─── isValidToolCallPayload ──────────────────────────────────────────────────
-
-describe("isValidToolCallPayload", () => {
-  const valid = {
-    sessionId: "sess-1",
-    tool: "bash",
-    args: { command: "ls" },
-    callId: "call-1",
-    timestamp: Date.now(),
-    signature: "abc123",
-    context: {
-      source: "linear" as const,
-      issueId: "issue-1",
-      issueIdentifier: "ENG-1",
-      issueUrl: "https://linear.app/issue/ENG-1",
-      repoFullName: "org/repo",
-      model: "claude-sonnet-4-5",
-    },
-  };
-
-  it("accepts a complete valid payload", () => {
-    expect(isValidToolCallPayload(valid)).toBe(true);
-  });
-
-  it("rejects null", () => {
-    expect(isValidToolCallPayload(null)).toBe(false);
-  });
-
-  it("rejects undefined", () => {
-    expect(isValidToolCallPayload(undefined)).toBe(false);
-  });
-
-  it("rejects missing sessionId", () => {
-    const { sessionId: _, ...rest } = valid;
-    expect(isValidToolCallPayload(rest)).toBe(false);
-  });
-
-  it("rejects missing tool", () => {
-    const { tool: _, ...rest } = valid;
-    expect(isValidToolCallPayload(rest)).toBe(false);
-  });
-
-  it("rejects missing timestamp", () => {
-    const { timestamp: _, ...rest } = valid;
-    expect(isValidToolCallPayload(rest)).toBe(false);
-  });
-
-  it("rejects missing signature", () => {
-    const { signature: _, ...rest } = valid;
-    expect(isValidToolCallPayload(rest)).toBe(false);
-  });
-
-  it("rejects context: null", () => {
-    expect(isValidToolCallPayload({ ...valid, context: null })).toBe(false);
-  });
-
-  it("rejects sessionId of wrong type", () => {
-    expect(isValidToolCallPayload({ ...valid, sessionId: 123 })).toBe(false);
   });
 });

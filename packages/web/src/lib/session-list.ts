@@ -64,14 +64,13 @@ export function isArchivedSessionListKey(key: unknown): key is string {
 export function applyTitleUpdate(
   data: SessionListResponse | undefined,
   sessionId: string,
-  title: string,
-  updatedAt: number
+  title: string | null
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
     ...data,
     sessions: data.sessions.map((session) =>
-      session.id === sessionId ? { ...session, title, updatedAt } : session
+      session.id === sessionId ? { ...session, title } : session
     ),
   };
 }
@@ -99,19 +98,6 @@ export function applySessionReadState(
   };
 }
 
-export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
-  const seen = new Set(existing.map((session) => session.id));
-  const merged = [...existing];
-
-  for (const session of incoming) {
-    if (seen.has(session.id)) continue;
-    seen.add(session.id);
-    merged.push(session);
-  }
-
-  return merged;
-}
-
 export function removeSessionFromList(sessions: Session[], sessionId: string) {
   return sessions.filter((session) => session.id !== sessionId);
 }
@@ -131,7 +117,9 @@ export function buildSessionSearchValue(session: Session): string {
  * query params so the destination page can render its header before the
  * session payload loads.
  */
-export function buildSessionHref(session: Session) {
+export function buildSessionHref(
+  session: Pick<Session, "id" | "title" | "repoOwner" | "repoName">
+) {
   const query: Record<string, string> = {};
   if (session.repoOwner && session.repoName) {
     query.repoOwner = session.repoOwner;

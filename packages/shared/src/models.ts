@@ -5,6 +5,8 @@
  * to ensure consistent behavior across control plane, web UI, and Slack bot.
  */
 
+import { SUBSCRIPTION_PROVIDER_IDS, type SubscriptionProviderId } from "./types/provider-accounts";
+
 /**
  * Reasoning effort levels supported across providers.
  *
@@ -407,6 +409,22 @@ export function extractProviderAndModel(modelId: string): { provider: string; mo
   }
   // Fallback for truly unknown models
   return { provider: "anthropic", model: normalized };
+}
+
+/**
+ * Resolve the subscription billing provider for a canonical catalog model.
+ * Unlike general model compatibility helpers, this rejects legacy bare IDs,
+ * malformed routes, and models absent from the current catalog.
+ */
+export function getSubscriptionProviderForModel(modelId: string): SubscriptionProviderId | null {
+  if (!VALID_MODELS.includes(modelId as ValidModel)) {
+    throw new Error(`Invalid canonical model ID: ${modelId}`);
+  }
+
+  const provider = modelId.slice(0, modelId.indexOf("/"));
+  return SUBSCRIPTION_PROVIDER_IDS.includes(provider as SubscriptionProviderId)
+    ? (provider as SubscriptionProviderId)
+    : null;
 }
 
 /**

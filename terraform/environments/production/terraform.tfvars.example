@@ -233,6 +233,11 @@ token_encryption_key = ""
 # Repo secrets encryption key (for encrypting repo secrets in D1)
 repo_secrets_encryption_key = ""
 
+# Optional existing provider account credential encryption key. Leave blank for
+# Terraform to generate and persist a dedicated key. Never change this after
+# storing provider account credentials.
+provider_accounts_encryption_key = ""
+
 # Modal API secret (for control plane -> Modal authentication)
 # Only required when sandbox_provider = "modal"
 # Generate with: openssl rand -hex 32
@@ -326,11 +331,12 @@ project_root = "../../../"
 enable_durable_object_bindings = false
 enable_service_bindings = false
 
-# Optional: override these only when an existing deployment needs to re-enter
-# Phase 1 for a later Durable Object migration. Fresh deployments can omit them.
+# Override these only for an explicit Durable Object migration. The production
+# workflow stages the SchedulerDO v2-to-v3 deletion only when state is still v2.
 # control_plane_migration_tag = "v1"
 # control_plane_migration_old_tag = null
 # control_plane_new_sqlite_classes = []
+# control_plane_deleted_classes = []
 
 # =============================================================================
 # Access Control

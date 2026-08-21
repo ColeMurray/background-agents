@@ -2,9 +2,14 @@
 
 Open-Inspect exposes these models in the model picker and integration preferences. The default
 enabled set includes Anthropic and OpenAI models. xAI / SuperGrok, OpenCode Zen, Z.AI Coding Plan,
-and DeepSeek models are available but must be enabled in **Settings > Models**. SuperGrok requires
-managed xAI OAuth credentials; Z.AI Coding Plan requires `ZHIPU_API_KEY`; DeepSeek requires
-`DEEPSEEK_API_KEY`.
+and DeepSeek models are available but must be enabled in **Settings > Models**. OpenAI and SuperGrok
+subscriptions are configured in **Settings > Provider Accounts**; Z.AI Coding Plan requires
+`ZHIPU_API_KEY`; DeepSeek requires `DEEPSEEK_API_KEY`.
+
+OpenAI and xAI session selectors offer provider policy, any active connected account, and API-key
+mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
+Unattended Slack, GitHub, Linear, and unpinned automation launches follow the provider's configured
+unattended mode.
 
 ## Anthropic
 
@@ -23,8 +28,8 @@ managed xAI OAuth credentials; Z.AI Coding Plan requires `ZHIPU_API_KEY`; DeepSe
 
 ## OpenAI
 
-OpenAI models require ChatGPT OAuth credentials. See [Using OpenAI Models](OPENAI_MODELS.md) for
-setup instructions.
+OpenAI models support connected ChatGPT provider accounts or `OPENAI_API_KEY` mode. See
+[Using OpenAI Models](OPENAI_MODELS.md) for account setup and coexistence details.
 
 | Model ID                     | Display name        | Description                                  | Reasoning efforts              | Default effort |
 | ---------------------------- | ------------------- | -------------------------------------------- | ------------------------------ | -------------- |
@@ -38,8 +43,9 @@ setup instructions.
 
 ## xAI / SuperGrok
 
-Grok models require a SuperGrok OAuth refresh token and are disabled by default. See
-[Using Grok with a SuperGrok Subscription](GROK_MODELS.md) for setup and rollout instructions.
+Grok models support connected SuperGrok provider accounts or `XAI_API_KEY` mode and are disabled by
+default. See [Using Grok with a SuperGrok Subscription](GROK_MODELS.md) for setup and rollout
+instructions.
 
 | Model ID             | Display name   | Description                                     | Reasoning efforts | Default effort |
 | -------------------- | -------------- | ----------------------------------------------- | ----------------- | -------------- |

@@ -50,6 +50,10 @@ export class SessionCoreRepository {
     return result.toArray() as T[];
   }
 
+  transaction<T>(callback: () => T): T {
+    return this.transactionSync(callback);
+  }
+
   getSession(): SessionRow | null {
     const result = this.sql.exec(`SELECT * FROM session LIMIT 1`);
     const rows = this.rows<SessionRow>(result);

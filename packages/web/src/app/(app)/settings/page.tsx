@@ -15,6 +15,7 @@ import { ScmSettingsPage } from "@/components/settings/scm-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
 import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
+import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
 import { SkillsSettings } from "@/components/settings/skills-settings";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
@@ -25,6 +26,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   secrets: "Secrets",
   environments: "Environments",
   models: "Models",
+  "provider-accounts": "Accounts",
   images: "Images",
   appearance: "Appearance",
   "keyboard-shortcuts": "Keyboard",
@@ -40,6 +42,7 @@ const VALID_CATEGORIES = new Set<string>([
   "secrets",
   "environments",
   "models",
+  "provider-accounts",
   "images",
   "appearance",
   "keyboard-shortcuts",
@@ -92,6 +95,7 @@ function SettingsPageContent() {
       {activeCategory === "secrets" && <SecretsSettings />}
       {activeCategory === "environments" && <EnvironmentsSettings />}
       {activeCategory === "models" && <ModelsSettings />}
+      {activeCategory === "provider-accounts" && <ProviderAccountsSettings />}
       {activeCategory === "images" && repoImagesEnabled && <ImagesSettings />}
       {activeCategory === "appearance" && <AppearanceSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}

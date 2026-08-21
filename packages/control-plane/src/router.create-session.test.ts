@@ -12,6 +12,8 @@ import { sessionCreateRoutes } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 import { resolveManagedSkills } from "./session/skill-resolution";
+import { resolveSessionProviderAuth } from "./session/provider-account-resolution";
+import { ProviderAccountSelectionPolicyError } from "./model-provider-accounts/selection-policy";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -27,6 +29,11 @@ vi.mock("./session/skill-resolution", async (importOriginal) => {
     ...actual,
     resolveManagedSkills: vi.fn(),
   };
+});
+
+vi.mock("./session/provider-account-resolution", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, resolveSessionProviderAuth: vi.fn() };
 });
 
 vi.mock("./routes/shared", async (importOriginal) => {
@@ -52,6 +59,10 @@ describe("handleCreateSession D1 ordering", () => {
       resolvedAt: 1,
       skills: [],
     });
+    vi.mocked(resolveSessionProviderAuth).mockResolvedValue([
+      { provider: "openai", authMode: "api_key", selectionSource: "fallback_api_key" },
+      { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
+    ]);
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       defaultBranch: "main",
@@ -289,6 +300,51 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).toHaveBeenCalledOnce();
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(initFetch.mock.invocationCallOrder[0]);
   });
+
+  it("resolves explicit provider selections for a user-created session", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+    const explicit = {
+      openai: { mode: "provider_account" as const, accountId: "1".repeat(32) },
+    };
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      title: "Explicit provider",
+      providerSelections: explicit,
+    });
+
+    expect(response.status).toBe(201);
+    expect(resolveSessionProviderAuth).toHaveBeenCalledWith(expect.anything(), {
+      explicit,
+      unattended: true,
+    });
+  });
+
+  it.each([400, 404, 409] as const)(
+    "preserves provider account policy status %i",
+    async (status) => {
+      vi.mocked(resolveSessionProviderAuth).mockRejectedValueOnce(
+        new ProviderAccountSelectionPolicyError("Provider account rejected", status)
+      );
+      const create = vi.fn();
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return { create } as never;
+      });
+
+      const response = await createSessionRequestWithBody(createEnv(vi.fn()), {
+        title: "Rejected provider",
+        providerSelections: {
+          openai: { mode: "provider_account", accountId: "1".repeat(32) },
+        },
+      });
+
+      expect(response.status).toBe(status);
+      expect(create).not.toHaveBeenCalled();
+    }
+  );
 
   it("enriches SCM fields from the resolved user's linked GitHub identity", async () => {
     const create = vi.fn().mockResolvedValue(undefined);

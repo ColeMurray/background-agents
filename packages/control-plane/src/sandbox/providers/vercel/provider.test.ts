@@ -14,6 +14,7 @@ import type {
   VercelSnapshotResponse,
 } from "./client";
 import { VercelSandboxApiError } from "./client";
+import { RequestDeadlineError } from "../../request-deadline";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
@@ -142,6 +143,19 @@ function environmentBuildConfig() {
 }
 
 describe("VercelSandboxProvider", () => {
+  it("classifies request deadline failures as transient", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () => {
+        throw new RequestDeadlineError("Vercel Sandbox", "createSandbox", 60_000);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
+      errorType: "transient",
+    });
+  });
+
   it("reports Vercel capabilities", () => {
     const provider = new VercelSandboxProvider(createMockClient(), providerConfig);
 
@@ -188,6 +202,10 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         USER_SECRET: "value",
         SANDBOX_ID: "sandbox-456",
+        // The base snapshot bakes none, so the sandbox can only report a
+        // runtime version — and so keep its snapshots restorable — if the
+        // provider exports it here.
+        SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
         PATH: expect.stringContaining("/vercel/runtimes/node24/bin"),
         CONTROL_PLANE_URL: "https://control-plane.test",
         SANDBOX_AUTH_TOKEN: "auth-token",

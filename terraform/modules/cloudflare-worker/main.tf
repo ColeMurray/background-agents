@@ -46,7 +46,7 @@ locals {
       name = sec.name
       text = sec.value
     }],
-    # Durable Object bindings (only when enabled - disable for initial deployment)
+    # Durable Object bindings (disabled only for initial class creation)
     var.enable_durable_object_bindings ? [for do in var.durable_objects : {
       type       = "durable_object_namespace"
       name       = do.binding_name
@@ -102,16 +102,29 @@ resource "cloudflare_worker_version" "this" {
   bindings = local.bindings
 
   # Durable Object migrations
-  # Phase 1 (enable_durable_object_bindings=false): Apply migrations WITHOUT bindings
-  # Phase 2 (enable_durable_object_bindings=true): Add bindings WITHOUT migrations
+  # Initial class creation uses bindings disabled for phase 1. Class deletion
+  # emits a migration with surviving bindings still enabled.
   # Note: Free plans require new_sqlite_classes instead of new_classes
   # When new_sqlite_classes is set, only those classes are declared as new (incremental migration).
   # When empty, all DO classes are declared as new (fresh deployment).
-  migrations = length(var.durable_objects) > 0 && !var.enable_durable_object_bindings ? {
+  migrations = (length(var.durable_objects) > 0 || length(var.deleted_classes) > 0) && (!var.enable_durable_object_bindings || length(var.deleted_classes) > 0) ? {
     old_tag            = var.migration_old_tag
     new_tag            = var.migration_tag
-    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : [for do in var.durable_objects : do.class_name]
+    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for do in var.durable_objects : do.class_name])
+    deleted_classes    = var.deleted_classes
   } : null
+
+  lifecycle {
+    # Deletion emits its migration with bindings enabled, but nothing in the
+    # expression above enforces that. With bindings disabled, local.bindings
+    # drops every surviving Durable Object binding, so this version would
+    # retire the deleted class and ship a control plane with no SESSION
+    # binding. Fail at plan time instead of deploying that.
+    precondition {
+      condition     = length(var.deleted_classes) == 0 || var.enable_durable_object_bindings
+      error_message = "Durable Object class deletion requires enable_durable_object_bindings = true, otherwise the same version drops every surviving DO binding."
+    }
+  }
 }
 
 # =============================================================================

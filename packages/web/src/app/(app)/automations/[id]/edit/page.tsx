@@ -109,6 +109,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
               triggerType: automation.triggerType,
               eventType: automation.eventType ?? undefined,
               triggerConfig: automation.triggerConfig ?? undefined,
+              providerSelections: automation.providerSelections,
             }}
             onSubmit={handleSubmit}
             submitting={submitting}

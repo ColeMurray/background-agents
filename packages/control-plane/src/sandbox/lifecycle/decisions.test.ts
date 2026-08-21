@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/model";
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
@@ -14,6 +15,7 @@ import {
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
+  isSnapshotRuntimeCompatible,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
@@ -147,6 +149,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -164,6 +167,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stale",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -178,6 +182,7 @@ describe("evaluateSpawnDecision", () => {
       status: "failed",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -186,12 +191,77 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("restore");
   });
 
+  it("spawns fresh instead of restoring a snapshot below the runtime floor", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false);
+
+    expect(decision.action).toBe("spawn");
+    if (decision.action === "spawn") {
+      expect(decision.reason).toContain(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`);
+    }
+  });
+
+  it("spawns fresh when the snapshot predates runtime-version recording", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, false);
+
+    expect(decision.action).toBe("spawn");
+    if (decision.action === "spawn") {
+      expect(decision.reason).toContain("unknown");
+    }
+  });
+
+  it("restores a snapshot taken exactly at the runtime floor", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: `v${MIN_COMPATIBLE_RUNTIME_VERSION}-at-floor`,
+      hasActiveWebSocket: false,
+    };
+
+    expect(evaluateSpawnDecision(state, config, now, false).action).toBe("restore");
+  });
+
+  it("keeps the in-memory spawn guard ahead of the runtime floor check", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    // A rejected snapshot must not let a concurrent evaluation start a second
+    // spawn while the first is still in flight.
+    expect(evaluateSpawnDecision(state, config, now, true).action).toBe("skip");
+  });
+
   it('returns "skip" when already spawning', () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "spawning",
       createdAt: now - 5000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -209,6 +279,7 @@ describe("evaluateSpawnDecision", () => {
       status: "connecting",
       createdAt: now - 5000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -223,6 +294,7 @@ describe("evaluateSpawnDecision", () => {
       status: "spawning",
       createdAt: now - (config.spawningTimeoutMs + 1000),
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -237,6 +309,7 @@ describe("evaluateSpawnDecision", () => {
       status: "connecting",
       createdAt: now - (config.spawningTimeoutMs + 1000),
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -251,6 +324,7 @@ describe("evaluateSpawnDecision", () => {
       status: "spawning",
       createdAt: now - (config.spawningTimeoutMs + 1000),
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -265,6 +339,7 @@ describe("evaluateSpawnDecision", () => {
       status: "ready",
       createdAt: now - 120000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: true,
     };
 
@@ -282,6 +357,7 @@ describe("evaluateSpawnDecision", () => {
       status: "ready",
       createdAt: now - 30000, // 30 seconds ago, less than readyWaitMs
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -299,6 +375,7 @@ describe("evaluateSpawnDecision", () => {
       status: "pending",
       createdAt: now - 10000, // 10 seconds ago, less than cooldownMs
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -316,6 +393,7 @@ describe("evaluateSpawnDecision", () => {
       status: "pending",
       createdAt: now - 60000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -336,6 +414,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -353,6 +432,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 120000,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       providerObjectId: "sb-123",
       hasActiveWebSocket: false,
     };
@@ -371,6 +451,7 @@ describe("evaluateSpawnDecision", () => {
       status: "pending",
       createdAt: now - 60000, // Past cooldown
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -385,6 +466,7 @@ describe("evaluateSpawnDecision", () => {
       status: "failed",
       createdAt: now - 5000, // Within cooldown, but status is failed
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -399,6 +481,7 @@ describe("evaluateSpawnDecision", () => {
       status: "stopped",
       createdAt: now - 5000, // Within cooldown, but status is stopped
       snapshotImageId: null, // No snapshot, so fresh spawn
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -416,6 +499,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -434,6 +518,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -449,6 +534,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -464,6 +550,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: null,
       snapshotImageId: "img-abc123",
+      snapshotRuntimeVersion: "v99-test",
       hasActiveWebSocket: false,
     };
 
@@ -479,6 +566,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: null,
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -494,6 +582,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -509,6 +598,7 @@ describe("evaluateSpawnDecision", () => {
       createdAt: now - 120000,
       providerObjectId: "daytona-abc123",
       snapshotImageId: null,
+      snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
@@ -955,5 +1045,24 @@ describe("evaluateExecutionTimeout", () => {
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(6000);
+  });
+});
+
+// ==================== Snapshot Runtime Floor ====================
+
+describe("isSnapshotRuntimeCompatible", () => {
+  it("accepts a snapshot at or above the floor", () => {
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION}-x`)).toBe(true);
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION + 1}-x`)).toBe(true);
+  });
+
+  it("rejects a snapshot below the floor", () => {
+    expect(isSnapshotRuntimeCompatible(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-x`)).toBe(false);
+  });
+
+  it("fails closed on missing or unparseable versions", () => {
+    expect(isSnapshotRuntimeCompatible(null)).toBe(false);
+    expect(isSnapshotRuntimeCompatible("")).toBe(false);
+    expect(isSnapshotRuntimeCompatible("daytona-v6-vnc")).toBe(false);
   });
 });

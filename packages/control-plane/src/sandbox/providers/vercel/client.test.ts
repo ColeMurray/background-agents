@@ -3,7 +3,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VercelSandboxApiError, VercelSandboxClient } from "./client";
+import {
+  VERCEL_CLEANUP_REQUEST_DEADLINE_MS,
+  VERCEL_COMMAND_REQUEST_DEADLINE_MS,
+  VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS,
+  VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS,
+  VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS,
+  VercelSandboxApiError,
+  VercelSandboxClient,
+} from "./client";
+import { RequestDeadlineError } from "../../request-deadline";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -27,6 +36,28 @@ function streamResponse(chunks: string[], status = 200): Response {
   );
 }
 
+function rejectWhenAborted(signal: AbortSignal): Promise<Response> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
+function stalledStreamResponse(signal: AbortSignal): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        if (signal.aborted) {
+          controller.error(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+      },
+    }),
+    { status: 200 }
+  );
+}
+
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -35,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -56,6 +88,94 @@ function lastFetchBody(): Record<string, unknown> {
 }
 
 describe("VercelSandboxClient", () => {
+  it("times out when response headers stall", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      rejectWhenAborted((init as RequestInit).signal as AbortSignal)
+    );
+
+    const request = createClient().createSandbox({ name: "sandbox-1" });
+    const rejection = expect(request).rejects.toMatchObject({
+      name: RequestDeadlineError.name,
+      provider: "Vercel Sandbox",
+      endpoint: "createSandbox",
+      timeoutMs: VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS,
+    });
+    await vi.advanceTimersByTimeAsync(VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
+  it("keeps the deadline armed while reading a command stream", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve(stalledStreamResponse((init as RequestInit).signal as AbortSignal))
+    );
+
+    const request = createClient().runCommandAndWait({
+      sessionId: "session-1",
+      command: "bash",
+    });
+    const rejection = expect(request).rejects.toThrow(
+      `Vercel Sandbox request timeout after ${VERCEL_COMMAND_REQUEST_DEADLINE_MS}ms (runCommandAndWait)`
+    );
+    await vi.advanceTimersByTimeAsync(VERCEL_COMMAND_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
+  it("allows an explicit command timeout before applying deadline headroom", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve(stalledStreamResponse((init as RequestInit).signal as AbortSignal))
+    );
+    const commandTimeoutMs = VERCEL_COMMAND_REQUEST_DEADLINE_MS * 2;
+
+    const request = createClient().runCommandAndWait({
+      sessionId: "session-1",
+      command: "bash",
+      timeoutMs: commandTimeoutMs,
+    });
+    const rejection = expect(request).rejects.toThrow(
+      `Vercel Sandbox request timeout after ${commandTimeoutMs + VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS}ms (runCommandAndWait)`
+    );
+    await vi.advanceTimersByTimeAsync(commandTimeoutMs);
+    expect(lastFetchInit().signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS);
+    await rejection;
+  });
+
+  it("preserves caller cancellation when it wins just before the Vercel deadline", async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const callerReason = new DOMException("caller cancelled", "AbortError");
+    fetchSpy.mockImplementation((_url, init) =>
+      rejectWhenAborted((init as RequestInit).signal as AbortSignal)
+    );
+
+    const request = createClient().snapshotSession("session-1", { signal: caller.signal });
+    await vi.advanceTimersByTimeAsync(VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS - 1);
+    caller.abort(callerReason);
+    vi.advanceTimersByTime(1);
+
+    await expect(request).rejects.toBe(callerReason);
+    const providerSignal = lastFetchInit().signal as AbortSignal;
+    expect(providerSignal).not.toBe(caller.signal);
+    expect(providerSignal.reason).toBe(callerReason);
+  });
+
+  it("keeps the deadline armed while consuming a successful void response", async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve(stalledStreamResponse((init as RequestInit).signal as AbortSignal))
+    );
+
+    const request = createClient().deleteSnapshot("snapshot-1");
+    const rejection = expect(request).rejects.toThrow(
+      `Vercel Sandbox request timeout after ${VERCEL_CLEANUP_REQUEST_DEADLINE_MS}ms (deleteSnapshot)`
+    );
+    await vi.advanceTimersByTimeAsync(VERCEL_CLEANUP_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
   it("validates required configuration", () => {
     expect(() => new VercelSandboxClient({ token: "", projectId: "project" })).toThrow(
       "VERCEL_TOKEN"
