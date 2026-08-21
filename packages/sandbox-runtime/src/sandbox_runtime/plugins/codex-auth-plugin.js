@@ -131,7 +131,15 @@ async function normalizeRequest(requestInput, init) {
   let body = init?.body;
   if (body === undefined && request?.body) body = await request.text();
 
-  return { url, headers, method: init?.method ?? request?.method, body };
+  return {
+    url,
+    headers,
+    method: init?.method ?? request?.method,
+    body,
+    // Without the source Request's signal, a cancelled turn would leave the
+    // subscription or platform call running.
+    signal: init?.signal ?? request?.signal,
+  };
 }
 
 function isChatCompletionsRequest(url) {
@@ -318,9 +326,10 @@ export const CodexAuthProxy = async (input) => {
               headers,
               method,
               body,
+              signal,
             } = await normalizeRequest(requestInput, init);
             const { headers: _discardedHeaders, ...restInit } = init ?? {};
-            const baseInit = { ...restInit, method, body };
+            const baseInit = { ...restInit, method, body, signal };
 
             const currentAuth = await getAuth();
             if (currentAuth.type !== "oauth") return fetch(parsed, { ...baseInit, headers });

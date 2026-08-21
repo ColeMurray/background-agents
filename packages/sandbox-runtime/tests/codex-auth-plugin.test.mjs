@@ -40,6 +40,7 @@ function stubFetch({ codex, broker, usage } = {}) {
       method: init?.method,
       headers: new Headers(init?.headers),
       body: init?.body,
+      signal: init?.signal,
     });
     if (target.includes("/provider-auth/openai/access-token")) {
       return (
@@ -205,6 +206,27 @@ test("spills over a Request-shaped call on a usage-limit 429", async () => {
   assert.equal(spilloverCall.url, MODEL_REQUEST_URL);
   assert.equal(spilloverCall.body, REQUEST_INIT.body);
   assert.equal(spilloverCall.headers.get("authorization"), "Bearer sk-fallback");
+});
+
+test("forwards a Request's abort signal to both legs", async () => {
+  process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
+  const calls = stubFetch({ codex: () => usageLimitResponse() });
+  const loaded = await loadProxy("request-input-signal");
+
+  const controller = new AbortController();
+  const request = new Request(MODEL_REQUEST_URL, { ...REQUEST_INIT, signal: controller.signal });
+  await loaded.fetch(request);
+
+  // `new Request(url, { signal })` exposes a dependent signal rather than the
+  // one passed in, so cancellation, not identity, is what must survive.
+  const subscriptionCall = calls.find((call) => call.url.startsWith("https://chatgpt.com/"));
+  const spilloverCall = calls.at(-1);
+  assert.ok(subscriptionCall.signal, "subscription call carries a signal");
+  assert.ok(spilloverCall.signal, "spillover call carries a signal");
+  assert.equal(subscriptionCall.signal.aborted, false);
+  controller.abort();
+  assert.equal(subscriptionCall.signal.aborted, true);
+  assert.equal(spilloverCall.signal.aborted, true);
 });
 
 test("latches on exhausted usage headers reported by a successful call", async () => {
