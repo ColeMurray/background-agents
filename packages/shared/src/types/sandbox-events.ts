@@ -55,6 +55,9 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // Present in essentially every session's replay history.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
+    // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any
+    // snapshot it produces so a later restore can be gated on it.
+    runtimeVersion: z.string().optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
   messageSandboxEventBaseSchema.extend({

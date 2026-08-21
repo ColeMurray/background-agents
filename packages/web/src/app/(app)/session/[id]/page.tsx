@@ -75,6 +75,7 @@ export default function SessionPage() {
     authError,
     connectionError,
     sessionState,
+    sandboxError,
     events,
     participants,
     artifacts,
@@ -392,6 +393,7 @@ export default function SessionPage() {
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-clip">
       <SessionHeader
         sessionState={sessionState}
+        sandboxError={sandboxError}
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected && ready}
         connecting={connecting || (connected && !ready)}

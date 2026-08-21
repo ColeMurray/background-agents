@@ -9,6 +9,7 @@ export interface SandboxCircuitBreakerState {
   created_at: number;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
+  snapshot_runtime_version: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
 }
@@ -52,7 +53,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, modal_object_id, snapshot_image_id, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<SandboxCircuitBreakerState>(result);
     return rows[0] ?? null;
@@ -91,7 +92,8 @@ export class SandboxRepository {
          vnc_password = NULL,
          tunnel_urls = NULL,
          ttyd_url = NULL,
-         ttyd_token = NULL
+         ttyd_token = NULL,
+         runtime_version = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -119,8 +121,49 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxSnapshotImageId(sandboxId: string, imageId: string): void {
-    this.sql.exec(`UPDATE sandbox SET snapshot_image_id = ? WHERE id = ?`, imageId, sandboxId);
+  updateSandboxSnapshotImageId(
+    sandboxId: string,
+    imageId: string,
+    runtimeVersion: string | null
+  ): void {
+    this.sql.exec(
+      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ? WHERE id = ?`,
+      imageId,
+      runtimeVersion,
+      sandboxId
+    );
+  }
+
+  /**
+   * Set the runtime version describing the sandbox's current filesystem.
+   *
+   * Used when the control plane already knows it authoritatively — restoring a
+   * snapshot puts that snapshot's runtime on disk regardless of what the
+   * provider exports into the new sandbox.
+   */
+  updateSandboxRuntimeVersion(runtimeVersion: string | null): void {
+    this.sql.exec(
+      `UPDATE sandbox SET runtime_version = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      runtimeVersion
+    );
+  }
+
+  /**
+   * Record the SANDBOX_VERSION a sandbox reported at startup, but only when
+   * nothing authoritative is on the row yet.
+   *
+   * A fresh spawn clears the column, so its report lands. A restore seeds the
+   * snapshot's version first, so a report is ignored: OpenComputer and Vercel
+   * export the *current* SANDBOX_VERSION into every sandbox they start,
+   * including ones forked from an old checkpoint, and trusting that would hand
+   * a stale filesystem a clean bill of health.
+   */
+  recordReportedSandboxRuntimeVersion(runtimeVersion: string | null): void {
+    this.sql.exec(
+      `UPDATE sandbox SET runtime_version = ?
+       WHERE runtime_version IS NULL AND id = (SELECT id FROM sandbox LIMIT 1)`,
+      runtimeVersion
+    );
   }
 
   updateSandboxHeartbeat(timestamp: number): void {

@@ -3,7 +3,12 @@
  */
 
 import { z } from "zod";
-import { PROVIDER_TOKEN_REFRESH_TIMEOUT_MS } from "./provider-token-timeouts";
+import {
+  fetchProvider,
+  parseProviderResponse,
+  readBoundedProviderBody,
+  type ProviderResponseErrorFactory,
+} from "./provider-response";
 
 const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_DEVICE_CODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode";
@@ -11,7 +16,6 @@ const OPENAI_DEVICE_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth
 export const OPENAI_DEVICE_VERIFICATION_URL = "https://auth.openai.com/codex/device";
 const OPENAI_DEVICE_REDIRECT_URL = "https://auth.openai.com/deviceauth/callback";
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OPENAI_RESPONSE_MAX_BYTES = 64 * 1024;
 const DEFAULT_OPENAI_TOKEN_LIFETIME_SECONDS = 60 * 60;
 const MAX_OPENAI_TOKEN_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
 
@@ -88,66 +92,26 @@ export function openAIAccessTokenLifetimeMs(expiresIn?: number): number {
   );
 }
 
-async function readBoundedBody(response: Response): Promise<string> {
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > OPENAI_RESPONSE_MAX_BYTES) {
-    throw new OpenAIOAuthError("OpenAI returned an oversized response", 502);
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return response.text();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > OPENAI_RESPONSE_MAX_BYTES) {
-      await reader.cancel();
-      throw new OpenAIOAuthError("OpenAI returned an oversized response", 502);
+function openAIResponseError(operation: string): ProviderResponseErrorFactory {
+  return (reason, status, invalidFields) => {
+    if (reason === "oversized") {
+      return new OpenAIOAuthError(`OpenAI ${operation} returned an oversized response`, 502);
     }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(body);
-}
-
-async function parseProviderResponse<T>(
-  response: Response,
-  schema: z.ZodType<T>,
-  operation: string
-): Promise<T> {
-  const body = await readBoundedBody(response);
-  if (!response.ok) throw new OpenAIOAuthError(`OpenAI ${operation} failed`, response.status);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    throw new OpenAIOAuthError(`OpenAI ${operation} returned invalid JSON`, 502);
-  }
-  const result = schema.safeParse(parsed);
-  if (!result.success) {
-    const fields = [
-      ...new Set(result.error.issues.map((issue) => String(issue.path[0] ?? "response"))),
-    ];
-    throw new OpenAIOAuthError(
-      `OpenAI ${operation} returned invalid data (${fields.join(", ")})`,
+    if (reason === "http") {
+      return new OpenAIOAuthError(`OpenAI ${operation} failed`, status);
+    }
+    if (reason === "invalid_json") {
+      return new OpenAIOAuthError(`OpenAI ${operation} returned invalid JSON`, 502);
+    }
+    return new OpenAIOAuthError(
+      `OpenAI ${operation} returned invalid data (${invalidFields?.join(", ")})`,
       502
     );
-  }
-  return result.data;
-}
-
-function providerFetch(url: string, init: RequestInit): Promise<Response> {
-  return fetch(url, { ...init, signal: AbortSignal.timeout(PROVIDER_TOKEN_REFRESH_TIMEOUT_MS) });
+  };
 }
 
 export async function startOpenAIDeviceAuthorization(): Promise<OpenAIDeviceAuthorization> {
-  const response = await providerFetch(OPENAI_DEVICE_CODE_URL, {
+  const response = await fetchProvider(OPENAI_DEVICE_CODE_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "User-Agent": "Open-Inspect" },
     body: JSON.stringify({ client_id: OPENAI_CLIENT_ID }),
@@ -155,7 +119,7 @@ export async function startOpenAIDeviceAuthorization(): Promise<OpenAIDeviceAuth
   const data = await parseProviderResponse(
     response,
     deviceAuthorizationSchema,
-    "device authorization"
+    openAIResponseError("device authorization")
   );
   return {
     deviceAuthId: data.device_auth_id,
@@ -168,16 +132,22 @@ export async function checkOpenAIDeviceAuthorization(
   deviceAuthId: string,
   userCode: string
 ): Promise<OpenAIDeviceStatus> {
-  const response = await providerFetch(OPENAI_DEVICE_TOKEN_URL, {
+  const response = await fetchProvider(OPENAI_DEVICE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "User-Agent": "Open-Inspect" },
     body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
   });
   if (response.status === 403 || response.status === 404) {
-    await readBoundedBody(response);
+    await readBoundedProviderBody(response, () =>
+      openAIResponseError("device status check")("oversized", response.status)
+    );
     return { status: "pending" };
   }
-  const data = await parseProviderResponse(response, deviceStatusSchema, "device status check");
+  const data = await parseProviderResponse(
+    response,
+    deviceStatusSchema,
+    openAIResponseError("device status check")
+  );
   return {
     status: "authorized",
     authorizationCode: data.authorization_code,
@@ -189,7 +159,7 @@ export async function exchangeOpenAIAuthorizationCode(
   authorizationCode: string,
   codeVerifier: string
 ): Promise<OpenAITokenResponse> {
-  const response = await providerFetch(OPENAI_TOKEN_URL, {
+  const response = await fetchProvider(OPENAI_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -200,14 +170,18 @@ export async function exchangeOpenAIAuthorizationCode(
       code_verifier: codeVerifier,
     }).toString(),
   });
-  return parseProviderResponse(response, openAITokenResponseSchema, "token exchange");
+  return parseProviderResponse(
+    response,
+    openAITokenResponseSchema,
+    openAIResponseError("token exchange")
+  );
 }
 
 /**
  * Refresh an OpenAI OAuth access token using a refresh token.
  */
 export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITokenResponse> {
-  const response = await providerFetch(OPENAI_TOKEN_URL, {
+  const response = await fetchProvider(OPENAI_TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -220,7 +194,10 @@ export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITo
   });
 
   if (!response.ok) {
-    const body = await readBoundedBody(response);
+    const body = await readBoundedProviderBody(
+      response,
+      () => new OpenAITokenRefreshError("OpenAI token refresh returned an oversized response", 502)
+    );
     let errorCode: string | undefined;
     try {
       const parsed = z.object({ error: z.string() }).safeParse(JSON.parse(body));
@@ -235,25 +212,15 @@ export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITo
     );
   }
 
-  const body = await readBoundedBody(response);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    throw new OpenAITokenRefreshError(
-      `OpenAI token refresh returned invalid response: ${response.status}`,
-      response.status
-    );
-  }
-  const tokenResult = openAITokenResponseSchema.safeParse(parsed);
-  if (!tokenResult.success) {
-    throw new OpenAITokenRefreshError(
-      `OpenAI token refresh returned invalid response: ${response.status}`,
-      response.status
-    );
-  }
-
-  return tokenResult.data;
+  return parseProviderResponse(
+    response,
+    openAITokenResponseSchema,
+    (_reason, status) =>
+      new OpenAITokenRefreshError(
+        `OpenAI token refresh returned invalid response: ${status}`,
+        status
+      )
+  );
 }
 
 /**

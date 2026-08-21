@@ -80,6 +80,8 @@ function createMockSandbox(
     modal_object_id: "modal-obj-123",
     snapshot_id: null,
     snapshot_image_id: null,
+    snapshot_runtime_version: null,
+    runtime_version: COMPATIBLE_RUNTIME_VERSION,
     auth_token: "auth-token-123",
     auth_token_hash: "auth-token-hash-123",
     status: "ready",
@@ -146,6 +148,7 @@ function createMockStorage(
         sandbox.auth_token_hash = data.authTokenHash;
         sandbox.auth_token = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
+        sandbox.runtime_version = null;
         if (!data.preserveProviderObjectId) sandbox.modal_object_id = null;
       }
     }),
@@ -160,10 +163,19 @@ function createMockStorage(
       calls.push(`updateSandboxModalObjectId:${id}`);
       if (sandbox) sandbox.modal_object_id = id;
     }),
-    updateSandboxSnapshotImageId: vi.fn((sandboxId: string, imageId: string) => {
-      calls.push(`updateSandboxSnapshotImageId:${imageId}`);
-      if (sandbox) sandbox.snapshot_image_id = imageId;
+    updateSandboxRuntimeVersion: vi.fn((runtimeVersion: string | null) => {
+      calls.push(`updateSandboxRuntimeVersion:${runtimeVersion}`);
+      if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
+    updateSandboxSnapshotImageId: vi.fn(
+      (sandboxId: string, imageId: string, runtimeVersion: string | null) => {
+        calls.push(`updateSandboxSnapshotImageId:${imageId}:${runtimeVersion}`);
+        if (sandbox) {
+          sandbox.snapshot_image_id = imageId;
+          sandbox.snapshot_runtime_version = runtimeVersion;
+        }
+      }
+    ),
     updateSandboxLastActivity: vi.fn((timestamp: number) => {
       calls.push("updateSandboxLastActivity");
       if (sandbox) sandbox.last_activity = timestamp;
@@ -371,6 +383,7 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
     status: kind === "spawn" ? "pending" : "stopped",
     created_at: Date.now() - 60000,
     snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+    snapshot_runtime_version: kind === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
   });
   const storage = createMockStorage(
     createMockSession({ code_server_enabled: 1, vnc_enabled: 1 }),
@@ -513,6 +526,7 @@ describe("SandboxLifecycleManager", () => {
         const sandbox = createMockSandbox({
           status: kind === "spawn" ? "pending" : "stopped",
           snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+          snapshot_runtime_version: kind === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
           created_at: Date.now() - 60000,
         });
         const storage = createMockStorage(createMockSession(), sandbox);
@@ -570,6 +584,7 @@ describe("SandboxLifecycleManager", () => {
         const sandbox = createMockSandbox({
           status: kind === "spawn" ? "pending" : "stopped",
           snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+          snapshot_runtime_version: kind === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
           created_at: Date.now() - 60000,
         });
         const storage = createMockStorage(createMockSession(), sandbox);
@@ -988,6 +1003,67 @@ describe("SandboxLifecycleManager", () => {
       expect(onSandboxTerminated).not.toHaveBeenCalled();
     });
 
+    it("persists the circuit-breaker reason, not just the broadcast", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "pending",
+        spawn_failure_count: 3,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      // Broadcast alone reaches only the tab that is already open; the reason
+      // has to be persisted or it vanishes on the reload someone does to read it.
+      expect(storage.setLastSpawnError).toHaveBeenCalledWith(
+        expect.stringContaining("temporarily disabled"),
+        expect.any(Number)
+      );
+      expect(sandbox.last_spawn_error).toContain("temporarily disabled");
+    });
+
+    it("still broadcasts the reason when persisting it throws", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "pending",
+        spawn_failure_count: 3,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      // updateSandboxSpawnError is a bare synchronous sql.exec in the DO, so
+      // this is a real failure mode, not a hypothetical one.
+      vi.mocked(storage.setLastSpawnError).mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      // Losing durability must not also cost the live broadcast, which is the
+      // only signal an already-open tab gets.
+      await expect(manager.spawnSandbox()).resolves.toBeUndefined();
+      expect(
+        broadcaster.messages.some((m) => (m as { type?: string }).type === "sandbox_error")
+      ).toBe(true);
+    });
+
     it("resets circuit breaker when window passes", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -1021,6 +1097,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1047,6 +1124,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const userEnvVars = {
         OPENAI_OAUTH_MANAGED: "1",
@@ -1076,6 +1154,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const manager = new SandboxLifecycleManager(
         createMockProvider(),
@@ -1109,6 +1188,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const provider = createMockProvider({
         restoreFromSnapshot: vi.fn(
@@ -1151,6 +1231,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       vi.mocked(storage.updateSandboxModalObjectId).mockImplementation(() => {
@@ -1192,6 +1273,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1224,6 +1306,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1350,10 +1433,114 @@ describe("SandboxLifecycleManager", () => {
       ]);
     });
 
+    it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
+      // The row starts out describing a sandbox that reported a compatible
+      // runtime. Once it is replaced, a snapshot the replacement takes must be
+      // stamped unknown until the new sandbox reports for itself — otherwise a
+      // downgraded or silent runtime inherits a clean bill of health.
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      expect(sandbox.runtime_version).toBe(COMPATIBLE_RUNTIME_VERSION);
+
+      await manager.spawnSandbox();
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(sandbox.runtime_version).toBeNull();
+      expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123:null");
+    });
+
+    it("seeds the restored sandbox's runtime version from the snapshot", async () => {
+      // OpenComputer and Vercel export the current SANDBOX_VERSION into every
+      // sandbox they start, including ones forked from an old checkpoint, so
+      // the snapshot's own version has to win.
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalled();
+      expect(storage.calls).toContain(`updateSandboxRuntimeVersion:${COMPATIBLE_RUNTIME_VERSION}`);
+      expect(sandbox.runtime_version).toBe(COMPATIBLE_RUNTIME_VERSION);
+    });
+
+    it("spawns fresh instead of restoring a snapshot taken by a retired runtime", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: "v1-retired",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).toHaveBeenCalled();
+    });
+
+    it("spawns fresh when the snapshot predates runtime-version recording", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).toHaveBeenCalled();
+    });
+
     it("resets isSpawningSandbox flag after restore throws error", async () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1388,6 +1575,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -1575,7 +1763,9 @@ describe("SandboxLifecycleManager", () => {
       await manager.triggerSnapshot("test_reason");
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
-      expect(storage.calls).toContain("updateSandboxSnapshotImageId:snapshot-img-123");
+      expect(storage.calls).toContain(
+        `updateSandboxSnapshotImageId:snapshot-img-123:${COMPATIBLE_RUNTIME_VERSION}`
+      );
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "snapshot_saved")
       ).toBe(true);
@@ -1639,7 +1829,9 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.triggerSnapshot("execution_complete");
 
-      expect(storage.calls).toContain("updateSandboxSnapshotImageId:custom-snapshot-id");
+      expect(storage.calls).toContain(
+        `updateSandboxSnapshotImageId:custom-snapshot-id:${COMPATIBLE_RUNTIME_VERSION}`
+      );
     });
 
     it("handles snapshot errors gracefully", async () => {
@@ -2082,6 +2274,9 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type?: string }).type === "sandbox_error")
       ).toBe(true);
+      // The reason is persisted alongside the broadcast, so reloading to
+      // investigate still shows why the sandbox failed.
+      expect(sandbox.last_spawn_error).toContain("failed to connect");
       // Should NOT trigger snapshot (nothing to snapshot)
       expect(provider.takeSnapshot).not.toHaveBeenCalled();
     });
@@ -2938,6 +3133,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "snapshot-img-1",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
         created_at: Date.now() - 60000,
       });
       const { manager, provider } = createMultiRepoManager({ sandbox });
@@ -2981,6 +3177,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const provider = createMockProvider();
       const manager = new SandboxLifecycleManager(
@@ -3306,6 +3503,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
@@ -3334,6 +3532,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
@@ -3364,6 +3563,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({
         status: "stopped",
         snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const storage = createMockStorage(session, sandbox);
       const broadcaster = createMockBroadcaster();
@@ -3423,7 +3623,11 @@ describe("SandboxLifecycleManager", () => {
     }
 
     function snapshotSandbox() {
-      return createMockSandbox({ status: "stopped", snapshot_image_id: "img-abc123" });
+      return createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+        snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+      });
     }
 
     it("passes agentSlackNotifyEnabled=true when the lookup returns true", async () => {

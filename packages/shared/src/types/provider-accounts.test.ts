@@ -4,6 +4,8 @@ import {
   SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
   SUBSCRIPTION_PROVIDER_IDS,
   connectModelProviderAccountRequestSchema,
+  modelProviderAccountReconnectMethod,
+  modelProviderAccountDefaultResponseSchema,
   modelProviderAccountDefaultRequestSchema,
   modelProviderAccountDefaultsResponseSchema,
   modelProviderAccountResponseSchema,
@@ -207,7 +209,7 @@ describe("provider device authorization contracts", () => {
 describe("provider account response schemas", () => {
   const account = {
     id: ACCOUNT_ID,
-    provider: "openai",
+    provider: "openai" as const,
     displayName: "Team ChatGPT",
     externalAccountId: "acct_external",
     status: "active",
@@ -241,6 +243,19 @@ describe("provider account response schemas", () => {
       }).success
     ).toBe(true);
     expect(
+      modelProviderAccountDefaultResponseSchema.safeParse({
+        default: {
+          provider: "openai",
+          providerAccountId: ACCOUNT_ID,
+          unattendedMode: "provider_account",
+          createdBy: "user-1",
+          updatedBy: "user-1",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      }).success
+    ).toBe(true);
+    expect(
       sessionModelProviderAuthResponseSchema.safeParse({
         providerAuth: [
           {
@@ -257,6 +272,22 @@ describe("provider account response schemas", () => {
         ],
       }).success
     ).toBe(true);
+  });
+
+  it("centralizes the legacy reconnect capability", () => {
+    expect(modelProviderAccountReconnectMethod(account)).toBe("device_authorization");
+    expect(
+      modelProviderAccountReconnectMethod({
+        provider: "xai",
+        externalAccountId: null,
+      })
+    ).toBe("refresh_token");
+    expect(
+      modelProviderAccountReconnectMethod({
+        provider: "xai",
+        externalAccountId: "xai-user-1",
+      })
+    ).toBe("device_authorization");
   });
 
   it("rejects credential leakage and inconsistent auth modes", () => {

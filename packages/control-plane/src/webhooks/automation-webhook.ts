@@ -14,6 +14,7 @@ import {
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
+import { Scheduler } from "../scheduler/scheduler";
 
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
@@ -80,21 +81,9 @@ async function handleAutomationWebhook(
 
   const idempotencyKey = parseWebhookIdempotencyKey(body);
 
-  // 6. Normalize and forward to SchedulerDO
+  // 6. Normalize and process the event.
   const event = normalizeWebhookEvent(automationId, body, idempotencyKey);
-
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-
-  const doId = env.SCHEDULER.idFromName("global-scheduler");
-  const stub = env.SCHEDULER.get(doId);
-
-  const response = await stub.fetch("http://internal/internal/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
+  const response = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
 
   const result = await response.json<{ triggered: number; skipped: number }>();
   return json({ ok: true, ...result }, response.status === 200 ? 200 : response.status);

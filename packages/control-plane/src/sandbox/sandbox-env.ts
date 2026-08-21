@@ -105,6 +105,19 @@ export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
 export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
 
 /**
+ * Every env var `BootMode.from_env` (sandbox_runtime/runtime_config.py) reads to
+ * decide how the runtime boots. Control-plane-owned: providers set these
+ * themselves when the mode applies, so they are stripped from the user layer.
+ * Keep in sync with that enum.
+ */
+export const BOOT_MODE_ENV_KEYS = [
+  IMAGE_BUILD_MODE_ENV_VAR,
+  "RESTORED_FROM_SNAPSHOT",
+  "FROM_REPO_IMAGE",
+  "REPO_IMAGE_SHA",
+] as const;
+
+/**
  * Env vars of the image-build callback contract, keyed by semantic name and
  * mirrored from the runtime constants in
  * `sandbox_runtime/repo_image_callback.py`. Both language sides are pinned by
@@ -270,6 +283,12 @@ export function buildSandboxEnvVars(
   const envVars: Record<string, string> = { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
   delete envVars.VNC_PASSWORD;
   delete envVars.NOVNC_PORT;
+  // Boot mode is the control plane's to decide. These are applied by the caller
+  // after this returns (only when the corresponding mode is real), so unlike the
+  // system keys below they are not overlaid and a repo secret of the same name
+  // would otherwise survive into BootMode.from_env — letting a session claim it
+  // booted from a repo image, a snapshot, or an image build when it did not.
+  for (const marker of BOOT_MODE_ENV_KEYS) delete envVars[marker];
 
   const sessionConfig = buildSessionConfig(config);
 

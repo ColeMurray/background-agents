@@ -1,14 +1,13 @@
 /**
- * SchedulerDO — singleton Durable Object that processes scheduled automations.
+ * Request-driven automation scheduler backed entirely by D1.
  *
- * Woken by the Worker's `scheduled()` handler (cron trigger) or by manual
- * trigger requests from the automation CRUD routes. Handles:
+ * Invoked by the Worker's `scheduled()` handler, automation routes, and
+ * SessionDO completion callbacks. Handles:
  * - Tick: recovery sweep + process overdue automations
  * - Trigger: manual single-automation trigger
  * - RunComplete: callback from SessionDO on execution completion
  */
 
-import { DurableObject } from "cloudflare:workers";
 import {
   automationEventSchema,
   matchesConditions,
@@ -58,7 +57,7 @@ import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
-import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
+import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
 import type { SessionInitInput } from "../session/initialize";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
@@ -166,6 +165,8 @@ const runCompleteBodySchema = z.object({
   error: z.string().optional(),
 });
 
+export type AutomationRunCompletion = z.infer<typeof runCompleteBodySchema>;
+
 function badJsonRequest(message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
     status: 400,
@@ -232,16 +233,32 @@ export async function resolveAutomationProviderAuth(
   );
 }
 
-export class SchedulerDO extends DurableObject<Env> {
+export class Scheduler {
   private readonly log: Logger;
-  /** The DO's database handle — the single point where env.DB is read. */
-  private readonly db: SqlDatabase;
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    this.log = createLogger("scheduler-do", {}, parseLogLevel(env.LOG_LEVEL));
-    // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
-    this.db = env.DB;
+  constructor(
+    private readonly db: SqlDatabase,
+    private readonly env: Env,
+    private readonly backgroundJobs: BackgroundTasks
+  ) {
+    this.log = createLogger("scheduler", {}, parseLogLevel(env.LOG_LEVEL));
+  }
+
+  /** Dispatch helper for logic tests and callers that already hold an internal Request. */
+  async dispatch(request: Request): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (request.method === "POST" && path === "/internal/tick") return this.tick();
+    if (request.method === "POST" && path === "/internal/trigger") {
+      return this.trigger(await request.json());
+    }
+    if (request.method === "POST" && path === "/internal/event") {
+      return this.event(await request.json());
+    }
+    if (request.method === "POST" && path === "/internal/run-complete") {
+      return this.runComplete(await request.json());
+    }
+    if (request.method === "GET" && path === "/internal/health") return this.health();
+    return new Response("Not Found", { status: 404 });
   }
 
   /**
@@ -420,8 +437,10 @@ export class SchedulerDO extends DurableObject<Env> {
         children,
         overlapScope,
         advanceSchedule:
-          source === "schedule" && params.advanceToNextRunAt !== undefined
-            ? { nextRunAt: params.advanceToNextRunAt }
+          source === "schedule" &&
+          params.scheduledAt !== undefined &&
+          params.advanceToNextRunAt !== undefined
+            ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
             : undefined,
       }));
     } catch (e) {
@@ -575,39 +594,17 @@ export class SchedulerDO extends DurableObject<Env> {
       },
       options.advanceSchedule &&
         params.source === "schedule" &&
+        params.scheduledAt !== undefined &&
         params.advanceToNextRunAt !== undefined
-        ? { nextRunAt: params.advanceToNextRunAt }
+        ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
         : undefined
     );
     return { outcome: "skipped" };
   }
 
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    if (request.method === "POST" && path === "/internal/tick") {
-      return this.handleTick();
-    }
-    if (request.method === "POST" && path === "/internal/trigger") {
-      return this.handleTrigger(request);
-    }
-    if (request.method === "POST" && path === "/internal/event") {
-      return this.handleEvent(request);
-    }
-    if (request.method === "POST" && path === "/internal/run-complete") {
-      return this.handleRunComplete(request);
-    }
-    if (request.method === "GET" && path === "/internal/health") {
-      return this.handleHealth();
-    }
-
-    return new Response("Not Found", { status: 404 });
-  }
-
   // ─── Tick handler ────────────────────────────────────────────────────────
 
-  private async handleTick(): Promise<Response> {
+  async tick(): Promise<Response> {
     const store = new AutomationStore(this.db);
     const now = Date.now();
     let processed = 0;
@@ -862,8 +859,8 @@ export class SchedulerDO extends DurableObject<Env> {
 
   // ─── Event handler ───────────────────────────────────────────────────────
 
-  private async handleEvent(request: Request): Promise<Response> {
-    const parsedEvent = automationEventSchema.safeParse(await request.json());
+  async event(input: unknown): Promise<Response> {
+    const parsedEvent = automationEventSchema.safeParse(input);
     if (!parsedEvent.success) {
       return badJsonRequest("Invalid automation event");
     }
@@ -1036,8 +1033,8 @@ export class SchedulerDO extends DurableObject<Env> {
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
-  private async handleTrigger(request: Request): Promise<Response> {
-    const parsedBody = manualTriggerBodySchema.safeParse(await request.json());
+  async trigger(input: unknown): Promise<Response> {
+    const parsedBody = manualTriggerBodySchema.safeParse(input);
     if (!parsedBody.success) return badJsonRequest("automationId required");
 
     const { automationId } = parsedBody.data;
@@ -1097,8 +1094,8 @@ export class SchedulerDO extends DurableObject<Env> {
 
   // ─── Run complete callback ───────────────────────────────────────────────
 
-  private async handleRunComplete(request: Request): Promise<Response> {
-    const parsedBody = runCompleteBodySchema.safeParse(await request.json());
+  async runComplete(input: unknown): Promise<Response> {
+    const parsedBody = runCompleteBodySchema.safeParse(input);
     if (!parsedBody.success) return badJsonRequest("Invalid run-complete callback");
 
     const body = parsedBody.data;
@@ -1340,7 +1337,7 @@ export class SchedulerDO extends DurableObject<Env> {
 
   // ─── Health check ────────────────────────────────────────────────────────
 
-  private async handleHealth(): Promise<Response> {
+  async health(): Promise<Response> {
     const store = new AutomationStore(this.db);
     const overdueCount = await store.countOverdue(Date.now());
 
@@ -1387,7 +1384,7 @@ export class SchedulerDO extends DurableObject<Env> {
       request_id: run.id,
       metrics: createRequestMetrics(),
       db: this.db,
-      executionCtx: createCloudflareBackgroundTasks(this.ctx),
+      executionCtx: this.backgroundJobs,
     };
 
     // What the session opens — the run's repository snapshot or, for

@@ -412,6 +412,14 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /background-agents/i });
   });
 
+  it("keeps the composer footer compact", async () => {
+    render(<Home />);
+
+    const branch = await screen.findByText("main");
+    expect(branch).toHaveClass("max-w-[9rem]", "truncate");
+    expect(screen.queryByText("build agent")).not.toBeInTheDocument();
+  });
+
   it("falls back to the repo default on a malformed stored value", async () => {
     localStorage.setItem("open-inspect-last-selected-repo", "env:");
     render(<Home />);

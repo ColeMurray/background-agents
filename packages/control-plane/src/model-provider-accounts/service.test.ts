@@ -9,6 +9,7 @@ import {
 } from "../auth/model-provider-account-adapters";
 import type { ModelProviderAccount } from "../db/model-provider-accounts";
 import type { ModelProviderAccountAtomicWriter } from "../db/model-provider-account-atomic-writer";
+import { XaiModelProviderAccountAdapter } from "../auth/model-provider-account-xai-adapter";
 import {
   ModelProviderAccountService,
   type ModelProviderAccountServiceAccountStore,
@@ -60,6 +61,13 @@ function adapter(
         }
     ),
     cachedAccess: vi.fn(() => null),
+    validateReconnectInputIdentity: vi.fn((input, expectedExternalAccountId) => {
+      const accountId =
+        input && typeof input === "object" && "accountId" in input ? String(input.accountId) : null;
+      if (expectedExternalAccountId && accountId !== expectedExternalAccountId) {
+        throw new ProviderIdentityError("OpenAI account identity did not match");
+      }
+    }),
     runtimeMetadata: vi.fn(() => ({})),
     validateExternalIdentity,
   };
@@ -378,6 +386,50 @@ describe("ModelProviderAccountService", () => {
       })
     );
     expect(store.accounts.setStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects identity-bound xAI reconnects through the adapter before consuming credentials", async () => {
+    const store = stores(providerAccount({ provider: "xai", externalAccountId: "xai-account" }));
+    const refresh = vi.fn();
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([new XaiModelProviderAccountAdapter(refresh)]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    await expect(
+      service.reconnect(ACCOUNT_ID, { provider: "xai", refreshToken: "submitted-secret" }, "user-1")
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Identity-bound xAI accounts must reconnect through device authorization",
+    });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(store.credentials.readCredentialState).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy identity-unbound xAI reconnects compatible", async () => {
+    const store = stores(providerAccount({ provider: "xai", externalAccountId: null }));
+    const refresh = vi.fn().mockResolvedValue({
+      access_token: "new-access",
+      refresh_token: "rotated-secret",
+      expires_in: 120,
+    });
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([new XaiModelProviderAccountAdapter(refresh)]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    await service.reconnect(
+      ACCOUNT_ID,
+      { provider: "xai", refreshToken: "submitted-secret" },
+      "user-1"
+    );
+
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(store.atomicWriter.reconnectCredentialAndAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "xai", externalAccountId: null })
+    );
   });
 
   it("rejects archived reconnects before consuming the submitted credential", async () => {

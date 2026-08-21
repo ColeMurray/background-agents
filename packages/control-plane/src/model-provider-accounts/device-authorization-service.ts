@@ -211,7 +211,11 @@ export class ProviderDeviceAuthorizationService {
         }
       );
       const capability = this.adapters.requireDeviceAuthorization(provider);
-      const result = await capability.pollPersisted(providerState, row.providerStateVersion);
+      const result = await capability.pollPersisted(
+        providerState,
+        row.providerStateVersion,
+        row.intervalMs
+      );
       now = this.dependencies.now();
       if (result.status === "pending") {
         const intervalMs = result.intervalMs ?? row.intervalMs;

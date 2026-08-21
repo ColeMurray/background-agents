@@ -192,6 +192,7 @@ function buildQueue() {
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
+    reportSandboxError: vi.fn((_reason: string) => {}),
   };
   const waitUntil = vi.fn((task: Promise<unknown>) =>
     task.catch((error) => log.error("background_task.failed", { error }))
@@ -349,7 +350,7 @@ describe("SessionMessageQueue", () => {
     await h.waitUntil.mock.results[0]!.value;
   });
 
-  it("broadcasts sandbox_error when the background spawn throws", async () => {
+  it("reports sandbox_error when the background spawn throws", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
     h.sandboxLifecycle.spawnSandbox.mockRejectedValue(new Error("modal exploded"));
@@ -357,10 +358,12 @@ describe("SessionMessageQueue", () => {
     await h.queue.processMessageQueue();
     await h.waitUntil.mock.results[0]!.value;
 
-    expect(h.broadcast).toHaveBeenCalledWith({
-      type: "sandbox_error",
-      error: "modal exploded",
-    });
+    // Routed through the lifecycle manager rather than broadcast directly, so
+    // the reason is persisted too and survives the reload someone does to read it.
+    expect(h.sandboxLifecycle.reportSandboxError).toHaveBeenCalledWith("modal exploded");
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sandbox_error" })
+    );
     expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
       error: expect.any(Error),
     });

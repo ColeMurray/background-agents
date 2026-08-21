@@ -134,6 +134,15 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
       : null;
   }
 
+  validateReconnectInputIdentity(
+    input: OpenAIProviderConnectInput,
+    expectedExternalAccountId: string | null
+  ): void {
+    if (expectedExternalAccountId && input.accountId !== expectedExternalAccountId) {
+      throw new ProviderIdentityError("OpenAI account identity did not match");
+    }
+  }
+
   runtimeMetadata(
     credential: OpenAIProviderCredential,
     externalAccountId: string | null

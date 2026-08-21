@@ -64,6 +64,23 @@ export const modelProviderAccountSchema = z.strictObject({
 });
 export type ModelProviderAccount = z.infer<typeof modelProviderAccountSchema>;
 
+export type ModelProviderAccountReconnectMethod = "device_authorization" | "refresh_token";
+
+/**
+ * Canonical reconnect capability for provider accounts.
+ *
+ * xAI accounts created before device authorization do not have a bound external identity and
+ * retain the one-time refresh-token reconnect path. Keep that compatibility rule here rather
+ * than making clients infer a workflow from account metadata independently.
+ */
+export function modelProviderAccountReconnectMethod(
+  account: Pick<ModelProviderAccount, "provider" | "externalAccountId">
+): ModelProviderAccountReconnectMethod {
+  return account.provider === "xai" && account.externalAccountId === null
+    ? "refresh_token"
+    : "device_authorization";
+}
+
 export const modelProviderAccountResponseSchema = z.strictObject({
   account: modelProviderAccountSchema,
 });
@@ -92,6 +109,13 @@ export const modelProviderAccountDefaultSchema = z.strictObject({
   updatedAt: z.number().int().nonnegative(),
 });
 export type ModelProviderAccountDefault = z.infer<typeof modelProviderAccountDefaultSchema>;
+
+export const modelProviderAccountDefaultResponseSchema = z.strictObject({
+  default: modelProviderAccountDefaultSchema,
+});
+export type ModelProviderAccountDefaultResponse = z.infer<
+  typeof modelProviderAccountDefaultResponseSchema
+>;
 
 export const modelProviderAccountDefaultRequestSchema = z.strictObject({
   providerAccountId: modelProviderAccountIdSchema,

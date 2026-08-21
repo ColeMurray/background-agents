@@ -319,14 +319,13 @@ export class SessionMessageQueue {
       // pending and dispatches when the sandbox WebSocket connects.
       this.backgroundTasks.submit(
         this.sandboxLifecycle.spawnSandbox().catch((error) => {
-          // Expected provider failures broadcast sandbox_error inside the
-          // lifecycle manager; this catch only sees throws from before those
-          // handlers. Surface them the same way so clients aren't left
-          // watching a silent "sandbox_spawning" forever.
-          this.messenger.broadcast({
-            type: "sandbox_error",
-            error: error instanceof Error ? error.message : "Failed to spawn sandbox",
-          });
+          // Expected provider failures report themselves inside the lifecycle
+          // manager; this catch only sees throws from before those handlers.
+          // Route it through the same call so the reason is persisted as well
+          // as broadcast — otherwise it survives only until the tab reloads.
+          this.sandboxLifecycle.reportSandboxError(
+            error instanceof Error ? error.message : "Failed to spawn sandbox"
+          );
           throw error;
         }),
         {

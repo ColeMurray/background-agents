@@ -48,6 +48,7 @@ function createMockFetcher() {
 function createTestHarness(overrides?: {
   env?: Partial<CallbackServiceEnv>;
   getSessionId?: () => string;
+  completeAutomationRun?: CallbackServiceDeps["completeAutomationRun"];
 }) {
   const log = createMockLogger();
   const repository = createMockRepository();
@@ -70,6 +71,7 @@ function createTestHarness(overrides?: {
     env,
     log,
     getSessionId: overrides?.getSessionId ?? (() => "session-123"),
+    completeAutomationRun: overrides?.completeAutomationRun,
     sleep,
   };
 
@@ -576,7 +578,7 @@ describe("CallbackNotificationService", () => {
       );
     });
 
-    it("skips automation source — the SchedulerDO has no tool-call consumer", async () => {
+    it("skips automation source because the scheduler has no tool-call consumer", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({ automationId: "a1", runId: "r1" }),
         source: "automation",
@@ -588,7 +590,7 @@ describe("CallbackNotificationService", () => {
         callId: "call-1",
       });
 
-      // No forward at all — previously this 404'd against the SchedulerDO.
+      // No forward at all; automation callbacks only report completion.
       const slackFetch = harness.slackBot.fetch;
       expect(slackFetch).not.toHaveBeenCalled();
       expect(harness.log.debug).toHaveBeenCalledWith(
@@ -840,10 +842,10 @@ describe("CallbackNotificationService", () => {
   });
 
   describe("notifyComplete — automation callback", () => {
-    it("routes automation callbacks to SCHEDULER_CALLBACK binding", async () => {
-      const schedulerFetcher = createMockFetcher();
+    it("routes automation callbacks to the injected completion function", async () => {
+      const completeAutomationRun = vi.fn(async () => new Response("ok"));
       const h = createTestHarness({
-        env: { SCHEDULER_CALLBACK: schedulerFetcher },
+        completeAutomationRun,
       });
 
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
@@ -855,34 +857,25 @@ describe("CallbackNotificationService", () => {
         }),
         source: "automation",
       });
-
-      const fetchMock = vi.mocked(schedulerFetcher.fetch);
-      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       await h.service.notifyComplete("msg-1", true);
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock).toHaveBeenCalledWith(
-        "https://internal/internal/run-complete",
-        expect.objectContaining({ method: "POST" })
-      );
-
-      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-      expect(body).toMatchObject({
+      expect(completeAutomationRun).toHaveBeenCalledTimes(1);
+      expect(completeAutomationRun).toHaveBeenCalledWith({
         automationId: "auto-1",
         runId: "run-1",
         sessionId: "session-123",
+        messageId: "msg-1",
         success: true,
+        error: undefined,
         automationName: "Daily sync",
       });
-      // Automation callbacks do NOT include HMAC signature (unlike bot callbacks)
-      expect(body.signature).toBeUndefined();
     });
 
     it("sends failure details for failed automation runs", async () => {
-      const schedulerFetcher = createMockFetcher();
+      const completeAutomationRun = vi.fn(async () => new Response("ok"));
       const h = createTestHarness({
-        env: { SCHEDULER_CALLBACK: schedulerFetcher },
+        completeAutomationRun,
       });
 
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
@@ -895,22 +888,18 @@ describe("CallbackNotificationService", () => {
         source: "automation",
       });
 
-      const fetchMock = vi.mocked(schedulerFetcher.fetch);
-      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
-
       await h.service.notifyComplete("msg-1", false, "Sandbox crashed");
 
-      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-      expect(body).toMatchObject({
-        success: false,
-        error: "Sandbox crashed",
-      });
+      expect(completeAutomationRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: "Sandbox crashed",
+        })
+      );
     });
 
-    it("skips when no SCHEDULER_CALLBACK binding", async () => {
-      const h = createTestHarness({
-        env: { SCHEDULER_CALLBACK: undefined },
-      });
+    it("skips when no automation completion function is configured", async () => {
+      const h = createTestHarness();
 
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({
@@ -943,9 +932,12 @@ describe("CallbackNotificationService", () => {
     });
 
     it("retries once on automation callback failure", async () => {
-      const schedulerFetcher = createMockFetcher();
+      const completeAutomationRun = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("network error"))
+        .mockResolvedValueOnce(new Response("ok"));
       const h = createTestHarness({
-        env: { SCHEDULER_CALLBACK: schedulerFetcher },
+        completeAutomationRun,
       });
 
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
@@ -958,14 +950,9 @@ describe("CallbackNotificationService", () => {
         source: "automation",
       });
 
-      const fetchMock = vi.mocked(schedulerFetcher.fetch);
-      fetchMock
-        .mockRejectedValueOnce(new Error("network error"))
-        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
-
       await h.service.notifyComplete("msg-1", true);
 
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(completeAutomationRun).toHaveBeenCalledTimes(2);
       expect(h.log.info).toHaveBeenCalledWith(
         "callback.complete_delivery",
         expect.objectContaining({ source: "automation", attempts: 2, retries: 1 })
@@ -973,9 +960,9 @@ describe("CallbackNotificationService", () => {
     });
 
     it("does not route automation callbacks to SLACK_BOT", async () => {
-      const schedulerFetcher = createMockFetcher();
+      const completeAutomationRun = vi.fn(async () => new Response("ok"));
       const h = createTestHarness({
-        env: { SCHEDULER_CALLBACK: schedulerFetcher },
+        completeAutomationRun,
       });
 
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
@@ -987,9 +974,6 @@ describe("CallbackNotificationService", () => {
         }),
         source: "automation",
       });
-
-      const fetchMock = vi.mocked(schedulerFetcher.fetch);
-      fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       await h.service.notifyComplete("msg-1", true);
 

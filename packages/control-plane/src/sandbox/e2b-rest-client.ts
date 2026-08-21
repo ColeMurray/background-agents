@@ -23,6 +23,16 @@ const TIMEOUT_KILL_MS = 30_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_SETTTL_MS = 15_000;
 const TIMEOUT_WRITE_FILE_MS = 30_000;
+// A snapshot bakes the build sandbox's filesystem into a reusable template;
+// larger than the other calls because it copies the whole prebuilt filesystem.
+const TIMEOUT_SNAPSHOT_MS = 180_000;
+const TIMEOUT_DELETE_TEMPLATE_MS = 30_000;
+const TIMEOUT_START_PROCESS_MS = 30_000;
+
+/** Connect envelope prefix: one flag byte plus a big-endian uint32 length. */
+const ENVELOPE_HEADER_BYTES = 5;
+/** Connect end-of-stream flag; that envelope carries `{}` or `{"error": ...}`. */
+const ENVELOPE_END_STREAM_FLAG = 0x02;
 
 const e2bSandboxDetailSchema = z.object({
   sandboxID: z.string(),
@@ -56,6 +66,20 @@ const e2bErrorBodySchema = z.object({
 
 export type E2BErrorBody = z.infer<typeof e2bErrorBodySchema>;
 
+/**
+ * Response of `POST /sandboxes/{id}/snapshots`. E2B bakes the sandbox's current
+ * filesystem and live process state into a reusable "snapshot template" whose
+ * id doubles as a `templateID`. The E2B launcher is deliberately snapshotted
+ * while waiting for fresh session env, so many sandboxes can spawn from one
+ * snapshot. `snapshotID` includes the build tag (e.g. `abc123:default`).
+ */
+const e2bSnapshotInfoSchema = z.object({
+  snapshotID: z.string(),
+  names: z.array(z.string()).default([]),
+});
+
+export type E2BSnapshotInfo = z.infer<typeof e2bSnapshotInfoSchema>;
+
 /** Default port envd listens on inside every sandbox. */
 const ENVD_PORT = 49983;
 /** Default sandbox host suffix (overridden by the create response `domain`). */
@@ -63,8 +87,10 @@ const DEFAULT_SANDBOX_DOMAIN = "e2b.app";
 /**
  * Path the per-session env file is written to. The template launcher
  * (packages/e2b-infra/oi-launch.py) polls this exact path — keep them in sync.
+ * Exported because the E2B provider's launcher start command waits on this
+ * file's consumption as its readiness handshake.
  */
-const SESSION_ENV_PATH = "/tmp/oi-session.env";
+export const SESSION_ENV_PATH = "/tmp/oi-session.env";
 
 export interface E2BCreateSandboxParams {
   templateID: string;
@@ -104,6 +130,79 @@ export class E2BApiError extends Error {
   ) {
     super(message);
     this.name = "E2BApiError";
+  }
+}
+
+/**
+ * Walk a Connect streaming response, yielding each envelope's flags and JSON.
+ * The response is fully buffered before decoding, so a truncated or malformed
+ * envelope means the stream is not trustworthy evidence — throw rather than
+ * silently dropping what did not parse.
+ */
+function* decodeConnectEnvelopes(buffer: Uint8Array): Generator<{ flags: number; body: unknown }> {
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const decoder = new TextDecoder();
+  let offset = 0;
+  while (offset < buffer.length) {
+    if (offset + ENVELOPE_HEADER_BYTES > buffer.length) {
+      throw new Error("envd stream truncated mid-envelope");
+    }
+    const flags = buffer[offset]!;
+    const length = view.getUint32(offset + 1);
+    const start = offset + ENVELOPE_HEADER_BYTES;
+    const end = start + length;
+    if (end > buffer.length) {
+      throw new Error("envd stream truncated mid-envelope");
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(decoder.decode(buffer.subarray(start, end)));
+    } catch {
+      throw new Error("envd stream contained a malformed envelope");
+    }
+    yield { flags, body };
+    offset = end;
+  }
+}
+
+/**
+ * Fail unless the stream proves the command ran to a clean exit: a start
+ * event, `end.status === "exit status 0"`, and a healthy Connect end-of-stream
+ * envelope (the protocol requires one on every completed stream). envd reports
+ * command failures in-band (a normal 200 stream ending in a non-zero
+ * `exit status`), so the HTTP status alone proves nothing — and a stream
+ * missing any part of that shape is a failure, not a success: this guards the
+ * spawn path, where a false "started" becomes a session that dies silently on
+ * the connecting timeout.
+ */
+function assertProcessStarted(buffer: Uint8Array): void {
+  let started = false;
+  let exitedCleanly = false;
+  let endOfStream = false;
+  for (const { flags, body } of decodeConnectEnvelopes(buffer)) {
+    if (flags & ENVELOPE_END_STREAM_FLAG) {
+      const streamError = (body as { error?: { message?: string } }).error;
+      if (streamError) {
+        throw new Error(`envd process start failed: ${streamError.message ?? "stream error"}`);
+      }
+      endOfStream = true;
+      continue;
+    }
+    const event = (body as { event?: Record<string, { status?: string }> }).event;
+    if (event?.start) started = true;
+    const status = event?.end?.status;
+    if (status !== undefined) {
+      if (status !== "exit status 0") {
+        throw new Error(`envd process start exited non-zero: ${status}`);
+      }
+      exitedCleanly = true;
+    }
+  }
+  if (!started || !exitedCleanly || !endOfStream) {
+    throw new Error(
+      `envd process start stream incomplete ` +
+        `(start=${started} clean_exit=${exitedCleanly} end_of_stream=${endOfStream})`
+    );
   }
 }
 
@@ -217,8 +316,18 @@ export class E2BRestClient {
     return this.requestJson("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS, e2bSandboxDetailSchema);
   }
 
-  async pauseSandbox(id: string): Promise<void> {
-    await this.requestVoid("POST", `/sandboxes/${id}/pause`, TIMEOUT_PAUSE_MS);
+  /**
+   * Pause a sandbox. By default E2B persists filesystem + memory (a resumable
+   * freeze). Pass `{ memory: false }` for a filesystem-only pause: resuming it
+   * cold-boots (reboots) the sandbox from disk, dropping all process memory. The
+   * image-build path uses that to discard the build supervisor (and its secret
+   * env) before baking a reusable snapshot.
+   */
+  async pauseSandbox(id: string, opts?: { memory?: boolean }, signal?: AbortSignal): Promise<void> {
+    await this.requestVoid("POST", `/sandboxes/${id}/pause`, TIMEOUT_PAUSE_MS, {
+      ...(opts?.memory === undefined ? {} : { body: { memory: opts.memory } }),
+      signal,
+    });
   }
 
   /**
@@ -229,10 +338,70 @@ export class E2BRestClient {
    * through getSandbox when they need it, so this is a command: the success body
    * carries nothing we act on and is discarded.
    */
-  async connectSandbox(id: string, timeoutSeconds: number): Promise<void> {
+  async connectSandbox(id: string, timeoutSeconds: number, signal?: AbortSignal): Promise<void> {
     await this.requestVoid("POST", `/sandboxes/${id}/connect`, TIMEOUT_CONNECT_MS, {
       body: { timeout: timeoutSeconds },
+      signal,
     });
+  }
+
+  /**
+   * Start a detached process inside a sandbox through envd.
+   *
+   * envd speaks Connect RPC and `Process/Start` is server-streaming, so the
+   * request body must be a Connect *envelope* — one flag byte, then a
+   * big-endian uint32 length, then the JSON message. Posting bare JSON to this
+   * endpoint returns 415.
+   *
+   * The command is expected to detach and exit (the caller wants the spawned
+   * process to outlive this RPC), so a non-zero exit or a stream-level error is
+   * a real failure and throws.
+   */
+  async startProcess(
+    id: string,
+    shellCommand: string,
+    opts: { domain?: string | null; envdAccessToken: string; signal?: AbortSignal }
+  ): Promise<void> {
+    const domain = opts.domain || DEFAULT_SANDBOX_DOMAIN;
+    const url = `https://${ENVD_PORT}-${id}.${domain}/process.Process/Start`;
+    const message = JSON.stringify({
+      process: { cmd: "/bin/sh", args: ["-c", shellCommand] },
+    });
+    const payload = new TextEncoder().encode(message);
+    const framed = new Uint8Array(ENVELOPE_HEADER_BYTES + payload.length);
+    new DataView(framed.buffer).setUint32(1, payload.length);
+    framed.set(payload, ENVELOPE_HEADER_BYTES);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_START_PROCESS_MS);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        body: framed,
+        headers: {
+          "Content-Type": "application/connect+json",
+          "connect-protocol-version": "1",
+          "X-Access-Token": opts.envdAccessToken,
+        },
+        signal: opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new E2BApiError(
+          text || `envd process start failed (${response.status})`,
+          response.status,
+          text
+        );
+      }
+      assertProcessStarted(new Uint8Array(await response.arrayBuffer()));
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`E2B envd process start timeout after ${TIMEOUT_START_PROCESS_MS}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async killSandbox(id: string, signal?: AbortSignal): Promise<void> {
@@ -243,6 +412,45 @@ export class E2BRestClient {
     await this.requestVoid("POST", `/sandboxes/${id}/timeout`, TIMEOUT_SETTTL_MS, {
       body: { timeout: timeoutSeconds },
     });
+  }
+
+  /**
+   * Bake the sandbox's current filesystem into a reusable snapshot template
+   * (`POST /sandboxes/{id}/snapshots`). The returned `snapshotID` is passed
+   * verbatim as `templateID` to {@link createSandbox} to spawn a prebuilt-image
+   * sandbox. Used by the image-build workflow after `.openinspect/setup.sh` has
+   * run once in the build sandbox.
+   */
+  async createSnapshot(
+    id: string,
+    options?: { name?: string; signal?: AbortSignal }
+  ): Promise<E2BSnapshotInfo> {
+    const startMs = Date.now();
+    try {
+      return await this.requestJson(
+        "POST",
+        `/sandboxes/${id}/snapshots`,
+        TIMEOUT_SNAPSHOT_MS,
+        e2bSnapshotInfoSchema,
+        { body: options?.name ? { name: options.name } : {}, signal: options?.signal }
+      );
+    } finally {
+      log.info("e2b.create_snapshot", { duration_ms: Date.now() - startMs, sandbox_id: id });
+    }
+  }
+
+  /**
+   * Delete a snapshot template (`DELETE /templates/{templateID}`). Snapshot ids,
+   * build tag included, are passed verbatim as the E2B API requires. Used by the
+   * image-build reaper to reclaim superseded prebuilt images.
+   */
+  async deleteTemplate(templateId: string, signal?: AbortSignal): Promise<void> {
+    await this.requestVoid(
+      "DELETE",
+      `/templates/${encodeURIComponent(templateId)}`,
+      TIMEOUT_DELETE_TEMPLATE_MS,
+      { signal }
+    );
   }
 
   getHostnameForPort(sandboxId: string, port: number, domain?: string | null): string {
@@ -261,7 +469,7 @@ export class E2BRestClient {
    * `schema`, otherwise the call fails as an invalid response.
    */
   private requestJson<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     schema: z.ZodType<T>,
@@ -286,7 +494,7 @@ export class E2BRestClient {
    * can fail the call.
    */
   private requestVoid(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     options?: { body?: unknown; signal?: AbortSignal }
@@ -300,7 +508,7 @@ export class E2BRestClient {
    * abort raised there is translated like any other (see the catch below).
    */
   private async send<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     options: { body?: unknown; signal?: AbortSignal } | undefined,

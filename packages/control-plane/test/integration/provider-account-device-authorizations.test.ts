@@ -115,6 +115,49 @@ describe("provider account device authorization routes", () => {
     expect(transaction).toEqual({ state: "connected", encrypted_provider_data: null });
   });
 
+  it("connects an xAI account through device authorization", async () => {
+    const started = await request("/model-provider-accounts/xai/device-authorizations", "POST", {
+      operation: "create",
+      displayName: "Primary SuperGrok",
+    });
+    expect(started.status).toBe(201);
+    const startBody = await started.json<{
+      transactionId: string;
+      userCode: string;
+      verificationUrl: string;
+    }>();
+    expect(startBody).toMatchObject({
+      userCode: "XAI-CODE",
+      verificationUrl: "https://accounts.x.ai/oauth2/device?user_code=XAI-CODE",
+    });
+
+    await makeDue(startBody.transactionId);
+    const connected = await request(
+      `/model-provider-accounts/xai/device-authorizations/${startBody.transactionId}/poll`,
+      "POST"
+    );
+    const connectedBody = await connected.json<{ account: { id: string } }>();
+    expect(connectedBody).toMatchObject({
+      status: "connected",
+      account: {
+        provider: "xai",
+        displayName: "Primary SuperGrok",
+        externalAccountId: "xai-integration",
+      },
+      reconnectedExisting: false,
+    });
+
+    const legacyReconnect = await request(
+      `/model-provider-accounts/${connectedBody.account.id}/reconnect`,
+      "POST",
+      { provider: "xai", refreshToken: "integration-xai-manual-reconnect" }
+    );
+    expect(legacyReconnect.status).toBe(409);
+    await expect(legacyReconnect.json()).resolves.toMatchObject({
+      error: "Identity-bound xAI accounts must reconnect through device authorization",
+    });
+  });
+
   it("reconnects only the same trusted identity and preserves the display name", async () => {
     await ensureAuthenticatedUser();
     await seedAccount();
@@ -268,10 +311,12 @@ describe("provider account device authorization routes", () => {
 
   it("expires locally without allowing a provider completion", async () => {
     const { result } = await start();
+    const expiredAt = Date.now() - 1;
     await env.DB.prepare(
-      "UPDATE model_provider_account_authorizations SET expires_at = ? WHERE id = ?"
+      `UPDATE model_provider_account_authorizations
+       SET created_at = ?, expires_at = ? WHERE id = ?`
     )
-      .bind(Date.now() - 1, result.transactionId)
+      .bind(expiredAt - 1, expiredAt, result.transactionId)
       .run();
     const response = await request(
       `/model-provider-accounts/openai/device-authorizations/${result.transactionId}/poll`,

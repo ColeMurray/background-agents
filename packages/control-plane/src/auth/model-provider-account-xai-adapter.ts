@@ -14,8 +14,10 @@ import {
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
   type ProviderConnectionResult,
+  type ProviderDeviceAuthorizationCapability,
   type ProviderRefreshResult,
 } from "./model-provider-account-adapters";
+import { XaiProviderDeviceAuthorization } from "./model-provider-account-xai-device-authorization";
 
 const credentialSchema = z.object({
   refreshToken: z.string().min(1),
@@ -42,7 +44,13 @@ export class XaiModelProviderAccountAdapter implements ModelProviderAccountAdapt
   readonly credentialSchemaVersion = 1;
   readonly refreshBufferMs = DEFAULT_PROVIDER_REFRESH_BUFFER_MS;
 
-  constructor(private readonly refreshToken: RefreshXai = refreshXaiToken) {}
+  constructor(
+    private readonly refreshToken: RefreshXai = refreshXaiToken,
+    readonly deviceAuthorization: ProviderDeviceAuthorizationCapability<
+      XaiProviderCredential,
+      unknown
+    > = new XaiProviderDeviceAuthorization()
+  ) {}
 
   parseConnectInput(input: unknown): XaiProviderConnectInput {
     return connectInputSchema.parse(input);
@@ -108,6 +116,17 @@ export class XaiModelProviderAccountAdapter implements ModelProviderAccountAdapt
           accessTokenExpiresAt: credential.accessTokenExpiresAt,
         }
       : null;
+  }
+
+  validateReconnectInputIdentity(
+    _input: XaiProviderConnectInput,
+    expectedExternalAccountId: string | null
+  ): void {
+    if (expectedExternalAccountId) {
+      throw new ProviderIdentityError(
+        "Identity-bound xAI accounts must reconnect through device authorization"
+      );
+    }
   }
 
   runtimeMetadata(_credential: XaiProviderCredential, _externalAccountId: string | null) {

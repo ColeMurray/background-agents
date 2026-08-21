@@ -4,10 +4,16 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import type { SentryAutomationEvent, WebhookAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
+import { Scheduler } from "../../src/scheduler/scheduler";
+import type { Env } from "../../src/types";
 
 function getSchedulerStub() {
-  const id = env.SCHEDULER.idFromName("global-scheduler");
-  return env.SCHEDULER.get(id);
+  const scheduler = new Scheduler(env.DB, env as Env, { submit() {} });
+  return {
+    fetch(input: RequestInfo | URL, init?: RequestInit) {
+      return scheduler.dispatch(new Request(input, init));
+    },
+  };
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -38,24 +44,11 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 
 async function sendEvent(event: SentryAutomationEvent | WebhookAutomationEvent): Promise<Response> {
   const stub = getSchedulerStub();
-  const opts = {
+  return stub.fetch("http://internal/internal/event", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(event),
-  };
-  try {
-    return await stub.fetch("http://internal/internal/event", opts);
-  } catch (e) {
-    // Retry once on DO invalidation (shared-storage integration runs can race)
-    if (e instanceof Error && e.message.includes("invalidating this Durable Object")) {
-      const retryStub = env.SCHEDULER.get(env.SCHEDULER.idFromName("global-scheduler"));
-      return retryStub.fetch("http://internal/internal/event", {
-        ...opts,
-        body: JSON.stringify(event),
-      });
-    }
-    throw e;
-  }
+  });
 }
 
 function makeSentryEvent(
@@ -93,7 +86,7 @@ function makeWebhookEvent(
   };
 }
 
-describe("SchedulerDO /internal/event (integration)", () => {
+describe("Scheduler event handling (integration)", () => {
   beforeEach(cleanD1Tables);
 
   // ─── Sentry event matching ───────────────────────────────────────────────

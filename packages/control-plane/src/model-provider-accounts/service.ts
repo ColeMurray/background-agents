@@ -280,7 +280,9 @@ export class ModelProviderAccountService {
       throw new ProviderAccountServiceError("Provider account does not match provider", 400);
     }
     const adapter = this.requireAdapter(account.provider);
-    const connected = await this.connect(adapter, input);
+    const parsedInput = adapter.parseConnectInput(input);
+    this.validateReconnectInputIdentity(adapter, parsedInput, account.externalAccountId);
+    const connected = await this.connectParsed(adapter, parsedInput);
     this.validateExternalIdentity(adapter, connected.externalAccountId, account.externalAccountId);
     return this.persistConnectedCredential(
       account,
@@ -371,8 +373,30 @@ export class ModelProviderAccountService {
     adapter: ErasedProviderAccountAdapter,
     input: ConnectModelProviderAccountRequest | ReconnectModelProviderAccountRequest
   ): Promise<ProviderConnectionResult<unknown>> {
+    return this.connectParsed(adapter, adapter.parseConnectInput(input));
+  }
+
+  private async connectParsed(
+    adapter: ErasedProviderAccountAdapter,
+    input: unknown
+  ): Promise<ProviderConnectionResult<unknown>> {
     try {
-      return await adapter.connect(adapter.parseConnectInput(input));
+      return await adapter.connect(input);
+    } catch (cause) {
+      if (cause instanceof ProviderIdentityError) {
+        throw new ProviderAccountServiceError(cause.message, 409, { cause });
+      }
+      throw cause;
+    }
+  }
+
+  private validateReconnectInputIdentity(
+    adapter: ErasedProviderAccountAdapter,
+    input: unknown,
+    expectedExternalAccountId: string | null
+  ): void {
+    try {
+      adapter.validateReconnectInputIdentity(input, expectedExternalAccountId);
     } catch (cause) {
       if (cause instanceof ProviderIdentityError) {
         throw new ProviderAccountServiceError(cause.message, 409, { cause });

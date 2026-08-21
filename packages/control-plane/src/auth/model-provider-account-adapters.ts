@@ -26,7 +26,10 @@ export interface ProviderDeviceAuthorizationCapability<TCredential, TProviderSta
   readonly stateSchemaVersion: number;
   start(): Promise<ProviderDeviceAuthorizationStart<TProviderState>>;
   parseState(payload: unknown, schemaVersion: number): TProviderState;
-  poll(providerState: TProviderState): Promise<ProviderDeviceAuthorizationPollResult<TCredential>>;
+  poll(
+    providerState: TProviderState,
+    intervalMs: number
+  ): Promise<ProviderDeviceAuthorizationPollResult<TCredential>>;
 }
 
 interface ErasedProviderDeviceAuthorizationCapability {
@@ -34,7 +37,8 @@ interface ErasedProviderDeviceAuthorizationCapability {
   start(): Promise<ProviderDeviceAuthorizationStart<unknown>>;
   pollPersisted(
     payload: unknown,
-    schemaVersion: number
+    schemaVersion: number,
+    intervalMs: number
   ): Promise<ProviderDeviceAuthorizationPollResult<unknown>>;
 }
 
@@ -60,6 +64,10 @@ export interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
   parseCredential(payload: unknown, schemaVersion: number): TCredential;
   refresh(credential: TCredential, now?: number): Promise<ProviderRefreshResult<TCredential>>;
   cachedAccess(credential: TCredential): CachedProviderAccess | null;
+  validateReconnectInputIdentity(
+    input: TConnectInput,
+    expectedExternalAccountId: string | null
+  ): void;
   runtimeMetadata(
     credential: TCredential,
     externalAccountId: string | null
@@ -121,7 +129,7 @@ function eraseDeviceAuthorizationCapability<TCredential, TProviderState>(
   return {
     stateSchemaVersion: capability.stateSchemaVersion,
     start: () => capability.start(),
-    pollPersisted: (payload, schemaVersion) =>
-      capability.poll(capability.parseState(payload, schemaVersion)),
+    pollPersisted: (payload, schemaVersion, intervalMs) =>
+      capability.poll(capability.parseState(payload, schemaVersion), intervalMs),
   };
 }

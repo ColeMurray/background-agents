@@ -51,6 +51,11 @@ import { ConditionBuilder } from "./condition-builder";
 import { useAutomationTargets } from "./use-automation-targets";
 import { cn } from "@/lib/utils";
 import { NO_REPOSITORY_LABEL, formatRepositoriesLabel } from "@/lib/repo-label";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
+import { useProviderAccounts } from "@/hooks/use-provider-accounts";
+import { ProviderAuthControls } from "@/components/provider-auth-controls";
+import { setProviderSelection } from "@/lib/provider-selection";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -120,6 +125,7 @@ export interface AutomationFormValues {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  providerSelections: ModelProviderSelections;
 }
 
 interface AutomationFormProps {
@@ -133,6 +139,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const { repos, loading: loadingRepos } = useRepos();
   const { environments, loading: loadingEnvironments } = useEnvironments();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
+  const providerAccounts = useProviderAccounts();
   const initialRepositories = useMemo(
     () => initialValues?.repositories ?? [],
     [initialValues?.repositories]
@@ -158,6 +165,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerConfig?.conditions ?? []
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
+  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
+    initialValues?.providerSelections ?? {}
+  );
 
   const isSchedule = triggerType === "schedule";
   // Multi-repository selections are schedule-only (the server rejects them for
@@ -298,6 +308,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       triggerType,
       // Always send the full selection — an empty list means repo-less.
       repositories: buildRepositoriesPayload(),
+      providerSelections,
     };
 
     if (!isSchedule) {
@@ -755,6 +766,30 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           allowed. &quot;Use model default&quot; leaves the choice to the model.
         </FieldDescription>
       </div>
+
+      <fieldset className="space-y-3 rounded-md border border-border-muted p-4">
+        <legend className="px-1 text-sm font-medium text-foreground">
+          Provider authentication
+        </legend>
+        <FieldDescription className="mb-3">
+          Unpinned providers use defaults when each run starts. Pins are retained when the
+          configured model changes and apply only to future sessions.
+        </FieldDescription>
+        {SUBSCRIPTION_PROVIDER_IDS.map((provider) => (
+          <ProviderAuthControls
+            key={provider}
+            provider={provider}
+            accounts={providerAccounts.accounts}
+            defaultValue={providerAccounts.defaults.find((item) => item.provider === provider)}
+            value={providerSelections[provider]}
+            policyLabel="Use defaults when each run starts"
+            unattended
+            onChange={(selection) =>
+              setProviderSelections((current) => setProviderSelection(current, provider, selection))
+            }
+          />
+        ))}
+      </fieldset>
 
       {/* Schedule fields (only for schedule type) */}
       {isSchedule && (

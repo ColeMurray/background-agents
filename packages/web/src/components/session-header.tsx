@@ -93,6 +93,8 @@ const SANDBOX_STATUS_PRESENTATION: Record<
 
 export type SessionHeaderProps = {
   sessionState: SessionSocketState["sessionState"];
+  /** Why the sandbox last failed; shown in the status popover. */
+  sandboxError?: SessionSocketState["sandboxError"];
   fallbackSessionInfo: {
     repoOwner: string | null;
     repoName: string | null;
@@ -115,6 +117,7 @@ export type SessionHeaderProps = {
 
 export function SessionHeader({
   sessionState,
+  sandboxError,
   fallbackSessionInfo,
   connected,
   connecting,
@@ -240,6 +243,7 @@ export function SessionHeader({
             <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
               dashboardUrl={sessionState?.sandboxDashboardUrl}
+              error={sandboxError}
             />
           </div>
           {showDesktopDetailsToggle && (
@@ -295,9 +299,17 @@ function ConnectionStatusIcon({
 function SandboxStatusIcon({
   status,
   dashboardUrl,
+  error,
 }: {
   status?: SandboxStatusValue;
   dashboardUrl?: string | null;
+  /**
+   * The control plane's reason for the current failure, when it has one.
+   * Rendered verbatim: it is usually the sandbox provider's own message (quota
+   * exceeded, rate limited, timeout above the plan cap), which is the only part
+   * that tells someone what to actually change.
+   */
+  error?: string | null;
 }) {
   if (!status) return null;
 
@@ -329,6 +341,11 @@ function SandboxStatusIcon({
             Sandbox {presentation.label}
           </div>
           <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
+          {error && (
+            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
+              {error}
+            </p>
+          )}
         </div>
         {safeDashboardUrl && (
           <a

@@ -1,5 +1,5 @@
 /**
- * Unit tests for SchedulerDO.
+ * Unit tests for Scheduler.
  *
  * Uses mocked D1 and SESSION namespace. For full integration tests
  * (with real D1 + workerd), see test/integration/scheduler.test.ts and
@@ -10,18 +10,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
-
-// Mock cloudflare:workers before importing SchedulerDO (extends DurableObject)
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -51,8 +39,7 @@ vi.mock("../session/skill-resolution", () => ({
   })),
 }));
 
-// Must import AFTER vi.mock so the hoisted mock is in place
-const { SchedulerDO } = await import("./durable-object");
+const { Scheduler } = await import("./scheduler");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
@@ -333,9 +320,9 @@ function createEnv(overrides?: Partial<Env>): Env {
   } as Env;
 }
 
-function createSchedulerDO(env?: Env): InstanceType<typeof SchedulerDO> {
-  const ctx = { storage: {} } as unknown as DurableObjectState;
-  return new SchedulerDO(ctx, env ?? createEnv());
+function createSchedulerDO(env = createEnv()) {
+  const scheduler = new Scheduler(env.DB, env, { submit: vi.fn() });
+  return Object.assign(scheduler, { fetch: (request: Request) => scheduler.dispatch(request) });
 }
 
 // ─── Sample data ─────────────────────────────────────────────────────────────
@@ -474,7 +461,7 @@ function lastInsertedChildren(): Array<Record<string, unknown>> {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe("SchedulerDO", () => {
+describe("Scheduler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveSessionProviderAuth.mockResolvedValue([
@@ -544,12 +531,43 @@ describe("SchedulerDO", () => {
         scheduled_at: sampleAutomation.next_run_at,
       });
       expect(params.overlapScope).toEqual({ kind: "automation" });
-      expect(params.advanceSchedule).toEqual({ nextRunAt: expect.any(Number) });
+      expect(params.advanceSchedule).toEqual({
+        fromSlot: sampleAutomation.next_run_at,
+        nextRunAt: expect.any(Number),
+      });
       expect(params.children).toHaveLength(1);
 
       expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ status: "running" })
+      );
+    });
+
+    it("does not enqueue a prompt when recovery wins the launch transition", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.updateRun.mockResolvedValue(false);
+
+      const env = createEnv();
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const fetchMock = vi.mocked(stub.fetch);
+
+      const scheduler = createSchedulerDO(env);
+      const response = await scheduler.fetch(
+        new Request("http://internal/internal/tick", { method: "POST" })
+      );
+
+      expect(await response.json()).toMatchObject({ processed: 0, failed: 1 });
+      expect(promptCallCount(fetchMock)).toBe(0);
+      expect(mockStore.updateRun).toHaveBeenNthCalledWith(
+        1,
+        expect.any(String),
+        expect.objectContaining({ status: "running" })
+      );
+      expect(mockStore.updateRun).toHaveBeenNthCalledWith(
+        2,
+        expect.any(String),
+        expect.objectContaining({ status: "failed" })
       );
     });
 
@@ -1155,7 +1173,7 @@ describe("SchedulerDO", () => {
           scheduled_at: sampleAutomation.next_run_at,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: expect.any(Number) }
+        { fromSlot: sampleAutomation.next_run_at, nextRunAt: expect.any(Number) }
       );
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });

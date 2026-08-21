@@ -44,6 +44,7 @@ function adapter(
     parseCredential: vi.fn((value) => value as Credential),
     refresh,
     cachedAccess: vi.fn(() => null),
+    validateReconnectInputIdentity: vi.fn() as never,
     runtimeMetadata: vi.fn(() => ({})),
     validateExternalIdentity: vi.fn(),
   };
