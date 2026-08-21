@@ -274,7 +274,7 @@ export function buildCommentActionPrompt(params: {
   let replyInstruction = "";
   let suggestionSection = "";
   if (commentId) {
-    replyInstruction = `\n5. If you need to reply to the specific review thread:\n\n   gh api repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies \\\n     --method POST \\\n     -f body="<your reply>"\n\n   A thread reply is anchored to the same lines as the comment it answers, so it can carry an\n   applyable suggestion. The summary comment cannot: an issue comment has no line anchor, and a\n   suggestion fence there renders as an inert code block. If you already pushed the fix, say so\n   in the reply instead of suggesting it.`;
+    replyInstruction = `\n5. If you need to reply to the specific review thread, write the reply to a file first — a suggestion fence contains backticks, and backticks inside a double-quoted shell argument are command substitution:\n\n   gh api repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies \\\n     --method POST \\\n     -F body=@/tmp/reply.md\n\n   A thread reply is anchored to the same lines as the comment it answers, so it can carry an\n   applyable suggestion. The summary comment cannot: an issue comment has no line anchor, and a\n   suggestion fence there renders as an inert code block. If you already pushed the fix, say so\n   in the reply instead of suggesting it.`;
     suggestionSection = `\n${buildSuggestionGuidelines()}`;
   }
 

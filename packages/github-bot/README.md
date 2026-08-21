@@ -241,6 +241,11 @@ rejects the whole review with HTTP 422). Because the sandbox has the head branch
 agent is required to print the anchored lines and validate the patched file before emitting a fence,
 and to fall back to prose when it cannot — an applied suggestion is one click from merge.
 
+The review path carries suggestions safely because `/tmp/review.json` is a JSON file, not a shell
+argument. The thread-reply path in `buildCommentActionPrompt` therefore uses `-F body=@<file>`
+rather than an inline `-f body="…"`: a fence contains backticks, and backticks inside a
+double-quoted shell argument are command substitution.
+
 The prompts embed only metadata from the webhook payload. The agent gathers everything else.
 
 ## Observability

@@ -240,6 +240,9 @@ describe("buildCommentActionPrompt", () => {
     const prompt = buildCommentActionPrompt({ ...baseParams, commentId: 999 });
     expect(prompt).toContain("## Applyable Suggestions");
     expect(prompt).toContain("```suggestion");
+    expect(prompt).toContain("-F body=@/tmp/reply.md");
+    // A fence contains backticks; inside `-f body="…"` the shell would execute them.
+    expect(prompt).not.toContain('-f body="<your reply>"');
     // The summary lands on issues/{n}/comments, which has no line anchor, so a fence there is
     // inert — the agent has to know which of its two posting paths can carry one.
     expect(prompt).toContain("renders as an inert code block");
