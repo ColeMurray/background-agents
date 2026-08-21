@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SkillAssignments } from "./skill-assignments";
 import { SkillFiles } from "./skill-files";
+import { SkillReimport } from "./skill-reimport";
 import { assignmentKey, buildAssignments, errorMessage } from "./utils";
 
 export function SkillEditor({
@@ -284,6 +285,10 @@ export function SkillEditor({
           {" · "}created by {skill.creatorDisplayName ?? skill.createdBy}
           {" · "}last edited by {skill.lastEditorDisplayName ?? skill.updatedBy}
         </div>
+      )}
+
+      {skill?.source && (
+        <SkillReimport skill={skill} dirty={dirty} onReimported={() => onSaved(skill.id)} />
       )}
 
       <SkillFiles files={files} onChange={setFiles} />

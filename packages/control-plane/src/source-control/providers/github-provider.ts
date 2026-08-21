@@ -23,8 +23,14 @@ import type {
   GitPushSpec,
   GitPushAuthContext,
   CredentialHelperAuth,
+  ResolvedCommit,
+  RepositoryTree,
 } from "../types";
-import { SourceControlProviderError, parseProviderResponse } from "../errors";
+import {
+  assertBlobWithinLimit,
+  SourceControlProviderError,
+  parseProviderResponse,
+} from "../errors";
 import {
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
@@ -116,6 +122,36 @@ const githubRepositoryInfoSchema = z.object({
 const githubBranchRefSchema = z.object({
   object: z.object({ sha: z.string().min(1) }),
 });
+
+/** Wire shape of GET /repos/{owner}/{repo}/commits/{ref}, limited to the SHA. */
+const githubCommitSchema = z.object({ sha: z.string().min(1) });
+
+/** Wire shape of GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1. */
+const githubTreeSchema = z.object({
+  truncated: z.boolean().optional(),
+  tree: z.array(
+    z.object({
+      path: z.string(),
+      mode: z.string(),
+      type: z.string(),
+      sha: z.string(),
+      size: z.number().int().nonnegative().optional(),
+    })
+  ),
+});
+
+/** Build a classified provider error from a non-OK GitHub response. */
+async function githubResponseError(
+  response: Response,
+  operation: string
+): Promise<SourceControlProviderError> {
+  const body = await response.text();
+  return SourceControlProviderError.fromFetchError(
+    `Failed to ${operation}: ${response.status} ${body}`,
+    new Error(body),
+    response.status
+  );
+}
 
 /** Parse a GitHub ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
@@ -543,6 +579,122 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         extractHttpStatus(error)
       );
     }
+  }
+
+  async resolveCommit(
+    config: GetRepositoryConfig & { ref: string }
+  ): Promise<ResolvedCommit | null> {
+    const data = await this.appJson(
+      `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+        config.name
+      )}/commits/${encodeURIComponent(config.ref)}`,
+      githubCommitSchema,
+      "resolve commit",
+      true
+    );
+    return data === null ? null : { sha: data.sha };
+  }
+
+  async listTree(config: GetRepositoryConfig & { commitSha: string }): Promise<RepositoryTree> {
+    const data = await this.appJsonRequired(
+      `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+        config.name
+      )}/git/trees/${encodeURIComponent(config.commitSha)}?recursive=1`,
+      githubTreeSchema,
+      "list repository tree"
+    );
+    return {
+      truncated: data.truncated === true,
+      // GitHub reports blob sizes in the tree, so callers get a usable
+      // pre-download budget check from listTree alone.
+      entries: data.tree.map((entry) => ({
+        path: entry.path,
+        type: entry.type === "blob" ? "file" : entry.type === "tree" ? "directory" : "other",
+        blobId: entry.sha,
+        sizeBytes: entry.size ?? null,
+        executable: entry.mode === "100755",
+      })),
+    };
+  }
+
+  async readBlob(
+    config: GetRepositoryConfig & { blobId: string; maxBytes: number }
+  ): Promise<Uint8Array> {
+    try {
+      const response = await this.appFetch(
+        `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/git/blobs/${encodeURIComponent(config.blobId)}`,
+        "read blob",
+        "application/vnd.github.raw"
+      );
+      if (!response.ok) throw await githubResponseError(response, "read blob");
+      assertBlobWithinLimit(response, config.maxBytes, config.blobId);
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to read blob: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  /** Issue an installation-authenticated GitHub API request. */
+  private async appFetch(path: string, operation: string, accept: string): Promise<Response> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        `GitHub App not configured - cannot ${operation}`,
+        "permanent"
+      );
+    }
+    const token = await getCachedInstallationToken(this.appConfig, {
+      cacheStore: this.cacheStore,
+      userAgent: this.userAgent,
+    });
+    return fetchWithTimeout(`${GITHUB_API_BASE}${path}`, {
+      headers: {
+        Accept: accept,
+        Authorization: `Bearer ${token}`,
+        "User-Agent": this.userAgent,
+      },
+    });
+  }
+
+  /**
+   * Installation-authenticated GET returning parsed JSON. A confirmed 404 is
+   * absence only when the caller asks for it; otherwise it is an error.
+   */
+  private async appJson<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    operation: string,
+    notFoundIsAbsence: boolean
+  ): Promise<T | null> {
+    try {
+      const response = await this.appFetch(path, operation, "application/vnd.github+json");
+      if (notFoundIsAbsence && response.status === 404) return null;
+      if (!response.ok) throw await githubResponseError(response, operation);
+      return await parseProviderResponse(response, schema, `Failed to ${operation}`);
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to ${operation}: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  private async appJsonRequired<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    operation: string
+  ): Promise<T> {
+    const data = await this.appJson(path, schema, operation, false);
+    if (data === null) throw new SourceControlProviderError(`Failed to ${operation}`, "permanent");
+    return data;
   }
 
   /**

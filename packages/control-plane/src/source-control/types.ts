@@ -150,6 +150,47 @@ export interface RepositoryAccessResult {
 }
 
 /**
+ * A commit-ish resolved to the commit it names.
+ */
+export interface ResolvedCommit {
+  /** Full commit SHA. */
+  sha: string;
+}
+
+/**
+ * One entry in a recursive repository listing.
+ */
+export interface RepositoryTreeEntry {
+  /** Repository-relative POSIX path. */
+  path: string;
+  /**
+   * Entry kind. Anything a provider reports that is neither a file nor a
+   * directory (submodule, symlink) is "other" — callers decide whether their
+   * operation can proceed without it.
+   */
+  type: "file" | "directory" | "other";
+  /** Provider blob ID, for files. */
+  blobId: string;
+  /**
+   * Byte size when the provider reports one, otherwise null. Null means
+   * unknown, never zero — a caller enforcing a size budget cannot treat a
+   * listing as size-bearing unless every entry reports one.
+   */
+  sizeBytes: number | null;
+  /** Whether the file carries the executable mode bit. */
+  executable: boolean;
+}
+
+/**
+ * A recursive repository listing at one commit.
+ */
+export interface RepositoryTree {
+  entries: RepositoryTreeEntry[];
+  /** True when the provider cut the listing short and entries are missing. */
+  truncated: boolean;
+}
+
+/**
  * Configuration for creating a pull request.
  */
 export interface CreatePullRequestConfig {
@@ -367,6 +408,48 @@ export interface SourceControlProvider {
    * absence; authentication, throttling, and transport failures throw.
    */
   getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null>;
+
+  /**
+   * Resolve a branch, tag, or commit-ish to the commit it names.
+   *
+   * App-authenticated. A confirmed 404 is absence (null); authentication,
+   * throttling, and transport failures throw.
+   *
+   * @param config - Repository identifier plus the ref to resolve
+   * @returns The resolved commit, or null when the ref does not exist
+   * @throws SourceControlProviderError
+   */
+  resolveCommit(config: GetRepositoryConfig & { ref: string }): Promise<ResolvedCommit | null>;
+
+  /**
+   * List every entry reachable from a commit, recursively.
+   *
+   * App-authenticated. Providers cap how much tree they will return in one
+   * response; `truncated` reports that cap being hit so callers can refuse to
+   * act on a partial listing rather than silently dropping entries.
+   *
+   * @param config - Repository identifier plus the commit to read
+   * @throws SourceControlProviderError
+   */
+  listTree(config: GetRepositoryConfig & { commitSha: string }): Promise<RepositoryTree>;
+
+  /**
+   * Read one blob's raw bytes by its provider blob ID.
+   *
+   * App-authenticated. Blob IDs come from `listTree`, so the content read is
+   * pinned to the same commit no matter what the ref does meanwhile.
+   *
+   * `maxBytes` is a refusal threshold, not a truncation point: a blob the
+   * provider can tell is larger is rejected before its body is buffered, so a
+   * caller with a size budget never has to hold an oversized blob in memory to
+   * discover it is oversized. Providers that cannot know the size up front
+   * still return the full body, so callers must re-check what they receive.
+   *
+   * @param config - Repository identifier, the blob ID from listTree, and the
+   *   largest body the caller is willing to accept
+   * @throws SourceControlProviderError, including when the blob is too large
+   */
+  readBlob(config: GetRepositoryConfig & { blobId: string; maxBytes: number }): Promise<Uint8Array>;
 
   /**
    * Read the current state of a pull request.

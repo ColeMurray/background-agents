@@ -162,6 +162,58 @@ export const skillFileSchema = z.strictObject({
   executable: z.boolean(),
 });
 
+/** Longest Git ref an import request may name (Git's own ref length ceiling). */
+export const MAX_SKILL_IMPORT_REF_LENGTH = 255;
+/** Longest repository subdirectory an import request may name, in UTF-8 bytes. */
+export const MAX_SKILL_IMPORT_SUBDIRECTORY_BYTES = 240;
+/** Deepest repository subdirectory an import request may name. */
+export const MAX_SKILL_IMPORT_SUBDIRECTORY_DEPTH = 20;
+
+function isSafeRepositorySubdirectory(path: string): boolean {
+  if (path.startsWith("/") || path.endsWith("/") || path.includes("\\")) return false;
+  const hasControlCharacter = Array.from(path).some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+  if (hasControlCharacter) return false;
+  const parts = path.split("/");
+  return (
+    parts.length <= MAX_SKILL_IMPORT_SUBDIRECTORY_DEPTH &&
+    parts.every((part) => part.length > 0 && part !== "." && part !== "..") &&
+    utf8.encode(path).byteLength <= MAX_SKILL_IMPORT_SUBDIRECTORY_BYTES
+  );
+}
+
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a SHA-256 digest");
+const commitShaSchema = z.string().regex(/^[0-9a-f]{7,64}$/, "must be a commit SHA");
+
+/** The resolved source of one import, without the time it was applied. */
+export const skillImportSourceSchema = z.strictObject({
+  provider: z.string(),
+  repoOwner: z.string(),
+  repoName: z.string(),
+  /** The ref the importer asked for; null when the default branch was used. */
+  requestedRef: z.string().nullable(),
+  /** The ref actually read, after defaulting. */
+  resolvedRef: z.string(),
+  /** Commit the content was read at — the pin for a moving ref. */
+  commitSha: z.string(),
+  subdirectory: z.string().nullable(),
+  /**
+   * Digest of the imported source bytes. Deliberately distinct from a
+   * revision's `revisionSha256`: the stored `SKILL.md` is regenerated from the
+   * mapped fields, so stored bytes differ from the bytes read upstream.
+   */
+  sourceSha256: z.string(),
+});
+
+/** A stored import, as reported on a skill. */
+export const skillImportProvenanceSchema = skillImportSourceSchema.extend({
+  importedAt: z.number(),
+  /** Revision the import produced. */
+  revisionId: z.string(),
+});
+
 export const skillAssignmentSchema = z.discriminatedUnion("type", [
   z.strictObject({ id: z.string(), type: z.literal("global") }),
   z.strictObject({
@@ -191,6 +243,11 @@ export const skillSummarySchema = z.strictObject({
   lastEditorDisplayName: z.string().nullable(),
   revisionAuthorDisplayName: z.string().nullable(),
   assignments: z.array(skillAssignmentSchema),
+  /**
+   * Most recent recorded import, or null for an editor-authored skill. Survives
+   * later hand edits so re-import always knows where the skill came from.
+   */
+  source: skillImportProvenanceSchema.nullable(),
   createdBy: z.string(),
   updatedBy: z.string(),
   createdAt: z.number(),
@@ -218,6 +275,110 @@ export const listSkillsResponseSchema = z.discriminatedUnion("hasMore", [
   }),
 ]);
 export const skillResponseSchema = z.strictObject({ skill: skillSchema });
+
+/**
+ * Repository identity for an import. Normalizes like `repositoryInputSchema`
+ * but drops `baseBranch`: an import reads at `ref`, and a second branch field
+ * beside it would only be ambiguous.
+ */
+const importRepositoryInputSchema = z
+  .strictObject({
+    repoOwner: wellFormedString.trim().min(1),
+    repoName: wellFormedString.trim().min(1),
+  })
+  .transform((repository) => ({
+    repoOwner: repository.repoOwner.toLowerCase(),
+    repoName: repository.repoName.toLowerCase(),
+  }));
+
+/**
+ * Where imported skill content is read from. `ref` may name a branch, tag, or
+ * commit; it is always resolved to a commit before anything is stored, so a
+ * moving ref never becomes the recorded provenance.
+ */
+export const skillImportSourceInputSchema = z.strictObject({
+  repository: importRepositoryInputSchema,
+  ref: wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH).nullish(),
+  subdirectory: wellFormedString
+    .trim()
+    .nullish()
+    .transform((value) => (value ? value.replace(/^\.?\/+|\/+$/g, "") : null))
+    .refine((value) => value === null || isSafeRepositorySubdirectory(value), {
+      message: "must be a safe relative POSIX path inside the repository",
+    }),
+});
+
+/**
+ * Findings that neither block the import nor survive into stored content.
+ * Surfaced in the preview so an importer sees what the mapping did not carry.
+ */
+export const skillImportWarningSchema = z.strictObject({
+  code: z.enum(["unmapped-frontmatter", "name-derived", "name-overridden"]),
+  message: z.string(),
+});
+
+export const skillImportPreviewInputSchema = z.strictObject({
+  source: skillImportSourceInputSchema,
+  /** Overrides the canonical name derived from the source. */
+  name: skillNameSchema.nullish(),
+});
+
+export const skillImportPreviewResponseSchema = z.strictObject({
+  name: skillNameSchema,
+  source: skillImportSourceSchema,
+  description: z.string(),
+  body: z.string(),
+  license: z.string().nullable(),
+  compatibility: z.string().nullable(),
+  metadata: z.record(z.string(), z.string()),
+  /** The `SKILL.md` that would be stored, regenerated from the mapped fields. */
+  skillMarkdown: z.string(),
+  revisionSha256: z.string(),
+  totalBytes: z.number().int().nonnegative(),
+  files: z.array(
+    z.strictObject({
+      path: z.string(),
+      sizeBytes: z.number().int().nonnegative(),
+      executable: z.boolean(),
+    })
+  ),
+  warnings: z.array(skillImportWarningSchema),
+  /**
+   * False when another skill already holds this canonical name. On a
+   * re-import the target skill's own name still counts as available.
+   */
+  nameAvailable: z.boolean(),
+});
+
+/**
+ * Confirming an import re-reads the source and refuses to save unless it still
+ * matches what the preview showed, so nothing is stored unreviewed.
+ */
+const importConfirmationSchema = z.strictObject({
+  expectedCommitSha: commitShaSchema,
+  expectedSourceSha256: sha256Schema,
+});
+
+export const importSkillInputSchema = importConfirmationSchema.extend({
+  source: skillImportSourceInputSchema,
+  name: skillNameSchema.nullish(),
+  assignments: z.array(skillAssignmentInputSchema).optional().default([]),
+});
+
+/** Re-import reads the recorded repository and subdirectory; only the ref moves. */
+export const reimportSkillPreviewInputSchema = z.strictObject({
+  ref: wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH).nullish(),
+});
+
+export const reimportSkillInputSchema = importConfirmationSchema.extend({
+  ref: wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH).nullish(),
+});
+
+export const reimportSkillResponseSchema = z.strictObject({
+  skill: skillSchema,
+  /** False when the source content was unchanged and no revision was added. */
+  revisionCreated: z.boolean(),
+});
 
 export const createSkillProfileInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(200),
@@ -341,3 +502,11 @@ export type SessionSkillManifestSelection = z.infer<typeof sessionSkillManifestS
 export type ResolvedSkill = z.infer<typeof resolvedSkillSchema>;
 export type SessionSkillsView = z.infer<typeof sessionSkillsViewSchema>;
 export type SandboxSkillInstallation = z.infer<typeof sandboxSkillInstallationSchema>;
+export type SkillImportSourceInput = z.infer<typeof skillImportSourceInputSchema>;
+export type SkillImportSource = z.infer<typeof skillImportSourceSchema>;
+export type SkillImportProvenance = z.infer<typeof skillImportProvenanceSchema>;
+export type SkillImportWarning = z.infer<typeof skillImportWarningSchema>;
+export type SkillImportPreviewInput = z.infer<typeof skillImportPreviewInputSchema>;
+export type SkillImportPreviewResponse = z.infer<typeof skillImportPreviewResponseSchema>;
+export type ImportSkillInput = z.infer<typeof importSkillInputSchema>;
+export type ReimportSkillInput = z.infer<typeof reimportSkillInputSchema>;

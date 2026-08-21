@@ -36,6 +36,7 @@ function skill(id: string, name: string): SkillSummary {
     lastEditorDisplayName: "User One",
     revisionAuthorDisplayName: "User One",
     assignments: [],
+    source: null,
     createdBy: "user-1",
     updatedBy: "user-1",
     createdAt: 1,
