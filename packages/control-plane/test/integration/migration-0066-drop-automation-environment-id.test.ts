@@ -14,9 +14,9 @@ afterEach(async () => {
   }
 });
 
-describe("migration 0064: drop automation environment id", () => {
+describe("migration 0066: drop automation environment id", () => {
   it("removes the scalar while preserving automation relationships", async () => {
-    // Full-history setup covers fresh databases; restore the sole pre-0064 difference.
+    // Full-history setup covers fresh databases; restore the sole pre-0066 difference.
     expect(await automationColumns()).not.toContain("environment_id");
     await env.DB.prepare("ALTER TABLE automations ADD COLUMN environment_id TEXT").run();
     await env.DB.prepare(
@@ -47,8 +47,8 @@ describe("migration 0064: drop automation environment id", () => {
        VALUES ('auto-1', 'env-1', 1000, 1000)`
     ).run();
 
-    const migration = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith("0064"));
-    if (!migration) throw new Error("Migration 0064 not found in TEST_MIGRATIONS");
+    const migration = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith("0066"));
+    if (!migration) throw new Error("Migration 0066 not found in TEST_MIGRATIONS");
     await env.DB.batch(migration.queries.map((query) => env.DB.prepare(query)));
 
     expect(await automationColumns()).not.toContain("environment_id");
