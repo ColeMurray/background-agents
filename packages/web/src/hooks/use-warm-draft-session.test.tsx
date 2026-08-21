@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { useLayoutEffect } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -59,6 +60,35 @@ describe("useWarmDraftSession", () => {
     rerender({ launchRequest: request("openai/gpt-5.5") });
     await waitFor(() => expect(retireWarmDraftSession).toHaveBeenCalledWith("session-1"));
     expect(result.current.sessionId).toBeNull();
+  });
+
+  it("warms the current request when called from a layout effect after an input change", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ sessionId: "session-2", status: "created" })
+    );
+    let warming: Promise<string | null> | undefined;
+    const { rerender } = renderHook(
+      ({ launchRequest, warmInLayout }) => {
+        const draft = useWarmDraftSession(launchRequest);
+        const { warm } = draft;
+        useLayoutEffect(() => {
+          if (warmInLayout) warming = warm();
+        }, [warm, warmInLayout]);
+        return draft;
+      },
+      { initialProps: { launchRequest: request(), warmInLayout: false } }
+    );
+
+    rerender({ launchRequest: request("openai/gpt-5.5"), warmInLayout: true });
+    await act(async () => {
+      await warming;
+    });
+
+    expect(browserApiFetch).toHaveBeenCalledWith(
+      "/api/sessions",
+      expect.objectContaining({ body: JSON.stringify(request("openai/gpt-5.5")) })
+    );
+    await expect(warming).resolves.toBe("session-2");
   });
 
   it("retires a stale response even when the aborted request still settles", async () => {
