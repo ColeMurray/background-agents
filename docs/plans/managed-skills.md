@@ -336,24 +336,27 @@ is not portable to the second `SqlDatabase` engine.
 
 ### Bounds that remain implicit
 
-Removing the count cap left three resources scaling with skill count rather than content. None is
-enforced, so each surfaces as an engine error rather than a validation message. They are recorded
-here so the removed limit does not become invisible.
+Removing the count cap exposed three resources scaling with skill count rather than content. None
+was enforced, so each surfaced as an engine error rather than a validation message. What each cost
+and what it costs now:
 
-| Resource                     | Shape                                               | Approximate cliff |
-| ---------------------------- | --------------------------------------------------- | ----------------- |
-| Installation payload         | JSON framing per file is excluded from `totalBytes` | ~2,400 skills     |
-| Session manifest persistence | 10 `session_skill_revisions` rows per INSERT        | ~9,900 skills     |
-| Profile membership writes    | 50 `skill_profile_items` rows per INSERT            | ~49,900 skills    |
+| Resource                     | Was                            | Now                                          | Cliff          |
+| ---------------------------- | ------------------------------ | -------------------------------------------- | -------------- |
+| Installation payload         | Whole manifest in one response | `MANAGED_SKILLS_PAGE_SIZE` per response      | none           |
+| Session manifest persistence | One INSERT per skill           | 10 `session_skill_revisions` rows per INSERT | ~9,900 skills  |
+| Profile membership writes    | One INSERT per skill           | 50 `skill_profile_items` rows per INSERT     | ~49,900 skills |
 
-The payload figure assumes the worst realistic shape: `MAX_SKILL_FILES` near-empty files per skill,
-where roughly 134 bytes plus the path length of framing per file counts against the runtime's
-`MAX_MANAGED_SKILL_RESPONSE_BYTES` but contributes nothing to the 5 MiB content aggregate. Because
-resolution checks only content bytes, such a manifest is accepted and persisted, then fails closed
-at sandbox boot — the one case where an accepted manifest is not installable. This is the binding
-constraint, and it is a transport shape rather than a storage bound: the runtime fetches the whole
-installation as one response, so the ceiling is per-response rather than per-session. Paging that
-fetch removes it without introducing a count limit.
+The payload was the binding constraint at roughly 2,400 skills, assuming the worst realistic shape:
+`MAX_SKILL_FILES` near-empty files per skill, where roughly 134 bytes plus the path length of
+framing per file counts against the runtime's `MAX_MANAGED_SKILL_RESPONSE_BYTES` but contributes
+nothing to the 5 MiB content aggregate. Because resolution checks only content bytes, such a
+manifest was accepted and persisted, then failed closed at sandbox boot — the one case where an
+accepted manifest was not installable. That is a transport shape rather than a storage bound, so the
+runtime pages the fetch instead of resolution rejecting the manifest: a fixed number of skills per
+response keeps every response far below the ceiling however wide the manifest is, and the runtime
+writes each page into the staging tree as it arrives, so peak memory is one page rather than the
+whole installation. Duplicate names and the content aggregate accumulate across pages, because they
+are properties of the installation and not of a response.
 
 The two write paths are bounded by D1's 1,000 queries per Worker invocation. Both pack rows into
 multi-row `INSERT`s sized to the 100-parameter ceiling (`bulkInsertStatements`), which divides the
@@ -673,7 +676,7 @@ Add `GET /sessions/:id/skills` for authenticated human-readable provenance.
 Add a sandbox-authenticated endpoint:
 
 ```text
-GET /sessions/:id/sandbox-skills
+GET /sessions/:id/sandbox-skills[?limit=<1..200>&cursor=<position>]
 ```
 
 The session-specific sandbox bearer token, validated by the Session Durable Object, must
@@ -698,9 +701,21 @@ narrow installation DTO containing the pinned manifest digest and bounded UTF-8 
         }
       ]
     }
-  ]
+  ],
+  "nextCursor": null
 }
 ```
+
+`limit` is optional. Without it the response is the whole installation and `nextCursor` is null,
+which is the only shape sandbox runtimes predating paging understand — they ignore the field, so
+this route must keep serving unpaged requests for as long as older snapshots can be restored. With
+it, the response holds at most `limit` skills and `nextCursor` carries the last position returned,
+or null at the end. Pinned revisions are immutable, so position is a stable cursor and every page of
+one installation reports the same `manifestSha256`; a runtime must reject a page whose digest
+differs from the first page's.
+
+Only an unpaged response carries an `ETag`. The digest covers the whole manifest, so it cannot
+identify a page.
 
 All integer fields in digest encodings are unsigned big-endian. `str(value)` means a 32-bit byte
 length followed by the exact UTF-8 bytes. A SHA-256 field contributes its raw 32 bytes, not hex.

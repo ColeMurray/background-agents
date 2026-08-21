@@ -197,6 +197,132 @@ async def test_materializer_ignores_invalid_utf8_during_collision_scan(tmp_path)
     assert (destination / "managed" / "SKILL.md").exists()
 
 
+def _page(names, *, next_cursor=None, manifest_sha256="a" * 64):
+    """A response carrying `names` as one page of a wider installation."""
+    document = {
+        "schemaVersion": 1,
+        "manifestSha256": manifest_sha256,
+        "skills": [_installation(name=name)["skills"][0] for name in names],
+        "nextCursor": next_cursor,
+    }
+    return json.dumps(document).encode()
+
+
+async def test_materializer_installs_every_page(tmp_path):
+    pages = [
+        _page(["alpha", "beta"], next_cursor="1"),
+        _page(["gamma"], next_cursor="2"),
+        _page(["delta"]),
+    ]
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(side_effect=pages)
+    destination = tmp_path / "global" / "skills"
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert sorted(entry.name for entry in destination.iterdir()) == [
+        "alpha",
+        "beta",
+        "delta",
+        "gamma",
+    ]
+    # Every request must carry a page size, and each one resumes from the
+    # previous response's cursor.
+    assert [call.kwargs for call in client.fetch_installation.await_args_list] == [
+        {"cursor": None, "limit": 50},
+        {"cursor": "1", "limit": 50},
+        {"cursor": "2", "limit": 50},
+    ]
+
+
+async def test_materializer_keeps_previous_install_when_a_later_page_fails(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=[
+            _page(["alpha"], next_cursor="1"),
+            ManagedSkillsError("boom", code="fetch_failed"),
+        ]
+    )
+    destination = tmp_path / "global" / "skills"
+    destination.mkdir(parents=True)
+    (destination / "previous").mkdir()
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="boom"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+    # A partial fetch must never be swapped in: the tree is all-or-nothing.
+    assert [entry.name for entry in destination.iterdir()] == ["previous"]
+    assert not (tmp_path / "global" / ".managed-skills-staging").exists()
+
+
+async def test_materializer_rejects_pages_from_different_manifests(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=[
+            _page(["alpha"], next_cursor="1"),
+            _page(["beta"], manifest_sha256="b" * 64),
+        ]
+    )
+    materializer = ManagedSkillsMaterializer(
+        client,
+        tmp_path / "global" / "skills",
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="different manifests"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+
+async def test_materializer_rejects_duplicate_names_across_pages(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=[_page(["alpha"], next_cursor="1"), _page(["alpha"])]
+    )
+    materializer = ManagedSkillsMaterializer(
+        client,
+        tmp_path / "global" / "skills",
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="duplicate managed skill name"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+
+async def test_materializer_stops_a_cursor_that_never_terminates(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=lambda **_: _page([], next_cursor="always-more")
+    )
+    materializer = ManagedSkillsMaterializer(
+        client,
+        tmp_path / "global" / "skills",
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="did not finish paging"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+
+def test_validate_installation_rejects_a_page_read_as_a_whole():
+    with pytest.raises(ManagedSkillsError, match="paged"):
+        validate_installation(_page(["alpha"], next_cursor="1"))
+
+
 def test_materializer_repairs_interrupted_swap(tmp_path):
     destination = tmp_path / "skills"
     backup = tmp_path / ".managed-skills-backup"

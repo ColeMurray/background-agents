@@ -402,6 +402,72 @@ describe("managed skills persistence and resolution", () => {
     });
   });
 
+  it("pages the sandbox installation without changing the unpaged contract", async () => {
+    await seedGlobalCatalog(101);
+    const manifest = await resolveManagedSkills(
+      env.DB,
+      { repositories: [], environmentId: null },
+      { mode: "all" },
+      "user_1"
+    );
+    await new SessionIndexStore(env.DB).create({
+      id: "paged",
+      title: null,
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created" as const,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      skillManifest: manifest,
+    });
+    const { stub } = await initNamedSessionDO("paged");
+    await seedSandboxAuthHash(stub, { authToken: "paged-token", sandboxId: "sandbox-paged" });
+    const fetchPage = (query: string) =>
+      SELF.fetch(`https://test.local/sessions/paged/sandbox-skills${query}`, {
+        headers: { Authorization: "Bearer paged-token" },
+      });
+
+    const names: string[] = [];
+    const digests = new Set<string>();
+    let cursor: string | null = null;
+    let requests = 0;
+    do {
+      const response = await fetchPage(`?limit=25${cursor === null ? "" : `&cursor=${cursor}`}`);
+      expect(response.status).toBe(200);
+      // The digest covers the whole manifest, so a page must not claim it.
+      expect(response.headers.get("ETag")).toBeNull();
+      const page = await response.json<{
+        manifestSha256: string;
+        skills: { name: string }[];
+        nextCursor: string | null;
+      }>();
+      expect(page.skills.length).toBeLessThanOrEqual(25);
+      digests.add(page.manifestSha256);
+      names.push(...page.skills.map((skill) => skill.name));
+      cursor = page.nextCursor;
+      requests += 1;
+    } while (cursor !== null);
+
+    expect(requests).toBe(5);
+    expect(names).toEqual(manifest.skills.map((skill) => skill.name));
+    // Pinned revisions are immutable, so every page describes one installation.
+    expect([...digests]).toEqual([manifest.manifestSha256]);
+
+    // A runtime that predates paging sends no limit and must still get all of it.
+    const whole = await fetchPage("");
+    expect(whole.headers.get("ETag")).toBe(`"${manifest.manifestSha256}"`);
+    const unpaged = await whole.json<{ skills: { name: string }[]; nextCursor: string | null }>();
+    expect(unpaged.nextCursor).toBeNull();
+    expect(unpaged.skills.map((skill) => skill.name)).toEqual(names);
+
+    await expect(fetchPage("?limit=0").then((r) => r.status)).resolves.toBe(400);
+    await expect(fetchPage("?limit=201").then((r) => r.status)).resolves.toBe(400);
+    await expect(fetchPage("?limit=25&cursor=nope").then((r) => r.status)).resolves.toBe(400);
+  });
+
   it("maps typed profile validation and conflict failures", async () => {
     const first = await serviceFetch("https://test.local/skill-profiles", {
       method: "POST",

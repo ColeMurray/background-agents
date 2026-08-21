@@ -310,6 +310,13 @@ export const sessionSkillsViewSchema = z.strictObject({
 });
 
 /** Narrow sandbox DTO: installation files only; provenance stays on the user-facing view. */
+/**
+ * Per-file JSON framing is excluded from the manifest's content aggregate, so a
+ * wide manifest can be accepted at resolution and still exceed the runtime's
+ * per-response ceiling. Runtimes that ask for a page size receive `nextCursor`
+ * and fetch the rest; runtimes that do not still receive the whole installation
+ * with `nextCursor: null`, which is what keeps restored older sandboxes working.
+ */
 export const sandboxSkillInstallationSchema = z.object({
   schemaVersion: z.literal(1),
   manifestSha256: z.string(),
@@ -319,7 +326,11 @@ export const sandboxSkillInstallationSchema = z.object({
       files: z.array(skillFileSchema),
     })
   ),
+  nextCursor: z.string().nullable().default(null),
 });
+
+/** Bounds on the page size a sandbox may request from the installation endpoint. */
+export const MAX_SANDBOX_SKILL_PAGE_SIZE = 200;
 
 export type SkillFileInput = z.infer<typeof skillFileInputSchema>;
 export type SkillContentInput = z.infer<typeof skillContentInputSchema>;

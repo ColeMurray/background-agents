@@ -378,24 +378,31 @@ export class SkillStore {
   }
 
   /**
-   * Load installation files for every revision a session pinned.
+   * Load installation files for the revisions a session pinned, optionally
+   * narrowed to one page of manifest positions.
    *
    * Keyed by session rather than by a revision-ID list on purpose: the IDs
    * already live in `session_skill_revisions`, so passing them back as bound
    * parameters would cap the manifest at the engine's parameter ceiling for no
-   * gain. One statement, one parameter, no chunking, no ceiling.
+   * gain. Narrowing by position keeps that property — three parameters whether
+   * the page holds one revision or a thousand.
    */
-  async filesForSessionRevisions(sessionId: string): Promise<Map<string, SkillFile[]>> {
+  async filesForSessionRevisions(
+    sessionId: string,
+    page?: { after: number; limit: number }
+  ): Promise<Map<string, SkillFile[]>> {
+    const pinnedRevisions = page
+      ? `SELECT revision_id FROM session_skill_revisions
+         WHERE session_id = ? AND position > ? ORDER BY position LIMIT ?`
+      : "SELECT revision_id FROM session_skill_revisions WHERE session_id = ?";
     const result = await this.db
       .prepare(
         `SELECT f.revision_id, f.path, f.content, f.content_sha256, f.size_bytes, f.executable
          FROM skill_revision_files f
-         WHERE f.revision_id IN (
-           SELECT revision_id FROM session_skill_revisions WHERE session_id = ?
-         )
+         WHERE f.revision_id IN (${pinnedRevisions})
          ORDER BY f.revision_id, f.path`
       )
-      .bind(sessionId)
+      .bind(...(page ? [sessionId, page.after, page.limit] : [sessionId]))
       .all<FileRow & { revision_id: string }>();
     const files = new Map<string, SkillFile[]>();
     for (const row of result.results ?? []) {
