@@ -48,14 +48,19 @@ import {
 } from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
-import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import type {
+  ModelProviderSelections,
+  ProviderAuthSelection,
+  SubscriptionProviderId,
+} from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
-import { setProviderSelection } from "@/lib/provider-selection";
+import { parseStoredProviderSelections, setProviderSelection } from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
 
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
@@ -108,10 +113,14 @@ export default function Home() {
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
+    const storedProviderSelections = parseStoredProviderSelections(
+      localStorage.getItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY)
+    );
     setStoredPreference({
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
+    if (storedProviderSelections) setProviderSelections(storedProviderSelections);
     hasHydratedModelPreferencesRef.current = true;
   }, []);
 
@@ -159,6 +168,15 @@ export default function Home() {
       saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [saveModelPreferenceDraft, selectedModel]
+  );
+
+  const handleProviderSelectionChange = useCallback(
+    (provider: SubscriptionProviderId, selection: ProviderAuthSelection | undefined) => {
+      const next = setProviderSelection(providerSelections, provider, selection);
+      setProviderSelections(next);
+      localStorage.setItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY, JSON.stringify(next));
+    },
+    [providerSelections]
   );
 
   const handlePromptChange = (value: string) => {
@@ -280,7 +298,7 @@ export default function Home() {
       skillPreviewLoading={skillPreviewLoading}
       skillSuggestions={skillSuggestions}
       providerSelections={providerSelections}
-      setProviderSelections={setProviderSelections}
+      onProviderSelectionChange={handleProviderSelectionChange}
       providerAccounts={providerAccounts}
     />
   );
@@ -308,7 +326,7 @@ function HomeContent({
   skillPreviewLoading,
   skillSuggestions,
   providerSelections,
-  setProviderSelections,
+  onProviderSelectionChange,
   providerAccounts,
 }: {
   isAuthenticated: boolean;
@@ -338,7 +356,10 @@ function HomeContent({
   skillPreviewLoading: boolean;
   skillSuggestions: PromptSkillSuggestionSource;
   providerSelections: ModelProviderSelections;
-  setProviderSelections: React.Dispatch<React.SetStateAction<ModelProviderSelections>>;
+  onProviderSelectionChange: (
+    provider: SubscriptionProviderId,
+    selection: ProviderAuthSelection | undefined
+  ) => void;
   providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
   const { isOpen } = useSidebarContext();
@@ -517,9 +538,7 @@ function HomeContent({
                         )}
                         value={providerSelections[selectedProvider]}
                         onChange={(selection) =>
-                          setProviderSelections((current) =>
-                            setProviderSelection(current, selectedProvider, selection)
-                          )
+                          onProviderSelectionChange(selectedProvider, selection)
                         }
                       />
                     )}

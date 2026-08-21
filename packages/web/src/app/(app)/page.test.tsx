@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
@@ -39,6 +39,25 @@ const mocks = vi.hoisted(() => ({
       repoId: number | null;
       baseBranch: string;
     }>;
+  }>,
+  enabledModelsValue: [] as string[],
+  enabledModelOptionsValue: [] as Array<{
+    category: string;
+    models: Array<{ id: string; name: string; description: string }>;
+  }>,
+  providerAccountsValue: [] as Array<{
+    id: string;
+    provider: "openai" | "xai";
+    displayName: string;
+    externalAccountId: string | null;
+    status: "active";
+    createdBy: null;
+    updatedBy: null;
+    lastVerifiedAt: null;
+    lastUsedAt: null;
+    createdAt: number;
+    updatedAt: number;
+    archivedAt: null;
   }>,
   skillPreview: {
     skills: [
@@ -104,14 +123,20 @@ vi.mock("@/hooks/use-branches", () => ({
 
 vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({
-    enabledModels: [DEFAULT_MODEL],
-    enabledModelOptions: [
-      {
-        category: "Anthropic",
-        models: [{ id: DEFAULT_MODEL, name: "Claude Sonnet 4.6", description: "" }],
-      },
-    ],
+    enabledModels: mocks.enabledModelsValue,
+    enabledModelOptions: mocks.enabledModelOptionsValue,
     loading: false,
+  }),
+}));
+
+vi.mock("@/hooks/use-provider-accounts", () => ({
+  useProviderAccounts: () => ({
+    providers: [],
+    accounts: mocks.providerAccountsValue,
+    defaults: [],
+    loading: false,
+    error: undefined,
+    refresh: vi.fn(),
   }),
 }));
 
@@ -134,6 +159,14 @@ beforeEach(() => {
   mocks.loadingReposValue = false;
   mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
+  mocks.enabledModelsValue = [DEFAULT_MODEL];
+  mocks.enabledModelOptionsValue = [
+    {
+      category: "Anthropic",
+      models: [{ id: DEFAULT_MODEL, name: "Claude Sonnet 4.6", description: "" }],
+    },
+  ];
+  mocks.providerAccountsValue = [];
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -388,6 +421,62 @@ describe("Home", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
     expect(sessionCreateBody()).toMatchObject({ environmentId: "env-1" });
+  });
+
+  it("persists provider authentication and restores it on the next visit", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    const accountId = "a".repeat(32);
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    mocks.enabledModelOptionsValue.push({
+      category: "OpenAI",
+      models: [{ id: openAiModel, name: "GPT-5.4", description: "" }],
+    });
+    mocks.providerAccountsValue = [
+      {
+        id: accountId,
+        provider: "openai",
+        displayName: "Team ChatGPT",
+        externalAccountId: "acct_public",
+        status: "active",
+        createdBy: null,
+        updatedBy: null,
+        lastVerifiedAt: null,
+        lastUsedAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+        archivedAt: null,
+      },
+    ];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
+    const first = render(<Home />);
+
+    const authenticationTrigger = await screen.findByRole("button", {
+      name: "OpenAI authentication options",
+    });
+    fireEvent.pointerDown(authenticationTrigger, { button: 0, ctrlKey: false });
+    const authenticationMenu = await screen.findByRole("menuitem", {
+      name: "OpenAI authentication",
+    });
+    authenticationMenu.focus();
+    fireEvent.keyDown(authenticationMenu, { key: "ArrowRight" });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Team ChatGPT" }));
+
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe(
+      JSON.stringify({ openai: { mode: "provider_account", accountId } })
+    );
+
+    first.unmount();
+    render(<Home />);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "OpenAI authentication options" });
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(sessionCreateBody()).toMatchObject({
+      model: openAiModel,
+      providerSelections: { openai: { mode: "provider_account", accountId } },
+    });
   });
 
   it("waits for environments to load before restoring a stored environment", async () => {
