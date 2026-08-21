@@ -17,13 +17,16 @@ export type AutomationInvocationSource = "schedule" | "manual" | "event";
  * skipped; `partial_failed` means the runs finished terminal with a mix of
  * completed and failed.
  */
-export type AutomationInvocationStatus =
-  | "starting"
-  | "running"
-  | "completed"
-  | "failed"
-  | "partial_failed"
-  | "skipped";
+export const automationInvocationStatusSchema = z.enum([
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "partial_failed",
+  "skipped",
+]);
+
+export type AutomationInvocationStatus = z.infer<typeof automationInvocationStatusSchema>;
 
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
@@ -90,7 +93,7 @@ export type Automation = z.infer<typeof automationSchema>;
 
 const automationExecutionSummarySchema = z.object({
   id: z.string(),
-  status: z.enum(["starting", "running", "completed", "failed", "partial_failed", "skipped"]),
+  status: automationInvocationStatusSchema,
   createdAt: z.number(),
 });
 

@@ -72,6 +72,16 @@ describe("describeCron", () => {
   it("falls back to raw expression for complex patterns", () => {
     expect(describeCron("0 9 1,15 * *", "UTC")).toBe("0 9 1,15 * * (UTC)");
   });
+
+  it("provides compact descriptions without reparsing display text", () => {
+    expect(describeCron("0 9 * * *", "UTC", { compact: true })).toBe("Daily at 9 AM (UTC)");
+    expect(describeCron("30 14 * * 1-5", "America/New_York", { compact: true })).toBe(
+      "Weekdays at 2:30 PM (ET)"
+    );
+    expect(describeCron("0 9 * * 1", "America/Los_Angeles", { compact: true })).toBe(
+      "Mondays at 9 AM (PT)"
+    );
+  });
 });
 
 describe("cronIntervalMinutes", () => {

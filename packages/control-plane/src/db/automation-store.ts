@@ -421,22 +421,26 @@ export class AutomationStore {
     const placeholders = automationIds.map(() => "?").join(", ");
     const result = await this.db
       .prepare(
-        `WITH ranked AS (
+        `WITH ranked_invocations AS (
            SELECT i.id, i.automation_id, i.created_at,
-                  ${DERIVED_INVOCATION_STATUS_SQL} AS derived_status,
                   ROW_NUMBER() OVER (
                     PARTITION BY i.automation_id
                     ORDER BY i.created_at DESC, i.id DESC
                   ) AS position
            FROM automation_invocations i
-           LEFT JOIN automation_runs r ON r.invocation_id = i.id
            WHERE i.automation_id IN (${placeholders})
-           GROUP BY i.id
+         ),
+         recent_invocations AS (
+           SELECT id, automation_id, created_at
+           FROM ranked_invocations
+           WHERE position <= ?
          )
-         SELECT id, automation_id, created_at, derived_status
-         FROM ranked
-         WHERE position <= ?
-         ORDER BY automation_id, created_at DESC, id DESC`
+         SELECT i.id, i.automation_id, i.created_at,
+                ${DERIVED_INVOCATION_STATUS_SQL} AS derived_status
+         FROM recent_invocations i
+         LEFT JOIN automation_runs r ON r.invocation_id = i.id
+         GROUP BY i.id
+         ORDER BY i.automation_id, i.created_at DESC, i.id DESC`
       )
       .bind(...automationIds, limit)
       .all<{

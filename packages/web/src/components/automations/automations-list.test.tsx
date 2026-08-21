@@ -112,7 +112,7 @@ describe("AutomationsList schedule metadata", () => {
     );
 
     expect(screen.getByText("Next: in 2h")).toBeInTheDocument();
-    expect(screen.getByText("Daily at 9 AM")).toBeInTheDocument();
+    expect(screen.getByText("Daily at 9 AM (UTC)")).toBeInTheDocument();
   });
 });
 
@@ -192,6 +192,9 @@ describe("AutomationsList execution activity", () => {
       expect.stringContaining("Completed")
     );
     expect(activity.children[1]).toHaveAttribute("aria-label", expect.stringContaining("Failed"));
+    expect(activity.children[0]).toHaveAttribute("data-status-shape", "completed");
+    expect(activity.children[1]).toHaveAttribute("data-status-shape", "failed");
+    expect(activity.children[0]).toHaveAttribute("tabindex", "0");
   });
 
   it("shows an explicit empty history state", () => {

@@ -79,13 +79,7 @@ function describeCompactTrigger(automation: Automation): string {
     return describeTrigger(automation);
   }
 
-  const description = describeCron(automation.scheduleCron, automation.scheduleTz);
-  return description
-    .replace(/^Every day at /, "Daily at ")
-    .replace(/^Every weekday at /, "Weekdays at ")
-    .replace(/^Every (Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) at /, "$1s at ")
-    .replace(":00 ", " ")
-    .replace(/ \([^)]+\)$/, "");
+  return describeCron(automation.scheduleCron, automation.scheduleTz, { compact: true });
 }
 
 export function AutomationsList({
