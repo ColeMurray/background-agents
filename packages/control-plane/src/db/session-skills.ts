@@ -53,10 +53,7 @@ export class SessionSkillStore {
   async getSandboxInstallation(sessionId: string): Promise<SandboxSkillInstallation | null> {
     const loaded = await this.load(sessionId);
     if (!loaded) return null;
-    const skillStore = new SkillStore(this.db);
-    const filesByRevision = await skillStore.filesForRevisions(
-      loaded.revisions.map((row) => row.revision_id)
-    );
+    const filesByRevision = await new SkillStore(this.db).filesForSessionRevisions(sessionId);
     const installation = {
       schemaVersion: 1,
       manifestSha256: loaded.manifest.manifest_sha256,

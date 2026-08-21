@@ -375,8 +375,9 @@ describe("managed skills persistence and resolution", () => {
       skillManifest: manifest,
     });
 
-    // filesForRevisions binds one parameter per revision; unchunked this throws
-    // on the fail-closed sandbox boot path rather than degrading.
+    // The installation query is keyed by session id, so manifest width costs no
+    // bound parameters. Passing revision IDs back in would cap the fail-closed
+    // sandbox boot path at the engine's parameter ceiling.
     const installation = await new SessionSkillStore(env.DB).getSandboxInstallation("wide");
     expect(installation?.skills).toHaveLength(101);
     expect(installation?.skills.every((skill) => skill.files.length === 2)).toBe(true);

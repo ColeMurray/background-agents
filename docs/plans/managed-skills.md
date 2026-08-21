@@ -324,9 +324,13 @@ reintroducing a count cap.
 The aggregate session limits are enforced by resolution preview and session creation. Resolution
 returns a specific error and never truncates a profile or silently drops skills.
 
-Stores that build `IN (?, …)` over a manifest-sized list must chunk by the engine's bound-parameter
-ceiling (`MAX_D1_QUERY_PARAMETERS`). Those queries fail outright rather than degrading, so the count
-cap was previously masking them.
+No query may bind one parameter per skill. Such queries fail outright rather than degrading, and the
+count cap was previously masking them. Prefer keying off an ID the database already holds — the
+session installation query filters `skill_revision_files` by a subquery on
+`session_skill_revisions`, so a wider manifest costs no additional parameters. Where the list
+genuinely originates outside the database (profile membership, which arrives in the request body),
+chunk by the engine's bound-parameter ceiling (`MAX_D1_QUERY_PARAMETERS`). A JSON-array parameter
+with `json_each` would also work on SQLite but is not portable to the second `SqlDatabase` engine.
 
 Paths must be normalized relative POSIX paths. Reject absolute paths, empty segments, `.`, `..`,
 backslashes, NUL/control characters, duplicate normalized paths, symlinks, hard links, and reserved
