@@ -134,19 +134,27 @@ describe("E2BSandboxProvider", () => {
     expect(env).not.toHaveProperty("GITHUB_APP_TOKEN");
   });
 
-  it("applies the static runtime env as a system overlay that beats user secrets", async () => {
-    // HOME/PYTHONPATH/NODE_PATH are boot-critical (E2B runs as non-root `user`;
-    // the entrypoint import path is /app). A user secret with one of these
-    // names must not be able to clobber them.
+  it("applies the pinned sandbox env as a system overlay that beats user secrets", async () => {
+    // These keys are boot-critical (E2B runs as non-root `user`; the
+    // entrypoint import path is /app; spawn selection gates on the reported
+    // version). A user secret with one of these names must not clobber them.
     const client = mockClient();
     await new E2BSandboxProvider(client, providerConfig).createSandbox({
       ...baseCreateConfig,
-      userEnvVars: { PYTHONPATH: "/evil", HOME: "/evil", NODE_PATH: "/evil" },
+      userEnvVars: {
+        PYTHONPATH: "/evil",
+        HOME: "/evil",
+        NODE_PATH: "/evil",
+        OI_SCM_CRED_CACHE_DIR: "/evil",
+        SANDBOX_VERSION: "v0-evil",
+      },
     });
     expect(createEnv(client)).toMatchObject({
       HOME: "/home/user",
       PYTHONPATH: "/app",
       NODE_PATH: "/usr/lib/node_modules",
+      OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
+      SANDBOX_VERSION: E2B_SANDBOX_VERSION,
     });
   });
 
@@ -183,18 +191,14 @@ describe("E2BSandboxProvider", () => {
     // control plane starts the supervisor itself on every boot — same shape as
     // Modal rebooting a repo image's entrypoint. Readiness is the uniform
     // contract (bridge phone-home + connecting timeout); no spawn handshake.
+    // Exact equality to the fixed command is also the no-secrets guarantee:
+    // E2B platform-logs command lines, so env values (secrets included) may
+    // only ever travel via create-time envVars.
     expect(client.startProcess).toHaveBeenCalledWith(
       "e2b-id",
       ENTRYPOINT_COMMAND,
       expect.objectContaining({ envdAccessToken: "envd-token" })
     );
-    // E2B platform-logs command lines: env values (secrets included) must only
-    // ever travel via create-time envVars, never the exec command.
-    const [, command] = vi.mocked(client.startProcess).mock.calls[0];
-    expect(command).not.toContain("hunter2-secret");
-    expect(command).not.toContain("tok");
-    expect(command).not.toContain("oi-launch");
-    expect(command).not.toContain("oi-session.env");
   });
 
   it("resumeSandbox paused uses connectSandbox and execs nothing", async () => {
@@ -790,5 +794,25 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     ).rejects.toBeInstanceOf(SandboxProviderError);
     expect(client.startProcess).not.toHaveBeenCalled();
     expect(client.killSandbox).toHaveBeenCalledWith("evil'; rm -rf /tmp #");
+  });
+
+  it("refuses to interpolate an empty provider id into the exec command", async () => {
+    // An empty id would pass shell-safety trivially but abort inside the
+    // sandbox (the runtime rejects a present-but-empty callback var) — a slow,
+    // confusing in-sandbox failure instead of a fast client-side one.
+    const client = mockClient({
+      createSandbox: vi.fn(async () => ({
+        sandboxID: "",
+        templateID: "tmpl",
+        envdAccessToken: "envd-token",
+      })),
+    });
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).triggerImageBuild({
+        ...baseBuildConfig,
+        onProviderSessionCreated: vi.fn(async () => {}),
+      })
+    ).rejects.toBeInstanceOf(SandboxProviderError);
+    expect(client.startProcess).not.toHaveBeenCalled();
   });
 });

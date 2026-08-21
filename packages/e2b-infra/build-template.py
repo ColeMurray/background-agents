@@ -12,8 +12,8 @@ Env:
   E2B_API_KEY       (required) — runtime API key; authenticates the build AND
                                  the post-build pre-warm.
   E2B_API_URL       (optional) — REST API base URL (default https://api.e2b.app).
-  E2B_TEMPLATE_CPU  (optional) — vCPU count (default 2).
-  E2B_TEMPLATE_MEM  (optional) — memory MB, even number (default 4096).
+  E2B_TEMPLATE_CPU        (optional) — vCPU count (default 2).
+  E2B_TEMPLATE_MEMORY_MB  (optional) — memory MB, even number (default 4096).
 """
 
 import atexit
@@ -33,7 +33,7 @@ TEMPLATE_ID = os.environ.get("E2B_TEMPLATE_ID")
 API_KEY = os.environ.get("E2B_API_KEY")
 API_URL = os.environ.get("E2B_API_URL", "https://api.e2b.app").rstrip("/")
 CPU = int(os.environ.get("E2B_TEMPLATE_CPU", "2"))
-MEM = int(os.environ.get("E2B_TEMPLATE_MEM", "4096"))
+MEM = int(os.environ.get("E2B_TEMPLATE_MEMORY_MB", "4096"))
 
 # The template runs nothing of its own: the control plane execs the supervisor
 # entrypoint via envd on every sandbox create (per-sandbox env rides the create

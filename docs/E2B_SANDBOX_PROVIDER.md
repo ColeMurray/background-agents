@@ -85,7 +85,7 @@ export E2B_TEMPLATE_ID=open-inspect-sandbox
 uv run python build-template.py
 ```
 
-Optional build knobs: `E2B_TEMPLATE_CPU` (default `2`), `E2B_TEMPLATE_MEM` MB (default `4096`) —
+Optional build knobs: `E2B_TEMPLATE_CPU` (default `2`), `E2B_TEMPLATE_MEMORY_MB` (default `4096`) —
 these apply to **manual** builds; Terraform-managed templates are sized by the `e2b_template_cpu` /
 `e2b_template_memory_mb` variables (same defaults). See
 [`packages/e2b-infra/README.md`](../packages/e2b-infra/README.md) for details on the template

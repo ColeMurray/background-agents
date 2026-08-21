@@ -524,6 +524,11 @@ variable "e2b_template_memory_mb" {
   description = "Memory (MB, even number) for the E2B sandbox template. Default sized for the agent toolchain (OpenCode + code-server + builds); lower it on plans that cap sandbox memory."
   type        = number
   default     = 4096
+
+  validation {
+    condition     = var.e2b_template_memory_mb % 2 == 0
+    error_message = "E2B requires an even memory_mb value."
+  }
 }
 
 variable "nextauth_secret" {

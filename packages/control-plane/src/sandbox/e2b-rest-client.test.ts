@@ -332,8 +332,8 @@ describe("E2BRestClient", () => {
   it("startProcess rejects a stream with no clean exit or end-of-stream", async () => {
     const client = new E2BRestClient(defaultConfig);
     // A start event alone proves nothing ran to completion. Treating it as
-    // success would let an unconfirmed launcher through to a session that then
-    // dies silently on the connecting timeout.
+    // success would let an unconfirmed entrypoint through to a session that
+    // then dies silently on the connecting timeout.
     fetchSpy.mockResolvedValue(
       new Response(connectStream([{ flags: 0, body: { event: { start: { pid: 7 } } } }]), {
         status: 200,

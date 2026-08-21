@@ -102,7 +102,7 @@ export interface E2BCreateSandboxParams {
   autoResume?: boolean;
   /**
    * Require an access token to reach envd (returned as `envdAccessToken`). Without it,
-   * envd accepts unauthenticated reads/writes of the uploaded session env.
+   * envd would accept anonymous process starts over the public sandbox host.
    */
   secure?: boolean;
 }

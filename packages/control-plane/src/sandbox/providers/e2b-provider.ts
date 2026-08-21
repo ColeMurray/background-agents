@@ -11,8 +11,8 @@
  * One boot path, the same shape as every other provider: the per-sandbox env
  * (secrets included) rides `POST /sandboxes` `envVars` — envd applies it to
  * every process it starts — and the control plane then execs the runtime
- * entrypoint, detached, via envd (startEntrypoint). Nothing may ride the exec
- * command or per-command envs instead: E2B platform-logs Process/Start
+ * entrypoint, detached, via envd (startEntrypoint). No secret may ride the
+ * exec command or per-command envs instead: E2B platform-logs Process/Start
  * requests with their command line and env values. Readiness is the uniform
  * contract — the sandbox bridge phones home, and the connecting timeout fails
  * the session otherwise; there is no spawn-time liveness handshake.
@@ -106,33 +106,38 @@ const E2B_SUPERVISOR_LOG_PATH = "/tmp/oi-supervisor.log";
 const E2B_ENTRYPOINT_COMMAND = `nohup python -m sandbox_runtime.entrypoint >${E2B_SUPERVISOR_LOG_PATH} 2>&1 &`;
 
 /**
- * Boot-critical env the provider pins on every sandbox, applied over user env
- * so a repo secret with one of these names cannot clobber a key the boot
- * depends on. E2B runs the runtime as non-root `user` (HOME must not be the
- * Dockerfile's /root), and PYTHONPATH/NODE_PATH place the staged runtime and
- * global node modules on the import paths.
+ * Env the provider pins on every E2B sandbox (sessions and image builds),
+ * applied over user env so a repo secret with one of these names cannot
+ * clobber a key the boot depends on.
  */
-const E2B_STATIC_ENV: Record<string, string> = {
+const E2B_SANDBOX_ENV: Record<string, string> = {
+  // E2B runs the runtime as non-root `user`; the Dockerfile's HOME=/root would
+  // EACCES everything under ~.
   HOME: "/home/user",
+  // The staged runtime and the global node modules — E2B propagates neither.
   PYTHONPATH: "/app",
   NODE_PATH: "/usr/lib/node_modules",
+  // /run is a root-owned tmpfs, so the git credential helper cannot create its
+  // default cache dir (/run/oi) and would fail before brokering a token.
+  OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
+  // So the runtime reports a version (spawn-time image selection gates on it).
+  SANDBOX_VERSION: E2B_SANDBOX_VERSION,
 };
 
 /**
- * Render the entrypoint command with optional `KEY='value'` shell assignments
- * prefixed. The command line is platform-logged by E2B, so only non-secret,
- * provider-generated values may travel here (everything else must use
- * create-time envVars); the allowlist enforces that the interpolation is
- * shell-inert.
+ * Render the entrypoint command, optionally prefixed with the one value
+ * allowed on a command line E2B platform-logs: the sandbox's own id — needed
+ * by the image-build callback yet unknowable before create returns, and
+ * public (every envd hostname carries it). Everything else must ride
+ * create-time envVars. The charset check keeps the interpolation shell-inert
+ * and rejects an empty id (the runtime aborts on a present-but-empty value).
  */
-function entrypointCommand(extraExecEnv: Record<string, string> = {}): string {
-  const assignments = Object.entries(extraExecEnv).map(([key, value]) => {
-    if (!/^[A-Z][A-Z0-9_]*$/.test(key) || !/^[A-Za-z0-9:_./-]*$/.test(value)) {
-      throw new Error(`unsafe exec env value for ${key}`);
-    }
-    return `${key}='${value}' `;
-  });
-  return assignments.join("") + E2B_ENTRYPOINT_COMMAND;
+function entrypointCommand(providerSessionId?: string): string {
+  if (providerSessionId === undefined) return E2B_ENTRYPOINT_COMMAND;
+  if (!/^[A-Za-z0-9_-]+$/.test(providerSessionId)) {
+    throw new Error("unsafe E2B sandbox id for exec command");
+  }
+  return `${REPO_IMAGE_CALLBACK_ENV.providerSessionId}='${providerSessionId}' ${E2B_ENTRYPOINT_COMMAND}`;
 }
 
 export interface E2BProviderConfig {
@@ -220,7 +225,14 @@ export class E2BSandboxProvider implements SandboxProvider {
         autoResume: false,
       });
 
-      await this.startEntrypoint(sandbox);
+      try {
+        await this.startEntrypoint(sandbox);
+      } catch (error) {
+        // The sandbox exists but can never boot — kill it rather than leak it
+        // until its TTL, then let the create fail loudly.
+        await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
+        throw error;
+      }
 
       const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
@@ -297,37 +309,31 @@ export class E2BSandboxProvider implements SandboxProvider {
    * ever starts and the session dies on the connecting timeout with no runtime
    * logs to explain it.
    *
-   * `extraExecEnv` rides the command line and is therefore platform-logged —
-   * strictly for non-secret, provider-generated values that cannot ride the
-   * create-time envVars (today: the sandbox's own id, unknown before create).
+   * The missing-token guard lives here, after create, so a tokenless create is
+   * caught while the caller still holds the sandbox for cleanup: it is
+   * systemic (secure unsupported / API change), not intermittent, and
+   * classified permanent so it trips the circuit breaker instead of looping
+   * create→kill.
    *
-   * On any failure — including a tokenless create, which is systemic (secure
-   * unsupported / API change), not intermittent, and classified permanent so
-   * it trips the circuit breaker instead of looping create→kill — the sandbox
-   * exists but can never boot: kill it rather than leak it until its TTL, then
-   * let the create fail loudly.
+   * Callers own cleanup: any failure here leaves a sandbox that can never
+   * boot, and the caller must kill it rather than leak it until its TTL.
    */
   private async startEntrypoint(
     sandbox: E2BSandboxCreated,
-    extraExecEnv?: Record<string, string>
+    providerSessionId?: string
   ): Promise<void> {
-    try {
-      const envdAccessToken = sandbox.envdAccessToken;
-      if (!envdAccessToken) {
-        throw new SandboxProviderError(
-          "E2B create did not return an envd access token (secure access required)",
-          "permanent"
-        );
-      }
-      await this.client.startProcess(sandbox.sandboxID, entrypointCommand(extraExecEnv), {
-        domain: sandbox.domain,
-        envdAccessToken,
-      });
-      log.info("e2b.entrypoint_started", { sandbox_id: sandbox.sandboxID });
-    } catch (error) {
-      await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
-      throw error;
+    const envdAccessToken = sandbox.envdAccessToken;
+    if (!envdAccessToken) {
+      throw new SandboxProviderError(
+        "E2B create did not return an envd access token (secure access required)",
+        "permanent"
+      );
     }
+    await this.client.startProcess(sandbox.sandboxID, entrypointCommand(providerSessionId), {
+      domain: sandbox.domain,
+      envdAccessToken,
+    });
+    log.info("e2b.entrypoint_started", { sandbox_id: sandbox.sandboxID });
   }
 
   async resumeSandbox(config: ResumeConfig): Promise<ResumeResult> {
@@ -474,13 +480,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       });
       Object.assign(
         envVars,
-        {
-          SANDBOX_VERSION: E2B_SANDBOX_VERSION,
-          // See the createSandbox path: /run is a root-owned tmpfs in E2B, so the
-          // git credential helper needs a user-writable cache dir.
-          OI_SCM_CRED_CACHE_DIR: "/tmp/oi",
-          [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
-        },
+        { [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds) },
         // No providerSessionId: the sandbox does not exist yet at create time;
         // it is delivered on the entrypoint exec below instead.
         buildImageBuildCallbackEnv({
@@ -489,7 +489,7 @@ export class E2BSandboxProvider implements SandboxProvider {
           failureCallbackUrl: config.failureCallbackUrl,
           token: config.callbackToken,
         }),
-        E2B_STATIC_ENV
+        E2B_SANDBOX_ENV
       );
 
       const sandbox = await this.client.createSandbox({
@@ -497,8 +497,8 @@ export class E2BSandboxProvider implements SandboxProvider {
         envVars,
         metadata: identity.labels,
         timeoutSeconds: config.providerSessionTimeoutSeconds,
-        // The build sandbox must stay alive so takeSnapshot can bake its
-        // filesystem; never auto-pause/resume it.
+        // The build sandbox must stay alive so takePrebuiltImageSnapshot can
+        // bake its filesystem; never auto-pause/resume it.
         autoPause: false,
         secure: true,
         autoResume: false,
@@ -511,14 +511,10 @@ export class E2BSandboxProvider implements SandboxProvider {
       // the session is bound).
       await config.onProviderSessionCreated(sandbox.sandboxID);
 
-      // The runtime's callback reporter requires the provider session id, and
-      // it cannot ride the create-time envVars (the id does not exist until
-      // create returns) — so it rides the exec command, the one value allowed
-      // there: non-secret (it is already in every envd hostname) and
-      // provider-generated.
-      await this.startEntrypoint(sandbox, {
-        [REPO_IMAGE_CALLBACK_ENV.providerSessionId]: sandbox.sandboxID,
-      });
+      // The runtime's callback reporter requires the provider session id,
+      // which cannot ride the create-time envVars (the id does not exist until
+      // create returns) — so it rides the exec command (see entrypointCommand).
+      await this.startEntrypoint(sandbox, sandbox.sandboxID);
 
       log.info("e2b.image_build_triggered", {
         build_id: config.buildId,
@@ -529,8 +525,8 @@ export class E2BSandboxProvider implements SandboxProvider {
         trace_id: config.correlation.trace_id,
       });
     } catch (error) {
-      // startEntrypoint kills on exec failure; this covers a create-time or
-      // onProviderSessionCreated failure that leaves the sandbox running.
+      // Any failure after create — bind or entrypoint exec — leaves a running
+      // sandbox that can never boot; kill it rather than leak it until its TTL.
       if (sandboxId) {
         await this.cleanupSandbox(sandboxId, "e2b.build_cleanup_kill_failed");
       }
@@ -548,10 +544,7 @@ export class E2BSandboxProvider implements SandboxProvider {
     }
   }
 
-  /**
-   * Assemble the per-session env (and the derived service passwords) shared by
-   * the create and restore paths.
-   */
+  /** Assemble the session env (and the derived service passwords) for a create. */
   private async buildRuntimeEnv(
     config: CreateSandboxConfig,
     extraEnv: Record<string, string>
@@ -578,13 +571,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         vncPassword,
       }
     );
-    // E2B sandboxes run as a non-root user and /run is a root-owned tmpfs, so
-    // the git credential helper can't create its default cache dir (/run/oi)
-    // and fails before brokering a token. Point it at a user-writable path.
-    envVars.OI_SCM_CRED_CACHE_DIR = "/tmp/oi";
-    // So the bridge reports a runtime version (spawn selection gates on it).
-    envVars.SANDBOX_VERSION = E2B_SANDBOX_VERSION;
-    Object.assign(envVars, extraEnv, E2B_STATIC_ENV);
+    Object.assign(envVars, extraEnv, E2B_SANDBOX_ENV);
     return { envVars, codeServerPassword, vncPassword };
   }
 
