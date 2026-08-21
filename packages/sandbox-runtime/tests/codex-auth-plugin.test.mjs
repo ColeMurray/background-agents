@@ -101,6 +101,27 @@ test("spills over to the platform API on a usage-limit 429, then latches", async
   );
 });
 
+test("keeps the Chat Completions contract when spilling over", async () => {
+  process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
+  const calls = stubFetch({ codex: () => usageLimitResponse() });
+  const loaded = await loadProxy("chat-completions");
+
+  const chatUrl = "https://api.openai.com/v1/chat/completions";
+  const chatInit = {
+    ...REQUEST_INIT,
+    body: JSON.stringify({ model: "gpt-5.4", messages: [{ role: "user", content: "hi" }] }),
+  };
+  const response = await loaded.fetch(chatUrl, chatInit);
+  assert.equal(response.status, 200);
+
+  // A Chat Completions body is not a Responses body, so the spillover must not
+  // rewrite the path to /v1/responses.
+  const spilloverCall = calls.at(-1);
+  assert.equal(spilloverCall.url, chatUrl);
+  assert.equal(spilloverCall.headers.get("authorization"), "Bearer sk-fallback");
+  assert.equal(spilloverCall.body, chatInit.body);
+});
+
 test("passes a throttling 429 through without spending the fallback key", async () => {
   process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
   const calls = stubFetch({

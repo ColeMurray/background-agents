@@ -14,6 +14,7 @@ import { createProviderTokenBroker } from "./provider-token-broker.js";
 
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1/responses";
+const OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
 const tokenBroker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
 
@@ -105,8 +106,23 @@ function headersFrom(init) {
   return headers;
 }
 
+function isChatCompletionsRequest(url) {
+  return url.pathname.includes("/chat/completions");
+}
+
 function isModelRequest(url) {
-  return url.pathname.includes("/v1/responses") || url.pathname.includes("/chat/completions");
+  return url.pathname.includes("/v1/responses") || isChatCompletionsRequest(url);
+}
+
+/**
+ * Platform endpoint that keeps the request contract the caller chose: Chat
+ * Completions and Responses payloads are not interchangeable, so a
+ * /chat/completions body must not be replayed against /v1/responses. Origin and
+ * path are fixed rather than forwarded from the request, so a proxied base URL
+ * cannot steer spillover traffic somewhere else.
+ */
+function fallbackEndpoint(url) {
+  return isChatCompletionsRequest(url) ? OPENAI_CHAT_COMPLETIONS_ENDPOINT : OPENAI_API_ENDPOINT;
 }
 
 function toPercent(value) {
@@ -294,9 +310,10 @@ export const CodexAuthProxy = async (input) => {
             const headers = headersFrom(init);
             const modelRequest = isModelRequest(parsed);
             const fallbackKey = (modelRequest && process.env[FALLBACK_KEY_ENV]) || "";
+            const fallbackUrl = fallbackEndpoint(parsed);
 
             if (fallbackKey && spilloverLatched) {
-              return fetch(OPENAI_API_ENDPOINT, {
+              return fetch(fallbackUrl, {
                 ...init,
                 headers: spilloverHeaders(headers, fallbackKey),
               });
@@ -309,7 +326,7 @@ export const CodexAuthProxy = async (input) => {
             } catch (error) {
               if (!fallbackKey) throw error;
               latchSpillover(`subscription token unavailable (${error.message})`);
-              return fetch(OPENAI_API_ENDPOINT, {
+              return fetch(fallbackUrl, {
                 ...init,
                 headers: spilloverHeaders(headers, fallbackKey),
               });
@@ -329,7 +346,7 @@ export const CodexAuthProxy = async (input) => {
                 const used = await probeUsedPercent(accessToken, accountId);
                 if (used !== null && used >= maxPercent) {
                   latchSpillover(`subscription usage at ${used}% of the ${maxPercent}% ceiling`);
-                  return fetch(OPENAI_API_ENDPOINT, {
+                  return fetch(fallbackUrl, {
                     ...init,
                     headers: spilloverHeaders(headers, fallbackKey),
                   });
@@ -361,7 +378,7 @@ export const CodexAuthProxy = async (input) => {
               return replayResponse(response, bodyText);
             }
             latchSpillover(reason);
-            return fetch(OPENAI_API_ENDPOINT, {
+            return fetch(fallbackUrl, {
               ...init,
               headers: spilloverHeaders(headers, fallbackKey),
             });
