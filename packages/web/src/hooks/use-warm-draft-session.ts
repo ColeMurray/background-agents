@@ -31,6 +31,10 @@ export function warmDraftSessionIdentity(request: WarmDraftSessionRequest | null
   return JSON.stringify(canonicalize(request));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export function useWarmDraftSession(request: WarmDraftSessionRequest | null) {
   const identity = warmDraftSessionIdentity(request);
   const requestRef = useRef(request);
@@ -89,8 +93,14 @@ export function useWarmDraftSession(request: WarmDraftSessionRequest | null) {
         });
         if (!response.ok) return null;
 
-        const payload = (await response.json()) as { sessionId?: unknown };
-        if (typeof payload.sessionId !== "string" || payload.sessionId.length === 0) return null;
+        const payload: unknown = await response.json();
+        if (
+          !isRecord(payload) ||
+          typeof payload.sessionId !== "string" ||
+          payload.sessionId.length === 0
+        ) {
+          return null;
+        }
         if (identityRef.current !== launchIdentity) {
           void retireWarmDraftSession(payload.sessionId);
           return null;
