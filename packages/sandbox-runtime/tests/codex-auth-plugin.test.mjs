@@ -53,7 +53,7 @@ function stubFetch({ codex, broker, usage } = {}) {
       );
     }
     if (target.includes("/wham/usage")) {
-      return usage?.() ?? new Response("no usage stub", { status: 404 });
+      return usage?.(init) ?? new Response("no usage stub", { status: 404 });
     }
     if (target.startsWith("https://chatgpt.com/")) return codex(calls.length);
     return new Response("platform-ok", { status: 200 });
@@ -297,25 +297,45 @@ test("keeps the subscription while usage is under the ceiling", async () => {
   assert.equal(calls.filter((call) => call.url === MODEL_REQUEST_URL).length, 0);
 });
 
-test("lets the caller abort the usage probe", async () => {
+test("abandons a usage probe still in flight when the caller aborts", async () => {
   process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
   process.env.OPENAI_SUBSCRIPTION_MAX_PERCENT = "80";
-  const calls = stubFetch({
+
+  // A probe that only settles on cancellation: without the caller's signal it
+  // would hang until USAGE_PROBE_TIMEOUT_MS, which is exactly the wait under test.
+  let probeStarted;
+  const probeSignal = new Promise((resolve) => (probeStarted = resolve));
+  stubFetch({
     codex: () => new Response("codex-ok", { status: 200 }),
-    usage: () => usageResponse(40, 50),
+    usage: (init) =>
+      new Promise((_, reject) => {
+        probeStarted(init.signal);
+        init.signal.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError"))
+        );
+      }),
   });
   const loaded = await loadProxy("probe-abort");
 
   const controller = new AbortController();
   const request = new Request(MODEL_REQUEST_URL, { ...REQUEST_INIT, signal: controller.signal });
-  assert.equal(await (await loaded.fetch(request)).text(), "codex-ok");
+  const pending = loaded.fetch(request);
 
-  // The probe precedes the turn's own request, so a cancelled turn must not have
-  // to wait out USAGE_PROBE_TIMEOUT_MS.
-  const probe = calls.find((call) => call.url.includes("/wham/usage"));
-  assert.equal(probe.signal.aborted, false);
+  const signal = await probeSignal;
+  assert.equal(signal.aborted, false, "the probe is in flight");
   controller.abort();
-  assert.equal(probe.signal.aborted, true);
+
+  let stall;
+  const outcome = await Promise.race([
+    pending.then(
+      () => "settled",
+      () => "settled"
+    ),
+    new Promise((resolve) => (stall = setTimeout(() => resolve("blocked"), 500))),
+  ]);
+  clearTimeout(stall);
+  assert.equal(signal.aborted, true);
+  assert.equal(outcome, "settled", "the turn does not wait out the probe timeout");
 });
 
 test("latches at the ceiling from a successful response's headers", async () => {
