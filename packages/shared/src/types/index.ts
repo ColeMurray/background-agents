@@ -168,6 +168,8 @@ export type {
   AutomationRepository,
   AutomationRepositoryInput,
   Automation,
+  AutomationExecutionSummary,
+  AutomationListItem,
   CreateAutomationRequest,
   UpdateAutomationRequest,
   AutomationRun,

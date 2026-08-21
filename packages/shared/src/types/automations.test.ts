@@ -28,6 +28,7 @@ const automation = {
   repositories: [{ repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" }],
   environmentIds: [],
   providerSelections: {},
+  recentExecutions: [],
 };
 
 describe("listAutomationsResponseSchema", () => {
@@ -64,6 +65,23 @@ describe("listAutomationsResponseSchema", () => {
         nextCursor: null,
       }).success
     ).toBe(false);
+  });
+
+  it("validates recent execution summaries", () => {
+    const result = listAutomationsResponseSchema.parse({
+      automations: [
+        {
+          ...automation,
+          recentExecutions: [{ id: "inv-1", status: "partial_failed", createdAt: 123 }],
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    expect(result.automations[0].recentExecutions).toEqual([
+      { id: "inv-1", status: "partial_failed", createdAt: 123 },
+    ]);
   });
 
   it("rejects malformed trigger-condition records", () => {

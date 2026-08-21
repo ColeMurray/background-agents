@@ -88,6 +88,20 @@ const automationSchema = z.object({
 
 export type Automation = z.infer<typeof automationSchema>;
 
+const automationExecutionSummarySchema = z.object({
+  id: z.string(),
+  status: z.enum(["starting", "running", "completed", "failed", "partial_failed", "skipped"]),
+  createdAt: z.number(),
+});
+
+export type AutomationExecutionSummary = z.infer<typeof automationExecutionSummarySchema>;
+
+const automationListItemSchema = automationSchema.extend({
+  recentExecutions: z.array(automationExecutionSummarySchema),
+});
+
+export type AutomationListItem = z.infer<typeof automationListItemSchema>;
+
 export const createAutomationRequestSchema = z.object({
   name: z.string(),
   instructions: z.string(),
@@ -158,12 +172,12 @@ export interface AutomationRun {
 
 export const listAutomationsResponseSchema = z.discriminatedUnion("hasMore", [
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(false),
     nextCursor: z.null(),
   }),
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(true),
     nextCursor: z.string().min(1),
   }),

@@ -7,6 +7,7 @@
 
 import type {
   Automation,
+  AutomationExecutionSummary,
   AutomationInvocation,
   AutomationInvocationSource,
   AutomationInvocationStatus,
@@ -407,6 +408,52 @@ export class AutomationStore {
         id: automations[automations.length - 1].id,
       },
     };
+  }
+
+  async listRecentExecutionsForAutomationIds(
+    automationIds: string[],
+    limit: number
+  ): Promise<Map<string, AutomationExecutionSummary[]>> {
+    const executionsByAutomation = new Map<string, AutomationExecutionSummary[]>();
+    for (const id of automationIds) executionsByAutomation.set(id, []);
+    if (automationIds.length === 0) return executionsByAutomation;
+
+    const placeholders = automationIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `WITH ranked AS (
+           SELECT i.id, i.automation_id, i.created_at,
+                  ${DERIVED_INVOCATION_STATUS_SQL} AS derived_status,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY i.automation_id
+                    ORDER BY i.created_at DESC, i.id DESC
+                  ) AS position
+           FROM automation_invocations i
+           LEFT JOIN automation_runs r ON r.invocation_id = i.id
+           WHERE i.automation_id IN (${placeholders})
+           GROUP BY i.id
+         )
+         SELECT id, automation_id, created_at, derived_status
+         FROM ranked
+         WHERE position <= ?
+         ORDER BY automation_id, created_at DESC, id DESC`
+      )
+      .bind(...automationIds, limit)
+      .all<{
+        id: string;
+        automation_id: string;
+        created_at: number;
+        derived_status: AutomationInvocationStatus;
+      }>();
+
+    for (const row of result.results ?? []) {
+      executionsByAutomation.get(row.automation_id)?.push({
+        id: row.id,
+        status: row.derived_status,
+        createdAt: row.created_at,
+      });
+    }
+    return executionsByAutomation;
   }
 
   /**
