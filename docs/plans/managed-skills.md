@@ -324,13 +324,38 @@ reintroducing a count cap.
 The aggregate session limits are enforced by resolution preview and session creation. Resolution
 returns a specific error and never truncates a profile or silently drops skills.
 
-No query may bind one parameter per skill. Such queries fail outright rather than degrading, and the
-count cap was previously masking them. Prefer keying off an ID the database already holds — the
-session installation query filters `skill_revision_files` by a subquery on
-`session_skill_revisions`, so a wider manifest costs no additional parameters. Where the list
-genuinely originates outside the database (profile membership, which arrives in the request body),
-chunk by the engine's bound-parameter ceiling (`MAX_D1_QUERY_PARAMETERS`). A JSON-array parameter
-with `json_each` would also work on SQLite but is not portable to the second `SqlDatabase` engine.
+No single statement may bind a parameter per skill over an unbounded list. Such statements fail
+outright rather than degrading, and the count cap was previously masking them. Chunked reads still
+bind one parameter per skill within a chunk; what matters is that no one statement is handed the
+whole list. Prefer keying off an ID the database already holds — the session installation query
+filters `skill_revision_files` by a subquery on `session_skill_revisions`, so a wider manifest costs
+no additional parameters. Where the list genuinely originates outside the database (profile
+membership, which arrives in the request body), chunk by the engine's bound-parameter ceiling
+(`MAX_D1_QUERY_PARAMETERS`). A JSON-array parameter with `json_each` would also work on SQLite but
+is not portable to the second `SqlDatabase` engine.
+
+### Bounds that remain implicit
+
+Removing the count cap left three resources still linear in skill count. None is enforced, so each
+surfaces as an engine error rather than a validation message. They are recorded here so the removed
+limit does not become invisible; making them count-independent is tracked separately.
+
+| Resource                     | Shape                                                       | Approximate cliff       |
+| ---------------------------- | ----------------------------------------------------------- | ----------------------- |
+| Installation payload         | JSON framing per file is excluded from `totalBytes`         | ~900–2,400 skills       |
+| Session manifest persistence | One `session_skill_revisions` INSERT per skill in one batch | engine statement budget |
+| Profile membership writes    | One `skill_profile_items` INSERT per skill in one batch     | engine statement budget |
+
+The payload figure assumes the worst realistic shape: `MAX_SKILL_FILES` near-empty files per skill,
+where roughly 134 bytes plus the path length of framing per file counts against the runtime's
+`MAX_MANAGED_SKILL_RESPONSE_BYTES` but contributes nothing to the 5 MiB content aggregate. Because
+resolution checks only content bytes, such a manifest is accepted and persisted, then fails closed
+at sandbox boot — the one case where an accepted manifest is not installable. A transport-safe
+aggregate needs a per-revision file count available at resolution time.
+
+The two write paths are bounded by the engine's per-invocation statement budget, not by content.
+`bindManifestCopy` is already set-based (`INSERT … SELECT`) and therefore count-independent; the
+create path and profile writes are the outliers, and both must keep their current atomicity.
 
 Paths must be normalized relative POSIX paths. Reject absolute paths, empty segments, `.`, `..`,
 backslashes, NUL/control characters, duplicate normalized paths, symlinks, hard links, and reserved
