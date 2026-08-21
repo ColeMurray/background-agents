@@ -48,20 +48,6 @@ const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).joi
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
-/** Column order for pinned-manifest inserts; must match bindManifestCopy's SELECT. */
-const SESSION_SKILL_REVISION_COLUMNS = [
-  "session_id",
-  "position",
-  "skill_id",
-  "revision_id",
-  "skill_name",
-  "description",
-  "revision_number",
-  "revision_sha256",
-  "total_bytes",
-  "assignment_sources",
-] as const;
-
 export interface ChildAdmissionLease {
   token: string;
   childSessionId: string;
@@ -407,19 +393,18 @@ export class SessionIndexStore {
       ...bulkInsertStatements(
         this.db,
         "session_skill_revisions",
-        SESSION_SKILL_REVISION_COLUMNS,
-        manifest.skills.map((skill, position) => [
-          sessionId,
+        manifest.skills.map((skill, position) => ({
+          session_id: sessionId,
           position,
-          skill.skillId,
-          skill.revisionId,
-          skill.name,
-          skill.description,
-          skill.revisionNumber,
-          skill.revisionSha256,
-          skill.totalBytes,
-          JSON.stringify(skill.assignmentSources),
-        ])
+          skill_id: skill.skillId,
+          revision_id: skill.revisionId,
+          skill_name: skill.name,
+          description: skill.description,
+          revision_number: skill.revisionNumber,
+          revision_sha256: skill.revisionSha256,
+          total_bytes: skill.totalBytes,
+          assignment_sources: JSON.stringify(skill.assignmentSources),
+        }))
       ),
     ];
   }

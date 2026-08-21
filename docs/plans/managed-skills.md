@@ -340,11 +340,11 @@ Removing the count cap exposed three resources scaling with skill count rather t
 was enforced, so each surfaced as an engine error rather than a validation message. What each cost
 and what it costs now:
 
-| Resource                     | Was                            | Now                                          | Cliff          |
-| ---------------------------- | ------------------------------ | -------------------------------------------- | -------------- |
-| Installation payload         | Whole manifest in one response | `MANAGED_SKILLS_PAGE_SIZE` per response      | none           |
-| Session manifest persistence | One INSERT per skill           | 10 `session_skill_revisions` rows per INSERT | ~9,900 skills  |
-| Profile membership writes    | One INSERT per skill           | 50 `skill_profile_items` rows per INSERT     | ~49,900 skills |
+| Resource                     | Was                            | Now                                          | Cliff         |
+| ---------------------------- | ------------------------------ | -------------------------------------------- | ------------- |
+| Installation payload         | Whole manifest in one response | `MANAGED_SKILLS_PAGE_SIZE` per response      | none          |
+| Session manifest persistence | One INSERT per skill           | 10 `session_skill_revisions` rows per INSERT | 9,041 skills  |
+| Profile membership writes    | One INSERT per skill           | 50 `skill_profile_items` rows per INSERT     | 33,251 skills |
 
 The payload was the binding constraint at roughly 2,400 skills, assuming the worst realistic shape:
 `MAX_SKILL_FILES` near-empty files per skill, where roughly 134 bytes plus the path length of
@@ -363,6 +363,23 @@ multi-row `INSERT`s sized to the 100-parameter ceiling (`bulkInsertStatements`),
 statement count by rows-per-statement and keeps the write inside its caller's atomic `batch()`.
 Multi-row `VALUES` is standard SQL, so neither path needs an engine branch. `bindManifestCopy` is
 set-based (`INSERT … SELECT`) and stays fully count-independent.
+
+Packing lowers the constant; it does not remove the linear term, and the budget is spent by the
+whole invocation rather than by the write alone. The cliffs above are the minimum end-to-end cost
+for `N` skills, so any additional per-request work lowers them further:
+
+| Path           | Reads                                                   | Writes                                    | Total     |
+| -------------- | ------------------------------------------------------- | ----------------------------------------- | --------- |
+| Session create | 2 generation + 1 catalog + ⌈N/100⌉ assignment hydration | 1 session + 1 manifest + ⌈N/10⌉ revisions | 5 + 0.11N |
+| Profile create | ⌈N/100⌉ `validateSkillIds`                              | 1 profile + ⌈N/50⌉ items + 1 generation   | 2 + 0.03N |
+
+Session create excludes repository and provider-auth statements and assumes resolution does not
+retry; a generation change retries the read phase up to `MAX_CATALOG_READ_ATTEMPTS` times, and
+profile-mode selection adds two more reads. Profile create excludes authentication and routing.
+Making either genuinely count-independent needs a set-based bulk write behind the database boundary
+— `json_each`-style expansion of a single parameter — which the `SqlDatabase` port cannot express
+today because it is types-only and erased at build time, leaving no runtime dispatch point for an
+engine branch.
 
 Paths must be normalized relative POSIX paths. Reject absolute paths, empty segments, `.`, `..`,
 backslashes, NUL/control characters, duplicate normalized paths, symlinks, hard links, and reserved

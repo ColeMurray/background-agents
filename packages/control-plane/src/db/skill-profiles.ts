@@ -171,8 +171,7 @@ export class SkillProfileStore {
     return bulkInsertStatements(
       this.db,
       "skill_profile_items",
-      ["profile_id", "skill_id"],
-      [...new Set(skillIds)].map((skillId) => [profileId, skillId])
+      [...new Set(skillIds)].map((skillId) => ({ profile_id: profileId, skill_id: skillId }))
     );
   }
 
