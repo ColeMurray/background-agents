@@ -9,12 +9,11 @@ import { pullRequestSummaryDisplay } from "@/lib/pr-summary";
 import { formatRelativeTime } from "@/lib/time";
 import { formatRepoLabel } from "@/lib/repo-label";
 import type { Session } from "@open-inspect/shared/types/sessions";
+import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
 
 interface ChildSessionsSectionProps {
   sessionId: string;
 }
-
-const TERMINAL_STATUSES = new Set(["completed", "cancelled", "failed", "archived"]);
 
 function statusBadgeVariant(status: string) {
   switch (status) {
@@ -37,7 +36,7 @@ export function ChildSessionsSection({ sessionId }: ChildSessionsSectionProps) {
     // This is a safety-net fallback for missed WS messages during reconnections.
     refreshInterval: (latestData) => {
       if (!latestData?.children?.length) return 0;
-      const hasActiveChild = latestData.children.some((c) => !TERMINAL_STATUSES.has(c.status));
+      const hasActiveChild = latestData.children.some((c) => !isSessionInactive(c.status));
       return hasActiveChild ? 30_000 : 0;
     },
   });

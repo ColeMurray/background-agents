@@ -18,9 +18,7 @@ import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
-
-/** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
-const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+import { isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
 export class SessionStatusService {
   constructor(
@@ -53,7 +51,7 @@ export class SessionStatusService {
       ).catch((error) =>
         this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
       );
-      if (TERMINAL_STATUSES.includes(status)) {
+      if (isTurnSettled(status)) {
         this.syncSessionMetrics(publicSessionId);
       }
       return false;
@@ -127,7 +125,7 @@ export class SessionStatusService {
 
     this.messenger.broadcast({ type: "session_status", status });
 
-    if (TERMINAL_STATUSES.includes(status)) {
+    if (isTurnSettled(status)) {
       this.syncSessionMetrics(publicSessionId);
     }
 

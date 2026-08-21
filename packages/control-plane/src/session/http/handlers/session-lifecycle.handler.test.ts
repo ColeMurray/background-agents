@@ -1003,11 +1003,22 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).not.toHaveBeenCalled();
   });
 
-  it("unarchives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+  // Unarchive must not assert a status of its own. Forcing "active" left a
+  // session with no queued work claiming to be working: nothing settles an idle
+  // `active` session, because every settle path is driven by execution events,
+  // so it stayed in the sidebar's in-progress group until the next prompt.
+  // Deriving the status from message state is what makes the restore honest.
+  it.each([
+    ["a finished session", "completed"],
+    ["a session with queued work", "active"],
+    ["a session whose last turn failed", "failed"],
+    ["a session with no messages at all", "created"],
+  ] as const)("unarchives %s to the status its messages imply", async (_label, settled) => {
+    const { handler, getSession, getParticipantByUserId, transition, settleFromMessageState } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
     getParticipantByUserId.mockReturnValue(createParticipant());
-    transition.mockResolvedValue(true);
+    settleFromMessageState.mockResolvedValue(settled);
 
     const response = await handler.unarchive(
       new Request("http://internal/internal/unarchive", {
@@ -1018,8 +1029,9 @@ describe("createSessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "active" });
-    expect(transition).toHaveBeenCalledWith("active");
+    expect(await response.json()).toEqual({ status: settled });
+    expect(settleFromMessageState).toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it("returns 409 when unarchiving a session that is not archived", async () => {
