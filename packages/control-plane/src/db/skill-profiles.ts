@@ -1,5 +1,6 @@
 import type { SkillProfile } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 interface ProfileRow {
@@ -143,14 +144,19 @@ export class SkillProfileStore {
       throw new SkillProfileValidationError("skillIds must be unique");
     }
     if (unique.length === 0) return;
-    const placeholders = unique.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM skills WHERE id IN (${placeholders}) AND deleted_at IS NULL`
-      )
-      .bind(...unique)
-      .first<{ count: number }>();
-    if ((result?.count ?? 0) !== unique.length) {
+    let found = 0;
+    for (let start = 0; start < unique.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = unique.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM skills WHERE id IN (${placeholders}) AND deleted_at IS NULL`
+        )
+        .bind(...chunk)
+        .first<{ count: number }>();
+      found += result?.count ?? 0;
+    }
+    if (found !== unique.length) {
       throw new SkillProfileValidationError("One or more skills do not exist");
     }
   }

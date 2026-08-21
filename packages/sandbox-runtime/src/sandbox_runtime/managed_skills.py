@@ -27,7 +27,6 @@ MAX_SKILL_FILE_BYTES = 256 * 1024
 MAX_SKILL_REVISION_BYTES = 1024 * 1024
 MAX_SKILL_PATH_BYTES = 240
 MAX_SKILL_PATH_DEPTH = 10
-MAX_MANAGED_SKILLS_PER_SESSION = 20
 MAX_MANAGED_SKILL_MANIFEST_BYTES = 5 * 1024 * 1024
 MAX_MANAGED_SKILL_RESPONSE_BYTES = 32 * 1024 * 1024
 MANAGED_SKILLS_FETCH_TIMEOUT_SECONDS = 15.0
@@ -215,7 +214,7 @@ def validate_installation(raw: bytes) -> ManagedSkillInstallation:
         )
     manifest_sha256 = _validate_sha256(installation["manifestSha256"], "manifest SHA-256")
     raw_skills = installation["skills"]
-    if not isinstance(raw_skills, list) or len(raw_skills) > MAX_MANAGED_SKILLS_PER_SESSION:
+    if not isinstance(raw_skills, list):
         raise ManagedSkillsError("invalid managed skills list", code="installation_invalid")
 
     skills: list[ManagedSkill] = []

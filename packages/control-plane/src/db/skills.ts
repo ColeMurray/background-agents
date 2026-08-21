@@ -13,6 +13,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { buildValidatedSkillRevision } from "../skills/content-addressing";
 import { isUniqueConstraintError } from "./errors";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const RESERVED_SKILL_NAMES = new Set([
@@ -76,8 +77,6 @@ interface SkillListResult {
   hasMore: boolean;
   nextCursor: string | null;
 }
-
-const MAX_D1_QUERY_PARAMETERS = 100;
 
 /** Mutable catalog operations backed by immutable content revisions. */
 export class SkillStore {
@@ -374,16 +373,21 @@ export class SkillStore {
     const files = new Map<string, SkillFile[]>();
     for (const revisionId of revisionIds) files.set(revisionId, []);
     if (revisionIds.length === 0) return files;
-    const placeholders = revisionIds.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(
-        `SELECT revision_id, path, content, content_sha256, size_bytes, executable
-         FROM skill_revision_files WHERE revision_id IN (${placeholders})
-         ORDER BY revision_id, path`
-      )
-      .bind(...revisionIds)
-      .all<FileRow & { revision_id: string }>();
-    for (const row of result.results ?? []) {
+    const rows: (FileRow & { revision_id: string })[] = [];
+    for (let start = 0; start < revisionIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = revisionIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(
+          `SELECT revision_id, path, content, content_sha256, size_bytes, executable
+           FROM skill_revision_files WHERE revision_id IN (${placeholders})
+           ORDER BY revision_id, path`
+        )
+        .bind(...chunk)
+        .all<FileRow & { revision_id: string }>();
+      rows.push(...(result.results ?? []));
+    }
+    for (const row of rows) {
       files.get(row.revision_id)?.push({
         path: row.path,
         content: row.content,

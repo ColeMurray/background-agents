@@ -13,7 +13,6 @@ export const MAX_SKILL_FILE_BYTES = 256 * 1024;
 export const MAX_SKILL_REVISION_BYTES = 1024 * 1024;
 export const MAX_SKILL_PATH_BYTES = 240;
 export const MAX_SKILL_PATH_DEPTH = 10;
-export const MAX_MANAGED_SKILLS_PER_SESSION = 20;
 export const MAX_MANAGED_SKILL_MANIFEST_BYTES = 5 * 1024 * 1024;
 export const SKILL_LIST_PAGE_SIZE = 100;
 
@@ -221,11 +220,11 @@ export const skillResponseSchema = z.strictObject({ skill: skillSchema });
 
 export const createSkillProfileInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(200),
-  skillIds: z.array(z.string().min(1)).max(MAX_MANAGED_SKILLS_PER_SESSION).default([]),
+  skillIds: z.array(z.string().min(1)).default([]),
 });
 export const updateSkillProfileInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(200).optional(),
-  skillIds: z.array(z.string().min(1)).max(MAX_MANAGED_SKILLS_PER_SESSION).optional(),
+  skillIds: z.array(z.string().min(1)).optional(),
 });
 export const skillProfileSchema = z.strictObject({
   id: z.string(),

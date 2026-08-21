@@ -240,10 +240,14 @@ describe("managed skills persistence and resolution", () => {
     expect(getResponse.status).toBe(404);
   });
 
-  it("paginates catalogs and hydrates assignments beyond D1's parameter limit", async () => {
-    const skills = new SkillStore(env.DB);
+  /**
+   * Seed `count` enabled, globally-assigned skills directly. Sized past D1's
+   * 100-parameter ceiling so every store that builds `IN (?, …)` over a
+   * manifest-sized list has to chunk.
+   */
+  async function seedGlobalCatalog(count: number) {
     const catalog = await Promise.all(
-      Array.from({ length: 101 }, async (_, index) => {
+      Array.from({ length: count }, async (_, index) => {
         const suffix = String(index).padStart(3, "0");
         const id = `catalog-skill-${suffix}`;
         return {
@@ -312,6 +316,12 @@ describe("managed skills persistence and resolution", () => {
         await env.DB.batch(phase.slice(start, start + 100));
       }
     }
+    return catalog;
+  }
+
+  it("paginates catalogs and hydrates assignments beyond D1's parameter limit", async () => {
+    const skills = new SkillStore(env.DB);
+    await seedGlobalCatalog(101);
 
     const applicable = await skills.listApplicable({ repositories: [], environmentId: null });
     expect(applicable).toHaveLength(101);
@@ -336,6 +346,48 @@ describe("managed skills persistence and resolution", () => {
       hasMore: false,
       nextCursor: null,
     });
+  });
+
+  it("resolves and installs a manifest larger than D1's parameter limit", async () => {
+    const catalog = await seedGlobalCatalog(101);
+
+    // No count cap: `all` selects the whole applicable set rather than 400ing.
+    const manifest = await resolveManagedSkills(
+      env.DB,
+      { repositories: [], environmentId: null },
+      { mode: "all" },
+      "user_1"
+    );
+    expect(manifest.skills).toHaveLength(101);
+
+    const sessions = new SessionIndexStore(env.DB);
+    await sessions.create({
+      id: "wide",
+      title: null,
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created" as const,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      skillManifest: manifest,
+    });
+
+    // filesForRevisions binds one parameter per revision; unchunked this throws
+    // on the fail-closed sandbox boot path rather than degrading.
+    const installation = await new SessionSkillStore(env.DB).getSandboxInstallation("wide");
+    expect(installation?.skills).toHaveLength(101);
+    expect(installation?.skills.every((skill) => skill.files.length === 2)).toBe(true);
+
+    // validateSkillIds chunks the same way, and profiles no longer cap length.
+    const profile = await new SkillProfileStore(env.DB).create(
+      "user_1",
+      "Everything",
+      catalog.map(({ id }) => id)
+    );
+    expect(profile.skillIds).toHaveLength(101);
   });
 
   it("maps typed profile validation and conflict failures", async () => {

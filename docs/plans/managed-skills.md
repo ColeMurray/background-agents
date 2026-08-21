@@ -306,15 +306,27 @@ runtime:
 | Total bytes per revision          |          1 MiB |
 | Path length                       |      240 bytes |
 | Path depth below skill root       |    10 segments |
-| Managed skills per session        |             20 |
+| Managed skills per session        |      unbounded |
 | Total managed content per session |          5 MiB |
 
 Only valid UTF-8 text files are accepted. This supports Markdown, source code, scripts, JSON, YAML,
 and text templates while keeping D1 storage and JSON delivery bounded. Binary assets and archive
 upload move to content-addressed R2 packages in a later phase.
 
+A session's manifest is bounded by total content bytes, not by skill count. V1 also capped the count
+at 20; that was removed because assignments are additive and a global assignment applies to every
+session, so one per-session count limit gated the entire installation — exceeding it failed every
+session create and automation run rather than the one oversized session. Byte limits do not have
+that property. If manifest delivery becomes the bottleneck, change the transmission (paginate or
+stream the installation fetch, move file bodies to content-addressed storage) rather than
+reintroducing a count cap.
+
 The aggregate session limits are enforced by resolution preview and session creation. Resolution
 returns a specific error and never truncates a profile or silently drops skills.
+
+Stores that build `IN (?, …)` over a manifest-sized list must chunk by the engine's bound-parameter
+ceiling (`MAX_D1_QUERY_PARAMETERS`). Those queries fail outright rather than degrading, so the count
+cap was previously masking them.
 
 Paths must be normalized relative POSIX paths. Reject absolute paths, empty segments, `.`, `..`,
 backslashes, NUL/control characters, duplicate normalized paths, symlinks, hard links, and reserved
