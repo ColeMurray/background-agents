@@ -66,16 +66,16 @@ beforeEach(() => {
   const recent = { ...session("recent", "Finished work"), status: "completed" as const };
   mockHook.mockReturnValue({
     needsAttention: [attention],
-    running: [running],
-    recent: [recent],
+    inProgress: [running],
+    finished: [recent],
     childrenMap: new Map([[running.id, [child]]]),
     loading: false,
     sessionsError: undefined,
     refreshSnapshot: vi.fn(async () => undefined),
     sectionPagination: {
       needsAttention: noPagination,
-      running: noPagination,
-      recent: noPagination,
+      inProgress: noPagination,
+      finished: noPagination,
     },
     sessionCreatorFilter: "all",
     setSessionCreatorFilter: vi.fn(),
@@ -107,7 +107,7 @@ describe("SessionSidebar", () => {
       ...value,
       sectionPagination: {
         ...value.sectionPagination,
-        running: { hasMore: true, loadingMore: false, loadMore: loadMoreRunning },
+        inProgress: { hasMore: true, loadingMore: false, loadMore: loadMoreRunning },
       },
     });
     render(<SessionSidebar />);
@@ -149,8 +149,8 @@ describe("SessionSidebar", () => {
     mockHook.mockReturnValue({
       ...value,
       needsAttention: [],
-      running: [],
-      recent: [],
+      inProgress: [],
+      finished: [],
       childrenMap: new Map(),
       sessionsError: new Error("snapshot unavailable"),
       refreshSnapshot,

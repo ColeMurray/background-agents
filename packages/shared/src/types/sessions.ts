@@ -32,17 +32,6 @@ export type SessionStatus = z.infer<typeof sessionStatusSchema>;
  * sets it optimistically on the `sandbox_warming` message and Modal reports
  * it from its own manager.
  */
-export type SandboxStatus =
-  | "pending"
-  | "spawning"
-  | "connecting"
-  | "warming"
-  | "ready"
-  | "stale"
-  | "snapshotting"
-  | "stopped"
-  | "failed";
-
 export const sandboxStatusSchema = z.enum([
   "pending",
   "spawning",
@@ -54,6 +43,7 @@ export const sandboxStatusSchema = z.enum([
   "stopped",
   "failed",
 ]);
+export type SandboxStatus = z.infer<typeof sandboxStatusSchema>;
 
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
 

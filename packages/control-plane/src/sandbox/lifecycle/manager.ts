@@ -13,7 +13,6 @@
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import { coerceSandboxStatus } from "../sandbox-status";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
 import {
   SandboxProviderError,
@@ -68,7 +67,7 @@ const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
  * Sandbox state with circuit breaker info (subset of full SandboxRow).
  */
 interface SandboxCircuitBreakerInfo {
-  status: string;
+  status: SandboxStatus;
   created_at: number;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
@@ -372,7 +371,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Evaluate spawn decision
     const spawnState = {
-      status: coerceSandboxStatus(sandboxState?.status, this.log),
+      status: sandboxState?.status ?? "pending",
       createdAt: sandboxState?.created_at || 0,
       providerObjectId: sandboxState?.modal_object_id || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,

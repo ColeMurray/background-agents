@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { coerceSandboxStatus } from "./sandbox-status";
+import { sandboxStatusSchema } from "@open-inspect/shared/types/sessions";
 import type { Logger } from "../logger";
 
 function createLog() {
@@ -14,23 +15,24 @@ function createLog() {
 }
 
 describe("coerceSandboxStatus", () => {
-  it.each(["pending", "spawning", "connecting", "warming", "ready", "stale", "stopped", "failed"])(
-    "passes %s through unchanged",
-    (status) => {
-      const log = createLog();
-      expect(coerceSandboxStatus(status, log)).toBe(status);
-      expect(log.warn).not.toHaveBeenCalled();
-    }
-  );
+  it.each(sandboxStatusSchema.options)("passes %s through unchanged", (status) => {
+    const log = createLog();
+    expect(coerceSandboxStatus(status, log)).toBe(status);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
 
   // The column is bare TEXT with no CHECK constraint, so the type system's
   // belief that it holds a SandboxStatus is an assumption, not a guarantee.
   // Degrading to `pending` keeps a spawn evaluable — throwing here would abort
   // the spawn over a value the caller could have survived — but it must be
   // loud, because a hit means something wrote a status we do not model.
-  it("degrades an unrecognized status to pending and warns", () => {
+  // `failed` rather than `pending`: an unclassifiable sandbox must not be
+  // treated as pre-spawn (reusable as if fresh) nor as stopped/stale (which
+  // makes evaluateSpawnDecision try to resume it). `failed` refuses reuse and
+  // still permits a clean spawn.
+  it("degrades an unrecognized status to failed and warns", () => {
     const log = createLog();
-    expect(coerceSandboxStatus("running", log)).toBe("pending");
+    expect(coerceSandboxStatus("running", log)).toBe("failed");
     expect(log.warn).toHaveBeenCalledWith(
       "sandbox.status.unrecognized",
       expect.objectContaining({ status: "running" })

@@ -4,19 +4,25 @@ import type { Logger } from "../logger";
 /**
  * Turn a raw sandbox status read out of storage into a `SandboxStatus`.
  *
- * Both status columns are bare `TEXT` with a default and no `CHECK`
- * constraint, so a row's status is only a `SandboxStatus` by convention. Every
- * write path is typed, which is what actually keeps the column honest — this
- * exists so the read side degrades loudly instead of asserting a lie with
- * `as SandboxStatus`.
+ * Called from `SandboxRepository`, which is the single read boundary for the
+ * sandbox row — not from individual consumers, or the same row would carry
+ * different semantics depending on which accessor a caller used. Both status
+ * columns are bare `TEXT` with no `CHECK` constraint, so a row's status is
+ * only a `SandboxStatus` by convention; every write path is compile-time
+ * typed, which is what actually keeps the column honest.
  *
  * Degrades rather than throws on purpose: the callers are spawn evaluation and
- * alarm ticks, which can proceed sensibly from `pending`. A throw there would
- * abort real work over a value the caller could have survived. Write
- * boundaries should stay compile-time typed instead of parsing.
+ * alarm ticks, which a throw would abort over a value they could survive.
+ *
+ * An unrecognized status resolves to `failed`, deliberately, and this is the
+ * conservative choice rather than the obvious one. `pending` would let an
+ * unclassifiable sandbox be treated as pre-spawn and picked up as if fresh;
+ * `stopped` or `stale` would make `evaluateSpawnDecision` try to *resume* it.
+ * `failed` is the only value that both refuses to reuse the sandbox and still
+ * permits a clean spawn.
  */
 export function coerceSandboxStatus(raw: string | null | undefined, log: Logger): SandboxStatus {
-  // Absent is the documented pre-spawn state, not corruption — no warning.
+  // Absent is the documented pre-spawn state, not corruption.
   if (raw == null || raw === "") return "pending";
 
   const parsed = sandboxStatusSchema.safeParse(raw);
@@ -26,5 +32,5 @@ export function coerceSandboxStatus(raw: string | null | undefined, log: Logger)
     event: "sandbox.status.unrecognized",
     status: raw,
   });
-  return "pending";
+  return "failed";
 }

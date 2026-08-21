@@ -316,11 +316,13 @@ export class SessionDO extends DurableObject<Env> {
     );
     this.participantRepository = new ParticipantRepository(this.sql);
     this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
-    this.sandboxRepository = new SandboxRepository(this.sql);
     this.sessionCoreRepository = new SessionCoreRepository(this.sql, (closure) =>
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
+    // After this.log: the sandbox repository validates the status it reads and
+    // warns on anything unmodelled, so it needs a logger.
+    this.sandboxRepository = new SandboxRepository(this.sql, this.log);
     const ensureInitialized = (rehydrateAlarm?: boolean) => this.ensureInitialized(rehydrateAlarm);
     const clock: Clock = {
       nowMs: () => Date.now(),

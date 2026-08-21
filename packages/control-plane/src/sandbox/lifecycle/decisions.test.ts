@@ -745,11 +745,11 @@ describe("evaluateInactivityTimeout", () => {
     }
   });
 
-  it("only applies to ready/running status", () => {
+  it("only applies to ready status", () => {
     const now = Date.now();
     const state: InactivityState = {
       lastActivity: now - config.timeoutMs - 60000,
-      status: "spawning", // Not ready or running
+      status: "spawning", // Not ready
       connectedClientCount: 0,
     };
 
@@ -758,7 +758,7 @@ describe("evaluateInactivityTimeout", () => {
     expect(decision.action).toBe("schedule");
   });
 
-  it('returns "timeout" for running status', () => {
+  it('returns "timeout" for ready status', () => {
     const now = Date.now();
     const state: InactivityState = {
       lastActivity: now - config.timeoutMs - 1000,

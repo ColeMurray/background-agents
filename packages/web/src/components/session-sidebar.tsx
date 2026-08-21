@@ -81,8 +81,8 @@ export function SessionSidebar({
 
   const {
     needsAttention,
-    running,
-    recent,
+    inProgress,
+    finished,
     childrenMap,
     loading,
     sessionsError,
@@ -284,7 +284,7 @@ export function SessionSidebar({
           </div>
         ) : (
           <>
-            {needsAttention.length === 0 && running.length === 0 && recent.length === 0 ? (
+            {needsAttention.length === 0 && inProgress.length === 0 && finished.length === 0 ? (
               hasSessionListError ? (
                 <div className="flex items-center justify-between gap-2 px-4 py-8 text-sm text-destructive">
                   <span>Unable to load sessions</span>
@@ -305,15 +305,8 @@ export function SessionSidebar({
                   sectionPagination.needsAttention,
                   true
                 )}
-                {/*
-                  "In progress", not "Running": this heading names the
-                  SessionInboxCategory `in_progress`, and the sandbox status
-                  shown in the session header has its own vocabulary. When both
-                  said "Running" a session could be filed under Running here
-                  while the header read "Stopped", and both were correct.
-                */}
-                {renderSessionGroup("In progress", running, sectionPagination.running)}
-                {renderSessionGroup("Recent", recent, sectionPagination.recent)}
+                {renderSessionGroup("In progress", inProgress, sectionPagination.inProgress)}
+                {renderSessionGroup("Recent", finished, sectionPagination.finished)}
               </>
             )}
 

@@ -3,7 +3,7 @@ import { env } from "cloudflare:test";
 import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
-import { deriveInboxCategory } from "@open-inspect/shared/types/session-activity";
+import type { SessionInboxCategory } from "@open-inspect/shared/types/session-inbox";
 
 const VIEWER_ID = "11111111111111111111111111111111";
 
@@ -496,26 +496,49 @@ describe("session inbox", () => {
 describe("inbox category conformance", () => {
   beforeEach(cleanD1Tables);
 
-  // deriveInboxCategory in @open-inspect/shared is the readable statement of a
-  // rule that otherwise exists only as a CASE expression inside a query
-  // string. It does not replace the SQL — the aggregate has to stay for
-  // pagination — so it is only worth having if the two provably agree. These
-  // cases drive real rows through the real query and compare.
+  // The category is decided by a CASE expression inside a query that also uses
+  // it as a WHERE predicate and a pagination key, so it cannot move out of SQL.
+  // These cases pin the rule by driving real rows through the real query and
+  // asserting the category each tree shape must land in. Expectations are
+  // stated, not computed: a second implementation to compare against would just
+  // be a second thing that can drift.
   const CASES: Array<{
     name: string;
     tree: Array<{ status: SessionEntry["status"]; unread: boolean }>;
+    expected: SessionInboxCategory;
   }> = [
-    { name: "single idle session", tree: [{ status: "completed", unread: false }] },
-    { name: "single active session", tree: [{ status: "active", unread: false }] },
-    { name: "single unread session", tree: [{ status: "completed", unread: true }] },
-    { name: "single draft", tree: [{ status: "created", unread: false }] },
-    { name: "single failed session", tree: [{ status: "failed", unread: false }] },
+    {
+      name: "single idle session",
+      tree: [{ status: "completed", unread: false }],
+      expected: "finished",
+    },
+    {
+      name: "single active session",
+      tree: [{ status: "active", unread: false }],
+      expected: "in_progress",
+    },
+    {
+      name: "single unread session",
+      tree: [{ status: "completed", unread: true }],
+      expected: "needs_attention",
+    },
+    {
+      name: "single draft",
+      tree: [{ status: "created", unread: false }],
+      expected: "finished",
+    },
+    {
+      name: "single failed session",
+      tree: [{ status: "failed", unread: false }],
+      expected: "finished",
+    },
     {
       name: "idle root with an active child",
       tree: [
         { status: "completed", unread: false },
         { status: "active", unread: false },
       ],
+      expected: "in_progress",
     },
     {
       name: "idle root with an unread child",
@@ -523,6 +546,7 @@ describe("inbox category conformance", () => {
         { status: "completed", unread: false },
         { status: "completed", unread: true },
       ],
+      expected: "needs_attention",
     },
     {
       name: "active root with an unread child (attention outranks progress)",
@@ -530,6 +554,7 @@ describe("inbox category conformance", () => {
         { status: "active", unread: false },
         { status: "completed", unread: true },
       ],
+      expected: "needs_attention",
     },
     {
       name: "wholly finished tree",
@@ -537,6 +562,7 @@ describe("inbox category conformance", () => {
         { status: "completed", unread: false },
         { status: "failed", unread: false },
       ],
+      expected: "finished",
     },
     // Archived rows are filtered by the eligibility clause before the
     // aggregate runs, so they contribute nothing -- not their unread flag and
@@ -549,6 +575,7 @@ describe("inbox category conformance", () => {
         { status: "completed", unread: false },
         { status: "archived", unread: true },
       ],
+      expected: "finished",
     },
     {
       name: "idle root with an archived active child",
@@ -556,10 +583,11 @@ describe("inbox category conformance", () => {
         { status: "completed", unread: false },
         { status: "archived", unread: false },
       ],
+      expected: "finished",
     },
   ];
 
-  it.each(CASES)("agrees with the query for a $name", async ({ tree }) => {
+  it.each(CASES)("files a $name under $expected", async ({ tree, expected }) => {
     // Prime the viewer row first: unreadSql gates on
     // `latest_terminal_message_completed_at >= viewer.created_at`, so a message
     // seeded before the viewer exists can never read as unread.
@@ -589,7 +617,6 @@ describe("inbox category conformance", () => {
       }
     }
 
-    const expected = deriveInboxCategory(tree);
     const response = await serviceFetch(`https://example.com/sessions/inbox?category=${expected}`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as {

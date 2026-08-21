@@ -122,8 +122,8 @@ describe("useSidebarSessions", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher).toHaveBeenCalledWith("/api/sessions/inbox");
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
-    expect(result.current.running.map(({ id }) => id)).toEqual(["running"]);
-    expect(result.current.recent.map(({ id }) => id)).toEqual(["finished"]);
+    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished"]);
   });
 
   it("polls only the canonical endpoint every 30 seconds while visible", async () => {
@@ -157,11 +157,11 @@ describe("useSidebarSessions", () => {
       snapshot({ finished: page([key.includes("mine=true") ? "mine" : "all"]) })
     );
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
-    await waitFor(() => expect(result.current.recent.map(({ id }) => id)).toEqual(["all"]));
+    await waitFor(() => expect(result.current.finished.map(({ id }) => id)).toEqual(["all"]));
 
     act(() => result.current.setSessionCreatorFilter("mine"));
 
-    await waitFor(() => expect(result.current.recent.map(({ id }) => id)).toEqual(["mine"]));
+    await waitFor(() => expect(result.current.finished.map(({ id }) => id)).toEqual(["mine"]));
     expect(fetcher).toHaveBeenCalledWith("/api/sessions/inbox?mine=true");
     expect(fetcher.mock.calls.some(([key]) => key.includes("category="))).toBe(false);
   });
@@ -283,20 +283,20 @@ describe("useSidebarSessions", () => {
     );
 
     await act(async () => result.current.sectionPagination.needsAttention.retry());
-    await waitFor(() => expect(result.current.running.map(({ id }) => id)).toEqual(["moved"]));
+    await waitFor(() => expect(result.current.inProgress.map(({ id }) => id)).toEqual(["moved"]));
 
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-only"]);
     expect(
       [
         ...result.current.needsAttention,
-        ...result.current.running,
-        ...result.current.recent,
+        ...result.current.inProgress,
+        ...result.current.finished,
       ].filter(({ id }) => id === "moved")
     ).toHaveLength(1);
 
     await act(async () => result.current.sectionPagination.needsAttention.retry());
     await waitFor(() =>
-      expect(result.current.running.map(({ id }) => id)).toEqual(["running-new"])
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running-new"])
     );
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-only"]);
   });
@@ -358,16 +358,16 @@ describe("useSidebarSessions", () => {
       expect(result.current.needsAttention.map(({ id }) => id)).toContain("duplicate")
     );
 
-    act(() => result.current.sectionPagination.recent.loadMore());
+    act(() => result.current.sectionPagination.finished.loadMore());
     await waitFor(() =>
-      expect(result.current.recent.map(({ id }) => id)).toContain("finished-tail")
+      expect(result.current.finished.map(({ id }) => id)).toContain("finished-tail")
     );
 
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
       "attention",
       "attention-tail",
     ]);
-    expect(result.current.recent.map(({ id }) => id)).toEqual([
+    expect(result.current.finished.map(({ id }) => id)).toEqual([
       "finished",
       "duplicate",
       "finished-tail",

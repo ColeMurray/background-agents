@@ -18,10 +18,7 @@ import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
-import {
-  isLegalSessionTransition,
-  isTurnSettled,
-} from "@open-inspect/shared/types/session-activity";
+import { isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
 export class SessionStatusService {
   constructor(
@@ -61,38 +58,10 @@ export class SessionStatusService {
     }
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
-    this.reportUnmodelledTransition(session.status, status, publicSessionId);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
     await this.projectTransition(session, publicSessionId, status, updatedAt);
 
     return true;
-  }
-
-  /**
-   * Report a transition that SESSION_TRANSITIONS does not model.
-   *
-   * Deliberately observational: it warns, it does not block. The table is
-   * derived from the code by hand, and getting it wrong in the blocking
-   * direction is far worse than leaving it incomplete -- an earlier draft
-   * omitted `created -> completed`, which the abandoned-draft repair performs,
-   * and rejecting it would have wedged the sweep on the rows it exists to
-   * unstick. If these warnings stay absent in production, tightening this to
-   * throw is a safe follow-up. Until then the table earns its keep as
-   * documentation and as a tested statement of intent.
-   */
-  private reportUnmodelledTransition(
-    from: SessionStatus,
-    to: SessionStatus,
-    sessionId: string
-  ): void {
-    if (isLegalSessionTransition(from, to)) return;
-
-    this.log.warn("session.transition.unmodelled", {
-      event: "session.transition.unmodelled",
-      session_id: sessionId,
-      from,
-      to,
-    });
   }
 
   /**
@@ -137,9 +106,6 @@ export class SessionStatusService {
 
     const publicSessionId = this.getPublicSessionId(session);
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
-    // cancel() bypasses transition() to close the aggregate atomically, so the
-    // check is repeated here rather than living in transition() alone.
-    this.reportUnmodelledTransition(session.status, "cancelled", publicSessionId);
     this.repository.updateSessionStatus(session.id, "cancelled", updatedAt);
     terminalizeUnfinishedMessages();
     await this.projectTransition(session, publicSessionId, "cancelled", updatedAt);
@@ -193,6 +159,16 @@ export class SessionStatusService {
     return nextStatus;
   }
 
+  /**
+   * The status an idle session should hold, read off its finished messages.
+   *
+   * Falling back to `created` sends a session *backwards* into draft, which
+   * looks like a bug and is not. It is reachable only when the session has no
+   * messages at all -- cancelling the only pending prompt deletes its row --
+   * and returning an empty session to draft is what lets the 8-hour
+   * abandoned-draft sweep reclaim it. That behaviour was added deliberately
+   * after dead sessions accumulated. Do not "fix" it to `completed`.
+   */
   private getIdleStatusFromTerminalMessages(): SessionStatus {
     const latestMessage = this.messageRepository.getLatestTerminalMessage();
     return latestMessage ? (latestMessage.status === "failed" ? "failed" : "completed") : "created";
