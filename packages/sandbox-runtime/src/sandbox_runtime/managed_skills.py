@@ -38,9 +38,6 @@ MANAGED_SKILLS_RETRY_BASE_SECONDS = 0.25
 # even while passing resolution. Requesting a fixed window keeps every response
 # far below MAX_MANAGED_SKILL_RESPONSE_BYTES regardless of how wide it is.
 MANAGED_SKILLS_PAGE_SIZE = 50
-# Backstop against a control plane that keeps handing back a cursor. Sized well
-# past any real catalog: exceeding it is a bug, not a large installation.
-MANAGED_SKILLS_MAX_PAGES = 1000
 
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -361,6 +358,17 @@ def validate_installation_page(
             "managed skills content exceeds the session size limit", code="installation_too_large"
         )
 
+    # A page that promises more must deliver something. Without this a control
+    # plane could hand back empty pages and an advancing cursor forever; with
+    # it, every non-final page adds at least one skill, every skill adds a
+    # non-empty SKILL.md to the content aggregate, and the 5 MiB check above
+    # therefore terminates the traversal. A repeated page terminates earlier
+    # still, on the duplicate-name check.
+    if next_cursor is not None and not skills:
+        raise ManagedSkillsError(
+            "managed skills page is empty but claims more", code="installation_invalid"
+        )
+
     page = ManagedSkillInstallationPage(manifest_sha256, tuple(skills), next_cursor)
     return page, installation_content_bytes
 
@@ -585,12 +593,18 @@ class ManagedSkillsMaterializer:
         Nothing outside the staging tree is touched until the caller commits, so
         a failure part-way through a paged fetch leaves the previous
         installation in place.
+
+        The loop has no page-count bound on purpose. A fixed one would cap the
+        installation at pages times page size, reintroducing exactly the kind of
+        invented skill limit this work removed; the session contract bounds
+        aggregate content, not count. Termination comes from that contract
+        instead — see validate_installation_page.
         """
         names: set[str] = set()
         content_bytes = 0
         manifest_sha256: str | None = None
         cursor: str | None = None
-        for _ in range(MANAGED_SKILLS_MAX_PAGES):
+        while True:
             raw = await self.client.fetch_installation(
                 cursor=cursor, limit=MANAGED_SKILLS_PAGE_SIZE
             )
@@ -605,9 +619,6 @@ class ManagedSkillsMaterializer:
             if page.next_cursor is None:
                 return manifest_sha256, names
             cursor = page.next_cursor
-        raise ManagedSkillsError(
-            "managed skills installation did not finish paging", code="installation_invalid"
-        )
 
     async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
         """Fetch, validate, collision-check, and install skills before OpenCode starts."""

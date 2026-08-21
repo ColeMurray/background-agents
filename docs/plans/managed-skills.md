@@ -753,7 +753,8 @@ those six values with `str`, using the empty string for fields not applicable to
 The control plane owns the canonical provenance digest. The sandbox independently verifies every
 delivered file's path, size, content hash, permissions, and generated `SKILL.md` identity.
 Selection, revision metadata, and assignment provenance remain available from
-`GET /sessions/:id/skills`. Return `ETag: "<manifestSha256>"` for diagnostics and future caching.
+`GET /sessions/:id/skills`. The unpaged `ETag` described above exists for diagnostics and future
+caching.
 
 The response is intentionally not placed in `SESSION_CONFIG`, environment variables, or the Modal
 create request. Content can exceed environment limits, executable instructions should not appear in

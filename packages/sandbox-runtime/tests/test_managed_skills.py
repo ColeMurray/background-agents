@@ -302,7 +302,8 @@ async def test_materializer_rejects_duplicate_names_across_pages(tmp_path):
         await materializer.materialize((), tmp_path / "workspace")
 
 
-async def test_materializer_stops_a_cursor_that_never_terminates(tmp_path):
+async def test_materializer_rejects_an_empty_page_that_claims_more(tmp_path):
+    """A page promising more must deliver something, or traversal cannot terminate."""
     client = MagicMock()
     client.fetch_installation = AsyncMock(
         side_effect=lambda **_: _page([], next_cursor="always-more")
@@ -314,8 +315,31 @@ async def test_materializer_stops_a_cursor_that_never_terminates(tmp_path):
         bundled_skills_path=tmp_path / "missing-bundled",
     )
 
-    with pytest.raises(ManagedSkillsError, match="did not finish paging"):
+    with pytest.raises(ManagedSkillsError, match="empty but claims more"):
         await materializer.materialize((), tmp_path / "workspace")
+
+
+async def test_materializer_traversal_is_not_capped_by_a_page_count(tmp_path):
+    """Installation width is bounded by aggregate content, never by a page count."""
+    total = 1010
+    pages = [
+        _page([f"skill-{index:04d}"], next_cursor=None if index == total - 1 else str(index))
+        for index in range(total)
+    ]
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(side_effect=pages)
+    destination = tmp_path / "global" / "skills"
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert len(list(destination.iterdir())) == total
+    assert client.fetch_installation.await_count == total
 
 
 def test_validate_installation_rejects_a_page_read_as_a_whole():
