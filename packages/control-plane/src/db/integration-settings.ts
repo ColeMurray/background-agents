@@ -7,6 +7,8 @@ import {
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
+  integrationGlobalSettingsSchemas,
+  integrationRepoSettingsSchemas,
   normalizeRoutingRules,
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
@@ -42,6 +44,38 @@ export function isValidIntegrationId(id: string): id is IntegrationId {
 
 const ENVIRONMENT_SETTINGS_INTEGRATIONS = new Set<string>(ENVIRONMENT_SETTINGS_INTEGRATION_IDS);
 
+function parseStoredGlobalSettings<K extends keyof IntegrationSettingsMap>(
+  integrationId: K,
+  raw: string
+): IntegrationSettingsMap[K]["global"] {
+  const parsed = JSON.parse(raw) as unknown;
+  const result = integrationGlobalSettingsSchemas[integrationId].safeParse(parsed);
+  if (!result.success) {
+    throw new IntegrationSettingsValidationError(
+      `Stored global integration settings are invalid: ${result.error.issues[0]?.message ?? "invalid shape"}`
+    );
+  }
+
+  // SAFETY: The schema is selected by the same integration id as the generic return type.
+  return result.data as IntegrationSettingsMap[K]["global"];
+}
+
+function parseStoredRepoSettings<K extends keyof IntegrationSettingsMap>(
+  integrationId: K,
+  raw: string
+): IntegrationSettingsMap[K]["repo"] {
+  const parsed = JSON.parse(raw) as unknown;
+  const result = integrationRepoSettingsSchemas[integrationId].safeParse(parsed);
+  if (!result.success) {
+    throw new IntegrationSettingsValidationError(
+      `Stored repo integration settings are invalid: ${result.error.issues[0]?.message ?? "invalid shape"}`
+    );
+  }
+
+  // SAFETY: The schema is selected by the same integration id as the generic return type.
+  return result.data as IntegrationSettingsMap[K]["repo"];
+}
+
 /** Whether an integration accepts environment-level setting overrides (design §13.5). */
 export function supportsEnvironmentSettings(
   id: keyof IntegrationSettingsMap
@@ -61,7 +95,7 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["global"];
+    const settings = parseStoredGlobalSettings(integrationId, row.settings);
     return this.normalizeStoredGlobalSettings(integrationId, settings);
   }
 
@@ -69,7 +103,7 @@ export class IntegrationSettingsStore {
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): Promise<void> {
-    if (settings.enabledRepos !== undefined) {
+    if (settings.enabledRepos !== undefined && settings.enabledRepos !== null) {
       if (
         !Array.isArray(settings.enabledRepos) ||
         !settings.enabledRepos.every((r) => typeof r === "string")
@@ -121,7 +155,7 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    const settings = parseStoredRepoSettings(integrationId, row.settings);
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
@@ -190,7 +224,7 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    const settings = parseStoredRepoSettings(integrationId, row.settings);
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 

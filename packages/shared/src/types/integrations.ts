@@ -11,46 +11,52 @@ export interface IntegrationEntry<
   TGlobalDefaults extends object = TRepo,
 > {
   global: {
-    enabledRepos?: string[];
+    enabledRepos?: string[] | null;
     defaults?: TGlobalDefaults;
   };
   repo: TRepo;
 }
 
 /** Overridable behavior settings for the GitHub bot. Used at both global (defaults) and per-repo (overrides) levels. */
-export interface GitHubBotSettings {
-  autoReviewOnOpen?: boolean;
-  model?: string;
-  reasoningEffort?: string;
-  allowedTriggerUsers?: string[];
-  codeReviewInstructions?: string;
-  commentActionInstructions?: string;
-}
+export const githubBotSettingsSchema = z.object({
+  autoReviewOnOpen: z.boolean().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  allowedTriggerUsers: z.array(z.string()).optional(),
+  codeReviewInstructions: z.string().optional(),
+  commentActionInstructions: z.string().optional(),
+});
+
+export type GitHubBotSettings = z.infer<typeof githubBotSettingsSchema>;
 
 /**
  * Source-control (SCM) behavior settings.
  *
  * Provider-agnostic: applies to both GitHub and GitLab.
  */
-export interface ScmSettings {
+export const scmSettingsSchema = z.object({
   /** Always open pull/merge requests created by sessions as drafts. */
-  alwaysUseDraftMode?: boolean;
+  alwaysUseDraftMode: z.boolean().optional(),
   /** Label applied to pull/merge requests created by sessions. */
-  pullRequestLabel?: string;
-}
+  pullRequestLabel: z.string().optional(),
+});
+
+export type ScmSettings = z.infer<typeof scmSettingsSchema>;
 
 /** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
 export type ScmRepoSettings = ScmSettings;
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
-export interface LinearBotSettings {
-  model?: string;
-  reasoningEffort?: string;
-  allowUserPreferenceOverride?: boolean;
-  allowLabelModelOverride?: boolean;
-  emitToolProgressActivities?: boolean;
-  issueSessionInstructions?: string;
-}
+export const linearBotSettingsSchema = z.object({
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  allowUserPreferenceOverride: z.boolean().optional(),
+  allowLabelModelOverride: z.boolean().optional(),
+  emitToolProgressActivities: z.boolean().optional(),
+  issueSessionInstructions: z.string().optional(),
+});
+
+export type LinearBotSettings = z.infer<typeof linearBotSettingsSchema>;
 
 /**
  * Maximum length of a custom session-instructions value (Linear
@@ -60,14 +66,18 @@ export interface LinearBotSettings {
 export const MAX_SESSION_INSTRUCTIONS_LENGTH = 10000;
 
 /** Overridable behavior settings for the code-server integration. */
-export interface CodeServerSettings {
-  enabled?: boolean;
-}
+export const codeServerSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+});
+
+export type CodeServerSettings = z.infer<typeof codeServerSettingsSchema>;
 
 /** Overridable behavior settings for the VNC desktop integration. */
-export interface VncSettings {
-  enabled?: boolean;
-}
+export const vncSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+});
+
+export type VncSettings = z.infer<typeof vncSettingsSchema>;
 
 /** Maximum number of tunnel ports a user can configure per sandbox. */
 export const MAX_TUNNEL_PORTS = 10;
@@ -174,58 +184,32 @@ export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
  * unset, the provider's own default applies. At repo scope, `null` explicitly
  * uses the provider default instead of inheriting a global resource default.
  */
-export interface SandboxSettings {
+export const sandboxSettingsSchema = z.object({
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
-  tunnelPorts?: number[];
+  tunnelPorts: z.array(z.number()).optional(),
   /** Enable a browser-based terminal (ttyd) in sandbox sessions. */
-  terminalEnabled?: boolean;
-  /**
-   * Port code-server binds to inside the sandbox (only used when code-server is
-   * enabled). Unset → DEFAULT_CODE_SERVER_PORT. Set this to free the default
-   * port for your own service on a tunnel.
-   */
-  codeServerPort?: number;
-  /**
-   * Port noVNC/websockify binds to inside the sandbox (only used when VNC is
-   * enabled). Unset → DEFAULT_VNC_PORT.
-   */
-  vncPort?: number;
-  /**
-   * Port the web terminal (ttyd) proxy is exposed on (only used when
-   * `terminalEnabled`). Unset → DEFAULT_TERMINAL_PORT. Ignored by providers
-   * without terminal support.
-   */
-  terminalPort?: number;
+  terminalEnabled: z.boolean().optional(),
+  /** Port code-server binds to inside the sandbox. */
+  codeServerPort: z.number().optional(),
+  /** Port noVNC/websockify binds to inside the sandbox. */
+  vncPort: z.number().optional(),
+  /** Port the web terminal (ttyd) proxy is exposed on. */
+  terminalPort: z.number().optional(),
   /** Maximum active agent-spawned child sessions per parent session. */
-  maxConcurrentChildSessions?: number;
+  maxConcurrentChildSessions: z.number().optional(),
   /** Maximum total agent-spawned child sessions per parent session. */
-  maxTotalChildSessions?: number;
-  /**
-   * CPU cores to reserve for the sandbox. Fractional values are allowed, but
-   * providers may round to their supported resource shapes. Unset →
-   * inherit/default; null → provider default.
-   */
-  cpuCores?: number | null;
-  /**
-   * Memory to reserve for the sandbox, in MiB. Providers may map this to their
-   * closest supported resource shape. Unset → inherit/default; null → provider
-   * default.
-   */
-  memoryMib?: number | null;
-  /**
-   * Requested sandbox session lifetime, in milliseconds and whole-second
-   * increments. Unset uses the provider default. Provider support and limits
-   * vary.
-   */
-  sandboxTimeoutMs?: number;
-  /**
-   * Repo-image build timeout (the build sandbox lifetime), in seconds.
-   * Build-only — sessions are unaffected. Unset → DEFAULT_BUILD_TIMEOUT_SECONDS.
-   * The trigger caps the effective value at MAX_BUILD_TIMEOUT_SECONDS via
-   * {@link resolveBuildTimeoutSeconds}.
-   */
-  buildTimeoutSeconds?: number;
-}
+  maxTotalChildSessions: z.number().optional(),
+  /** CPU cores to reserve for the sandbox. */
+  cpuCores: z.number().nullable().optional(),
+  /** Memory to reserve for the sandbox, in MiB. */
+  memoryMib: z.number().nullable().optional(),
+  /** Requested sandbox session lifetime, in milliseconds. */
+  sandboxTimeoutMs: z.number().optional(),
+  /** Repo-image build timeout (the build sandbox lifetime), in seconds. */
+  buildTimeoutSeconds: z.number().optional(),
+});
+
+export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
 /**
  * Resolve the effective repo-image build timeout (seconds) from sandbox
@@ -294,22 +278,23 @@ export const MAX_SLACK_ROUTING_RULES = 100;
 export const MAX_SLACK_ROUTING_KEYWORD_LENGTH = 100;
 
 /** Per-repo Slack overrides. Mentions policy is workspace-wide and cannot be overridden per repo. */
-export interface SlackRepoSettings {
-  agentNotificationsEnabled?: boolean;
-}
+export const slackRepoSettingsSchema = z.object({
+  agentNotificationsEnabled: z.boolean().optional(),
+});
+
+export type SlackRepoSettings = z.infer<typeof slackRepoSettingsSchema>;
 
 /** Global Slack defaults: per-repo fields plus workspace-wide policy controls. */
-export interface SlackGlobalSettings extends SlackRepoSettings {
-  model?: string;
-  mentionsPolicy?: SlackMentionsPolicy;
+export const slackGlobalSettingsSchema = slackRepoSettingsSchema.extend({
+  model: z.string().optional(),
+  mentionsPolicy: z.enum(["allow", "escape", "strip"]).optional(),
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
-  routingRules?: SlackRoutingRule[];
-  /**
-   * Custom instructions appended to the first prompt of every Slack-initiated
-   * session (global-only, like mentionsPolicy).
-   */
-  sessionInstructions?: string;
-}
+  routingRules: z.array(slackRoutingRuleSchema).optional(),
+  /** Custom instructions appended to the first prompt of every Slack-initiated session. */
+  sessionInstructions: z.string().optional(),
+});
+
+export type SlackGlobalSettings = z.infer<typeof slackGlobalSettingsSchema>;
 
 /**
  * Clean up raw routing rules for storage or use: trim and lowercase the keyword,
@@ -389,6 +374,46 @@ export interface IntegrationSettingsMap {
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
   scm: IntegrationEntry<ScmSettings>;
 }
+
+export const integrationRepoSettingsSchemas = {
+  github: githubBotSettingsSchema,
+  linear: linearBotSettingsSchema,
+  "code-server": codeServerSettingsSchema,
+  vnc: vncSettingsSchema,
+  sandbox: sandboxSettingsSchema,
+  slack: slackRepoSettingsSchema,
+  scm: scmSettingsSchema,
+} as const;
+
+export const integrationGlobalSettingsSchemas = {
+  github: z.object({
+    enabledRepos: z.array(z.string()).nullable().optional(),
+    defaults: githubBotSettingsSchema.optional(),
+  }),
+  linear: z.object({
+    enabledRepos: z.array(z.string()).nullable().optional(),
+    defaults: linearBotSettingsSchema.optional(),
+  }),
+  "code-server": z.object({
+    enabledRepos: z.array(z.string()).nullable().optional(),
+    defaults: codeServerSettingsSchema.optional(),
+  }),
+  vnc: z.object({
+    enabledRepos: z.array(z.string()).nullable().optional(),
+    defaults: vncSettingsSchema.optional(),
+  }),
+  sandbox: z.object({
+    enabledRepos: z.array(z.string()).nullable().optional(),
+    defaults: sandboxSettingsSchema.optional(),
+  }),
+  slack: z.object({
+    enabledRepos: z.array(z.string()).nullable().optional(),
+    defaults: slackGlobalSettingsSchema.optional(),
+  }),
+  scm: z.object({
+    defaults: scmSettingsSchema.optional(),
+  }),
+} as const;
 
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];

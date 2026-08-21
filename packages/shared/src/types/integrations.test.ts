@@ -10,6 +10,8 @@ import {
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  integrationGlobalSettingsSchemas,
+  integrationRepoSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "./integrations";
@@ -188,6 +190,38 @@ describe("slackIntegrationSettingsRoutingResponseSchema", () => {
         settings: { defaults: { routingRules: [{ keyword: "frontend" }] } },
       }).success
     ).toBe(false);
+  });
+});
+
+describe("integration settings schemas", () => {
+  it("parses valid global and repo settings", () => {
+    expect(
+      integrationGlobalSettingsSchemas.github.safeParse({
+        enabledRepos: null,
+        defaults: { autoReviewOnOpen: false, allowedTriggerUsers: ["alice"] },
+      }).success
+    ).toBe(true);
+    expect(
+      integrationRepoSettingsSchemas.slack.safeParse({ agentNotificationsEnabled: true }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed stored settings", () => {
+    expect(
+      integrationGlobalSettingsSchemas.github.safeParse({
+        enabledRepos: [42],
+        defaults: { autoReviewOnOpen: false },
+      }).success
+    ).toBe(false);
+    expect(
+      integrationRepoSettingsSchemas.slack.safeParse({ agentNotificationsEnabled: "yes" }).success
+    ).toBe(false);
+  });
+
+  it("parses nullable sandbox resource settings", () => {
+    expect(
+      integrationRepoSettingsSchemas.sandbox.safeParse({ cpuCores: null, memoryMib: null }).success
+    ).toBe(true);
   });
 });
 
