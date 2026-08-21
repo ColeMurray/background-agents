@@ -42,6 +42,18 @@ describe("parseSkillMarkdown", () => {
     expect(scalar("---\nname: 'deploy'   # canonical\n---\n", "name")).toBe("deploy");
   });
 
+  it("allows a comment after a flow sequence", () => {
+    expect(
+      parseSkillMarkdown("---\ntools: [shell, git] # supported\n---\n").frontmatter.get("tools")
+    ).toEqual({ kind: "sequence", value: ["shell", "git"] });
+  });
+
+  it("keeps a bracket inside a quoted entry from ending the sequence", () => {
+    expect(
+      parseSkillMarkdown('---\ntools: ["a]b", c] # note\n---\n').frontmatter.get("tools")
+    ).toEqual({ kind: "sequence", value: ["a]b", "c"] });
+  });
+
   it("keeps commas and escaped quotes inside quoted flow entries", () => {
     expect(parseSkillMarkdown('---\ntools: ["a,b", c]\n---\n').frontmatter.get("tools")).toEqual({
       kind: "sequence",
@@ -113,6 +125,8 @@ describe("parseSkillMarkdown", () => {
     ["a lone surrogate escape", '---\nname: "\\uD800"\n---\n'],
     ["text after a quoted scalar", '---\nname: "deploy" trailing\n---\n'],
     ["the keep chomping indicator", "---\ndescription: |+\n  text\n---\n"],
+    ["text after a flow sequence", "---\ntools: [shell] trailing\n---\n"],
+    ["an unterminated flow sequence", "---\ntools: [shell, git\n---\n"],
   ])("rejects %s", (_case, markdown) => {
     expect(() => parseSkillMarkdown(markdown)).toThrow(SkillMarkdownError);
   });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SKILL_FILE_BYTES,
   MAX_SKILL_REVISION_BYTES,
   skillImportSourceInputSchema,
 } from "@open-inspect/shared/types/skills";
@@ -337,7 +338,7 @@ describe("fetchSkillImport", () => {
 
     await fetchSkillImport(provider, source());
 
-    expect(blobLimits).toEqual([256 * 1024]);
+    expect(blobLimits).toEqual([MAX_SKILL_FILE_BYTES]);
   });
 
   it("enforces the revision limit on a tree that reports no sizes", async () => {
@@ -356,7 +357,7 @@ describe("fetchSkillImport", () => {
     );
 
     await expect(fetchSkillImport(provider, source())).rejects.toThrow(
-      /Imported content exceeds the 1048576-byte skill limit/
+      new RegExp(`Imported content exceeds the ${MAX_SKILL_REVISION_BYTES}-byte skill limit`)
     );
   });
 
@@ -368,7 +369,7 @@ describe("fetchSkillImport", () => {
     );
 
     await expect(fetchSkillImport(provider, source())).rejects.toThrow(
-      /exceeds the 1048576-byte skill limit/
+      new RegExp(`exceeds the ${MAX_SKILL_REVISION_BYTES}-byte skill limit`)
     );
     expect(blobLimits).toEqual([]);
   });
@@ -376,11 +377,14 @@ describe("fetchSkillImport", () => {
   it("rejects a file over the per-file size limit", async () => {
     const provider = fakeProvider({
       "SKILL.md": { content: SKILL_MD },
-      "references/big.md": { content: "x".repeat(256 * 1024 + 1) },
+      "references/big.md": { content: "x".repeat(MAX_SKILL_FILE_BYTES + 1) },
     });
 
     await expect(fetchSkillImport(provider, source())).rejects.toThrow(
-      /references\/big\.md is 262145 bytes, over the 262144-byte per-file limit/
+      new RegExp(
+        `references/big\\.md is ${MAX_SKILL_FILE_BYTES + 1} bytes, ` +
+          `over the ${MAX_SKILL_FILE_BYTES}-byte per-file limit`
+      )
     );
   });
 });

@@ -108,10 +108,10 @@ function closingQuoteIndex(value: string): number {
   return -1;
 }
 
-/** Everything a quoted scalar may be followed by is whitespace and a comment. */
-function assertOnlyTrailingComment(trailing: string, line: number): void {
+/** Everything a closed value may be followed by is whitespace and a comment. */
+function assertOnlyTrailingComment(trailing: string, line: number, what: string): void {
   if (trailing.trim() !== "" && !/^\s+#/.test(trailing)) {
-    throw new SkillMarkdownError(`unexpected text after quoted value on line ${line}`);
+    throw new SkillMarkdownError(`unexpected text after ${what} on line ${line}`);
   }
 }
 
@@ -123,7 +123,7 @@ function parseInlineScalar(raw: string, line: number): string {
     if (end === -1) {
       throw new SkillMarkdownError(`unterminated quoted value on line ${line}`);
     }
-    assertOnlyTrailingComment(value.slice(end + 1), line);
+    assertOnlyTrailingComment(value.slice(end + 1), line, "quoted value");
     const inner = value.slice(1, end);
     return value.startsWith('"') ? unescapeDoubleQuoted(inner, line) : inner.replace(/''/g, "'");
   }
@@ -157,6 +157,21 @@ function splitFlowEntries(inner: string, line: number): string[] {
   }
   entries.push(inner.slice(start));
   return entries;
+}
+
+/** Index of the `]` closing a flow sequence, skipping quoted entries; -1 if absent. */
+function closingBracketIndex(value: string): number {
+  for (let index = 1; index < value.length; index++) {
+    const character = value[index];
+    if (character === '"' || character === "'") {
+      const end = closingQuoteIndex(value.slice(index));
+      if (end === -1) return -1;
+      index += end;
+      continue;
+    }
+    if (character === "]") return index;
+  }
+  return -1;
 }
 
 function parseFlowSequence(raw: string, line: number): string[] {
@@ -328,12 +343,14 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
       continue;
     }
     if (trimmedValue.startsWith("[")) {
-      if (!trimmedValue.endsWith("]")) {
+      const listEnd = closingBracketIndex(trimmedValue);
+      if (listEnd === -1) {
         throw new SkillMarkdownError(`unterminated list on line ${lineNumber}`);
       }
+      assertOnlyTrailingComment(trimmedValue.slice(listEnd + 1), lineNumber, "list");
       frontmatter.set(key, {
         kind: "sequence",
-        value: parseFlowSequence(trimmedValue, lineNumber),
+        value: parseFlowSequence(trimmedValue.slice(0, listEnd + 1), lineNumber),
       });
       index++;
       continue;
