@@ -84,3 +84,46 @@ export function deriveInboxCategory(
   if (tree.some((session) => session.status === "active")) return "in_progress";
   return "finished";
 }
+
+/**
+ * The session status transitions the system actually performs.
+ *
+ * Derived from the code, not from intuition. That distinction is load-bearing:
+ * an earlier draft of this table forbade `created -> completed`, which the
+ * abandoned-draft repair performs and an integration test asserts, so
+ * enforcing it would have broken the sweep on exactly the rows it exists to
+ * unstick. Every entry below has a named cause in the transition tests.
+ *
+ * Same-status entries are omitted because `transition()` short-circuits when
+ * nothing changes; `isLegalSessionTransition` permits them separately.
+ */
+export const SESSION_TRANSITIONS: Record<SessionStatus, readonly SessionStatus[]> = {
+  // A draft can be prompted, repaired to a settled status by the expire-draft
+  // sweep, filed away, or cancelled before it ever runs.
+  created: ["active", "completed", "failed", "archived", "cancelled"],
+  // `active -> created` is intentional, not a bug: cancelling the only pending
+  // prompt deletes its row, leaving a session with no messages at all, and
+  // returning it to draft is what lets the 8-hour sweep reclaim it. It was
+  // added deliberately after dead sessions accumulated. Do not remove it.
+  active: ["completed", "failed", "cancelled", "archived", "created"],
+  completed: ["active", "archived"],
+  failed: ["active", "archived"],
+  // Absorbing by design. Four places agree independently:
+  // isPromptableSessionStatus, the archive guard, the unarchive guard, and the
+  // web prompt composer. Users stop a prompt; they do not cancel a session --
+  // there is no public route to cancel one, only to cancel a child.
+  cancelled: [],
+  // Unarchive settles from message state rather than asserting `active`, so
+  // every status the settle can produce is reachable from here.
+  archived: ["active", "completed", "failed", "created"],
+};
+
+/**
+ * Whether `from -> to` is a transition the system is known to perform.
+ *
+ * A no-op is always legal: callers routinely re-assert the current status, and
+ * `transition()` short-circuits those before any write.
+ */
+export function isLegalSessionTransition(from: SessionStatus, to: SessionStatus): boolean {
+  return from === to || SESSION_TRANSITIONS[from].includes(to);
+}
