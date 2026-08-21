@@ -35,6 +35,15 @@ API_URL = os.environ.get("E2B_API_URL", "https://api.e2b.app").rstrip("/")
 CPU = int(os.environ.get("E2B_TEMPLATE_CPU", "2"))
 MEM = int(os.environ.get("E2B_TEMPLATE_MEMORY_MB", "4096"))
 
+# Mirror the e2b-infra Terraform module's validation so manual builds fail
+# fast locally instead of with a late remote build error.
+if CPU < 1:
+    print("Error: E2B_TEMPLATE_CPU must be a positive integer", file=sys.stderr)
+    sys.exit(1)
+if MEM < 2 or MEM % 2 != 0:
+    print("Error: E2B_TEMPLATE_MEMORY_MB must be a positive even number", file=sys.stderr)
+    sys.exit(1)
+
 # The template runs nothing of its own: the control plane execs the supervisor
 # entrypoint via envd on every sandbox create (per-sandbox env rides the create
 # call), so the start command is inert. It is kept (rather than omitted) only

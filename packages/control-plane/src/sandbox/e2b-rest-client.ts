@@ -66,10 +66,10 @@ const e2bErrorBodySchema = z.object({
 export type E2BErrorBody = z.infer<typeof e2bErrorBodySchema>;
 
 /**
- * Response of `POST /sandboxes/{id}/snapshots`. E2B bakes the sandbox's current
- * filesystem (and whatever is live in memory — the caller quiesces first) into
+ * Response of `POST /sandboxes/{id}/snapshots`. E2B captures the running
+ * sandbox as-is — memory included, which is why the bake quiesces first — into
  * a reusable "snapshot template" whose id doubles as a `templateID`. The
- * image's contract is its filesystem only: every spawn from it starts the
+ * image's *contract* is its filesystem only: every spawn from it starts the
  * runtime entrypoint anew. `snapshotID` includes the build tag
  * (e.g. `abc123:default`).
  */
@@ -205,6 +205,46 @@ function assertProcessStarted(buffer: Uint8Array): void {
   }
 }
 
+/**
+ * Strip every create-env value from provider error text before it can escape
+ * into a persisted/broadcast failure reason. The create request carries
+ * secrets (SANDBOX_AUTH_TOKEN, user secrets, build callback tokens); if E2B
+ * ever echoes request values in an error body, the echo must die here. Each
+ * value is matched raw and through two levels of JSON escaping — the shapes an
+ * echo can take in a parsed message or in raw body text that itself quotes the
+ * encoded request. Values shorter than 8 chars are left alone — too short to
+ * be a meaningful secret, and redacting them would mangle ordinary text
+ * ("1800", "true").
+ */
+function scrubEnvValues(text: string, envVars: Record<string, string>): string {
+  let scrubbed = text;
+  for (const value of Object.values(envVars)) {
+    if (value.length < 8) continue;
+    const forms = new Set<string>();
+    let form = value;
+    for (let i = 0; i < 3; i++) {
+      forms.add(form);
+      form = JSON.stringify(form).slice(1, -1);
+    }
+    for (const needle of forms) {
+      scrubbed = scrubbed.split(needle).join("[redacted]");
+    }
+  }
+  return scrubbed;
+}
+
+function scrubbedCreateError(error: E2BApiError, envVars: Record<string, string>): E2BApiError {
+  const scrub = (text: string) => scrubEnvValues(text, envVars);
+  const body =
+    typeof error.body === "string"
+      ? scrub(error.body)
+      : error.body && {
+          ...error.body,
+          ...(error.body.message === undefined ? {} : { message: scrub(error.body.message) }),
+        };
+  return new E2BApiError(scrub(error.message), error.status, body);
+}
+
 export class E2BRestClient {
   private readonly baseUrl: string;
 
@@ -235,6 +275,13 @@ export class E2BRestClient {
           },
         }
       );
+    } catch (error) {
+      // This request body carries secrets (envVars): make sure a provider
+      // error echoing request values cannot reach failure reasons verbatim.
+      if (error instanceof E2BApiError && params.envVars) {
+        throw scrubbedCreateError(error, params.envVars);
+      }
+      throw error;
     } finally {
       log.info("e2b.create_sandbox", {
         duration_ms: Date.now() - startMs,
@@ -265,15 +312,23 @@ export class E2BRestClient {
    * Resume a paused sandbox (or extend a running one).
    *
    * Connect answers with the create-style `Sandbox` shape — `sandboxID`/`templateID`,
-   * no `state`, which only `GET /sandboxes/{id}` returns. Callers re-read state
-   * through getSandbox when they need it, so this is a command: the success body
-   * carries nothing we act on and is discarded.
+   * no `state`, which only `GET /sandboxes/{id}` returns — including a fresh
+   * `envdAccessToken` for secure sandboxes. Most callers resume-and-forget;
+   * the image bake uses the returned token to scrub the build's supervisor
+   * log before snapshotting (takePrebuiltImageSnapshot).
    */
-  async connectSandbox(id: string, timeoutSeconds: number, signal?: AbortSignal): Promise<void> {
-    await this.requestVoid("POST", `/sandboxes/${id}/connect`, TIMEOUT_CONNECT_MS, {
-      body: { timeout: timeoutSeconds },
-      signal,
-    });
+  async connectSandbox(
+    id: string,
+    timeoutSeconds: number,
+    signal?: AbortSignal
+  ): Promise<E2BSandboxCreated> {
+    return this.requestJson(
+      "POST",
+      `/sandboxes/${id}/connect`,
+      TIMEOUT_CONNECT_MS,
+      e2bSandboxCreatedSchema,
+      { body: { timeout: timeoutSeconds }, signal }
+    );
   }
 
   /**

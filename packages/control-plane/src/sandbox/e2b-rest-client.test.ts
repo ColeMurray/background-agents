@@ -128,15 +128,56 @@ describe("E2BRestClient", () => {
 
   it("connect + timeout endpoints", async () => {
     const client = new E2BRestClient(defaultConfig);
-    // Connect answers with the create-style Sandbox shape (no `state`); the
-    // command discards it rather than validating it as a sandbox detail.
-    fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1", templateID: "tmpl" }));
-    await expect(client.connectSandbox("sb-1", 3300)).resolves.toBeUndefined();
+    // Connect answers with the create-style Sandbox shape (no `state`),
+    // including a fresh envd token for secure sandboxes — the bake's log
+    // scrub depends on getting it back.
+    fetchSpy.mockResolvedValue(
+      jsonResponse({ sandboxID: "sb-1", templateID: "tmpl", envdAccessToken: "fresh-token" })
+    );
+    await expect(client.connectSandbox("sb-1", 3300)).resolves.toMatchObject({
+      sandboxID: "sb-1",
+      envdAccessToken: "fresh-token",
+    });
     expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ timeout: 3300 });
 
     fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
     await client.setSandboxTimeout("sb-1", 7200);
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ timeout: 7200 });
+  });
+
+  it("scrubs create-env values (raw and JSON-escaped) out of create errors", async () => {
+    // The create body carries secrets; an E2B error echoing request values
+    // must not reach persisted/broadcast failure reasons verbatim.
+    const client = new E2BRestClient(defaultConfig);
+    const envVars = {
+      SECRET: "sk-super-secret-value-123",
+      PEM: "line-one\nline-two-secret",
+      SANDBOX_TIMEOUT_SECONDS: "1800",
+    };
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 400,
+          message:
+            "invalid envVars: sk-super-secret-value-123 and line-one\\nline-two-secret; timeout 1800 ok",
+        }),
+        { status: 400, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const error = await client
+      .createSandbox({ templateID: "tmpl-123", envVars })
+      .then(() => null)
+      .catch((e: unknown) => e as E2BApiError);
+
+    expect(error).toBeInstanceOf(E2BApiError);
+    expect(error!.message).not.toContain("sk-super-secret-value-123");
+    expect(error!.message).not.toContain("line-two-secret");
+    expect(error!.message).toContain("[redacted]");
+    // Short non-secret values stay, so real diagnostics survive.
+    expect(error!.message).toContain("1800");
+    const body = error!.body as { message?: string };
+    expect(body.message).not.toContain("sk-super-secret-value-123");
   });
 
   it("commands ignore whatever a success body contains", async () => {

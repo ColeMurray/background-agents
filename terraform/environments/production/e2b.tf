@@ -53,5 +53,12 @@ module "e2b_infra" {
   # fails safe: a failed template rebuild leaves a fully working system, where
   # template-first plus a failed worker deploy would leave sessions AND image
   # builds down until a re-apply.
+  #
+  # Known trade: on FIRST enablement or an e2b_template_id rotation, the worker
+  # briefly points at a template that does not exist yet (creates 404 until the
+  # build lands — and until a re-apply if the build fails). Template-first
+  # would protect that rare, operator-initiated case, but would re-arm the
+  # broken upgrade window above for every deployer crossing the direct-boot
+  # change in one apply.
   depends_on = [module.control_plane_worker]
 }

@@ -46,7 +46,12 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
       })
     ),
     pauseSandbox: vi.fn(async () => {}),
-    connectSandbox: vi.fn(async () => {}),
+    // Connect answers with the create-style shape, fresh envd token included.
+    connectSandbox: vi.fn(async () => ({
+      sandboxID: "e2b-id",
+      templateID: "tmpl",
+      envdAccessToken: "fresh-envd-token",
+    })),
     startProcess: vi.fn(async () => {}),
     killSandbox: vi.fn(async () => {}),
     setSandboxTimeout: vi.fn(async () => {}),
@@ -583,7 +588,7 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
   });
 
-  it("takePrebuiltImageSnapshot sanitizes via pause(memory:false)+connect before snapshot", async () => {
+  it("takePrebuiltImageSnapshot sanitizes via pause(memory:false)+connect, scrubs the log, then snapshots", async () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);
     const result = await provider.takePrebuiltImageSnapshot({
@@ -593,18 +598,48 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     });
     expect(client.pauseSandbox).toHaveBeenCalledWith("build-sbx", { memory: false }, undefined);
     expect(client.connectSandbox).toHaveBeenCalledWith("build-sbx", expect.any(Number), undefined);
+    // The memoryless pause wipes process memory and the build's create-time
+    // envVars, but not the DISK: user setup hooks can print inherited build
+    // secrets into the supervisor log, so the bake deletes it (with the fresh
+    // envd token from connect) before the snapshot captures the filesystem.
+    expect(client.startProcess).toHaveBeenCalledTimes(1);
+    expect(client.startProcess).toHaveBeenCalledWith(
+      "build-sbx",
+      "rm -f /tmp/oi-supervisor.log",
+      expect.objectContaining({ envdAccessToken: "fresh-envd-token" })
+    );
+    // The bake never boots the runtime — the image's contract is its
+    // filesystem, and createSandbox starts the entrypoint on every spawn.
+    const [, bakeCommand] = vi.mocked(client.startProcess).mock.calls[0];
+    expect(bakeCommand).not.toContain("entrypoint");
     expect(client.createSnapshot).toHaveBeenCalledWith("build-sbx", { signal: undefined });
-    // The image's contract is its filesystem: the bake starts nothing inside
-    // the sandbox (createSandbox starts the entrypoint on every spawn from the
-    // image), and the memoryless pause also wipes the build's create-time
-    // envVars, so no build credential survives into the image.
-    expect(client.startProcess).not.toHaveBeenCalled();
     const pauseOrder = vi.mocked(client.pauseSandbox).mock.invocationCallOrder[0];
     const connectOrder = vi.mocked(client.connectSandbox).mock.invocationCallOrder[0];
+    const scrubOrder = vi.mocked(client.startProcess).mock.invocationCallOrder[0];
     const snapOrder = vi.mocked(client.createSnapshot).mock.invocationCallOrder[0];
     expect(pauseOrder).toBeLessThan(connectOrder);
-    expect(connectOrder).toBeLessThan(snapOrder);
+    expect(connectOrder).toBeLessThan(scrubOrder);
+    expect(scrubOrder).toBeLessThan(snapOrder);
     expect(result).toEqual({ success: true, imageId: "snap-abc:default" });
+  });
+
+  it("takePrebuiltImageSnapshot fails closed when connect returns no envd token", async () => {
+    // Without the token the log scrub cannot run, and baking anyway would
+    // silently ship whatever the build log holds into a durable image.
+    const client = mockClient({
+      connectSandbox: vi.fn(async () => ({ sandboxID: "build-sbx", templateID: "tmpl" })),
+    });
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).takePrebuiltImageSnapshot({
+        providerObjectId: "build-sbx",
+        sessionId: "build-1",
+        reason: "environment_image_build",
+      })
+    ).rejects.toMatchObject({
+      errorType: "permanent",
+      message: expect.stringMatching(/envd access token/),
+    });
+    expect(client.createSnapshot).not.toHaveBeenCalled();
   });
 
   it("takePrebuiltImageSnapshot forwards the caller deadline to every step", async () => {
@@ -618,6 +653,11 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     });
     expect(client.pauseSandbox).toHaveBeenCalledWith("build-sbx", { memory: false }, signal);
     expect(client.connectSandbox).toHaveBeenCalledWith("build-sbx", expect.any(Number), signal);
+    expect(client.startProcess).toHaveBeenCalledWith(
+      "build-sbx",
+      expect.any(String),
+      expect.objectContaining({ signal })
+    );
     expect(client.createSnapshot).toHaveBeenCalledWith("build-sbx", { signal });
   });
 
@@ -775,10 +815,11 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
   });
 
-  it("refuses to interpolate a hostile provider id into the exec command", async () => {
-    // The exec command is shell; the only interpolated value is the E2B-issued
-    // sandbox id. If E2B ever returned something shell-hostile, fail the build
-    // (and kill the sandbox) rather than exec it.
+  it("refuses a hostile provider id before binding or exec", async () => {
+    // The E2B-issued sandbox id is interpolated into a shell command AND
+    // persisted as the build's provider-session binding. A shell-hostile id
+    // must fail the build (and kill the sandbox) before either use — a bound
+    // session for a sandbox this method then kills would be a lie in the DB.
     const client = mockClient({
       createSandbox: vi.fn(async () => ({
         sandboxID: "evil'; rm -rf /tmp #",
@@ -786,17 +827,19 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
         envdAccessToken: "envd-token",
       })),
     });
+    const onProviderSessionCreated = vi.fn(async () => {});
     await expect(
       new E2BSandboxProvider(client, providerConfig).triggerImageBuild({
         ...baseBuildConfig,
-        onProviderSessionCreated: vi.fn(async () => {}),
+        onProviderSessionCreated,
       })
     ).rejects.toBeInstanceOf(SandboxProviderError);
+    expect(onProviderSessionCreated).not.toHaveBeenCalled();
     expect(client.startProcess).not.toHaveBeenCalled();
     expect(client.killSandbox).toHaveBeenCalledWith("evil'; rm -rf /tmp #");
   });
 
-  it("refuses to interpolate an empty provider id into the exec command", async () => {
+  it("refuses an empty provider id before binding or exec", async () => {
     // An empty id would pass shell-safety trivially but abort inside the
     // sandbox (the runtime rejects a present-but-empty callback var) — a slow,
     // confusing in-sandbox failure instead of a fast client-side one.
@@ -807,12 +850,14 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
         envdAccessToken: "envd-token",
       })),
     });
+    const onProviderSessionCreated = vi.fn(async () => {});
     await expect(
       new E2BSandboxProvider(client, providerConfig).triggerImageBuild({
         ...baseBuildConfig,
-        onProviderSessionCreated: vi.fn(async () => {}),
+        onProviderSessionCreated,
       })
     ).rejects.toBeInstanceOf(SandboxProviderError);
+    expect(onProviderSessionCreated).not.toHaveBeenCalled();
     expect(client.startProcess).not.toHaveBeenCalled();
   });
 });

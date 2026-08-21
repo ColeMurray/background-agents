@@ -125,18 +125,27 @@ const E2B_SANDBOX_ENV: Record<string, string> = {
 };
 
 /**
+ * The image-build path interpolates the E2B-issued sandbox id into a shell
+ * command and persists it as the build's provider-session binding — reject
+ * anything empty or shell-hostile before either use.
+ */
+function assertSafeProviderSessionId(providerSessionId: string): void {
+  if (!/^[A-Za-z0-9_-]+$/.test(providerSessionId)) {
+    throw new Error("unsafe E2B sandbox id for exec command");
+  }
+}
+
+/**
  * Render the entrypoint command, optionally prefixed with the one value
  * allowed on a command line E2B platform-logs: the sandbox's own id — needed
  * by the image-build callback yet unknowable before create returns, and
  * public (every envd hostname carries it). Everything else must ride
- * create-time envVars. The charset check keeps the interpolation shell-inert
- * and rejects an empty id (the runtime aborts on a present-but-empty value).
+ * create-time envVars; the assert keeps the interpolation shell-inert and
+ * rejects an empty id (the runtime aborts on a present-but-empty value).
  */
 function entrypointCommand(providerSessionId?: string): string {
   if (providerSessionId === undefined) return E2B_ENTRYPOINT_COMMAND;
-  if (!/^[A-Za-z0-9_-]+$/.test(providerSessionId)) {
-    throw new Error("unsafe E2B sandbox id for exec command");
-  }
+  assertSafeProviderSessionId(providerSessionId);
   return `${REPO_IMAGE_CALLBACK_ENV.providerSessionId}='${providerSessionId}' ${E2B_ENTRYPOINT_COMMAND}`;
 }
 
@@ -271,6 +280,12 @@ export class E2BSandboxProvider implements SandboxProvider {
    * resumed, quiet sandbox: kernel and envd up, no userland processes, no
    * build credentials anywhere.
    *
+   * The pause cannot sanitize the DISK, though: the build supervisor's log
+   * (E2B_SUPERVISOR_LOG_PATH) survives it, and user-authored setup hooks
+   * inherit the build's secret env and can print it there — so the bake
+   * deletes the log from the resumed sandbox before snapshotting, using the
+   * fresh envd token the connect response returns.
+   *
    * Nothing captured in memory is relied on. Sandboxes spawned from the image
    * resume quiet, and createSandbox starts the entrypoint itself
    * (startEntrypoint) — the same lifecycle as Modal repo images, whose
@@ -282,11 +297,26 @@ export class E2BSandboxProvider implements SandboxProvider {
   async takePrebuiltImageSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
     try {
       await this.client.pauseSandbox(config.providerObjectId, { memory: false }, config.signal);
-      await this.client.connectSandbox(
+      const resumed = await this.client.connectSandbox(
         config.providerObjectId,
         SNAPSHOT_CONNECT_TIMEOUT_SECONDS,
         config.signal
       );
+      const envdAccessToken = resumed.envdAccessToken;
+      if (!envdAccessToken) {
+        // Fail closed, like the create-time guard: baking without the log
+        // scrub would silently ship whatever build output — possibly printed
+        // secrets — the log holds, into a durable image.
+        throw new SandboxProviderError(
+          "E2B connect did not return an envd access token (secure access required)",
+          "permanent"
+        );
+      }
+      await this.client.startProcess(config.providerObjectId, `rm -f ${E2B_SUPERVISOR_LOG_PATH}`, {
+        domain: resumed.domain,
+        envdAccessToken,
+        signal: config.signal,
+      });
       // No name: each build gets a distinct snapshot template. Superseded images
       // are reclaimed by the reaper via deleteProviderImage, so reusing a name
       // (which would reassign builds to one template) buys nothing.
@@ -504,6 +534,10 @@ export class E2BSandboxProvider implements SandboxProvider {
         autoResume: false,
       });
       sandboxId = sandbox.sandboxID;
+      // Reject a hostile/empty id BEFORE binding it: the bind persists the id
+      // as the build's provider session, and a value the exec step would
+      // refuse must never be recorded as a live binding.
+      assertSafeProviderSessionId(sandbox.sandboxID);
 
       // Register the build sandbox before starting the entrypoint, so the
       // workflow has bound the provider session before the supervisor can run
