@@ -206,7 +206,6 @@ export class E2BSandboxProvider implements SandboxProvider {
       return {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.sandboxID,
-        status: "running",
         createdAt: Date.now(),
         codeServerUrl,
         codeServerPassword,

@@ -1680,7 +1680,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
     const sandbox = this.getSandbox();
-    if (!sandbox || (sandbox.status !== "ready" && sandbox.status !== "running")) {
+    if (!sandbox || sandbox.status !== "ready") {
       return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
     }
 
@@ -1693,7 +1693,7 @@ export class SessionDO extends DurableObject<Env> {
     if (
       !current ||
       current.id !== sandbox.id ||
-      (current.status !== "ready" && current.status !== "running") ||
+      current.status !== "ready" ||
       current.code_server_url !== sandbox.code_server_url ||
       current.code_server_password !== sandbox.code_server_password ||
       current.vnc_url !== sandbox.vnc_url ||

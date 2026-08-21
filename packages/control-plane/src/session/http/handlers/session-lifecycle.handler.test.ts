@@ -50,7 +50,7 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     runtime_version: null,
     auth_token: null,
     auth_token_hash: null,
-    status: "running",
+    status: "ready",
     git_sync_status: "pending",
     last_heartbeat: 999,
     last_activity: null,
@@ -678,7 +678,7 @@ describe("createSessionLifecycleHandler", () => {
       sandbox: {
         id: "sandbox-1",
         modalSandboxId: "modal-1",
-        status: "running",
+        status: "ready",
         gitSyncStatus: "pending",
         lastHeartbeat: 999,
       },
@@ -1072,7 +1072,7 @@ describe("createSessionLifecycleHandler", () => {
     } = createHandler();
     const ws = {} as WebSocket;
     getSession.mockReturnValue(createSession({ status: "active" }));
-    getSandbox.mockReturnValue(createSandbox({ status: "running" }));
+    getSandbox.mockReturnValue(createSandbox({ status: "ready" }));
     cancelSession.mockResolvedValue(undefined);
     getSandboxSocket.mockReturnValue(ws);
 

@@ -496,7 +496,6 @@ describe("ModalSandboxProvider", () => {
 
       expect(result.sandboxId).toBe("sandbox-abc");
       expect(result.providerObjectId).toBe("modal-obj-xyz");
-      expect(result.status).toBe("created");
       expect(result.createdAt).toBe(1234567890);
       expect(result).toMatchObject({
         vncAccess: { url: "https://vnc.test", password: "vnc-pw" },

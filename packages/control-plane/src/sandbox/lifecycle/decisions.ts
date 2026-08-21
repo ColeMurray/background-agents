@@ -434,8 +434,8 @@ export function evaluateInactivityTimeout(
     return { action: "schedule", nextCheckMs: config.minCheckIntervalMs };
   }
 
-  // Only check inactivity for ready or running sandboxes
-  if (state.status !== "ready" && state.status !== "running") {
+  // Only check inactivity for a sandbox that is actually attached
+  if (state.status !== "ready") {
     return { action: "schedule", nextCheckMs: config.minCheckIntervalMs };
   }
 

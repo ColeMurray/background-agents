@@ -1092,7 +1092,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     if (!isTerminalState && reason !== "heartbeat_timeout") {
       this.storage.updateSandboxStatus(previousStatus as SandboxStatus);
       this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
-      if (previousStatus === "ready" || previousStatus === "running") {
+      if (previousStatus === "ready") {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });
       }
     }
