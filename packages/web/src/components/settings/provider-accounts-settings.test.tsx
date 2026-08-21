@@ -2,10 +2,13 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { toast } from "sonner";
-import type { ModelProviderAccount } from "@open-inspect/shared/types/provider-accounts";
+import type {
+  ModelProviderAccount,
+  ModelProviderAccountDefault,
+} from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAccountsSettings } from "./provider-accounts-settings";
 import { CHATGPT_DEVICE_AUTHORIZATION_SETTINGS_URL } from "./provider-device-authorization-dialog";
 
@@ -39,12 +42,13 @@ const account = {
   archivedAt: null,
 };
 let accountsResult: ModelProviderAccount[];
+let defaultsResult: ModelProviderAccountDefault[];
 
 vi.mock("@/hooks/use-provider-accounts", () => ({
   useProviderAccounts: () => ({
     providers,
     accounts: accountsResult,
-    defaults: [],
+    defaults: defaultsResult,
     loading: false,
     error: undefined,
     refresh,
@@ -83,6 +87,7 @@ describe("ProviderAccountsSettings", () => {
     cancelAuthorization.mockResolvedValue(undefined);
     reconnectAccount.mockResolvedValue(undefined);
     accountsResult = [account];
+    defaultsResult = [];
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -338,6 +343,41 @@ describe("ProviderAccountsSettings", () => {
     await waitFor(() => {
       expect(setDefault).toHaveBeenCalledWith("openai", account.id, "provider_account");
     });
+  });
+
+  it("locks every account mutation while an operation is in flight", async () => {
+    let finishAction!: () => void;
+    runAction.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAction = resolve;
+        })
+    );
+    accountsResult = [account, { ...account, id: "c".repeat(32), displayName: "Backup ChatGPT" }];
+    defaultsResult = [
+      {
+        provider: "openai",
+        providerAccountId: account.id,
+        unattendedMode: "provider_account",
+        createdBy: null,
+        updatedBy: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    render(<ProviderAccountsSettings />);
+
+    const verifyButtons = screen.getAllByRole("button", { name: "Verify" });
+    fireEvent.click(verifyButtons[0]);
+
+    expect(screen.getByRole("button", { name: "Add account" })).toBeDisabled();
+    expect(screen.getAllByLabelText("Authentication")[0]).toBeDisabled();
+    expect(verifyButtons[1]).toBeDisabled();
+    fireEvent.click(verifyButtons[1]);
+    expect(runAction).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishAction());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add account" })).toBeEnabled());
   });
 
   it("keeps primary account actions on one line and moves secondary actions to overflow", async () => {

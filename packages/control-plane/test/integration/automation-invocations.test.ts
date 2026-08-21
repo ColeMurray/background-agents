@@ -549,7 +549,7 @@ describe("automation invocations (D1 integration)", () => {
       expect(row!.status).toBe("completed");
     });
 
-    it("bulkFailRuns only fails active runs", async () => {
+    it("bulkFailRunningRuns only fails running rows", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-bulkfail" }));
       const invocation = makeInvocation("auto-bulkfail");
@@ -570,7 +570,7 @@ describe("automation invocations (D1 integration)", () => {
         overlapScope: { kind: "automation" },
       });
 
-      await store.bulkFailRuns([done.id, stuck.id], "timeout", 999);
+      await store.bulkFailRunningRuns([done.id, stuck.id], "timeout", 999);
 
       const statuses = await env.DB.prepare(
         `SELECT id, status FROM automation_runs WHERE invocation_id = ?`
@@ -580,6 +580,35 @@ describe("automation invocations (D1 integration)", () => {
       const byId = new Map(statuses.results!.map((row) => [row.id, row.status]));
       expect(byId.get(done.id)).toBe("completed");
       expect(byId.get(stuck.id)).toBe("failed");
+    });
+
+    it("does not fail a run claimed after the orphan sweep reads it", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-claim-race" }));
+      const invocation = makeInvocation("auto-claim-race");
+      const child = makeChild("auto-claim-race", {
+        status: "starting",
+        created_at: 1,
+        repo_owner: "acme",
+        repo_name: "web",
+      });
+      await store.insertInvocationGuarded({
+        invocation,
+        children: [child],
+        overlapScope: { kind: "automation" },
+      });
+
+      const [staleOrphan] = await store.getOrphanedStartingRuns(0, 10);
+      expect(staleOrphan?.id).toBe(child.id);
+      await expect(store.claimRunSession(child.id, "session-1", 500)).resolves.toBe(true);
+      await store.bulkFailStartingRuns([staleOrphan!.id], "session_creation_timeout", 999);
+
+      const row = await env.DB.prepare(
+        `SELECT status, session_id FROM automation_runs WHERE id = ?`
+      )
+        .bind(child.id)
+        .first<{ status: string; session_id: string | null }>();
+      expect(row).toEqual({ status: "running", session_id: "session-1" });
     });
 
     it("getUncountedFailedInvocations finds exactly the crash-window invocations", async () => {

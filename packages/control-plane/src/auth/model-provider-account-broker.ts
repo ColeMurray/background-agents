@@ -155,8 +155,8 @@ export class ModelProviderAccountBroker {
               exchangeOwner: state.exchangeOwner ?? "",
               now: this.now(),
             });
-          } catch {
-            return this.reconcileLostTerminalFence(account, adapter, state);
+          } catch (cause) {
+            return this.reconcileLostTerminalFence(account, adapter, state, cause);
           }
           if (fenced) {
             throw this.reconnectError(account.provider, "A credential exchange became stale");
@@ -298,7 +298,8 @@ export class ModelProviderAccountBroker {
   private async reconcileLostTerminalFence(
     previousAccount: ModelProviderAccount,
     adapter: ErasedProviderAccountAdapter,
-    previousState: ProviderCredentialState
+    previousState: ProviderCredentialState,
+    fenceError?: unknown
   ): Promise<ProviderAccess> {
     const account = await this.stores.accounts.getById(previousAccount.id);
     if (!account) {
@@ -328,6 +329,7 @@ export class ModelProviderAccountBroker {
     if (state.credentialVersion !== previousState.credentialVersion) {
       return this.accessFromConcurrentUpdate(account, adapter, state);
     }
+    if (fenceError !== undefined) throw fenceError;
     throw new ModelProviderAccountBrokerError(
       "exchange_busy",
       `${account.provider} credential exchange lost its durable claim`

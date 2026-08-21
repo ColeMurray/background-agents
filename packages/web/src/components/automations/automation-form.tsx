@@ -784,6 +784,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             value={providerSelections[provider]}
             policyLabel="Use defaults when each run starts"
             unattended
+            disabled={submitting}
             onChange={(selection) =>
               setProviderSelections((current) => setProviderSelection(current, provider, selection))
             }

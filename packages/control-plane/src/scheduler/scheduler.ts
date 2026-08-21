@@ -488,11 +488,7 @@ export class Scheduler {
         const sessionId = generateId();
         // Claim the generated session before initialization. Otherwise the orphan sweep can
         // terminalize an old `starting` row while initialization is still creating its session.
-        const claimed = await store.updateRun(child.id, {
-          status: "running",
-          session_id: sessionId,
-          started_at: Date.now(),
-        });
+        const claimed = await store.claimRunSession(child.id, sessionId, Date.now());
         if (!claimed) {
           throw new Error("Automation run was recovered before launch claimed its session");
         }
@@ -764,7 +760,7 @@ export class Scheduler {
 
     if (orphaned.length > 0) {
       try {
-        await store.bulkFailRuns(
+        await store.bulkFailStartingRuns(
           orphaned.map((r) => r.id),
           "session_creation_timeout",
           now
@@ -782,7 +778,7 @@ export class Scheduler {
 
     if (timedOut.length > 0) {
       try {
-        await store.bulkFailRuns(
+        await store.bulkFailRunningRuns(
           timedOut.map((r) => r.id),
           "execution_timeout",
           now

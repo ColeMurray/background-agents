@@ -35,6 +35,7 @@ const ACCOUNT_PREFIX = "account:";
 const DEFAULT_POLICY_LABEL = "Use default";
 const DEFAULT_UNATTENDED = false;
 const DEFAULT_VARIANT = "select";
+const DEFAULT_DISABLED = false;
 
 export function ProviderAuthControls({
   provider,
@@ -45,7 +46,7 @@ export function ProviderAuthControls({
   policyLabel = DEFAULT_POLICY_LABEL,
   unattended = DEFAULT_UNATTENDED,
   variant = DEFAULT_VARIANT,
-  disabled = false,
+  disabled = DEFAULT_DISABLED,
 }: {
   provider: SubscriptionProviderId;
   accounts: ModelProviderAccount[];
@@ -77,6 +78,7 @@ export function ProviderAuthControls({
     : policyLabel;
   const providerName = SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].displayName;
   const handleChange = (next: string) => {
+    if (disabled) return;
     if (next === POLICY) onChange(undefined);
     else if (next === API_KEY) onChange({ mode: "api_key" });
     else onChange({ mode: "provider_account", accountId: next.slice(ACCOUNT_PREFIX.length) });
@@ -100,21 +102,29 @@ export function ProviderAuthControls({
           <DropdownMenuLabel>Session options</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger>{providerName} authentication</DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger disabled={disabled}>
+              {providerName} authentication
+            </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               collisionPadding={8}
               className="w-36 max-w-[calc(100vw-2rem)] sm:w-72"
             >
               <DropdownMenuRadioGroup value={selected} onValueChange={handleChange}>
-                <DropdownMenuRadioItem value={POLICY}>
+                <DropdownMenuRadioItem value={POLICY} disabled={disabled}>
                   <span className="truncate">{policyDescription}</span>
                 </DropdownMenuRadioItem>
                 {available.map((account) => (
-                  <DropdownMenuRadioItem key={account.id} value={`${ACCOUNT_PREFIX}${account.id}`}>
+                  <DropdownMenuRadioItem
+                    key={account.id}
+                    value={`${ACCOUNT_PREFIX}${account.id}`}
+                    disabled={disabled}
+                  >
                     <span className="truncate">{account.displayName}</span>
                   </DropdownMenuRadioItem>
                 ))}
-                <DropdownMenuRadioItem value={API_KEY}>No account</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value={API_KEY} disabled={disabled}>
+                  No account
+                </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
