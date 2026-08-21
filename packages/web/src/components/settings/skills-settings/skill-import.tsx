@@ -14,7 +14,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SkillAssignments } from "./skill-assignments";
 import { SkillImportReview } from "./skill-import-review";
-import { assignmentKey, buildAssignments, errorMessage } from "./utils";
+import {
+  assignmentKey,
+  buildAssignments,
+  errorMessage,
+  previewedSourceConfirmation,
+} from "./utils";
 
 const INITIAL_ASSIGNMENTS: SkillAssignmentInput[] = [{ type: "global" }];
 
@@ -88,8 +93,7 @@ export function SkillImport({
         source: sourceInput(),
         name: preview.name,
         assignments: buildAssignments(assignmentKeys, repos, environments, INITIAL_ASSIGNMENTS),
-        expectedCommitSha: preview.source.commitSha,
-        expectedSourceSha256: preview.source.sourceSha256,
+        ...previewedSourceConfirmation(preview.source),
       });
       toast.success(`Imported ${skill.name}`);
       onImported(skill.id);

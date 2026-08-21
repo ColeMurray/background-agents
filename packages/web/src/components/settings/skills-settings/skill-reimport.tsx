@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SkillImportReview, SkillImportSourceSummary } from "./skill-import-review";
-import { errorMessage } from "./utils";
+import { errorMessage, previewedSourceConfirmation } from "./utils";
 
 /**
  * Pull the recorded source again as a new revision. Only the ref moves: the
@@ -60,8 +60,7 @@ export function SkillReimport({
     try {
       const result = await reimportSkill(skill.id, skill.currentRevisionId, {
         ref: ref.trim() || null,
-        expectedCommitSha: preview.source.commitSha,
-        expectedSourceSha256: preview.source.sourceSha256,
+        ...previewedSourceConfirmation(preview.source),
       });
       toast.success(
         result.revisionCreated

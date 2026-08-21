@@ -24,7 +24,7 @@ import {
 import type { RepositoryTreeEntry, SourceControlProvider } from "../source-control";
 import { SourceControlProviderError } from "../source-control";
 import { buildValidatedSkillRevision, hashImportedSourceTree } from "./content-addressing";
-import { parseSkillMarkdown, SkillMarkdownError } from "./skill-markdown";
+import { parseSkillMarkdown, SkillMarkdownError, type ParsedSkillMarkdown } from "./skill-markdown";
 
 /** Blobs read concurrently. Bounded to keep one import's subrequest burst small. */
 const BLOB_CONCURRENCY = 6;
@@ -161,10 +161,7 @@ async function readBlobs(
 }
 
 /** Read one frontmatter entry as a bounded string, rejecting other shapes. */
-function scalarField(
-  frontmatter: ReturnType<typeof parseSkillMarkdown>["frontmatter"],
-  key: string
-): string | null {
+function scalarField(frontmatter: ParsedSkillMarkdown["frontmatter"], key: string): string | null {
   const value = frontmatter.get(key);
   if (value === undefined) return null;
   if (value.kind !== "scalar") {
@@ -181,7 +178,7 @@ function mapFrontmatter(
   markdown: string,
   files: SkillFileInput[]
 ): { content: SkillContentInput; frontmatterName: string | null; warnings: SkillImportWarning[] } {
-  let parsed: ReturnType<typeof parseSkillMarkdown>;
+  let parsed: ParsedSkillMarkdown;
   try {
     parsed = parseSkillMarkdown(markdown);
   } catch (error) {
