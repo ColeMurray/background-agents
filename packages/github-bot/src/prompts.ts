@@ -21,6 +21,42 @@ function buildCommentGuidelines(isPublicRepo: boolean): string {
 - Compose your full response before posting any comments.`;
 }
 
+function buildSuggestionGuidelines(): string {
+  return `
+## Applyable Suggestions
+A fenced \`suggestion\` block inside an inline review comment renders in GitHub with a "Commit
+suggestion" button, so the author applies your fix in one click. Use one whenever the fix is a
+concrete, local edit you can state exactly:
+
+\`\`\`suggestion
+<the replacement lines>
+\`\`\`
+
+Hard rules — the fence content REPLACES the comment's anchored lines verbatim:
+- It is not a diff and not an excerpt. Never put \`+\`/\`-\` markers, \`...\`, placeholders, TODOs,
+  or prose inside the fence.
+- Reproduce the original leading whitespace exactly. A suggestion with wrong indentation still
+  applies cleanly and breaks the file.
+- Include only the anchored lines — no surrounding unchanged lines for context.
+- Prefer a single-line anchor (\`line\` only) even when the replacement is several lines: one
+  anchored line may be replaced by any number of lines. Use \`start_line\` + \`line\` only to
+  replace a contiguous range, and only when BOTH endpoints appear in a hunk of \`gh pr diff\` —
+  a range endpoint outside the diff rejects the ENTIRE review with HTTP 422.
+- If the replacement itself contains a fence, wrap the suggestion in four backticks.
+- One suggestion per comment. The explanation goes above the fence, never inside it.
+
+Verify before you suggest. The repo is checked out on the PR head branch, so check instead of
+guessing:
+1. Print the exact anchored lines (\`sed -n 'START,ENDp' <path>\`) and confirm your fence is a
+   correct verbatim replacement for precisely those lines.
+2. Apply the replacement to a scratch copy and run the cheapest correctness check the repo
+   offers for that file (syntax parse, type check, or its linter).
+
+If either check fails, or the real fix spans multiple files, needs an import or declaration
+elsewhere, or turns on a judgment call, describe the fix in prose and post NO fence. A wrong
+suggestion is worse than none: it is one click away from being merged.`;
+}
+
 function buildUntrustedUserContentBlock(params: {
   source: string;
   author: string;
@@ -131,6 +167,12 @@ ${prDescriptionBlock}
    Omit the "comments" key entirely if you have no inline comments. NEVER post inline
    comments through any other endpoint — everything ships in this one review call.
 
+   A comment may add "start_line": <first line> (with "start_side": "RIGHT") to anchor a
+   contiguous range instead of a single line, and its "body" may carry an applyable fix — see
+   ## Applyable Suggestions below. Prefer suggestions over prose whenever the fix is a
+   concrete, local edit; they are the difference between a review the author has to
+   re-implement and one they can apply.
+
    ${reviewEventGuidance}
 
 5. Submit as ONE command that chains the ownership and freshness fence directly into the
@@ -176,6 +218,7 @@ ${prDescriptionBlock}
    waiting on the check waits forever. Posting the failure is always better than posting
    nothing. If the head has genuinely moved on, this status lands on the commit that was
    superseded and the newer review publishes its own — so it is safe in every case.
+${buildSuggestionGuidelines()}
 
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
@@ -229,8 +272,10 @@ export function buildCommentActionPrompt(params: {
   }
 
   let replyInstruction = "";
+  let suggestionSection = "";
   if (commentId) {
-    replyInstruction = `\n5. If you need to reply to the specific review thread:\n\n   gh api repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies \\\n     --method POST \\\n     -f body="<your reply>"`;
+    replyInstruction = `\n5. If you need to reply to the specific review thread:\n\n   gh api repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies \\\n     --method POST \\\n     -f body="<your reply>"\n\n   A thread reply is anchored to the same lines as the comment it answers, so it can carry an\n   applyable suggestion. The summary comment cannot: an issue comment has no line anchor, and a\n   suggestion fence there renders as an inert code block. If you already pushed the fix, say so\n   in the reply instead of suggesting it.`;
+    suggestionSection = `\n${buildSuggestionGuidelines()}`;
   }
 
   return `${intro}${prDetails}${codeLocation}
@@ -252,7 +297,7 @@ ${buildUntrustedUserContentBlock({
 
    gh api repos/${owner}/${repo}/issues/${number}/comments \\
      --method POST \\
-     -f body="<summary of what you did or your response>"${replyInstruction}
+     -f body="<summary of what you did or your response>"${replyInstruction}${suggestionSection}
 ${buildCustomInstructionsSection(commentActionInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
 }

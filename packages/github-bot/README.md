@@ -215,6 +215,7 @@ Two prompt templates in `src/prompts.ts`:
 - Run `gh pr diff` for the full diff
 - Submit a review via `gh api .../reviews`
 - Post inline comments via `gh api .../comments`
+- Emit applyable `suggestion` fences in inline comment bodies (see below)
 
 **`buildCommentActionPrompt`** — Includes the user's request (with @mention stripped) and
 instructions to:
@@ -222,7 +223,23 @@ instructions to:
 - Check prior conversation via `gh pr view --comments`
 - Make code changes and push, or respond with analysis
 - Post a summary comment via `gh api .../issues/{n}/comments`
-- Reply to a specific review thread (when `commentId` is present)
+- Reply to a specific review thread (when `commentId` is present), optionally with an applyable
+  `suggestion` fence — the summary comment cannot carry one, since an issue comment has no line
+  anchor
+
+### Applyable Suggestions
+
+`buildSuggestionGuidelines` is shared by both prompts. A fenced `suggestion` block inside a
+**line-anchored** comment is what GitHub renders with a "Commit suggestion" button; the fence
+content replaces the anchored lines verbatim. Nothing in this package touches the GitHub API for it
+— the review schema in `buildCodeReviewPrompt` already carries `path`/`line`/`side` and a
+`commit_id`, so suggestions are entirely a property of each comment's `body`. The guidelines add
+`start_line`/`start_side` for range anchors and hold the agent to the constraints that make an
+applied suggestion safe: verbatim replacement, exact original indentation, no diff markers or
+placeholders, and range endpoints that both fall inside a diff hunk (an endpoint outside the diff
+rejects the whole review with HTTP 422). Because the sandbox has the head branch checked out, the
+agent is required to print the anchored lines and validate the patched file before emitting a fence,
+and to fall back to prose when it cannot — an applied suggestion is one click from merge.
 
 The prompts embed only metadata from the webhook payload. The agent gathers everything else.
 

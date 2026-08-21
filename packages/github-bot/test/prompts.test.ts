@@ -86,6 +86,29 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).not.toContain("pulls/42/comments \\");
   });
 
+  it("teaches the applyable suggestion fence and its range anchors", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+    // The whole point: a `suggestion` fence in an inline comment body is what GitHub renders
+    // with a "Commit suggestion" button, and start_line/start_side is what anchors a range.
+    expect(prompt).toContain("## Applyable Suggestions");
+    expect(prompt).toContain("```suggestion");
+    expect(prompt).toContain('"start_line"');
+    expect(prompt).toContain('"start_side": "RIGHT"');
+  });
+
+  it("fences the suggestion contract against the ways an applied suggestion breaks code", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+    // A suggestion is one click from merge, so every one of these is load-bearing: the fence
+    // replaces the anchored lines verbatim, so a diff marker, an ellipsis, or lost indentation
+    // applies cleanly and corrupts the file.
+    expect(prompt).toContain("REPLACES the comment's anchored lines verbatim");
+    expect(prompt).toContain("Reproduce the original leading whitespace exactly");
+    expect(prompt).toContain("HTTP 422");
+    expect(prompt).toContain("post NO fence");
+    // And the agent must check rather than guess — it has the head branch checked out.
+    expect(prompt).toContain("sed -n 'START,ENDp' <path>");
+  });
+
   it("limits self-reviews to comments", () => {
     const prompt = buildCodeReviewPrompt({ ...baseParams, isSelfReview: true });
     expect(prompt).toContain('"event": "COMMENT"');
@@ -211,6 +234,21 @@ describe("buildCommentActionPrompt", () => {
     const prompt = buildCommentActionPrompt(baseParams);
     expect(prompt).not.toContain("## Code Location");
     expect(prompt).not.toContain("reply to the specific review thread");
+  });
+
+  it("offers applyable suggestions only on the line-anchored reply path", () => {
+    const prompt = buildCommentActionPrompt({ ...baseParams, commentId: 999 });
+    expect(prompt).toContain("## Applyable Suggestions");
+    expect(prompt).toContain("```suggestion");
+    // The summary lands on issues/{n}/comments, which has no line anchor, so a fence there is
+    // inert — the agent has to know which of its two posting paths can carry one.
+    expect(prompt).toContain("renders as an inert code block");
+  });
+
+  it("omits the suggestion contract when there is no thread to reply to", () => {
+    const prompt = buildCommentActionPrompt(baseParams);
+    expect(prompt).not.toContain("## Applyable Suggestions");
+    expect(prompt).not.toContain("```suggestion");
   });
 
   it("includes summary comment instruction with correct repo path", () => {
