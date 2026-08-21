@@ -63,6 +63,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionCoreRepository } from "./session-core-repository";
 import { SandboxRepository } from "./sandbox-repository";
+import { DEFAULT_SANDBOX_STATUS } from "../sandbox/sandbox-status";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -1631,7 +1632,7 @@ export class SessionDO extends DurableObject<Env> {
       baseBranch: session.base_branch,
       branchName: session.branch_name,
       status: session.status,
-      sandboxStatus: sandbox?.status ?? "pending",
+      sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
       messageCount: this.messageRepository.getMessageCount(),
       createdAt: session.created_at,
       model: session.model ?? DEFAULT_MODEL,

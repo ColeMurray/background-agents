@@ -51,6 +51,7 @@ import {
   type SelectedImageBuild,
 } from "./image-selection";
 import type { AlarmScheduler } from "../../platform-ports";
+import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
 
 export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
@@ -371,7 +372,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Evaluate spawn decision
     const spawnState = {
-      status: sandboxState?.status ?? "pending",
+      status: sandboxState?.status ?? DEFAULT_SANDBOX_STATUS,
       createdAt: sandboxState?.created_at || 0,
       providerObjectId: sandboxState?.modal_object_id || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,

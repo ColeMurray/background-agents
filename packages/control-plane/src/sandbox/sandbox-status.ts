@@ -2,6 +2,20 @@ import { sandboxStatusSchema, type SandboxStatus } from "@open-inspect/shared/ty
 import type { Logger } from "../logger";
 
 /**
+ * The status a sandbox holds before anything has tried to start it.
+ *
+ * Named because three places need the same answer -- a row whose status column
+ * is empty, and the two callers that read a session with no sandbox row at all
+ * -- and they should not be able to drift apart. The `sandbox` table declares
+ * the matching SQL default (`session/schema.ts`), which cannot reference this
+ * constant; if one changes, change both.
+ *
+ * Deliberately not exported from `@open-inspect/shared`: nothing outside the
+ * control plane decides a sandbox's pre-spawn state.
+ */
+export const DEFAULT_SANDBOX_STATUS: SandboxStatus = "pending";
+
+/**
  * Turn a raw sandbox status read out of storage into a `SandboxStatus`.
  *
  * Called from `SandboxRepository`, which is the single read boundary for the
@@ -23,7 +37,7 @@ import type { Logger } from "../logger";
  */
 export function coerceSandboxStatus(raw: string | null | undefined, log: Logger): SandboxStatus {
   // Absent is the documented pre-spawn state, not corruption.
-  if (raw == null || raw === "") return "pending";
+  if (raw == null || raw === "") return DEFAULT_SANDBOX_STATUS;
 
   const parsed = sandboxStatusSchema.safeParse(raw);
   if (parsed.success) return parsed.data;

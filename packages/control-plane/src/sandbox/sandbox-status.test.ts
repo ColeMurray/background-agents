@@ -23,9 +23,8 @@ describe("coerceSandboxStatus", () => {
 
   // The column is bare TEXT with no CHECK constraint, so the type system's
   // belief that it holds a SandboxStatus is an assumption, not a guarantee.
-  // Degrading to `pending` keeps a spawn evaluable — throwing here would abort
-  // the spawn over a value the caller could have survived — but it must be
-  // loud, because a hit means something wrote a status we do not model.
+  // Degrading rather than throwing keeps the spawn evaluable, but it must be
+  // loud: a hit means something wrote a status we do not model.
   // `failed` rather than `pending`: an unclassifiable sandbox must not be
   // treated as pre-spawn (reusable as if fresh) nor as stopped/stale (which
   // makes evaluateSpawnDecision try to resume it). `failed` refuses reuse and
