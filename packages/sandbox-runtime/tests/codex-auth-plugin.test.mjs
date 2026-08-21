@@ -297,6 +297,27 @@ test("keeps the subscription while usage is under the ceiling", async () => {
   assert.equal(calls.filter((call) => call.url === MODEL_REQUEST_URL).length, 0);
 });
 
+test("lets the caller abort the usage probe", async () => {
+  process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
+  process.env.OPENAI_SUBSCRIPTION_MAX_PERCENT = "80";
+  const calls = stubFetch({
+    codex: () => new Response("codex-ok", { status: 200 }),
+    usage: () => usageResponse(40, 50),
+  });
+  const loaded = await loadProxy("probe-abort");
+
+  const controller = new AbortController();
+  const request = new Request(MODEL_REQUEST_URL, { ...REQUEST_INIT, signal: controller.signal });
+  assert.equal(await (await loaded.fetch(request)).text(), "codex-ok");
+
+  // The probe precedes the turn's own request, so a cancelled turn must not have
+  // to wait out USAGE_PROBE_TIMEOUT_MS.
+  const probe = calls.find((call) => call.url.includes("/wham/usage"));
+  assert.equal(probe.signal.aborted, false);
+  controller.abort();
+  assert.equal(probe.signal.aborted, true);
+});
+
 test("latches at the ceiling from a successful response's headers", async () => {
   process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
   process.env.OPENAI_SUBSCRIPTION_MAX_PERCENT = "80";

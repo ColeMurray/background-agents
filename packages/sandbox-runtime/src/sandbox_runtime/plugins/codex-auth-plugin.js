@@ -213,16 +213,19 @@ function spentReason(response, { maxPercent = 100, bodyText = "" } = {}) {
  * not consume any of it. Returns the highest window, or null when the payload
  * carries no usage at all.
  */
-async function probeUsedPercent(accessToken, accountId) {
+async function probeUsedPercent(accessToken, accountId, callerSignal) {
   const headers = new Headers({
     authorization: `Bearer ${accessToken}`,
     originator: "opencode",
   });
   if (accountId) headers.set("ChatGPT-Account-Id", accountId);
 
+  // The probe runs before the turn's own request, so a cancelled turn must not
+  // wait out the probe timeout.
+  const timeout = AbortSignal.timeout(USAGE_PROBE_TIMEOUT_MS);
   const response = await fetch(USAGE_STATUS_ENDPOINT, {
     headers,
-    signal: AbortSignal.timeout(USAGE_PROBE_TIMEOUT_MS),
+    signal: callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout,
   });
   if (!response.ok) throw new Error(`usage status ${response.status}`);
 
@@ -369,7 +372,7 @@ export const CodexAuthProxy = async (input) => {
             if (fallbackKey && maxPercent < 100 && !usageProbed) {
               usageProbed = true;
               try {
-                const used = await probeUsedPercent(accessToken, accountId);
+                const used = await probeUsedPercent(accessToken, accountId, signal);
                 if (used !== null && used >= maxPercent) {
                   latchSpillover(`subscription usage at ${used}% of the ${maxPercent}% ceiling`);
                   return fetch(fallbackUrl, {
