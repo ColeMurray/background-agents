@@ -106,6 +106,34 @@ function headersFrom(init) {
   return headers;
 }
 
+/**
+ * Fold both fetch shapes — `(url, init)` and a `Request` — into one plain init.
+ * opencode's provider client passes an init today, but a `Request` carries its
+ * own method, headers and body, and spreading an absent init would send the
+ * subscription call and every spillover retry as a bodiless GET. Buffering the
+ * body to a string here is also what lets a 429 be retried at all.
+ */
+async function normalizeRequest(requestInput, init) {
+  const request = requestInput instanceof Request ? requestInput : null;
+  const url = request
+    ? new URL(request.url)
+    : requestInput instanceof URL
+      ? requestInput
+      : new URL(String(requestInput));
+
+  const headers = new Headers();
+  if (request) request.headers.forEach((value, key) => headers.set(key, value));
+  for (const [key, value] of headersFrom(init)) headers.set(key, value);
+  // opencode signs the request with a placeholder API key; this proxy supplies
+  // the real credential instead.
+  headers.delete("authorization");
+
+  let body = init?.body;
+  if (body === undefined && request?.body) body = await request.text();
+
+  return { url, headers, method: init?.method ?? request?.method, body };
+}
+
 function isChatCompletionsRequest(url) {
   return url.pathname.includes("/chat/completions");
 }
@@ -285,36 +313,25 @@ export const CodexAuthProxy = async (input) => {
         return {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput, init) {
-            // Remove dummy API key authorization header
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.delete("authorization");
-                init.headers.delete("Authorization");
-              } else if (Array.isArray(init.headers)) {
-                init.headers = init.headers.filter(
-                  ([key]) => key.toLowerCase() !== "authorization"
-                );
-              } else {
-                delete init.headers["authorization"];
-                delete init.headers["Authorization"];
-              }
-            }
+            const {
+              url: parsed,
+              headers,
+              method,
+              body,
+            } = await normalizeRequest(requestInput, init);
+            const { headers: _discardedHeaders, ...restInit } = init ?? {};
+            const baseInit = { ...restInit, method, body };
 
             const currentAuth = await getAuth();
-            if (currentAuth.type !== "oauth") return fetch(requestInput, init);
+            if (currentAuth.type !== "oauth") return fetch(parsed, { ...baseInit, headers });
 
-            const parsed =
-              requestInput instanceof URL
-                ? requestInput
-                : new URL(typeof requestInput === "string" ? requestInput : requestInput.url);
-            const headers = headersFrom(init);
             const modelRequest = isModelRequest(parsed);
             const fallbackKey = (modelRequest && process.env[FALLBACK_KEY_ENV]) || "";
             const fallbackUrl = fallbackEndpoint(parsed);
 
             if (fallbackKey && spilloverLatched) {
               return fetch(fallbackUrl, {
-                ...init,
+                ...baseInit,
                 headers: spilloverHeaders(headers, fallbackKey),
               });
             }
@@ -327,7 +344,7 @@ export const CodexAuthProxy = async (input) => {
               if (!fallbackKey) throw error;
               latchSpillover(`subscription token unavailable (${error.message})`);
               return fetch(fallbackUrl, {
-                ...init,
+                ...baseInit,
                 headers: spilloverHeaders(headers, fallbackKey),
               });
             }
@@ -347,7 +364,7 @@ export const CodexAuthProxy = async (input) => {
                 if (used !== null && used >= maxPercent) {
                   latchSpillover(`subscription usage at ${used}% of the ${maxPercent}% ceiling`);
                   return fetch(fallbackUrl, {
-                    ...init,
+                    ...baseInit,
                     headers: spilloverHeaders(headers, fallbackKey),
                   });
                 }
@@ -359,7 +376,7 @@ export const CodexAuthProxy = async (input) => {
             }
 
             const response = await fetch(modelRequest ? CODEX_API_ENDPOINT : parsed, {
-              ...init,
+              ...baseInit,
               headers,
             });
             if (!fallbackKey) return response;
@@ -374,12 +391,12 @@ export const CodexAuthProxy = async (input) => {
 
             const bodyText = await response.text().catch(() => "");
             const reason = spentReason(response, { maxPercent, bodyText });
-            if (!reason || typeof init?.body !== "string") {
+            if (!reason || typeof body !== "string") {
               return replayResponse(response, bodyText);
             }
             latchSpillover(reason);
             return fetch(fallbackUrl, {
-              ...init,
+              ...baseInit,
               headers: spilloverHeaders(headers, fallbackKey),
             });
           },

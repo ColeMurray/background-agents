@@ -35,7 +35,12 @@ function stubFetch({ codex, broker, usage } = {}) {
   const calls = [];
   globalThis.fetch = async (url, init) => {
     const target = String(url);
-    calls.push({ url: target, headers: new Headers(init?.headers), body: init?.body });
+    calls.push({
+      url: target,
+      method: init?.method,
+      headers: new Headers(init?.headers),
+      body: init?.body,
+    });
     if (target.includes("/provider-auth/openai/access-token")) {
       return (
         broker?.() ??
@@ -161,6 +166,45 @@ test("spills over when the control plane cannot mint a subscription token", asyn
   assert.equal(await response.text(), "platform-ok");
   assert.equal(calls.filter((call) => call.url.startsWith("https://chatgpt.com/")).length, 0);
   assert.equal(calls.at(-1).headers.get("authorization"), "Bearer sk-fallback");
+});
+
+test("keeps a Request-shaped call intact when the subscription token fails", async () => {
+  process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
+  const calls = stubFetch({
+    codex: () => new Response("unreachable", { status: 500 }),
+    broker: () => new Response("revoked", { status: 401 }),
+  });
+  const loaded = await loadProxy("request-input-token");
+
+  // A Request carries its own method and body; an absent init must not turn the
+  // spillover retry into a bodiless GET.
+  const response = await loaded.fetch(new Request(MODEL_REQUEST_URL, REQUEST_INIT));
+  assert.equal(await response.text(), "platform-ok");
+
+  const spilloverCall = calls.at(-1);
+  assert.equal(spilloverCall.url, MODEL_REQUEST_URL);
+  assert.equal(spilloverCall.method, "POST");
+  assert.equal(spilloverCall.body, REQUEST_INIT.body);
+  assert.equal(spilloverCall.headers.get("authorization"), "Bearer sk-fallback");
+});
+
+test("spills over a Request-shaped call on a usage-limit 429", async () => {
+  process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
+  const calls = stubFetch({ codex: () => usageLimitResponse() });
+  const loaded = await loadProxy("request-input-429");
+
+  const response = await loaded.fetch(new Request(MODEL_REQUEST_URL, REQUEST_INIT));
+  assert.equal(await response.text(), "platform-ok");
+
+  const subscriptionCall = calls.find((call) => call.url.startsWith("https://chatgpt.com/"));
+  assert.equal(subscriptionCall.method, "POST");
+  assert.equal(subscriptionCall.body, REQUEST_INIT.body);
+
+  // Retrying a 429 needs the body in hand, which a live Request stream cannot give.
+  const spilloverCall = calls.at(-1);
+  assert.equal(spilloverCall.url, MODEL_REQUEST_URL);
+  assert.equal(spilloverCall.body, REQUEST_INIT.body);
+  assert.equal(spilloverCall.headers.get("authorization"), "Bearer sk-fallback");
 });
 
 test("latches on exhausted usage headers reported by a successful call", async () => {
