@@ -336,26 +336,30 @@ is not portable to the second `SqlDatabase` engine.
 
 ### Bounds that remain implicit
 
-Removing the count cap left three resources still linear in skill count. None is enforced, so each
-surfaces as an engine error rather than a validation message. They are recorded here so the removed
-limit does not become invisible; making them count-independent is tracked separately.
+Removing the count cap left three resources scaling with skill count rather than content. None is
+enforced, so each surfaces as an engine error rather than a validation message. They are recorded
+here so the removed limit does not become invisible.
 
-| Resource                     | Shape                                                       | Approximate cliff       |
-| ---------------------------- | ----------------------------------------------------------- | ----------------------- |
-| Installation payload         | JSON framing per file is excluded from `totalBytes`         | ~900–2,400 skills       |
-| Session manifest persistence | One `session_skill_revisions` INSERT per skill in one batch | engine statement budget |
-| Profile membership writes    | One `skill_profile_items` INSERT per skill in one batch     | engine statement budget |
+| Resource                     | Shape                                               | Approximate cliff |
+| ---------------------------- | --------------------------------------------------- | ----------------- |
+| Installation payload         | JSON framing per file is excluded from `totalBytes` | ~2,400 skills     |
+| Session manifest persistence | 10 `session_skill_revisions` rows per INSERT        | ~9,900 skills     |
+| Profile membership writes    | 50 `skill_profile_items` rows per INSERT            | ~49,900 skills    |
 
 The payload figure assumes the worst realistic shape: `MAX_SKILL_FILES` near-empty files per skill,
 where roughly 134 bytes plus the path length of framing per file counts against the runtime's
 `MAX_MANAGED_SKILL_RESPONSE_BYTES` but contributes nothing to the 5 MiB content aggregate. Because
 resolution checks only content bytes, such a manifest is accepted and persisted, then fails closed
-at sandbox boot — the one case where an accepted manifest is not installable. A transport-safe
-aggregate needs a per-revision file count available at resolution time.
+at sandbox boot — the one case where an accepted manifest is not installable. This is the binding
+constraint, and it is a transport shape rather than a storage bound: the runtime fetches the whole
+installation as one response, so the ceiling is per-response rather than per-session. Paging that
+fetch removes it without introducing a count limit.
 
-The two write paths are bounded by the engine's per-invocation statement budget, not by content.
-`bindManifestCopy` is already set-based (`INSERT … SELECT`) and therefore count-independent; the
-create path and profile writes are the outliers, and both must keep their current atomicity.
+The two write paths are bounded by D1's 1,000 queries per Worker invocation. Both pack rows into
+multi-row `INSERT`s sized to the 100-parameter ceiling (`bulkInsertStatements`), which divides the
+statement count by rows-per-statement and keeps the write inside its caller's atomic `batch()`.
+Multi-row `VALUES` is standard SQL, so neither path needs an engine branch. `bindManifestCopy` is
+set-based (`INSERT … SELECT`) and stays fully count-independent.
 
 Paths must be normalized relative POSIX paths. Reject absolute paths, empty segments, `.`, `..`,
 backslashes, NUL/control characters, duplicate normalized paths, symlinks, hard links, and reserved

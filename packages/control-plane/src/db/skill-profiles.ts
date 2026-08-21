@@ -1,5 +1,6 @@
 import type { SkillProfile } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
+import { bulkInsertStatements } from "./bulk-insert";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -161,11 +162,17 @@ export class SkillProfileStore {
     }
   }
 
+  /**
+   * Pack membership rows into multi-row INSERTs. Profile size is caller-chosen,
+   * so a statement per member would let one profile write exhaust the
+   * invocation's query budget; the statements stay batchable either way.
+   */
   private itemStatements(profileId: string, skillIds: string[]): SqlStatement[] {
-    return [...new Set(skillIds)].map((skillId) =>
-      this.db
-        .prepare("INSERT INTO skill_profile_items (profile_id, skill_id) VALUES (?, ?)")
-        .bind(profileId, skillId)
+    return bulkInsertStatements(
+      this.db,
+      "skill_profile_items",
+      ["profile_id", "skill_id"],
+      [...new Set(skillIds)].map((skillId) => [profileId, skillId])
     );
   }
 

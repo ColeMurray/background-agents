@@ -21,6 +21,7 @@ import {
   type ModelProviderId,
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
+import { bulkInsertStatements } from "./bulk-insert";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import {
   SessionInboxStore,
@@ -46,6 +47,20 @@ const TERMINAL_STATUSES = [
 const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
+
+/** Column order for pinned-manifest inserts; must match bindManifestCopy's SELECT. */
+const SESSION_SKILL_REVISION_COLUMNS = [
+  "session_id",
+  "position",
+  "skill_id",
+  "revision_id",
+  "skill_name",
+  "description",
+  "revision_number",
+  "revision_sha256",
+  "total_bytes",
+  "assignment_sources",
+] as const;
 
 export interface ChildAdmissionLease {
   token: string;
@@ -363,6 +378,10 @@ export class SessionIndexStore {
    * Build manifest statements for the session-creation batch. The caller owns
    * execution so the session, repository snapshot, and pinned skills commit
    * atomically rather than leaving a partially initialized session.
+   *
+   * Revisions are packed into multi-row INSERTs: the pinned set is as wide as
+   * the applicable catalog, and a statement per skill would spend the
+   * invocation's whole query budget on one session create.
    */
   private bindManifestInserts(
     sessionId: string,
@@ -385,26 +404,22 @@ export class SessionIndexStore {
           manifest.manifestSha256,
           manifest.resolvedAt
         ),
-      ...manifest.skills.map((skill, position) =>
-        this.db
-          .prepare(
-            `INSERT INTO session_skill_revisions
-             (session_id, position, skill_id, revision_id, skill_name, description,
-              revision_number, revision_sha256, total_bytes, assignment_sources)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            sessionId,
-            position,
-            skill.skillId,
-            skill.revisionId,
-            skill.name,
-            skill.description,
-            skill.revisionNumber,
-            skill.revisionSha256,
-            skill.totalBytes,
-            JSON.stringify(skill.assignmentSources)
-          )
+      ...bulkInsertStatements(
+        this.db,
+        "session_skill_revisions",
+        SESSION_SKILL_REVISION_COLUMNS,
+        manifest.skills.map((skill, position) => [
+          sessionId,
+          position,
+          skill.skillId,
+          skill.revisionId,
+          skill.name,
+          skill.description,
+          skill.revisionNumber,
+          skill.revisionSha256,
+          skill.totalBytes,
+          JSON.stringify(skill.assignmentSources),
+        ])
       ),
     ];
   }

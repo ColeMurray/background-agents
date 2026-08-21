@@ -381,14 +381,25 @@ describe("managed skills persistence and resolution", () => {
     const installation = await new SessionSkillStore(env.DB).getSandboxInstallation("wide");
     expect(installation?.skills).toHaveLength(101);
     expect(installation?.skills.every((skill) => skill.files.length === 2)).toBe(true);
+    // Revisions are written in multi-row chunks, so prove `position` survives the
+    // chunk boundaries rather than only that the right number of rows landed.
+    expect(installation?.skills.map((skill) => skill.name)).toEqual(
+      manifest.skills.map((skill) => skill.name)
+    );
 
     // validateSkillIds chunks the same way, and profiles no longer cap length.
-    const profile = await new SkillProfileStore(env.DB).create(
+    const profiles = new SkillProfileStore(env.DB);
+    const profile = await profiles.create(
       "user_1",
       "Everything",
       catalog.map(({ id }) => id)
     );
     expect(profile.skillIds).toHaveLength(101);
+    // create() returns its own input, so read membership back to prove the
+    // chunked item inserts committed every row.
+    await expect(profiles.getOwned(profile.id, "user_1")).resolves.toMatchObject({
+      skillIds: catalog.map(({ id }) => id).sort(),
+    });
   });
 
   it("maps typed profile validation and conflict failures", async () => {
