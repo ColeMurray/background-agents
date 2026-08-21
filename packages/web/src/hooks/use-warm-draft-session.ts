@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -41,10 +41,12 @@ export function useWarmDraftSession(request: WarmDraftSessionRequest | null) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isWarming, setIsWarming] = useState(false);
 
-  requestRef.current = request;
-  identityRef.current = identity;
+  useLayoutEffect(() => {
+    requestRef.current = request;
+    identityRef.current = identity;
+  }, [identity, request]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     creationRef.current = null;

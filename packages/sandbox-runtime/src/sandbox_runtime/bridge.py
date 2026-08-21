@@ -287,10 +287,15 @@ class AgentBridge:
 
     def _build_ready_event(self) -> dict[str, Any]:
         repositories = load_repo_manifest(self.repo_manifest_path)
+        # The image bakes SANDBOX_VERSION; reporting it lets the control plane
+        # stamp snapshots with the runtime that produced them and retire the
+        # ones a later compatibility floor rules out.
+        runtime_version = os.environ.get("SANDBOX_VERSION", "")
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": self.opencode_session_id,
+            **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
                     "position": position,

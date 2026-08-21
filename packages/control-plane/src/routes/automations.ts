@@ -45,6 +45,7 @@ import { generateId } from "../auth/crypto";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
+import { Scheduler } from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
 import {
   automationRepositoriesInputSchema,
@@ -1083,18 +1084,9 @@ async function handleTriggerAutomation(
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
 
-  // Forward to SchedulerDO (it performs its own authoritative concurrency check)
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-
-  const doId = env.SCHEDULER.idFromName("global-scheduler");
-  const stub = env.SCHEDULER.get(doId);
-
-  const triggerResponse = await stub.fetch("http://internal/internal/trigger", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ automationId: id }),
+  // The scheduler performs the authoritative D1-backed concurrency check.
+  const triggerResponse = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger({
+    automationId: id,
   });
 
   if (!triggerResponse.ok) {

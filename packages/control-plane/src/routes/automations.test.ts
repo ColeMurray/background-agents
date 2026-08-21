@@ -73,6 +73,13 @@ vi.mock("../db/model-provider-accounts", () => ({
 
 /** Shared D1 batch spy — createEnv wires it as env.DB.batch. */
 const mockBatch = vi.fn();
+const mockSchedulerTrigger = vi.hoisted(() => vi.fn());
+
+vi.mock("../scheduler/scheduler", () => ({
+  Scheduler: vi.fn().mockImplementation(function () {
+    return { trigger: mockSchedulerTrigger };
+  }),
+}));
 
 vi.mock("../db/automation-store", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -138,12 +145,6 @@ function createEnv(): Env {
   return {
     DB: { batch: mockBatch } as unknown as D1Database,
     SESSION: {} as DurableObjectNamespace,
-    SCHEDULER: {
-      idFromName: vi.fn().mockReturnValue("fake-id"),
-      get: vi.fn().mockReturnValue({
-        fetch: vi.fn().mockResolvedValue(Response.json({ run: { id: "run-1" } }, { status: 201 })),
-      }),
-    } as unknown as DurableObjectNamespace,
     DEPLOYMENT_NAME: "test",
     TOKEN_ENCRYPTION_KEY: "test-key",
   } as Env;
@@ -251,6 +252,9 @@ describe("automation route handlers", () => {
     mockProviderAuthStore.bindInserts.mockReturnValue([{ sql: "insert-provider-auth" }]);
     mockProviderAuthStore.bindReplace.mockReturnValue([{ sql: "replace-provider-auth" }]);
     mockBatch.mockResolvedValue([]);
+    mockSchedulerTrigger.mockResolvedValue(
+      Response.json({ run: { id: "run-1" } }, { status: 201 })
+    );
     mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
     mockProviderAccountStore.getById.mockResolvedValue({
       id: "0123456789abcdef0123456789abcdef",
@@ -1352,7 +1356,7 @@ describe("automation route handlers", () => {
   });
 
   describe("POST /automations/:id/trigger", () => {
-    it("triggers automation via SchedulerDO", async () => {
+    it("triggers automation via the scheduler", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
 
@@ -1367,16 +1371,13 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(404);
     });
 
-    it("returns 409 when SchedulerDO reports active run", async () => {
+    it("returns 409 when the scheduler reports an active run", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
-      // Override the SCHEDULER stub to return 409 (concurrency check lives in the DO)
       const env = createEnv();
-      (env.SCHEDULER!.get as ReturnType<typeof vi.fn>).mockReturnValue({
-        fetch: vi
-          .fn()
-          .mockResolvedValue(Response.json({ error: "concurrent_run_active" }, { status: 409 })),
-      });
+      mockSchedulerTrigger.mockResolvedValue(
+        Response.json({ error: "concurrent_run_active" }, { status: 409 })
+      );
 
       const { handler, match } = getHandler("POST", "/automations/auto-1/trigger");
       const request = new Request("https://test.local/automations/auto-1/trigger", {

@@ -180,6 +180,20 @@ jobs:
             -backend-config='endpoints={s3="https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Stage SchedulerDO deletion migration
+        run: |
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          if [ "$current_tag" = "v2" ]; then
+            printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
+          fi
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform Plan
         id: plan
         run: |
@@ -339,6 +353,20 @@ jobs:
             -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
             -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
             -backend-config='endpoints={s3="https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Stage SchedulerDO deletion migration
+        run: |
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          if [ "$current_tag" = "v2" ]; then
+            printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
+          fi
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Terraform Apply

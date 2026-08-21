@@ -259,7 +259,7 @@ describe("automation invocations (D1 integration)", () => {
           makeChild("auto-g1", { repo_owner: "acme", repo_name: "web" }),
         ],
         overlapScope: { kind: "automation" },
-        advanceSchedule: { nextRunAt: 2_000 },
+        advanceSchedule: { fromSlot: 1_000, nextRunAt: 2_000 },
       });
 
       expect(inserted).toBe(true);
@@ -289,13 +289,15 @@ describe("automation invocations (D1 integration)", () => {
           makeChild("auto-g2", { repo_owner: "acme", repo_name: "web" }),
         ],
         overlapScope: { kind: "automation" },
-        advanceSchedule: { nextRunAt: 3_000 },
+        // This firing observed slot 1_000, so it is the one entitled to move it.
+        advanceSchedule: { fromSlot: 1_000, nextRunAt: 3_000 },
       });
 
       // The 0-row guarded INSERT is a success, not an error: D1 batch() does
-      // NOT roll back, children are 0-row no-ops, and the unconditional
-      // advance still applies. This is the real-D1 verification of the
-      // meta.changes-per-statement semantics the scheduler depends on.
+      // NOT roll back, children are 0-row no-ops, and the advance still
+      // applies because this firing still owns the slot. This is the real-D1
+      // verification of the meta.changes-per-statement semantics the scheduler
+      // depends on.
       expect(result.inserted).toBe(false);
       expect(await store.getInvocationById(second.id)).toBeNull();
       expect(await countRows("automation_runs", `invocation_id = '${second.id}'`)).toBe(0);
@@ -360,7 +362,7 @@ describe("automation invocations (D1 integration)", () => {
           }),
         ],
         overlapScope: { kind: "automation" },
-        advanceSchedule: { nextRunAt: 2_000 },
+        advanceSchedule: { fromSlot: 1_000, nextRunAt: 2_000 },
       });
 
       const duplicateSlot = makeInvocation("auto-g4", { source: "schedule", scheduled_at: 1_000 });
@@ -370,7 +372,7 @@ describe("automation invocations (D1 integration)", () => {
           invocation: duplicateSlot,
           children: [makeChild("auto-g4", { repo_owner: "acme", repo_name: "api" })],
           overlapScope: { kind: "automation" },
-          advanceSchedule: { nextRunAt: 9_999 },
+          advanceSchedule: { fromSlot: 1_000, nextRunAt: 9_999 },
         });
       } catch (e) {
         caught = e;
@@ -459,7 +461,7 @@ describe("automation invocations (D1 integration)", () => {
           scheduled_at: 1_000,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: 2_000 }
+        { fromSlot: 1_000, nextRunAt: 2_000 }
       );
 
       expect(inserted).toBe(true);
@@ -467,7 +469,7 @@ describe("automation invocations (D1 integration)", () => {
       expect(await countRows("automation_invocations", "skip_reason IS NOT NULL")).toBe(1);
     });
 
-    it("still advances when the skip collides with an existing slot (INSERT OR IGNORE)", async () => {
+    it("hands the slot over exactly once when two skips collide (INSERT OR IGNORE)", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-s2", next_run_at: 1_000 }));
 
@@ -477,7 +479,7 @@ describe("automation invocations (D1 integration)", () => {
           scheduled_at: 1_000,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: 2_000 }
+        { fromSlot: 1_000, nextRunAt: 2_000 }
       );
       const second = await store.insertSkippedInvocation(
         makeInvocation("auto-s2", {
@@ -485,13 +487,16 @@ describe("automation invocations (D1 integration)", () => {
           scheduled_at: 1_000,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: 3_000 }
+        { fromSlot: 1_000, nextRunAt: 3_000 }
       );
 
-      // The duplicate skip is ignored, but the advance MUST apply — a lost
-      // advance re-collides on (automation_id, scheduled_at) every tick.
+      // The duplicate skip is ignored AND its advance is a no-op: it claimed
+      // slot 1_000, which the first skip already handed to 2_000. Letting it
+      // advance anyway would move 2_000 -> 3_000 and slot 2_000 would never
+      // fire. The re-collision this guards against is already impossible —
+      // the winning skip moved next_run_at off 1_000.
       expect(second.inserted).toBe(false);
-      expect((await store.getById("auto-s2"))!.next_run_at).toBe(3_000);
+      expect((await store.getById("auto-s2"))!.next_run_at).toBe(2_000);
     });
   });
 

@@ -457,6 +457,57 @@ describe("AutomationStore", () => {
       expect(statements).toHaveLength(0);
     });
   });
+
+  describe("schedule advancement", () => {
+    const invocation = {
+      id: "inv-1",
+      automation_id: "auto_test1",
+      source: "schedule" as const,
+      scheduled_at: now,
+      trigger_key: null,
+      concurrency_key: null,
+      trigger_metadata: null,
+      skip_reason: null,
+      failure_counted_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    it("advances a guarded invocation only while it still owns the claimed slot", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.insertInvocationGuarded({
+        invocation,
+        children: [sampleRunRow],
+        overlapScope: { kind: "automation" },
+        advanceSchedule: { fromSlot: now, nextRunAt: now + 60_000 },
+      });
+
+      const advance = statements.at(-1)!;
+      // Compare-and-set on the claimed slot, not a monotonic timestamp guard:
+      // "any later value wins" lets a loser advance again from the winner's
+      // successor and skip a slot entirely.
+      expect(advance.sql).toContain("next_run_at = ?");
+      expect(advance.sql).not.toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now);
+    });
+
+    it("advances a skipped invocation only while it still owns the claimed slot", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.insertSkippedInvocation(
+        { ...invocation, id: "inv-skipped", skip_reason: "concurrent_run_active" },
+        { fromSlot: now, nextRunAt: now + 60_000 }
+      );
+
+      const advance = statements.at(-1)!;
+      expect(advance.sql).toContain("next_run_at = ?");
+      expect(advance.sql).not.toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now);
+    });
+  });
 });
 
 describe("isDuplicateKeyError", () => {

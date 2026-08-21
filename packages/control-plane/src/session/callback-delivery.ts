@@ -15,12 +15,18 @@ interface DeliveryResult {
 export async function deliverWithRetry(
   send: (signal: AbortSignal) => Promise<Response>,
   sleep: (ms: number) => Promise<void>,
-  onFailure: (failure: DeliveryFailure) => void | Promise<void>
+  onFailure: (failure: DeliveryFailure) => void | Promise<void>,
+  options: { attemptTimeoutMs?: number | null } = {}
 ): Promise<DeliveryResult> {
+  const attemptTimeoutMs =
+    options.attemptTimeoutMs === undefined ? CALLBACK_ATTEMPT_TIMEOUT_MS : options.attemptTimeoutMs;
   let httpStatus: number | undefined;
   for (let attempt = 1; attempt <= CALLBACK_ATTEMPTS; attempt++) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), CALLBACK_ATTEMPT_TIMEOUT_MS);
+    const timeout =
+      attemptTimeoutMs === null
+        ? undefined
+        : setTimeout(() => controller.abort(), attemptTimeoutMs);
     let failure: DeliveryFailure;
     httpStatus = undefined;
     try {
@@ -31,7 +37,7 @@ export async function deliverWithRetry(
     } catch (error) {
       failure = { attempt, error };
     } finally {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
     }
     try {
       await onFailure(failure);

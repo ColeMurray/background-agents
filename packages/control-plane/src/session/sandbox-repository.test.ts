@@ -86,6 +86,8 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("modal_object_id = NULL");
       expect(mock.calls[0].query).toContain("vnc_url = NULL");
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
+      // A replacement sandbox must not inherit the predecessor's runtime.
+      expect(mock.calls[0].query).toContain("runtime_version = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
 
@@ -113,12 +115,48 @@ describe("SandboxRepository", () => {
   });
 
   describe("updateSandboxSnapshotImageId", () => {
-    it("updates snapshot image ID for specific sandbox", () => {
-      repository.updateSandboxSnapshotImageId("sb-1", "img-123");
+    it("stamps the snapshot with the runtime that produced it", () => {
+      repository.updateSandboxSnapshotImageId("sb-1", "img-123", "v59-runtime");
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET snapshot_image_id");
-      expect(mock.calls[0].params).toEqual(["img-123", "sb-1"]);
+      expect(mock.calls[0].query).toContain("snapshot_runtime_version");
+      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "sb-1"]);
+    });
+
+    it("records a null runtime when the sandbox never reported one", () => {
+      repository.updateSandboxSnapshotImageId("sb-1", "img-123", null);
+
+      expect(mock.calls[0].params).toEqual(["img-123", null, "sb-1"]);
+    });
+  });
+
+  describe("updateSandboxRuntimeVersion", () => {
+    it("records the running sandbox's runtime version", () => {
+      repository.updateSandboxRuntimeVersion("v59-runtime");
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET runtime_version");
+      expect(mock.calls[0].params).toEqual(["v59-runtime"]);
+    });
+
+    it("clears the recorded version when set to null", () => {
+      repository.updateSandboxRuntimeVersion(null);
+
+      expect(mock.calls[0].params).toEqual([null]);
+    });
+  });
+
+  describe("recordReportedSandboxRuntimeVersion", () => {
+    it("only fills a row with nothing recorded yet", () => {
+      repository.recordReportedSandboxRuntimeVersion("v59-runtime");
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE sandbox SET runtime_version");
+      // A restore seeds the snapshot's version first; the sandbox's own report
+      // must not overwrite it.
+      expect(mock.calls[0].query).toContain("runtime_version IS NULL");
+      expect(mock.calls[0].params).toEqual(["v59-runtime"]);
     });
   });
 

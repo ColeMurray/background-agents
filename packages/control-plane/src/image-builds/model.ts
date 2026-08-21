@@ -21,9 +21,9 @@ import { MIN_COMPATIBLE_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,
- * OpenComputer checkpoints. Daytona has no image support.
+ * OpenComputer checkpoints, E2B snapshots. Daytona has no image support.
  */
-export type ImageBuildProvider = "modal" | "vercel" | "opencomputer";
+export type ImageBuildProvider = "modal" | "vercel" | "opencomputer" | "e2b";
 
 /**
  * What an image bakes. `id` is a lowercase `owner/name` pair for repo scopes

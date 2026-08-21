@@ -18,12 +18,12 @@ import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/in
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
+import { Scheduler } from "./scheduler/scheduler";
 
 const logger = createLogger("worker");
 
 // Re-export Durable Objects for Cloudflare to discover
 export { SessionDO } from "./session/durable-object";
-export { SchedulerDO } from "./scheduler/durable-object";
 
 /**
  * Worker fetch handler.
@@ -46,9 +46,9 @@ export default {
   },
 
   /**
-   * Cron trigger handler — wakes the SchedulerDO to process overdue automations.
+   * Cron trigger handler — processes overdue automations.
    */
-  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     if (event.cron === IMAGE_BUILD_SCHEDULER_CRON) {
       const requestId = crypto.randomUUID();
       // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
@@ -71,17 +71,10 @@ export default {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
-    if (!env.SCHEDULER) {
-      logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
-      return;
-    }
-
-    // Always wake the SchedulerDO — it runs both the recovery sweep
-    // (orphaned/timed-out runs) and processes overdue automations.
-    const doId = env.SCHEDULER.idFromName("global-scheduler");
-    const stub = env.SCHEDULER.get(doId);
-
-    await stub.fetch("http://internal/internal/tick", { method: "POST" });
+    // The tick runs both the recovery sweep (orphaned/timed-out runs) and
+    // processes overdue automations.
+    // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: construct the scheduler's database dependency
+    await new Scheduler(env.DB, env, createCloudflareBackgroundTasks(ctx)).tick();
   },
 
   queue: consumeImageBuildFinalizations,

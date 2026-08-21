@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   modal_object_id TEXT,                             -- Legacy provider object ID (Modal object ID or Daytona handle)
   snapshot_id TEXT,
   snapshot_image_id TEXT,                           -- Modal Image ID for filesystem snapshot restoration
+  snapshot_runtime_version TEXT,                    -- SANDBOX_VERSION that produced snapshot_image_id (restore compatibility floor)
+  runtime_version TEXT,                             -- SANDBOX_VERSION reported by the running sandbox
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
   auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
   status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'syncing', 'ready', 'running', 'stale', 'snapshotting', 'stopped', 'failed'
@@ -574,6 +576,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 43,
     description: "Persist session alarm scheduling state",
     run: SESSION_ALARM_STATE_TABLE_SQL,
+  },
+  {
+    id: 44,
+    description: "Record sandbox runtime version and stamp it on snapshots",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN runtime_version TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_runtime_version TEXT`);
+    },
   },
 ];
 

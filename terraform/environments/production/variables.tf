@@ -598,6 +598,12 @@ variable "control_plane_new_sqlite_classes" {
   default     = []
 }
 
+variable "control_plane_deleted_classes" {
+  description = "DO classes deleted in this control plane migration step"
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_service_bindings" {
   description = "Enable service bindings. Set false for initial deployment if target workers don't exist yet."
   type        = bool

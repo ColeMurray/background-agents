@@ -14,7 +14,7 @@
 FROM python:3.12-slim-bookworm
 
 # Pinned toolchain versions (keep in sync with daytona-infra/src/toolchain.py).
-ARG OPENCODE_VERSION=1.18.11
+ARG OPENCODE_VERSION=1.18.18
 ARG CODE_SERVER_VERSION=4.109.5
 ARG AGENT_BROWSER_VERSION=0.21.2
 
@@ -76,12 +76,18 @@ RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_c
 # Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
 # so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
 # control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.
+#
+# Deliberately no SANDBOX_VERSION here. It would never reach the supervisor (see
+# above), so a literal could only rot: image selection gates on the version a
+# build *reports*, which comes from E2B_SANDBOX_VERSION in the control plane —
+# derived from sandbox_runtime/runtime_manifest.json. A second copy in this file
+# would drift below the floor the next time the manifest bumps, with nothing to
+# catch it.
 ENV HOME=/root \
     NODE_ENV=development \
     PATH=/usr/local/bin:/usr/bin:/bin \
     PYTHONPATH=/app \
-    NODE_PATH=/usr/lib/node_modules \
-    SANDBOX_VERSION=e2b-v3-vnc
+    NODE_PATH=/usr/lib/node_modules
 
 # NOTE: file staging (sandbox_runtime, oi-launch.py), WORKDIR, and the start/ready
 # commands are applied by build-template.py via the E2B Template SDK
