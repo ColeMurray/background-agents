@@ -13,6 +13,7 @@
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import { coerceSandboxStatus } from "../sandbox-status";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
 import {
   SandboxProviderError,
@@ -371,7 +372,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Evaluate spawn decision
     const spawnState = {
-      status: (sandboxState?.status || "pending") as SandboxStatus,
+      status: coerceSandboxStatus(sandboxState?.status, this.log),
       createdAt: sandboxState?.created_at || 0,
       providerObjectId: sandboxState?.modal_object_id || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,
@@ -1090,7 +1091,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Restore previous status if we weren't in a terminal state
     if (!isTerminalState && reason !== "heartbeat_timeout") {
-      this.storage.updateSandboxStatus(previousStatus as SandboxStatus);
+      this.storage.updateSandboxStatus(previousStatus);
       this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
       if (previousStatus === "ready") {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });
@@ -1237,7 +1238,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Check connecting timeout — sandbox failed to connect within allowed time
     const connectingResult = evaluateConnectingTimeout(
-      sandbox.status as SandboxStatus,
+      sandbox.status,
       sandbox.created_at,
       this.config.connectingTimeout,
       now
@@ -1325,7 +1326,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     const connectedClients = this.getConnectedClientCount();
     const inactivityState = {
       lastActivity: sandbox.last_activity,
-      status: sandbox.status as SandboxStatus,
+      status: sandbox.status,
       connectedClientCount: connectedClients,
     };
 
@@ -1443,7 +1444,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     const warmState = {
       hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
-      status: sandbox?.status as SandboxStatus | null,
+      // Not coerced, deliberately: `WarmState.status` is `SandboxStatus | null`
+      // and a session with no sandbox row yet is the ordinary case on the
+      // warm-on-typing path. This cast only widens `undefined` to `null`; it is
+      // not asserting an unvalidated string. Coercing here would turn "no
+      // sandbox" into "pending" and skip the spawn this method exists to start.
+      status: sandbox?.status ?? null,
       isSpawningInMemory: this.isSpawningSandbox,
     };
 

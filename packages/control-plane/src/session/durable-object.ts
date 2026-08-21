@@ -1956,8 +1956,8 @@ export class SessionDO extends DurableObject<Env> {
     return false;
   }
 
-  private updateSandboxStatus(status: string): void {
-    this.sandboxRepository.updateSandboxStatus(status as SandboxStatus);
+  private updateSandboxStatus(status: SandboxStatus): void {
+    this.sandboxRepository.updateSandboxStatus(status);
   }
 
   // HTTP handlers
