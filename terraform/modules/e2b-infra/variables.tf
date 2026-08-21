@@ -24,7 +24,7 @@ variable "template_cpu" {
 variable "template_memory_mb" {
   description = "Memory (MB, even number) for the template"
   type        = number
-  default     = 1024
+  default     = 4096
 }
 
 variable "deploy_path" {

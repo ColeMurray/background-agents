@@ -8,8 +8,9 @@
 # which stages packages/sandbox-runtime/src/sandbox_runtime and applies the COPY /
 # WORKDIR / start-command steps programmatically (API-key auth, no access token).
 #
-# Start command (set by build-template.py / Terraform, not ENTRYPOINT here):
-#   python /usr/local/bin/oi-launch
+# The template runs nothing of its own (its start command is an inert sleep —
+# see build-template.py): the control plane starts the supervisor entrypoint
+# via envd on every sandbox create, with per-sandbox env from the create call.
 
 FROM python:3.12-slim-bookworm
 
@@ -73,13 +74,13 @@ RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_c
   && git config --system credential.helper /usr/local/bin/oi-git-credentials \
   && git config --system credential.useHttpPath true
 
-# Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
-# so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
-# control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.
+# Build-time env only. E2B does NOT propagate Docker ENV to the runtime process:
+# everything the supervisor needs (HOME/PYTHONPATH/NODE_PATH, CONTROL_PLANE_URL,
+# secrets, …) is injected by the control plane via create-time envVars.
 #
 # Deliberately no SANDBOX_VERSION here. It would never reach the supervisor (see
-# above), so a literal could only rot: image selection gates on the version a
-# build *reports*, which comes from E2B_SANDBOX_VERSION in the control plane —
+# above), so a literal could only rot: image selection gates on the version the
+# runtime *reports*, which comes from E2B_SANDBOX_VERSION in the control plane —
 # derived from sandbox_runtime/runtime_manifest.json. A second copy in this file
 # would drift below the floor the next time the manifest bumps, with nothing to
 # catch it.
@@ -89,7 +90,7 @@ ENV HOME=/root \
     PYTHONPATH=/app \
     NODE_PATH=/usr/lib/node_modules
 
-# NOTE: file staging (sandbox_runtime, oi-launch.py), WORKDIR, and the start/ready
-# commands are applied by build-template.py via the E2B Template SDK
+# NOTE: file staging (sandbox_runtime), WORKDIR, and the start/ready commands
+# are applied by build-template.py via the E2B Template SDK
 # (.copy()/.setWorkdir()/.setStartCmd()) — not here. This Dockerfile defines only
 # the base image layers; it is not built standalone.

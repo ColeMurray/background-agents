@@ -36,9 +36,22 @@ module "e2b_infra" {
   count  = local.use_e2b_backend ? 1 : 0
   source = "../../modules/e2b-infra"
 
-  api_key     = var.e2b_api_key
-  api_url     = var.e2b_api_url
-  template_id = var.e2b_template_id
-  deploy_path = "${var.project_root}/packages/e2b-infra"
-  source_hash = data.external.e2b_source_hash[0].result.hash
+  api_key            = var.e2b_api_key
+  api_url            = var.e2b_api_url
+  template_id        = var.e2b_template_id
+  template_cpu       = var.e2b_template_cpu
+  template_memory_mb = var.e2b_template_memory_mb
+  deploy_path        = "${var.project_root}/packages/e2b-infra"
+  source_hash        = data.external.e2b_source_hash[0].result.hash
+
+  # Deploy the worker BEFORE rebuilding the template (the reverse of the other
+  # sandbox modules, whose workers consume module outputs). The worker binds
+  # only var.e2b_template_id, so this edge is free to point either way — and
+  # worker-first is the compatible order: the new control plane boots the old
+  # launcher-bearing template fine (the captured launcher just idles unfed),
+  # while an old control plane cannot boot a launcher-less template. It also
+  # fails safe: a failed template rebuild leaves a fully working system, where
+  # template-first plus a failed worker deploy would leave sessions AND image
+  # builds down until a re-apply.
+  depends_on = [module.control_plane_worker]
 }
