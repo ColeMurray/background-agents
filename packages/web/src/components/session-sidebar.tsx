@@ -305,7 +305,14 @@ export function SessionSidebar({
                   sectionPagination.needsAttention,
                   true
                 )}
-                {renderSessionGroup("Running", running, sectionPagination.running)}
+                {/*
+                  "In progress", not "Running": this heading names the
+                  SessionInboxCategory `in_progress`, and the sandbox status
+                  shown in the session header has its own vocabulary. When both
+                  said "Running" a session could be filed under Running here
+                  while the header read "Stopped", and both were correct.
+                */}
+                {renderSessionGroup("In progress", running, sectionPagination.running)}
                 {renderSessionGroup("Recent", recent, sectionPagination.recent)}
               </>
             )}

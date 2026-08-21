@@ -14,6 +14,7 @@
  * must be visible in the names.
  */
 
+import type { SessionInboxCategory } from "./session-inbox";
 import type { SessionStatus } from "./sessions";
 
 /**
@@ -60,3 +61,26 @@ export function isTurnSettled(status: SessionStatus): boolean {
 export const INACTIVE_SESSION_STATUS_SQL = [...INACTIVE_SESSION_STATUSES]
   .map((status) => `'${status}'`)
   .join(", ");
+
+/**
+ * A session's inbox grouping, folded over the session and all its descendants.
+ *
+ * Deliberately takes a collection: a root's category depends on every session
+ * in its tree, because the query this mirrors aggregates with MAX() over the
+ * group. A per-session signature could not express the rule.
+ *
+ * This does not replace the SQL in `session-inbox-store.ts` — that aggregate
+ * has to stay for pagination to work. It exists so the rule has one typed,
+ * testable definition to check the query against, instead of living only as a
+ * CASE expression inside a query string.
+ *
+ * Order matters: unread wins over in-progress. A session that is both needs
+ * the user's attention more than it needs a progress indicator.
+ */
+export function deriveInboxCategory(
+  tree: ReadonlyArray<{ status: SessionStatus; unread: boolean }>
+): SessionInboxCategory {
+  if (tree.some((session) => session.unread)) return "needs_attention";
+  if (tree.some((session) => session.status === "active")) return "in_progress";
+  return "finished";
+}

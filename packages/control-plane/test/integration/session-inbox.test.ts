@@ -3,6 +3,7 @@ import { env } from "cloudflare:test";
 import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
+import { deriveInboxCategory } from "@open-inspect/shared/types/session-activity";
 
 const VIEWER_ID = "11111111111111111111111111111111";
 
@@ -489,5 +490,92 @@ describe("session inbox", () => {
       page.items.map((item) => item.rootSession.id)
     );
     expect(rootIds).toHaveLength(new Set(rootIds).size);
+  });
+});
+
+describe("inbox category conformance", () => {
+  beforeEach(cleanD1Tables);
+
+  // deriveInboxCategory in @open-inspect/shared is the readable statement of a
+  // rule that otherwise exists only as a CASE expression inside a query
+  // string. It does not replace the SQL — the aggregate has to stay for
+  // pagination — so it is only worth having if the two provably agree. These
+  // cases drive real rows through the real query and compare.
+  const CASES: Array<{
+    name: string;
+    tree: Array<{ status: SessionEntry["status"]; unread: boolean }>;
+  }> = [
+    { name: "single idle session", tree: [{ status: "completed", unread: false }] },
+    { name: "single active session", tree: [{ status: "active", unread: false }] },
+    { name: "single unread session", tree: [{ status: "completed", unread: true }] },
+    { name: "single draft", tree: [{ status: "created", unread: false }] },
+    { name: "single failed session", tree: [{ status: "failed", unread: false }] },
+    {
+      name: "idle root with an active child",
+      tree: [
+        { status: "completed", unread: false },
+        { status: "active", unread: false },
+      ],
+    },
+    {
+      name: "idle root with an unread child",
+      tree: [
+        { status: "completed", unread: false },
+        { status: "completed", unread: true },
+      ],
+    },
+    {
+      name: "active root with an unread child (attention outranks progress)",
+      tree: [
+        { status: "active", unread: false },
+        { status: "completed", unread: true },
+      ],
+    },
+    {
+      name: "wholly finished tree",
+      tree: [
+        { status: "completed", unread: false },
+        { status: "failed", unread: false },
+      ],
+    },
+  ];
+
+  it.each(CASES)("agrees with the query for a $name", async ({ tree }) => {
+    // Prime the viewer row first: unreadSql gates on
+    // `latest_terminal_message_completed_at >= viewer.created_at`, so a message
+    // seeded before the viewer exists can never read as unread.
+    await serviceFetch("https://example.com/sessions/inbox?category=finished");
+    const store = new SessionIndexStore(env.DB);
+    const rootId = "root";
+    const readAfter = Date.now();
+
+    for (const [index, node] of tree.entries()) {
+      const id = index === 0 ? rootId : `descendant-${index}`;
+      await store.create(
+        session(id, {
+          status: node.status,
+          parentSessionId: index === 0 ? null : rootId,
+          spawnSource: index === 0 ? "user" : "agent",
+          spawnDepth: index === 0 ? 0 : 1,
+          updatedAt: 5000 - index,
+        })
+      );
+      if (node.unread) {
+        await store.recordLatestTerminalMessage({
+          sessionId: id,
+          messageId: `message-${index}`,
+          messageCreatedAt: readAfter,
+          terminalMessageCompletedAt: readAfter,
+        });
+      }
+    }
+
+    const expected = deriveInboxCategory(tree);
+    const response = await serviceFetch(`https://example.com/sessions/inbox?category=${expected}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      items: Array<{ rootSession: { id: string } }>;
+    };
+    expect(body.items.map(({ rootSession }) => rootSession.id)).toEqual([rootId]);
   });
 });

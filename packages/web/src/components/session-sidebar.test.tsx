@@ -94,7 +94,7 @@ describe("SessionSidebar", () => {
     render(<SessionSidebar />);
 
     expect(screen.getByRole("heading", { name: "Needs attention" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Running" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "In progress" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Recent" })).toBeInTheDocument();
     expect(screen.getByText("Checking tests")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Signed in as Test User" })).toBeInTheDocument();
@@ -112,7 +112,7 @@ describe("SessionSidebar", () => {
     });
     render(<SessionSidebar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Load more running" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load more in progress" }));
     expect(loadMoreRunning).toHaveBeenCalledOnce();
   });
 
@@ -140,7 +140,7 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Unable to load needs attention")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledOnce();
-    expect(screen.getByRole("heading", { name: "Running" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "In progress" })).toBeInTheDocument();
   });
 
   it("surfaces a retryable error when the initial snapshot fails", () => {
