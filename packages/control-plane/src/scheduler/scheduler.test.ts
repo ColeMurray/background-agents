@@ -531,7 +531,10 @@ describe("Scheduler", () => {
         scheduled_at: sampleAutomation.next_run_at,
       });
       expect(params.overlapScope).toEqual({ kind: "automation" });
-      expect(params.advanceSchedule).toEqual({ nextRunAt: expect.any(Number) });
+      expect(params.advanceSchedule).toEqual({
+        fromSlot: sampleAutomation.next_run_at,
+        nextRunAt: expect.any(Number),
+      });
       expect(params.children).toHaveLength(1);
 
       expect(mockStore.updateRun).toHaveBeenCalledWith(
@@ -1170,7 +1173,7 @@ describe("Scheduler", () => {
           scheduled_at: sampleAutomation.next_run_at,
           skip_reason: "concurrent_run_active",
         }),
-        { nextRunAt: expect.any(Number) }
+        { fromSlot: sampleAutomation.next_run_at, nextRunAt: expect.any(Number) }
       );
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });

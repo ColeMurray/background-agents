@@ -600,23 +600,30 @@ describe("Scheduler (integration)", () => {
         getSchedulerStub(schedulerEnv),
       ];
 
-      const results = await Promise.allSettled([
+      // Not allSettled: a rejected entry point is itself a failure of this
+      // gate. Losing the admission race must degrade to a clean status code,
+      // not a thrown request — that is exactly what the removed Durable
+      // Object used to guarantee by serializing every caller.
+      const [triggerA, triggerB, tick] = await Promise.all([
         schedulers[0]!.fetch(triggerRequest()),
         schedulers[1]!.fetch(triggerRequest()),
         schedulers[2]!.fetch("http://internal/internal/tick", { method: "POST" }),
       ]);
 
-      const responses = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : []
-      );
-      const tickResponse = results[2];
-      const tickSummary =
-        tickResponse?.status === "fulfilled"
-          ? await tickResponse.value.json<{ processed: number }>()
-          : null;
-      expect(
-        responses.some((response) => response.status === 201) || tickSummary?.processed === 1
-      ).toBe(true);
+      const triggerStatuses = [triggerA.status, triggerB.status].sort();
+      const tickSummary = await tick.json<{ processed: number; skipped: number }>();
+
+      expect(tick.status).toBe(200);
+      // Exactly one admission across all three entry points: either a trigger
+      // won (the other returns 409 and the tick found nothing to process) or
+      // the tick won (both triggers return 409).
+      if (triggerStatuses.includes(201)) {
+        expect(triggerStatuses).toEqual([201, 409]);
+        expect(tickSummary.processed).toBe(0);
+      } else {
+        expect(triggerStatuses).toEqual([409, 409]);
+        expect(tickSummary.processed).toBe(1);
+      }
 
       const runs = await fetchRuns("auto-concurrent-admission");
       expect(runs).toHaveLength(1);
@@ -640,6 +647,53 @@ describe("Scheduler (integration)", () => {
 
       const automation = await store.getById("auto-concurrent-admission");
       expect(automation!.next_run_at).toBeGreaterThan(dueAt);
+    });
+
+    it("does not let a firing that lost the slot advance the schedule again", async () => {
+      // Two ticks straddling a cron boundary both read slot S and compute
+      // successors from their own wall clock. The winner moves S -> N. Under a
+      // "later timestamp wins" guard the loser could then move N -> N2, and
+      // slot N would never fire at all. Only the firing that still owns S may
+      // advance it.
+      const store = new AutomationStore(env.DB);
+      const slot = Date.now() - 60_000;
+      const winnerNext = slot + 60_000;
+      const loserNext = slot + 120_000;
+      await store.create(
+        makeAutomation({
+          id: "auto-slot-ownership",
+          schedule_cron: "* * * * *",
+          next_run_at: slot,
+        })
+      );
+
+      const skipInvocation = (id: string) => ({
+        id,
+        automation_id: "auto-slot-ownership",
+        source: "schedule" as const,
+        scheduled_at: slot,
+        trigger_key: null,
+        concurrency_key: null,
+        trigger_metadata: null,
+        skip_reason: "concurrent_run_active",
+        failure_counted_at: null,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+
+      await store.insertSkippedInvocation(skipInvocation("inv-slot-winner"), {
+        fromSlot: slot,
+        nextRunAt: winnerNext,
+      });
+      expect((await store.getById("auto-slot-ownership"))!.next_run_at).toBe(winnerNext);
+
+      // The loser still believes it owns `slot` and carries a later successor.
+      await store.insertSkippedInvocation(skipInvocation("inv-slot-loser"), {
+        fromSlot: slot,
+        nextRunAt: loserNext,
+      });
+
+      expect((await store.getById("auto-slot-ownership"))!.next_run_at).toBe(winnerNext);
     });
 
     it("returns 400 when automationId is missing", async () => {

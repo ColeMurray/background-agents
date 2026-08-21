@@ -473,7 +473,7 @@ describe("AutomationStore", () => {
       updated_at: now,
     };
 
-    it("guards a guarded invocation advance against schedule rewind", async () => {
+    it("advances a guarded invocation only while it still owns the claimed slot", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
 
@@ -481,26 +481,31 @@ describe("AutomationStore", () => {
         invocation,
         children: [sampleRunRow],
         overlapScope: { kind: "automation" },
-        advanceSchedule: { nextRunAt: now + 60_000 },
+        advanceSchedule: { fromSlot: now, nextRunAt: now + 60_000 },
       });
 
       const advance = statements.at(-1)!;
-      expect(advance.sql).toContain("next_run_at < ?");
-      expect(advance.params.at(-1)).toBe(now + 60_000);
+      // Compare-and-set on the claimed slot, not a monotonic timestamp guard:
+      // "any later value wins" lets a loser advance again from the winner's
+      // successor and skip a slot entirely.
+      expect(advance.sql).toContain("next_run_at = ?");
+      expect(advance.sql).not.toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now);
     });
 
-    it("guards a skipped invocation advance against schedule rewind", async () => {
+    it("advances a skipped invocation only while it still owns the claimed slot", async () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
 
       await store.insertSkippedInvocation(
         { ...invocation, id: "inv-skipped", skip_reason: "concurrent_run_active" },
-        { nextRunAt: now + 60_000 }
+        { fromSlot: now, nextRunAt: now + 60_000 }
       );
 
       const advance = statements.at(-1)!;
-      expect(advance.sql).toContain("next_run_at < ?");
-      expect(advance.params.at(-1)).toBe(now + 60_000);
+      expect(advance.sql).toContain("next_run_at = ?");
+      expect(advance.sql).not.toContain("next_run_at < ?");
+      expect(advance.params.at(-1)).toBe(now);
     });
   });
 });

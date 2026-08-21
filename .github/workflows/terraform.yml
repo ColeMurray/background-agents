@@ -182,7 +182,13 @@ jobs:
 
       - name: Stage SchedulerDO deletion migration
         run: |
-          current_tag="$(terraform state pull | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
           if [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
@@ -351,7 +357,13 @@ jobs:
 
       - name: Stage SchedulerDO deletion migration
         run: |
-          current_tag="$(terraform state pull | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
           if [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi

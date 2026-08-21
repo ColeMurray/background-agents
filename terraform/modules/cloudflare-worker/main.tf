@@ -113,6 +113,18 @@ resource "cloudflare_worker_version" "this" {
     new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for do in var.durable_objects : do.class_name])
     deleted_classes    = var.deleted_classes
   } : null
+
+  lifecycle {
+    # Deletion emits its migration with bindings enabled, but nothing in the
+    # expression above enforces that. With bindings disabled, local.bindings
+    # drops every surviving Durable Object binding, so this version would
+    # retire the deleted class and ship a control plane with no SESSION
+    # binding. Fail at plan time instead of deploying that.
+    precondition {
+      condition     = length(var.deleted_classes) == 0 || var.enable_durable_object_bindings
+      error_message = "Durable Object class deletion requires enable_durable_object_bindings = true, otherwise the same version drops every surviving DO binding."
+    }
+  }
 }
 
 # =============================================================================

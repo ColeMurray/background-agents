@@ -437,8 +437,10 @@ export class Scheduler {
         children,
         overlapScope,
         advanceSchedule:
-          source === "schedule" && params.advanceToNextRunAt !== undefined
-            ? { nextRunAt: params.advanceToNextRunAt }
+          source === "schedule" &&
+          params.scheduledAt !== undefined &&
+          params.advanceToNextRunAt !== undefined
+            ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
             : undefined,
       }));
     } catch (e) {
@@ -592,8 +594,9 @@ export class Scheduler {
       },
       options.advanceSchedule &&
         params.source === "schedule" &&
+        params.scheduledAt !== undefined &&
         params.advanceToNextRunAt !== undefined
-        ? { nextRunAt: params.advanceToNextRunAt }
+        ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
         : undefined
     );
     return { outcome: "skipped" };
