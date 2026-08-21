@@ -174,8 +174,11 @@ describe("E2BRestClient", () => {
     expect(error!.message).not.toContain("sk-super-secret-value-123");
     expect(error!.message).not.toContain("line-two-secret");
     expect(error!.message).toContain("[redacted]");
-    // Short non-secret values stay, so real diagnostics survive.
-    expect(error!.message).toContain("1800");
+    // Short values are scrubbed too — user secrets are arbitrary-length —
+    // while the surrounding prose survives (scrubbing is per-value, not
+    // whole-message).
+    expect(error!.message).not.toContain("1800");
+    expect(error!.message).toContain("timeout");
     const body = error!.body as { message?: string };
     expect(body.message).not.toContain("sk-super-secret-value-123");
   });
