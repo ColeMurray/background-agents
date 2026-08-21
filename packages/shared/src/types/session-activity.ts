@@ -76,12 +76,24 @@ export const INACTIVE_SESSION_STATUS_SQL = [...INACTIVE_SESSION_STATUSES]
  *
  * Order matters: unread wins over in-progress. A session that is both needs
  * the user's attention more than it needs a progress indicator.
+ *
+ * Archived sessions contribute nothing — not their status and not their unread
+ * flag. The query filters them in its eligibility clause, before the aggregate
+ * ever runs, so a fold that counted them would report `needs_attention` for a
+ * root whose only unread descendant is archived while production reported
+ * `finished`. The conformance test covers both archived shapes precisely
+ * because they are the only ones that can catch this.
+ *
+ * This is an oracle, not a runtime path: the SQL aggregate stays, because
+ * pagination needs it. The function exists so the rule has one readable,
+ * testable statement to check that query against.
  */
 export function deriveInboxCategory(
   tree: ReadonlyArray<{ status: SessionStatus; unread: boolean }>
 ): SessionInboxCategory {
-  if (tree.some((session) => session.unread)) return "needs_attention";
-  if (tree.some((session) => session.status === "active")) return "in_progress";
+  const eligible = tree.filter((session) => session.status !== "archived");
+  if (eligible.some((session) => session.unread)) return "needs_attention";
+  if (eligible.some((session) => session.status === "active")) return "in_progress";
   return "finished";
 }
 
@@ -114,8 +126,13 @@ export const SESSION_TRANSITIONS: Record<SessionStatus, readonly SessionStatus[]
   // there is no public route to cancel one, only to cancel a child.
   cancelled: [],
   // Unarchive settles from message state rather than asserting `active`, so
-  // every status the settle can produce is reachable from here.
-  archived: ["active", "completed", "failed", "created"],
+  // every status that settle can produce is reachable from here -- except
+  // `active`. Archiving refuses while any message is pending or processing, and
+  // an archived session is not promptable, so an archived session always has
+  // zero queued work and the settle can only yield completed, failed, or
+  // created. An integration test that tried to reach `active` this way got a
+  // 409 from the archive step, which is what pinned this down.
+  archived: ["completed", "failed", "created"],
 };
 
 /**

@@ -538,6 +538,25 @@ describe("inbox category conformance", () => {
         { status: "failed", unread: false },
       ],
     },
+    // Archived rows are filtered by the eligibility clause before the
+    // aggregate runs, so they contribute nothing -- not their unread flag and
+    // not their status. These two cases are the only ones that can catch a
+    // fold which forgets that, which is why the first draft of this suite
+    // omitting `archived` left a real divergence undetected.
+    {
+      name: "idle root with an archived unread child",
+      tree: [
+        { status: "completed", unread: false },
+        { status: "archived", unread: true },
+      ],
+    },
+    {
+      name: "idle root with an archived active child",
+      tree: [
+        { status: "completed", unread: false },
+        { status: "archived", unread: false },
+      ],
+    },
   ];
 
   it.each(CASES)("agrees with the query for a $name", async ({ tree }) => {

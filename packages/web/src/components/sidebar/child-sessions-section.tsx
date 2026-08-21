@@ -8,24 +8,29 @@ import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { pullRequestSummaryDisplay } from "@/lib/pr-summary";
 import { formatRelativeTime } from "@/lib/time";
 import { formatRepoLabel } from "@/lib/repo-label";
-import type { Session } from "@open-inspect/shared/types/sessions";
+import type { Session, SessionStatus } from "@open-inspect/shared/types/sessions";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
 
 interface ChildSessionsSectionProps {
   sessionId: string;
 }
 
-function statusBadgeVariant(status: string) {
+// Typed as SessionStatus rather than string so the compiler checks the arms.
+// While it was `string` this switch carried a `case "running"`, which has never
+// been a SessionStatus -- it is a sandbox status, and the two vocabularies
+// leaking into one switch is exactly the confusion this module is being cleaned
+// up to remove.
+function statusBadgeVariant(status: SessionStatus) {
   switch (status) {
     case "active":
-    case "running":
       return "info" as const;
     case "completed":
       return "pr-merged" as const;
     case "cancelled":
     case "failed":
       return "pr-closed" as const;
-    default:
+    case "created":
+    case "archived":
       return "default" as const;
   }
 }

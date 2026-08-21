@@ -54,7 +54,6 @@ describe("isLegalSessionTransition", () => {
     ["completed", "archived", "an idle session is filed away"],
     ["failed", "active", "a retry prompt arrives"],
     ["failed", "archived", "a failed session is filed away"],
-    ["archived", "active", "unarchive settles to queued work"],
     ["archived", "completed", "unarchive settles to finished messages"],
     ["archived", "failed", "unarchive settles to a failed last turn"],
     ["archived", "created", "unarchive settles an empty session back to draft"],
@@ -78,6 +77,9 @@ describe("isLegalSessionTransition", () => {
     ["completed", "cancelled"],
     ["failed", "cancelled"],
     ["archived", "cancelled"],
+    // Archiving refuses while work is queued and archived sessions are not
+    // promptable, so an archived session can never settle to `active`.
+    ["archived", "active"],
   ] as const)("forbids %s -> %s", (from, to) => {
     expect(isLegalSessionTransition(from, to)).toBe(false);
   });

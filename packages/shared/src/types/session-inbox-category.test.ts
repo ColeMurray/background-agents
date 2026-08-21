@@ -12,13 +12,34 @@ describe("deriveInboxCategory", () => {
     expect(deriveInboxCategory([])).toBe("finished");
   });
 
-  it.each(ALL_STATUSES)("classifies a single unread %s session as needs_attention", (status) => {
-    expect(deriveInboxCategory([{ status, unread: true }])).toBe("needs_attention");
-  });
+  it.each(ALL_STATUSES.filter((status) => status !== "archived"))(
+    "classifies a single unread %s session as needs_attention",
+    (status) => {
+      expect(deriveInboxCategory([{ status, unread: true }])).toBe("needs_attention");
+    }
+  );
 
   it.each(ALL_STATUSES)("classifies a single read %s session by its status", (status) => {
     const expected = status === "active" ? "in_progress" : "finished";
     expect(deriveInboxCategory([{ status, unread: false }])).toBe(expected);
+  });
+
+  // Archived rows are removed by the query's eligibility clause before the
+  // aggregate runs, so they contribute neither status nor unread flag. Getting
+  // this wrong filed a root whose only unread descendant was archived under
+  // needs_attention while production filed it under finished.
+  it("ignores an archived session entirely, even when unread", () => {
+    expect(deriveInboxCategory([{ status: "archived", unread: true }])).toBe("finished");
+    expect(
+      deriveInboxCategory([
+        { status: "completed", unread: false },
+        { status: "archived", unread: true },
+      ])
+    ).toBe("finished");
+  });
+
+  it("ignores an archived session when deciding in_progress", () => {
+    expect(deriveInboxCategory([{ status: "archived", unread: false }])).toBe("finished");
   });
 
   // MAX(unread) and MAX(status = 'active') are aggregates over the whole

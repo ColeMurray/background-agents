@@ -137,6 +137,44 @@ describe("POST /internal/unarchive", () => {
     const stateRes = await stub.fetch("http://internal/internal/state");
     expect((await stateRes.json<{ status: string }>()).status).toBe("completed");
   });
+
+  // The handler unit test mocks the settle service, so these are what actually
+  // pin each message state to the status it produces.
+  // Only terminal message states appear here: a session with a pending or
+  // processing message cannot be archived at all (the archive handler 409s), so
+  // an archived session always has zero queued work.
+  it.each([["failed", "failed"]] as const)(
+    "unarchive settles a %s message to %s",
+    async (messageStatus, expected) => {
+      const { stub } = await initSession({ userId: "user-1" });
+      const [participant] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants LIMIT 1"
+      );
+      await seedMessage(stub, {
+        id: "msg-1",
+        authorId: participant.id,
+        content: "do the thing",
+        source: "web",
+        status: messageStatus,
+        createdAt: 1000,
+      });
+
+      await stub.fetch("http://internal/internal/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "user-1" }),
+      });
+      const res = await stub.fetch("http://internal/internal/unarchive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "user-1" }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json<{ status: string }>()).toEqual({ status: expected });
+    }
+  );
 });
 
 describe("POST /internal/prompt", () => {
