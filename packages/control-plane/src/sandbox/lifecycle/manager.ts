@@ -1447,7 +1447,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       // Not coerced, deliberately: `WarmState.status` is `SandboxStatus | null`
       // and a session with no sandbox row yet is the ordinary case on the
       // warm-on-typing path. Coercing here would turn "no sandbox" into
-      // "pending" and skip the spawn this method exists to start.
+      // DEFAULT_SANDBOX_STATUS and skip the spawn this method exists to start.
       status: sandbox?.status ?? null,
       isSpawningInMemory: this.isSpawningSandbox,
     };
