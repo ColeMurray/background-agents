@@ -499,11 +499,12 @@ describe("Home", () => {
     fireEvent.keyDown(authenticationMenu, { key: "ArrowRight" });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Team ChatGPT" }));
 
-    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe(
-      JSON.stringify({ openai: { mode: "provider_account", accountId } })
-    );
+    const storedSelection = JSON.stringify({ openai: { mode: "provider_account", accountId } });
+    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(storedSelection);
 
     first.unmount();
+    localStorage.removeItem("open-inspect-last-provider-selections:v1");
+    localStorage.setItem("open-inspect-last-provider-selections", storedSelection);
     render(<Home />);
     const user = userEvent.setup();
     await screen.findByRole("button", { name: "OpenAI authentication options" });
@@ -515,6 +516,8 @@ describe("Home", () => {
       model: openAiModel,
       providerSelections: { openai: { mode: "provider_account", accountId } },
     });
+    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(storedSelection);
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBeNull();
   });
 
   it("waits for provider accounts and removes a stale stored selection", async () => {
@@ -539,7 +542,8 @@ describe("Home", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(sessionCreateBody()).toMatchObject({ providerSelections: {} }));
-    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe("{}");
+    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}");
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBeNull();
   });
 
   it("waits for environments to load before restoring a stored environment", async () => {
