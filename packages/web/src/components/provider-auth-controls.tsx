@@ -32,6 +32,10 @@ import {
 const POLICY = "policy";
 const API_KEY = "api_key";
 const ACCOUNT_PREFIX = "account:";
+const DEFAULT_POLICY_LABEL = "Use default";
+const DEFAULT_UNATTENDED = false;
+const DEFAULT_VARIANT = "select";
+const DEFAULT_DISABLED = false;
 
 export function ProviderAuthControls({
   provider,
@@ -39,9 +43,10 @@ export function ProviderAuthControls({
   defaultValue,
   value,
   onChange,
-  policyLabel = "Use default",
-  unattended = false,
-  variant = "select",
+  policyLabel = DEFAULT_POLICY_LABEL,
+  unattended = DEFAULT_UNATTENDED,
+  variant = DEFAULT_VARIANT,
+  disabled = DEFAULT_DISABLED,
 }: {
   provider: SubscriptionProviderId;
   accounts: ModelProviderAccount[];
@@ -51,6 +56,7 @@ export function ProviderAuthControls({
   policyLabel?: string;
   unattended?: boolean;
   variant?: "select" | "menu";
+  disabled?: boolean;
 }) {
   const available = accounts.filter(
     (account) => account.provider === provider && account.status === "active" && !account.archivedAt
@@ -83,6 +89,7 @@ export function ProviderAuthControls({
     : policyLabel;
   const providerName = SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].displayName;
   const handleChange = (next: string) => {
+    if (disabled) return;
     if (next === POLICY) onChange(undefined);
     else if (next === API_KEY) onChange({ mode: "api_key" });
     else onChange({ mode: "provider_account", accountId: next.slice(ACCOUNT_PREFIX.length) });
@@ -97,6 +104,7 @@ export function ProviderAuthControls({
             className={`flex max-w-52 items-center gap-1.5 rounded px-2 py-1 text-xs transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
             aria-label={`${providerName} authentication options, ${triggerSelectionLabel}`}
             title={`${providerName} authentication`}
+            disabled={disabled}
           >
             <span className="truncate">
               {providerName}: {triggerSelectionLabel}
@@ -108,21 +116,29 @@ export function ProviderAuthControls({
           <DropdownMenuLabel>Session options</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger>{providerName} authentication</DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger disabled={disabled}>
+              {providerName} authentication
+            </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               collisionPadding={8}
               className="w-36 max-w-[calc(100vw-2rem)] sm:w-72"
             >
               <DropdownMenuRadioGroup value={selected} onValueChange={handleChange}>
-                <DropdownMenuRadioItem value={POLICY}>
+                <DropdownMenuRadioItem value={POLICY} disabled={disabled}>
                   <span className="truncate">{policyDescription}</span>
                 </DropdownMenuRadioItem>
                 {available.map((account) => (
-                  <DropdownMenuRadioItem key={account.id} value={`${ACCOUNT_PREFIX}${account.id}`}>
+                  <DropdownMenuRadioItem
+                    key={account.id}
+                    value={`${ACCOUNT_PREFIX}${account.id}`}
+                    disabled={disabled}
+                  >
                     <span className="truncate">{account.displayName}</span>
                   </DropdownMenuRadioItem>
                 ))}
-                <DropdownMenuRadioItem value={API_KEY}>No account</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value={API_KEY} disabled={disabled}>
+                  No account
+                </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
@@ -134,7 +150,7 @@ export function ProviderAuthControls({
   return (
     <div className="space-y-1.5">
       <Label htmlFor={`provider-auth-${provider}`}>{providerName} authentication</Label>
-      <Select value={selected} onValueChange={handleChange}>
+      <Select value={selected} onValueChange={handleChange} disabled={disabled}>
         <SelectTrigger id={`provider-auth-${provider}`}>
           <SelectValue />
         </SelectTrigger>

@@ -150,4 +150,60 @@ describe("ProviderAuthControls menu", () => {
 
     expect(screen.getByRole("combobox")).toHaveTextContent("Unavailable account");
   });
+
+  it("disables both control variants while the owning form is locked", () => {
+    const { rerender } = render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[account]}
+        disabled
+        onChange={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "OpenAI authentication options, Use default" })
+    ).toBeDisabled();
+
+    rerender(
+      <ProviderAuthControls provider="openai" accounts={[account]} disabled onChange={vi.fn()} />
+    );
+    expect(screen.getByRole("combobox")).toBeDisabled();
+  });
+
+  it("blocks an already-open menu when the owning form becomes locked", async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[account]}
+        onChange={onChange}
+      />
+    );
+    const trigger = screen.getByRole("button", {
+      name: "OpenAI authentication options, Use default",
+    });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const authenticationMenu = await screen.findByRole("menuitem", {
+      name: "OpenAI authentication",
+    });
+    authenticationMenu.focus();
+    fireEvent.keyDown(authenticationMenu, { key: "ArrowRight" });
+    const noAccount = await screen.findByRole("menuitemradio", { name: "No account" });
+
+    rerender(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[account]}
+        disabled
+        onChange={onChange}
+      />
+    );
+
+    expect(noAccount).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(noAccount);
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

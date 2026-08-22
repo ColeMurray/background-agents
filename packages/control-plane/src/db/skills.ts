@@ -524,12 +524,22 @@ export class SkillStore {
       ),
     ];
     if (environmentIds.length === 0) return;
-    const placeholders = environmentIds.map(() => "?").join(", ");
-    const row = await this.db
-      .prepare(`SELECT COUNT(*) AS count FROM environments WHERE id IN (${placeholders})`)
-      .bind(...environmentIds)
-      .first<{ count: number }>();
-    if ((row?.count ?? 0) !== environmentIds.length) {
+    // `assignments` is request input and carries no length bound, so this
+    // cannot bind a parameter per environment: past the engine ceiling it
+    // fails outright with `too many SQL variables` instead of reporting a
+    // validation error, which made a skill assigned to more than
+    // MAX_D1_QUERY_PARAMETERS environments impossible to create.
+    let found = 0;
+    for (let start = 0; start < environmentIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = environmentIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const row = await this.db
+        .prepare(`SELECT COUNT(*) AS count FROM environments WHERE id IN (${placeholders})`)
+        .bind(...chunk)
+        .first<{ count: number }>();
+      found += row?.count ?? 0;
+    }
+    if (found !== environmentIds.length) {
       throw new SkillValidationError("One or more assigned environments do not exist");
     }
   }

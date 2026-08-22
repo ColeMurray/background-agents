@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   modelProviderAccountReconnectMethod,
@@ -184,8 +184,11 @@ export function ProviderAccountsSettings() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [saving, setSaving] = useState(false);
+  const operationInFlightRef = useRef(false);
 
   async function run(operation: () => Promise<unknown>, success: string) {
+    if (operationInFlightRef.current) return;
+    operationInFlightRef.current = true;
     setSaving(true);
     try {
       await operation();
@@ -196,8 +199,17 @@ export function ProviderAccountsSettings() {
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "Provider account request failed");
     } finally {
+      operationInFlightRef.current = false;
       setSaving(false);
     }
+  }
+
+  function beginConnection(next: Connection) {
+    if (!operationInFlightRef.current) setConnection(next);
+  }
+
+  function beginConfirmation(next: Exclude<Confirm, null>) {
+    if (!operationInFlightRef.current) setConfirm(next);
   }
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading provider accounts...</p>;
@@ -250,7 +262,7 @@ export function ProviderAccountsSettings() {
               <h3 className="font-medium text-foreground">Connected accounts</h3>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="subtle">
+                  <Button size="sm" variant="subtle" disabled={saving}>
                     <PlusIcon className="size-4" />
                     Add account
                   </Button>
@@ -260,7 +272,10 @@ export function ProviderAccountsSettings() {
                   {providers.map((provider) => (
                     <DropdownMenuItem
                       key={provider.provider}
-                      onSelect={() => setConnection(CONNECTION_STRATEGIES[provider.provider].add())}
+                      disabled={saving}
+                      onSelect={() =>
+                        beginConnection(CONNECTION_STRATEGIES[provider.provider].add())
+                      }
                     >
                       <ProviderIcon provider={provider.provider} className="size-5" />
                       <span>{provider.subscriptionName}</span>
@@ -331,8 +346,9 @@ export function ProviderAccountsSettings() {
                         <Button
                           size="xs"
                           variant="subtle"
+                          disabled={saving}
                           onClick={() =>
-                            setConnection(
+                            beginConnection(
                               CONNECTION_STRATEGIES[account.provider].reconnect(account)
                             )
                           }
@@ -343,6 +359,7 @@ export function ProviderAccountsSettings() {
                           <Button
                             size="xs"
                             variant="subtle"
+                            disabled={saving}
                             onClick={() =>
                               void run(
                                 () => runProviderAccountAction(account.id, "enable"),
@@ -356,7 +373,8 @@ export function ProviderAccountsSettings() {
                           <Button
                             size="xs"
                             variant="subtle"
-                            onClick={() => setConfirm({ account, action: "disable" })}
+                            disabled={saving}
+                            onClick={() => beginConfirmation({ account, action: "disable" })}
                           >
                             Disable
                           </Button>
@@ -364,6 +382,7 @@ export function ProviderAccountsSettings() {
                         <Button
                           size="xs"
                           variant="subtle"
+                          disabled={saving}
                           onClick={() =>
                             void run(
                               () => runProviderAccountAction(account.id, "verify"),
@@ -388,6 +407,7 @@ export function ProviderAccountsSettings() {
                           <DropdownMenuContent align="end">
                             {account.status === "active" && !isDefault && (
                               <DropdownMenuItem
+                                disabled={saving}
                                 onSelect={() =>
                                   void run(
                                     () =>
@@ -404,7 +424,9 @@ export function ProviderAccountsSettings() {
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuItem
+                              disabled={saving}
                               onSelect={() => {
+                                if (operationInFlightRef.current) return;
                                 const displayName = window
                                   .prompt("Account name", account.displayName)
                                   ?.trim();
@@ -432,7 +454,8 @@ export function ProviderAccountsSettings() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               className="text-destructive focus:text-destructive"
-                              onSelect={() => setConfirm({ account, action: "archive" })}
+                              disabled={saving}
+                              onSelect={() => beginConfirmation({ account, action: "archive" })}
                             >
                               Archive
                             </DropdownMenuItem>
@@ -477,18 +500,20 @@ export function ProviderAccountsSettings() {
                             Automated authentication
                           </Label>
                           <Select
+                            disabled={saving}
                             value={providerDefault.unattendedMode}
-                            onValueChange={(value: "provider_account" | "api_key") =>
-                              void run(
-                                () =>
-                                  setProviderAccountDefault(
-                                    provider.provider,
-                                    providerDefault.providerAccountId,
-                                    value
-                                  ),
-                                "Authentication updated"
-                              )
-                            }
+                            onValueChange={(value: "provider_account" | "api_key") => {
+                              if (!operationInFlightRef.current)
+                                void run(
+                                  () =>
+                                    setProviderAccountDefault(
+                                      provider.provider,
+                                      providerDefault.providerAccountId,
+                                      value
+                                    ),
+                                  "Authentication updated"
+                                );
+                            }}
                           >
                             <SelectTrigger id={`unattended-${provider.provider}`}>
                               <SelectValue />

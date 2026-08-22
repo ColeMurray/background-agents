@@ -9,6 +9,7 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 
 export type ProviderSelectionDrafts = ModelProviderSelections;
+export const EMPTY_PROVIDER_SELECTIONS: ProviderSelectionDrafts = {};
 
 export type InteractiveProviderRoutingIdentity = Record<
   SubscriptionProviderId,

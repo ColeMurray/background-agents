@@ -591,6 +591,7 @@ function HomeContent({
                           (item) => item.provider === selectedProvider
                         )}
                         value={providerSelections[selectedProvider]}
+                        disabled={creating}
                         onChange={(selection) =>
                           onProviderSelectionChange(selectedProvider, selection)
                         }

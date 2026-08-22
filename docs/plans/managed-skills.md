@@ -329,10 +329,19 @@ outright rather than degrading, and the count cap was previously masking them. C
 bind one parameter per skill within a chunk; what matters is that no one statement is handed the
 whole list. Prefer keying off an ID the database already holds — the session installation query
 filters `skill_revision_files` by a subquery on `session_skill_revisions`, so a wider manifest costs
-no additional parameters. Where the list genuinely originates outside the database (profile
-membership, which arrives in the request body), chunk by the engine's bound-parameter ceiling
-(`MAX_D1_QUERY_PARAMETERS`). A JSON-array parameter with `json_each` would also work on SQLite but
-is not portable to the second `SqlDatabase` engine.
+no additional parameters. Where the list genuinely originates outside the database — profile
+membership and skill assignments, both of which arrive in the request body — chunk by the engine's
+bound-parameter ceiling (`MAX_D1_QUERY_PARAMETERS`). A JSON-array parameter with `json_each` would
+also work on SQLite but is not portable to the second `SqlDatabase` engine.
+
+The same applies to aggregates on the read side, which are easier to miss because they fail on a
+byte ceiling rather than a parameter count. `SkillProfileStore.list` used to build a profile's whole
+membership into one `json_group_array` value, capped at 2 MB or roughly fifty thousand ids; nothing
+bounds profile width, and that ceiling was only out of reach because profile writes give out first
+at about 33,000 members. Making the write cheaper would have moved the write cliff past the read one
+and left profiles that could be saved and never loaded. It reads membership as its own query and
+groups in memory instead. When a limit is removed or a write is made cheaper, check what the read
+path was quietly relying on that limit to keep small.
 
 ### Bounds that remain implicit
 

@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { ModelProviderAccountAdapterRegistry } from "../auth/model-provider-account-adapters";
+import {
+  ModelProviderAccountAdapterRegistry,
+  type ProviderDeviceAuthorizationCapability,
+  type ProviderDeviceAuthorizationPollResult,
+} from "../auth/model-provider-account-adapters";
+import {
+  OpenAIModelProviderAccountAdapter,
+  type OpenAIProviderCredential,
+} from "../auth/model-provider-account-openai-adapter";
+import { encryptProviderAuthorizationPayload } from "../auth/provider-account-crypto";
 import type {
   ConnectedProviderAuthorization,
   PendingProviderAuthorization,
@@ -11,6 +20,7 @@ import type {
 import { ProviderDeviceAuthorizationService } from "./device-authorization-service";
 
 const TRANSACTION_ID = "01".repeat(32);
+const ENCRYPTION_KEY = btoa("x".repeat(32));
 type CreatePendingProviderAuthorization = Extract<
   PendingProviderAuthorization,
   { operation: "create" }
@@ -97,7 +107,30 @@ function terminal(
       };
 }
 
-function service(now: number, transaction: ProviderAuthorization) {
+function deviceAuthorization(
+  intervalMs: number,
+  pollResult: ProviderDeviceAuthorizationPollResult<OpenAIProviderCredential> = {
+    status: "pending",
+  }
+): ProviderDeviceAuthorizationCapability<OpenAIProviderCredential, unknown> {
+  return {
+    stateSchemaVersion: 1,
+    start: vi.fn(async () => ({
+      providerState: { deviceAuthId: "device-1" },
+      userCode: "ABCD-EFGH",
+      verificationUrl: "https://example.com/device",
+      intervalMs,
+    })),
+    parseState: vi.fn((payload) => payload),
+    poll: vi.fn(async () => pollResult),
+  };
+}
+
+function service(
+  now: number,
+  transaction: ProviderAuthorization,
+  adapters = new ModelProviderAccountAdapterRegistry([])
+) {
   let current = transaction;
   const transactions = {
     recordAttempt: vi.fn(async () => true),
@@ -148,8 +181,8 @@ function service(now: number, transaction: ProviderAuthorization) {
       getById: vi.fn(async () => account),
     },
     { finalizeTrustedConnection: vi.fn(async () => true) },
-    btoa("x".repeat(32)),
-    new ModelProviderAccountAdapterRegistry([]),
+    ENCRYPTION_KEY,
+    adapters,
     { generateId: (bytes) => "ab".repeat(bytes), now: () => now },
     logger
   );
@@ -208,6 +241,35 @@ describe("ProviderDeviceAuthorizationService polling", () => {
     });
   });
 
+  it("bounds a provider-supplied pending interval before persisting it", async () => {
+    const capability = deviceAuthorization(5_000, { status: "pending", intervalMs: 90_000 });
+    const adapters = new ModelProviderAccountAdapterRegistry([
+      new OpenAIModelProviderAccountAdapter(undefined, capability),
+    ]);
+    const encryptedProviderData = await encryptProviderAuthorizationPayload(
+      { deviceAuthId: "device-1" },
+      ENCRYPTION_KEY,
+      { transactionId: TRANSACTION_ID, provider: "openai", stateSchemaVersion: 1 }
+    );
+    const { subject, transactions } = service(
+      10_000,
+      pending({ nextPollAt: 0, encryptedProviderData }),
+      adapters
+    );
+
+    await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({
+      status: "pending",
+      pollIntervalMs: 60_000,
+      nextPollAt: 70_000,
+    });
+    expect(transactions.returnPending).toHaveBeenCalledWith(
+      expect.anything(),
+      70_000,
+      60_000,
+      10_000
+    );
+  });
+
   it.each(["connected", "cancelled"] as const)(
     "returns the durable %s winner when a claim CAS loses",
     async (winner) => {
@@ -225,4 +287,33 @@ describe("ProviderDeviceAuthorizationService polling", () => {
       });
     }
   );
+});
+
+describe("ProviderDeviceAuthorizationService start", () => {
+  it.each([
+    [500, 1_000],
+    [90_000, 60_000],
+  ])("bounds a provider interval of %i ms to %i ms", async (providerInterval, expected) => {
+    const capability = deviceAuthorization(providerInterval);
+    const adapters = new ModelProviderAccountAdapterRegistry([
+      new OpenAIModelProviderAccountAdapter(undefined, capability),
+    ]);
+    const { subject, transactions } = service(10_000, pending(), adapters);
+
+    const result = await subject.start("user-1", "openai", {
+      operation: "create",
+      displayName: "OpenAI",
+    });
+
+    expect(result.pollIntervalMs).toBe(expected);
+    expect(transactions.activate).toHaveBeenCalledWith(
+      result.transactionId,
+      "user-1",
+      expect.any(String),
+      1,
+      expected,
+      expect.any(Number),
+      10_000
+    );
+  });
 });

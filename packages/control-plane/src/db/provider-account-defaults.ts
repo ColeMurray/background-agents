@@ -34,6 +34,8 @@ function toDefault(row: DefaultRow): ProviderDefault {
   };
 }
 
+export class ProviderDefaultConstraintError extends Error {}
+
 export class ProviderDefaultStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -61,7 +63,7 @@ export class ProviderDefaultStore {
       .bind(provider, unattendedMode, actorId, actorId, now, now, providerAccountId, provider)
       .run();
     if (result.meta.changes === 0) {
-      throw new Error(`Default requires an active ${provider} account`);
+      throw new ProviderDefaultConstraintError(`Default requires an active ${provider} account`);
     }
   }
 

@@ -26,6 +26,8 @@ type AuthorizationFailure = {
   status?: number;
 };
 
+const COUNTDOWN_TICK_INTERVAL_MS = 1_000;
+
 function authorizationFailure(error: unknown): AuthorizationFailure {
   if (error instanceof Error && "status" in error && typeof error.status === "number") {
     const retryable =
@@ -70,6 +72,10 @@ export function useProviderDeviceAuthorization(
     let cancellationRequested = false;
     let transactionId: string | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let pollAbortController: AbortController | undefined;
+    let pollIntervalMs: number | null = null;
+    let deadline: number | null = null;
 
     setAuthorization(null);
     setFailure(null);
@@ -84,16 +90,38 @@ export function useProviderDeviceAuthorization(
     };
     cancelCurrentRef.current = cancel;
 
+    const expire = () => {
+      if (!active || finished) return;
+      finished = true;
+      clearTimeout(pollTimer);
+      pollAbortController?.abort();
+      setRemainingMs(0);
+      setStatus("expired");
+      setFailure({ message: "Provider authorization expired.", retryable: true });
+    };
+
     const schedulePoll = (pollIntervalMs: number) => {
-      pollTimer = setTimeout(() => void poll(), pollIntervalMs);
+      const remaining = deadline === null ? 0 : deadline - performance.now();
+      if (remaining <= 0) {
+        expire();
+        return;
+      }
+      pollTimer = setTimeout(() => void poll(), Math.min(pollIntervalMs, remaining));
     };
 
     const poll = async () => {
-      if (!active || !transactionId) return;
+      if (!active || finished || !transactionId) return;
+      const controller = new AbortController();
+      pollAbortController = controller;
       try {
-        const result = await pollProviderDeviceAuthorization(initialProvider, transactionId);
-        if (!active) return;
+        const result = await pollProviderDeviceAuthorization(
+          initialProvider,
+          transactionId,
+          controller.signal
+        );
+        if (!active || finished) return;
         if (result.status === "pending") {
+          pollIntervalMs = result.pollIntervalMs;
           setAuthorization((current) =>
             current
               ? {
@@ -108,15 +136,26 @@ export function useProviderDeviceAuthorization(
 
         setStatus(result.status);
         finished = true;
+        clearTimeout(deadlineTimer);
         if (result.status === "connected") {
           onConnectedRef.current(result);
         } else {
           setFailure({ message: result.error, retryable: result.retryable });
         }
       } catch (error) {
-        if (!active) return;
+        if (!active || finished) return;
+        const nextFailure = authorizationFailure(error);
+        const remaining = deadline === null ? 0 : deadline - performance.now();
+        if (nextFailure.retryable && pollIntervalMs !== null && remaining > 0) {
+          schedulePoll(Math.min(pollIntervalMs, remaining));
+          return;
+        }
+        finished = true;
+        clearTimeout(deadlineTimer);
         setStatus("failed");
-        setFailure(authorizationFailure(error));
+        setFailure(nextFailure);
+      } finally {
+        if (pollAbortController === controller) pollAbortController = undefined;
       }
     };
 
@@ -139,7 +178,9 @@ export function useProviderDeviceAuthorization(
         }
         setAuthorization(result);
         setStatus("pending");
-        const deadline = performance.now() + result.expiresInMs;
+        pollIntervalMs = result.pollIntervalMs;
+        deadline = performance.now() + result.expiresInMs;
+        deadlineTimer = setTimeout(expire, result.expiresInMs);
         setLocalDeadline(deadline);
         setRemainingMs(result.expiresInMs);
         schedulePoll(result.pollIntervalMs);
@@ -154,6 +195,8 @@ export function useProviderDeviceAuthorization(
     return () => {
       active = false;
       clearTimeout(pollTimer);
+      clearTimeout(deadlineTimer);
+      pollAbortController?.abort();
       cancel();
       if (cancelCurrentRef.current === cancel) cancelCurrentRef.current = () => undefined;
     };
@@ -163,7 +206,7 @@ export function useProviderDeviceAuthorization(
     if (localDeadline === null || status !== "pending") return;
     const updateRemaining = () => setRemainingMs(Math.max(0, localDeadline - performance.now()));
     updateRemaining();
-    const timer = setInterval(updateRemaining, 1_000);
+    const timer = setInterval(updateRemaining, COUNTDOWN_TICK_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [localDeadline, status]);
 

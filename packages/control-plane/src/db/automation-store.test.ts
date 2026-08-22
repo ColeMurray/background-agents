@@ -458,6 +458,19 @@ describe("AutomationStore", () => {
     });
   });
 
+  describe("claimRunSession", () => {
+    it("claims only a starting run", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.claimRunSession("run_test1", "session-1", now);
+
+      expect(statements[0].sql).toContain("SET status = 'running'");
+      expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
+      expect(statements[0].params).toEqual(["session-1", now, "run_test1"]);
+    });
+  });
+
   describe("schedule advancement", () => {
     const invocation = {
       id: "inv-1",

@@ -46,12 +46,13 @@ export class ProviderResourceError extends Error {
 
 async function requestProviderResponse(
   path: BrowserApiPath,
-  init?: { method?: string; body?: unknown }
+  init?: { method?: string; body?: unknown; signal?: AbortSignal }
 ): Promise<Response> {
   const response = await browserApiFetch(path, {
     method: init?.method,
     headers: init?.body === undefined ? undefined : { "Content-Type": "application/json" },
     body: init?.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: init?.signal,
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
@@ -70,7 +71,7 @@ async function requestProviderResponse(
 async function requestProviderResource<T>(
   path: BrowserApiPath,
   schema: ZodType<T>,
-  init?: { method?: string; body?: unknown }
+  init?: { method?: string; body?: unknown; signal?: AbortSignal }
 ): Promise<T> {
   const response = await requestProviderResponse(path, init);
   const parsed = schema.safeParse(await response.json().catch(() => null));
@@ -149,14 +150,15 @@ export async function startProviderDeviceAuthorization(
 
 export async function pollProviderDeviceAuthorization(
   provider: SubscriptionProviderId,
-  transactionId: string
+  transactionId: string,
+  signal?: AbortSignal
 ) {
   const parsedProvider = subscriptionProviderIdSchema.parse(provider);
   const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
   return requestProviderResource(
     `${ACCOUNTS_KEY}/device-authorizations/${parsedProvider}/${id}/poll`,
     providerDeviceAuthorizationStatusResponseSchema,
-    { method: "POST", body: {} }
+    { method: "POST", body: {}, signal }
   );
 }
 

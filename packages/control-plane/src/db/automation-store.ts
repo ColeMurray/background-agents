@@ -786,17 +786,42 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  /** Fail stuck runs. Same SQL guard as updateRun — sweeps must never flip terminal rows. */
-  async bulkFailRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+  /** Atomically assign a session only while a run still awaits launch. */
+  async claimRunSession(id: string, sessionId: string, startedAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = 'running', session_id = ?, started_at = ?
+         WHERE id = ? AND status = 'starting'`
+      )
+      .bind(sessionId, startedAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async bulkFailStartingRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+    await this.bulkFailRunsInStatus(runIds, "starting", reason, completedAt);
+  }
+
+  async bulkFailRunningRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+    await this.bulkFailRunsInStatus(runIds, "running", reason, completedAt);
+  }
+
+  private async bulkFailRunsInStatus(
+    runIds: string[],
+    status: "starting" | "running",
+    reason: string,
+    completedAt: number
+  ): Promise<void> {
     if (runIds.length === 0) return;
     const placeholders = runIds.map(() => "?").join(", ");
     await this.db
       .prepare(
         `UPDATE automation_runs
          SET status = 'failed', failure_reason = ?, completed_at = ?
-         WHERE id IN (${placeholders}) AND status IN ('starting', 'running')`
+         WHERE id IN (${placeholders}) AND status = ?`
       )
-      .bind(reason, completedAt, ...runIds)
+      .bind(reason, completedAt, ...runIds, status)
       .run();
   }
 
