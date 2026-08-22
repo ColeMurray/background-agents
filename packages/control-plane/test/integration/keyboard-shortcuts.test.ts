@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { DEFAULT_KEYBOARD_SHORTCUTS } from "@open-inspect/shared/types/keyboard-shortcuts";
+import {
+  DEFAULT_KEYBOARD_SHORTCUTS,
+  KEYBOARD_SHORTCUT_PREFERENCES_VERSION,
+} from "@open-inspect/shared/types/keyboard-shortcuts";
 import { KeyboardShortcutPreferencesStore } from "../../src/db/keyboard-shortcut-preferences";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
@@ -29,6 +32,16 @@ describe("keyboard shortcut preferences", () => {
 
     const getResponse = await serviceFetch("https://test.local/keyboard-shortcuts");
     await expect(getResponse.json()).resolves.toEqual({ shortcuts: customShortcuts });
+
+    const row = await env.DB.prepare(
+      "SELECT shortcuts FROM keyboard_shortcut_preferences WHERE user_id = ?"
+    )
+      .bind("11111111111111111111111111111111")
+      .first<{ shortcuts: string }>();
+    expect(JSON.parse(row?.shortcuts ?? "null")).toEqual({
+      version: KEYBOARD_SHORTCUT_PREFERENCES_VERSION,
+      shortcuts: customShortcuts,
+    });
   });
 
   it("rejects malformed and duplicate shortcut sets", async () => {
@@ -70,46 +83,6 @@ describe("keyboard shortcut preferences", () => {
       DEFAULT_KEYBOARD_SHORTCUTS
     );
     await expect(store.get("11111111111111111111111111111111")).resolves.toEqual(customShortcuts);
-  });
-
-  it("fills missing stored actions from current defaults", async () => {
-    await serviceFetch("https://test.local/keyboard-shortcuts");
-    const { "toggle-sidebar": _, ...olderRecord } = customShortcuts;
-    await env.DB.prepare(
-      "INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at) VALUES (?, ?, 1)"
-    )
-      .bind("11111111111111111111111111111111", JSON.stringify(olderRecord))
-      .run();
-
-    const response = await serviceFetch("https://test.local/keyboard-shortcuts");
-    await expect(response.json()).resolves.toEqual({
-      shortcuts: {
-        ...olderRecord,
-        "toggle-sidebar": DEFAULT_KEYBOARD_SHORTCUTS["toggle-sidebar"],
-      },
-    });
-  });
-
-  it("falls back to defaults when a newly filled action collides with an older override", async () => {
-    await serviceFetch("https://test.local/keyboard-shortcuts");
-    const { "toggle-sidebar": _, ...olderRecord } = customShortcuts;
-    olderRecord["open-command-menu"] = DEFAULT_KEYBOARD_SHORTCUTS["toggle-sidebar"];
-    olderRecord["send-prompt"] = DEFAULT_KEYBOARD_SHORTCUTS["new-session"];
-    olderRecord["new-session"] = DEFAULT_KEYBOARD_SHORTCUTS["send-prompt"];
-    await env.DB.prepare(
-      "INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at) VALUES (?, ?, 1)"
-    )
-      .bind("11111111111111111111111111111111", JSON.stringify(olderRecord))
-      .run();
-
-    const response = await serviceFetch("https://test.local/keyboard-shortcuts");
-    await expect(response.json()).resolves.toEqual({
-      shortcuts: {
-        ...DEFAULT_KEYBOARD_SHORTCUTS,
-        "send-prompt": olderRecord["send-prompt"],
-        "new-session": olderRecord["new-session"],
-      },
-    });
   });
 
   it("requires a canonical user principal", async () => {

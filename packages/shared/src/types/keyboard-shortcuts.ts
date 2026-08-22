@@ -1,14 +1,5 @@
 import { z } from "zod";
 
-export const KEYBOARD_SHORTCUT_ACTIONS = [
-  "send-prompt",
-  "open-command-menu",
-  "new-session",
-  "toggle-sidebar",
-] as const;
-
-export type KeyboardShortcutAction = (typeof KEYBOARD_SHORTCUT_ACTIONS)[number];
-
 const MODIFIER_CODES = new Set([
   "AltLeft",
   "AltRight",
@@ -40,22 +31,65 @@ export const keyboardShortcutBindingSchema = z
 
 export type KeyboardShortcutBinding = z.infer<typeof keyboardShortcutBindingSchema>;
 
-const keyboardShortcutPreferencesObjectSchema = z.strictObject({
-  "send-prompt": keyboardShortcutBindingSchema,
-  "open-command-menu": keyboardShortcutBindingSchema,
-  "new-session": keyboardShortcutBindingSchema,
-  "toggle-sidebar": keyboardShortcutBindingSchema,
-});
+export const KEYBOARD_SHORTCUT_PREFERENCES_VERSION = 1;
 
-export const storedKeyboardShortcutPreferencesSchema =
-  keyboardShortcutPreferencesObjectSchema.partial();
+export const KEYBOARD_SHORTCUT_DEFINITIONS = {
+  "send-prompt": {
+    defaultBinding: { code: "Enter", primary: true, alt: false, shift: false },
+    global: false,
+  },
+  "open-command-menu": {
+    defaultBinding: { code: "KeyK", primary: true, alt: false, shift: false },
+    global: true,
+  },
+  "new-session": {
+    defaultBinding: { code: "KeyO", primary: true, alt: false, shift: true },
+    global: true,
+  },
+  "toggle-sidebar": {
+    defaultBinding: { code: "Slash", primary: true, alt: false, shift: false },
+    global: true,
+  },
+} as const satisfies Record<string, { defaultBinding: KeyboardShortcutBinding; global: boolean }>;
 
-export const keyboardShortcutPreferencesSchema =
+export type KeyboardShortcutAction = keyof typeof KEYBOARD_SHORTCUT_DEFINITIONS;
+export type GlobalKeyboardShortcutAction = {
+  [Action in KeyboardShortcutAction]: (typeof KEYBOARD_SHORTCUT_DEFINITIONS)[Action]["global"] extends true
+    ? Action
+    : never;
+}[KeyboardShortcutAction];
+export type KeyboardShortcutPreferences = Record<KeyboardShortcutAction, KeyboardShortcutBinding>;
+
+export const KEYBOARD_SHORTCUT_ACTIONS = Object.keys(
+  KEYBOARD_SHORTCUT_DEFINITIONS
+) as KeyboardShortcutAction[];
+export const GLOBAL_KEYBOARD_SHORTCUT_ACTIONS = KEYBOARD_SHORTCUT_ACTIONS.filter(
+  (action): action is GlobalKeyboardShortcutAction => KEYBOARD_SHORTCUT_DEFINITIONS[action].global
+);
+
+export const DEFAULT_KEYBOARD_SHORTCUTS = Object.fromEntries(
+  KEYBOARD_SHORTCUT_ACTIONS.map((action) => [
+    action,
+    KEYBOARD_SHORTCUT_DEFINITIONS[action].defaultBinding,
+  ])
+) as KeyboardShortcutPreferences;
+
+const keyboardShortcutPreferencesObjectSchema = z.strictObject(
+  Object.fromEntries(
+    KEYBOARD_SHORTCUT_ACTIONS.map((action) => [action, keyboardShortcutBindingSchema])
+  ) as Record<KeyboardShortcutAction, typeof keyboardShortcutBindingSchema>
+);
+
+export function keyboardShortcutBindingKey(binding: KeyboardShortcutBinding): string {
+  return `${binding.primary}:${binding.alt}:${binding.shift}:${binding.code}`;
+}
+
+export const keyboardShortcutPreferencesSchema: z.ZodType<KeyboardShortcutPreferences> =
   keyboardShortcutPreferencesObjectSchema.superRefine((shortcuts, ctx) => {
     const seen = new Set<string>();
     for (const action of KEYBOARD_SHORTCUT_ACTIONS) {
       const binding = shortcuts[action];
-      const canonical = `${binding.primary}:${binding.alt}:${binding.shift}:${binding.code}`;
+      const canonical = keyboardShortcutBindingKey(binding);
       if (seen.has(canonical)) {
         ctx.addIssue({
           code: "custom",
@@ -66,15 +100,6 @@ export const keyboardShortcutPreferencesSchema =
       seen.add(canonical);
     }
   });
-
-export type KeyboardShortcutPreferences = z.infer<typeof keyboardShortcutPreferencesSchema>;
-
-export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutPreferences = {
-  "send-prompt": { code: "Enter", primary: true, alt: false, shift: false },
-  "open-command-menu": { code: "KeyK", primary: true, alt: false, shift: false },
-  "new-session": { code: "KeyO", primary: true, alt: false, shift: true },
-  "toggle-sidebar": { code: "Slash", primary: true, alt: false, shift: false },
-};
 
 export const keyboardShortcutPreferencesResponseSchema = z.strictObject({
   shortcuts: keyboardShortcutPreferencesSchema,

@@ -1,11 +1,16 @@
 import {
   DEFAULT_KEYBOARD_SHORTCUTS,
-  KEYBOARD_SHORTCUT_ACTIONS,
+  KEYBOARD_SHORTCUT_PREFERENCES_VERSION,
   keyboardShortcutPreferencesSchema,
-  storedKeyboardShortcutPreferencesSchema,
   type KeyboardShortcutPreferences,
 } from "@open-inspect/shared/types/keyboard-shortcuts";
+import { z } from "zod";
 import type { SqlDatabase } from "./sql-database";
+
+const storedKeyboardShortcutPreferencesSchema = z.strictObject({
+  version: z.literal(KEYBOARD_SHORTCUT_PREFERENCES_VERSION),
+  shortcuts: keyboardShortcutPreferencesSchema,
+});
 
 export class KeyboardShortcutPreferencesStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -16,30 +21,7 @@ export class KeyboardShortcutPreferencesStore {
       .bind(userId)
       .first<{ shortcuts: string }>();
     if (!row) return DEFAULT_KEYBOARD_SHORTCUTS;
-    const stored = storedKeyboardShortcutPreferencesSchema.parse(JSON.parse(row.shortcuts));
-    const merged = keyboardShortcutPreferencesSchema.safeParse({
-      ...DEFAULT_KEYBOARD_SHORTCUTS,
-      ...stored,
-    });
-    if (merged.success) return merged.data;
-
-    // A future default may collide with older overrides. Select the largest
-    // compatible override set as a group so coordinated swaps remain intact.
-    const overrides = KEYBOARD_SHORTCUT_ACTIONS.flatMap((action) =>
-      stored[action] ? ([[action, stored[action]]] as const) : []
-    );
-    for (let size = overrides.length; size >= 0; size -= 1) {
-      for (let mask = 0; mask < 1 << overrides.length; mask += 1) {
-        const selected = overrides.filter((_, index) => mask & (1 << index));
-        if (selected.length !== size) continue;
-        const candidate = keyboardShortcutPreferencesSchema.safeParse({
-          ...DEFAULT_KEYBOARD_SHORTCUTS,
-          ...Object.fromEntries(selected),
-        });
-        if (candidate.success) return candidate.data;
-      }
-    }
-    return DEFAULT_KEYBOARD_SHORTCUTS;
+    return storedKeyboardShortcutPreferencesSchema.parse(JSON.parse(row.shortcuts)).shortcuts;
   }
 
   async set(
@@ -53,7 +35,14 @@ export class KeyboardShortcutPreferencesStore {
          VALUES (?, ?, ?)
          ON CONFLICT(user_id) DO UPDATE SET shortcuts = excluded.shortcuts, updated_at = excluded.updated_at`
       )
-      .bind(userId, JSON.stringify(validated), Date.now())
+      .bind(
+        userId,
+        JSON.stringify({
+          version: KEYBOARD_SHORTCUT_PREFERENCES_VERSION,
+          shortcuts: validated,
+        }),
+        Date.now()
+      )
       .run();
     return validated;
   }

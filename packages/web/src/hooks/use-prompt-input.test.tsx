@@ -4,7 +4,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { KeyboardShortcutBinding } from "@open-inspect/shared/types/keyboard-shortcuts";
+import {
+  DEFAULT_KEYBOARD_SHORTCUTS,
+  type KeyboardShortcutBinding,
+} from "@open-inspect/shared/types/keyboard-shortcuts";
 import { usePromptInput } from "./use-prompt-input";
 
 expect.extend(matchers);
@@ -32,7 +35,7 @@ vi.mock("@/hooks/use-session-attachments", () => ({
 
 function PromptHarness({
   canSubmit,
-  sendShortcut,
+  sendShortcut = DEFAULT_KEYBOARD_SHORTCUTS["send-prompt"],
 }: {
   canSubmit: boolean;
   sendShortcut?: KeyboardShortcutBinding;

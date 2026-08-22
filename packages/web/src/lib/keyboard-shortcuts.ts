@@ -1,19 +1,16 @@
 import {
   DEFAULT_KEYBOARD_SHORTCUTS,
+  GLOBAL_KEYBOARD_SHORTCUT_ACTIONS,
   KEYBOARD_SHORTCUT_ACTIONS,
+  keyboardShortcutBindingKey,
   keyboardShortcutBindingSchema,
   type KeyboardShortcutAction,
   type KeyboardShortcutBinding,
   type KeyboardShortcutPreferences,
+  type GlobalKeyboardShortcutAction,
 } from "@open-inspect/shared/types/keyboard-shortcuts";
 
-export type GlobalShortcutAction = Exclude<KeyboardShortcutAction, "send-prompt">;
-
-const GLOBAL_SHORTCUT_ACTIONS: GlobalShortcutAction[] = [
-  "open-command-menu",
-  "new-session",
-  "toggle-sidebar",
-];
+export type GlobalShortcutAction = GlobalKeyboardShortcutAction;
 
 const CODE_LABELS: Record<string, string> = {
   ArrowDown: "Down",
@@ -77,7 +74,7 @@ export function findDuplicateShortcutActions(
   const actionsByBinding = new Map<string, KeyboardShortcutAction[]>();
   for (const action of KEYBOARD_SHORTCUT_ACTIONS) {
     const binding = shortcuts[action];
-    const canonical = `${binding.primary}:${binding.alt}:${binding.shift}:${binding.code}`;
+    const canonical = keyboardShortcutBindingKey(binding);
     const actions = actionsByBinding.get(canonical) ?? [];
     actions.push(action);
     actionsByBinding.set(canonical, actions);
@@ -90,7 +87,8 @@ export function matchGlobalShortcut(
   shortcuts: KeyboardShortcutPreferences = DEFAULT_KEYBOARD_SHORTCUTS
 ): GlobalShortcutAction | null {
   return (
-    GLOBAL_SHORTCUT_ACTIONS.find((action) => matchesShortcut(event, shortcuts[action])) ?? null
+    GLOBAL_KEYBOARD_SHORTCUT_ACTIONS.find((action) => matchesShortcut(event, shortcuts[action])) ??
+    null
   );
 }
 

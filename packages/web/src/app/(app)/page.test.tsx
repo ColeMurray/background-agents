@@ -6,7 +6,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
-import { DEFAULT_KEYBOARD_SHORTCUTS } from "@open-inspect/shared/types/keyboard-shortcuts";
+import {
+  DEFAULT_KEYBOARD_SHORTCUTS,
+  type KeyboardShortcutPreferences,
+} from "@open-inspect/shared/types/keyboard-shortcuts";
 import Home from "./page";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
@@ -77,12 +80,7 @@ const mocks = vi.hoisted(() => ({
     totalBytes: 10,
     ignoredProfileSkillIds: [],
   },
-  keyboardShortcuts: {
-    "send-prompt": { code: "Enter", primary: true, alt: false, shift: false },
-    "open-command-menu": { code: "KeyK", primary: true, alt: false, shift: false },
-    "new-session": { code: "KeyO", primary: true, alt: false, shift: true },
-    "toggle-sidebar": { code: "Slash", primary: true, alt: false, shift: false },
-  },
+  keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
 }));
 
 const repo = {

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_KEYBOARD_SHORTCUTS,
+  GLOBAL_KEYBOARD_SHORTCUT_ACTIONS,
+  KEYBOARD_SHORTCUT_ACTIONS,
+  keyboardShortcutBindingKey,
   keyboardShortcutPreferencesSchema,
-  storedKeyboardShortcutPreferencesSchema,
 } from "./keyboard-shortcuts";
 
 describe("keyboard shortcut preferences", () => {
@@ -47,8 +49,15 @@ describe("keyboard shortcut preferences", () => {
     ).toBe(false);
   });
 
-  it("accepts stored records that predate newly added actions", () => {
-    const { "toggle-sidebar": _, ...olderRecord } = DEFAULT_KEYBOARD_SHORTCUTS;
-    expect(storedKeyboardShortcutPreferencesSchema.parse(olderRecord)).toEqual(olderRecord);
+  it("derives action lists and binding identity from the canonical definitions", () => {
+    expect(KEYBOARD_SHORTCUT_ACTIONS).toEqual(Object.keys(DEFAULT_KEYBOARD_SHORTCUTS));
+    expect(GLOBAL_KEYBOARD_SHORTCUT_ACTIONS).toEqual([
+      "open-command-menu",
+      "new-session",
+      "toggle-sidebar",
+    ]);
+    expect(keyboardShortcutBindingKey(DEFAULT_KEYBOARD_SHORTCUTS["send-prompt"])).toBe(
+      "true:false:false:Enter"
+    );
   });
 });

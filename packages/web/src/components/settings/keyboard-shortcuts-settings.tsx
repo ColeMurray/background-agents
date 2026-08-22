@@ -4,6 +4,7 @@ import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "r
 import { toast } from "sonner";
 import {
   DEFAULT_KEYBOARD_SHORTCUTS,
+  KEYBOARD_SHORTCUT_ACTIONS,
   type KeyboardShortcutAction,
   type KeyboardShortcutPreferences,
 } from "@open-inspect/shared/types/keyboard-shortcuts";
@@ -16,16 +17,18 @@ import {
 } from "@/lib/keyboard-shortcuts";
 import { cn } from "@/lib/utils";
 
-const SHORTCUT_ROWS: Array<{
-  action: KeyboardShortcutAction;
-  label: string;
-  description: string;
-}> = [
-  { action: "send-prompt", label: "Send prompt", description: "Send from a prompt composer" },
-  { action: "open-command-menu", label: "Command menu", description: "Search and navigate" },
-  { action: "new-session", label: "New session", description: "Start a new coding session" },
-  { action: "toggle-sidebar", label: "Toggle sidebar", description: "Show or hide the sidebar" },
-];
+const SHORTCUT_METADATA = {
+  "send-prompt": { label: "Send prompt", description: "Send from a prompt composer" },
+  "open-command-menu": { label: "Command menu", description: "Search and navigate" },
+  "new-session": { label: "New session", description: "Start a new coding session" },
+  "toggle-sidebar": { label: "Toggle sidebar", description: "Show or hide the sidebar" },
+} satisfies Record<
+  KeyboardShortcutAction,
+  {
+    label: string;
+    description: string;
+  }
+>;
 
 function shortcutsEqual(a: KeyboardShortcutPreferences, b: KeyboardShortcutPreferences): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -102,12 +105,13 @@ export function KeyboardShortcutsSettings() {
 
       {error && (
         <p role="alert" className="mb-4 text-sm text-destructive">
-          Saved shortcuts could not be loaded. Defaults are active while we retry.
+          Saved shortcuts could not be refreshed. Current shortcuts remain active while we retry.
         </p>
       )}
 
       <div className="border border-border rounded-md divide-y divide-border-muted">
-        {SHORTCUT_ROWS.map(({ action, label, description }) => {
+        {KEYBOARD_SHORTCUT_ACTIONS.map((action) => {
+          const { label, description } = SHORTCUT_METADATA[action];
           const duplicate = duplicates.has(action);
           const active = recording === action;
           const shortcut = formatShortcut(draft[action]);

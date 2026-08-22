@@ -4,10 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { mutate } from "swr";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
-import {
-  DEFAULT_KEYBOARD_SHORTCUTS,
-  type KeyboardShortcutBinding,
-} from "@open-inspect/shared/types/keyboard-shortcuts";
+import type { KeyboardShortcutBinding } from "@open-inspect/shared/types/keyboard-shortcuts";
 import {
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
   useSessionAttachments,
@@ -34,7 +31,7 @@ export function usePromptInput(
   loadingEnabledModels: boolean,
   sessionStatus: SessionStatus,
   canSubmit: boolean,
-  sendShortcut: KeyboardShortcutBinding = DEFAULT_KEYBOARD_SHORTCUTS["send-prompt"]
+  sendShortcut: KeyboardShortcutBinding
 ) {
   const [prompt, setPromptState] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
