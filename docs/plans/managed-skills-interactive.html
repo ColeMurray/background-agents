@@ -1559,8 +1559,9 @@ Rejected:
             <summary>Failure posture</summary>
             <div class="details-body">
               Invalid edits preserve the current revision. Missing content, auth failure, hash
-              mismatch, collision, or exhausted startup retries fail the sandbox before OpenCode
-              starts. Activation callback failure alone retries best-effort after local success.
+              mismatch, or exhausted startup retries fail the sandbox before OpenCode starts. Name
+              collisions keep the discovered skill, drop the managed entry, and emit a warning.
+              Activation callback failure alone retries best-effort after local success.
             </div>
           </details>
 
