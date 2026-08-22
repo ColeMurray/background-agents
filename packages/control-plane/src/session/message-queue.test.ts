@@ -672,7 +672,9 @@ describe("SessionMessageQueue", () => {
 
   it("fails an unavailable prompt model before spawning or dispatching", async () => {
     const h = buildQueue();
-    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ model: "xai/grok-4.5" }));
+    h.repository.getNextPendingMessage.mockReturnValueOnce(
+      createMessage({ model: "xai/grok-4.5" })
+    );
     h.getProviderAuthenticationError.mockResolvedValue(
       "No xAI authentication is configured for this session"
     );
@@ -691,6 +693,30 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
+  it("continues with the next prompt after rejecting unavailable authentication", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.repository.getNextPendingMessage
+      .mockReturnValueOnce(createMessage({ id: "blocked", model: "xai/grok-4.5" }))
+      .mockReturnValueOnce(createMessage({ id: "eligible", model: "anthropic/claude-haiku-4-5" }));
+    h.getProviderAuthenticationError.mockImplementation(async (model) =>
+      model === "xai/grok-4.5" ? "No xAI authentication is configured" : null
+    );
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "blocked", success: false }),
+      expect.any(Number),
+      "pending"
+    );
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      sandboxWs,
+      expect.objectContaining({ type: "prompt", messageId: "eligible" })
+    );
   });
 
   it("uses the canonical profile userId instead of a bot transport identity", async () => {

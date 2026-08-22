@@ -247,6 +247,7 @@ export default function Home() {
     if (
       submitInFlightRef.current ||
       sessionAttachments.isUploading ||
+      !providerSelectionsHydrated ||
       providerAccounts.loading ||
       loadingEnabledModels
     ) {
@@ -336,6 +337,7 @@ export default function Home() {
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}
+      providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
@@ -364,6 +366,7 @@ function HomeContent({
   attachments,
   creating,
   isCreatingSession,
+  providerSelectionsHydrated,
   error,
   handleSubmit,
   modelOptions,
@@ -394,6 +397,7 @@ function HomeContent({
   };
   creating: boolean;
   isCreatingSession: boolean;
+  providerSelectionsHydrated: boolean;
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
@@ -522,6 +526,7 @@ function HomeContent({
                       disabled={
                         (!prompt.trim() && attachments.items.length === 0) ||
                         attachmentsLocked ||
+                        !providerSelectionsHydrated ||
                         providerAccounts.loading ||
                         !isLaunchable
                       }

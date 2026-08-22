@@ -137,4 +137,17 @@ describe("ProviderAuthControls menu", () => {
     );
     expect(screen.queryByText(/Use defaults when each run starts: Team ChatGPT/)).toBeNull();
   });
+
+  it("labels an unavailable account in the standard selector", () => {
+    render(
+      <ProviderAuthControls
+        provider="openai"
+        accounts={[]}
+        value={{ mode: "provider_account", accountId: account.id }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Unavailable account");
+  });
 });

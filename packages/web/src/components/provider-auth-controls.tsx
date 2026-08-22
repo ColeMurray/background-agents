@@ -140,6 +140,11 @@ export function ProviderAuthControls({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={POLICY}>{policyDescription}</SelectItem>
+          {value?.mode === "provider_account" && !explicitAccount && (
+            <SelectItem value={`${ACCOUNT_PREFIX}${value.accountId}`}>
+              Unavailable account
+            </SelectItem>
+          )}
           {available.map((account) => (
             <SelectItem key={account.id} value={`${ACCOUNT_PREFIX}${account.id}`}>
               {account.displayName}

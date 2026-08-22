@@ -315,6 +315,7 @@ export class SessionMessageQueue {
       if (this.failMessage(message, authenticationError, now, "pending")) {
         this.broadcastPromptQueue();
         await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
       }
       return;
     }
