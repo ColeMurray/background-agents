@@ -141,7 +141,7 @@ export function parsePrimaryBuildSha(repositoryShas: string): string | null {
     if (!Array.isArray(parsed)) return null;
     const primary: unknown = parsed[0];
     if (primary && typeof primary === "object" && "baseSha" in primary) {
-      const sha = (primary as { baseSha?: unknown }).baseSha;
+      const sha = primary.baseSha;
       return typeof sha === "string" ? sha : null;
     }
     return null;

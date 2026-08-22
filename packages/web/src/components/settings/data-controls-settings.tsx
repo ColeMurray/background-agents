@@ -4,8 +4,8 @@ import { useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
-import type { Session } from "@open-inspect/shared/types/sessions";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
   buildSessionHref,
@@ -24,8 +24,24 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
   offset: 0,
 });
 
+const archivedSessionSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const archivedSessionsPageSchema = z.object({
+  sessions: z.array(archivedSessionSchema),
+  hasMore: z.boolean(),
+});
+
+type ArchivedSession = z.infer<typeof archivedSessionSchema>;
+
 export function DataControlsSettings() {
-  const [extraSessions, setExtraSessions] = useState<Session[]>([]);
+  const [extraSessions, setExtraSessions] = useState<ArchivedSession[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const offsetRef = useRef(0);
@@ -53,10 +69,13 @@ export function DataControlsSettings() {
         })
       );
       if (res.ok) {
-        const resData: SessionListResponse = await res.json();
-        const fetched: Session[] = resData.sessions || [];
+        const parsed = archivedSessionsPageSchema.safeParse(await res.json());
+        if (!parsed.success) {
+          throw new Error("Invalid archived sessions response");
+        }
+        const fetched = parsed.data.sessions;
         setExtraSessions((prev) => [...prev, ...fetched]);
-        setHasMore(resData.hasMore);
+        setHasMore(parsed.data.hasMore);
         offsetRef.current += fetched.length;
       }
     } catch (error) {
@@ -152,7 +171,7 @@ function ArchivedSessionRow({
   session,
   onUnarchive,
 }: {
-  session: Session;
+  session: ArchivedSession;
   onUnarchive: (id: string) => void;
 }) {
   const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
