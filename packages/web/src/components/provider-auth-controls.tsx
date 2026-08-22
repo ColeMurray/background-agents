@@ -66,7 +66,9 @@ export function ProviderAuthControls({
   const effectiveDefaultLabel =
     unattended && defaultValue?.unattendedMode === "api_key"
       ? "No account"
-      : defaultAccount?.displayName;
+      : defaultValue
+        ? (defaultAccount?.displayName ?? "Unavailable account")
+        : undefined;
   const explicitAccount =
     value?.mode === "provider_account"
       ? available.find((account) => account.id === value.accountId)

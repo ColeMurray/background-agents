@@ -129,9 +129,11 @@ describe("getProviderAuthenticationError", () => {
           xai: "legacy_scoped_oauth",
         }
       )
-    ).toBe(
-      "No xAI authentication is configured for this session. Select a connected SuperGrok account, configure an xAI default, or provide XAI_API_KEY, then create a new session."
-    );
+    ).toEqual({
+      provider: "xai",
+      message:
+        "No xAI authentication is configured for this session. Select a connected SuperGrok account, configure an xAI default, or provide XAI_API_KEY, then create a new session.",
+    });
   });
 
   it.each([
@@ -156,7 +158,7 @@ describe("getProviderAuthenticationError", () => {
           openai: "api_key",
           xai: "legacy_scoped_oauth",
         }
-      )
+      )?.message
     ).toContain("OPENAI_API_KEY");
   });
 

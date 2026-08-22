@@ -86,6 +86,32 @@ describe("ProviderAuthControls menu", () => {
     ).toHaveTextContent("OpenAI: Team ChatGPT");
   });
 
+  it("shows when the configured default account is unavailable", () => {
+    render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[{ ...account, status: "reconnect_required" }]}
+        defaultValue={{
+          provider: "openai",
+          providerAccountId: account.id,
+          unattendedMode: "provider_account",
+          createdBy: null,
+          updatedBy: null,
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "OpenAI authentication options, Unavailable account",
+      })
+    ).toHaveTextContent("OpenAI: Unavailable account");
+  });
+
   it("shows the effective unattended API-key default", () => {
     render(
       <ProviderAuthControls

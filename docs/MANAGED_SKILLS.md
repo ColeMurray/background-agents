@@ -192,7 +192,7 @@ sessions created by an agent inherit the parent's exact set of skills.
 
 There is no separate installation step. Before the agent starts, Open-Inspect validates and installs
 the selected skills automatically. If selected content cannot be fetched, validated, or installed,
-the session fails to start rather than silently omitting a skill.
+the session fails to start. Name collisions are handled separately as described below.
 
 ---
 
@@ -253,8 +253,10 @@ repository or environment.
 Managed skills are pinned at session creation. Start a new session to receive a newer revision,
 changed assignments, or newly enabled skills.
 
-### A session fails to start because of a skill name collision
+### A managed skill is missing because of a name collision
 
-A managed skill cannot have the same name as another skill available in the sandbox, including one
-provided by a repository. Rename or remove the other skill, or create a new managed skill with a
-different canonical name and update its assignments and profiles.
+When a managed skill has the same name as a repository, user, or bundled skill available in the
+sandbox, Open-Inspect keeps the discovered skill and drops the colliding managed skill. Other
+managed skills are still installed and the session continues to start. Rename or remove the
+discovered skill, or create a new managed skill with a different canonical name and update its
+assignments and profiles.

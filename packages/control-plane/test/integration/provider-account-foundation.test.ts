@@ -183,8 +183,8 @@ describe("provider account migration and stores", () => {
       credential: { credentialSchemaVersion: 1, payload: { refreshToken: "second" } },
     });
 
-    expect(first.becameDefault).toBe(true);
-    expect(second.becameDefault).toBe(false);
+    expect(first.id).toBe("first-account");
+    expect(second.id).toBe("second-account");
     await expect(new ProviderDefaultStore(env.DB).get("xai")).resolves.toMatchObject({
       providerAccountId: "first-account",
       unattendedMode: "provider_account",
@@ -214,11 +214,8 @@ describe("provider account migration and stores", () => {
       )
     );
 
-    expect(created.filter((result) => result.becameDefault)).toHaveLength(1);
     const providerDefault = await new ProviderDefaultStore(env.DB).get("xai");
-    expect(created.map((result) => result.account.id)).toContain(
-      providerDefault?.providerAccountId
-    );
+    expect(created.map((account) => account.id)).toContain(providerDefault?.providerAccountId);
   });
 
   it("atomically completes verification account state and fenced credentials", async () => {

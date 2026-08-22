@@ -5,6 +5,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { retireWarmDraftSession } from "@/lib/warm-session";
+import type { InteractiveProviderRoutingIdentity } from "@/lib/provider-selection";
 import {
   useWarmDraftSession,
   warmDraftSessionIdentity,
@@ -23,27 +24,33 @@ const request = (model = "openai/gpt-5.4"): WarmDraftSessionRequest => ({
     openai: { mode: "provider_account", accountId: "a".repeat(32) },
     xai: { mode: "api_key" },
   },
-  providerDefaults: [],
-  providerAccountStates: [],
+});
+
+const routing = (
+  xai: InteractiveProviderRoutingIdentity["xai"] = { mode: "legacy_scoped_oauth" }
+): InteractiveProviderRoutingIdentity => ({
+  openai: { mode: "legacy_scoped_oauth" },
+  xai,
 });
 
 describe("useWarmDraftSession", () => {
   beforeEach(() => vi.resetAllMocks());
 
   it("derives one stable identity from the complete launch request", () => {
-    expect(warmDraftSessionIdentity(request())).toBe(
-      warmDraftSessionIdentity({
-        providerDefaults: [],
-        providerAccountStates: [],
-        providerSelections: {
-          xai: { mode: "api_key" },
-          openai: { accountId: "a".repeat(32), mode: "provider_account" },
+    expect(warmDraftSessionIdentity(request(), routing())).toBe(
+      warmDraftSessionIdentity(
+        {
+          providerSelections: {
+            xai: { mode: "api_key" },
+            openai: { accountId: "a".repeat(32), mode: "provider_account" },
+          },
+          skillSelection: { mode: "all" },
+          model: "openai/gpt-5.4",
+          repoName: "background-agents",
+          repoOwner: "open-inspect",
         },
-        skillSelection: { mode: "all" },
-        model: "openai/gpt-5.4",
-        repoName: "background-agents",
-        repoOwner: "open-inspect",
-      })
+        routing()
+      )
     );
   });
 
@@ -98,47 +105,33 @@ describe("useWarmDraftSession", () => {
     expect(result.current.sessionId).toBe("account-session");
   });
 
-  it("retires a draft when its implicit provider default changes", async () => {
+  it("retires a draft when its effective provider account changes", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ sessionId: "default-session", status: "created" })
     );
-    const initial: WarmDraftSessionRequest = {
-      ...request(),
-      providerSelections: {},
-      providerDefaults: [
-        {
-          provider: "xai" as const,
-          providerAccountId: "a".repeat(32),
-          unattendedMode: "provider_account" as const,
-        },
-      ],
-      providerAccountStates: [
-        {
-          id: "a".repeat(32),
-          provider: "xai",
-          status: "active",
-          archivedAt: null,
-        },
-      ],
-    };
+    const initial = { ...request(), providerSelections: {} };
+    const initialRouting = routing({
+      mode: "provider_account",
+      accountId: "a".repeat(32),
+      status: "active",
+      archivedAt: null,
+    });
     const { result, rerender } = renderHook(
-      ({ launchRequest }) => useWarmDraftSession(launchRequest),
-      { initialProps: { launchRequest: initial } }
+      ({ launchRequest, routingIdentity }) => useWarmDraftSession(launchRequest, routingIdentity),
+      { initialProps: { launchRequest: initial, routingIdentity: initialRouting } }
     );
 
     await act(async () => {
       await result.current.warm();
     });
     rerender({
-      launchRequest: {
-        ...initial,
-        providerDefaults: [
-          {
-            ...initial.providerDefaults[0],
-            providerAccountId: "b".repeat(32),
-          },
-        ],
-      },
+      launchRequest: initial,
+      routingIdentity: routing({
+        mode: "provider_account",
+        accountId: "b".repeat(32),
+        status: "active",
+        archivedAt: null,
+      }),
     });
 
     await waitFor(() => expect(retireWarmDraftSession).toHaveBeenCalledWith("default-session"));
@@ -149,43 +142,29 @@ describe("useWarmDraftSession", () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ sessionId: "active-default-session", status: "created" })
     );
-    const initial: WarmDraftSessionRequest = {
-      ...request(),
-      providerSelections: {},
-      providerDefaults: [
-        {
-          provider: "xai" as const,
-          providerAccountId: "a".repeat(32),
-          unattendedMode: "provider_account" as const,
-        },
-      ],
-      providerAccountStates: [
-        {
-          id: "a".repeat(32),
-          provider: "xai",
-          status: "active",
-          archivedAt: null,
-        },
-      ],
-    };
+    const initial = { ...request(), providerSelections: {} };
+    const initialRouting = routing({
+      mode: "provider_account",
+      accountId: "a".repeat(32),
+      status: "active",
+      archivedAt: null,
+    });
     const { result, rerender } = renderHook(
-      ({ launchRequest }) => useWarmDraftSession(launchRequest),
-      { initialProps: { launchRequest: initial } }
+      ({ launchRequest, routingIdentity }) => useWarmDraftSession(launchRequest, routingIdentity),
+      { initialProps: { launchRequest: initial, routingIdentity: initialRouting } }
     );
 
     await act(async () => {
       await result.current.warm();
     });
     rerender({
-      launchRequest: {
-        ...initial,
-        providerAccountStates: [
-          {
-            ...initial.providerAccountStates[0],
-            status: "reconnect_required" as const,
-          },
-        ],
-      },
+      launchRequest: initial,
+      routingIdentity: routing({
+        mode: "provider_account",
+        accountId: "a".repeat(32),
+        status: "reconnect_required",
+        archivedAt: null,
+      }),
     });
 
     await waitFor(() =>
@@ -202,28 +181,29 @@ describe("useWarmDraftSession", () => {
     const initial: WarmDraftSessionRequest = {
       ...request(),
       providerSelections: { xai: { mode: "provider_account", accountId } },
-      providerAccountStates: [
-        { id: accountId, provider: "xai", status: "active", archivedAt: null },
-      ],
     };
+    const initialRouting = routing({
+      mode: "provider_account",
+      accountId,
+      status: "active",
+      archivedAt: null,
+    });
     const { result, rerender } = renderHook(
-      ({ launchRequest }) => useWarmDraftSession(launchRequest),
-      { initialProps: { launchRequest: initial } }
+      ({ launchRequest, routingIdentity }) => useWarmDraftSession(launchRequest, routingIdentity),
+      { initialProps: { launchRequest: initial, routingIdentity: initialRouting } }
     );
 
     await act(async () => {
       await result.current.warm();
     });
     rerender({
-      launchRequest: {
-        ...initial,
-        providerAccountStates: [
-          {
-            ...initial.providerAccountStates[0],
-            status: "reconnect_required" as const,
-          },
-        ],
-      },
+      launchRequest: initial,
+      routingIdentity: routing({
+        mode: "provider_account",
+        accountId,
+        status: "reconnect_required",
+        archivedAt: null,
+      }),
     });
 
     await waitFor(() =>

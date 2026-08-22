@@ -26,6 +26,8 @@ to the opt-in xAI / SuperGrok catalog with low, medium, and high efforts.
 **Kimi K3 and GLM 5.3.** Adds `opencode/kimi-k3` to the opt-in OpenCode Zen catalog and
 `zai-coding-plan/glm-5.3` to the opt-in Z.AI Coding Plan catalog.
 
+**OpenCode Zen GLM 5.2.** Adds `opencode/glm-5.2` to the opt-in OpenCode Zen catalog.
+
 **Cancel queued prompts.** Pending web prompts can now be removed before they start processing,
 freeing queue capacity and restoring the removed text to an empty composer after server
 confirmation.

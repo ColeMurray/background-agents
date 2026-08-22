@@ -50,7 +50,7 @@ export function getProviderAuthenticationError(
   model: string,
   sandboxEnv: Record<string, string>,
   providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>
-): string | null {
+): { provider: SubscriptionProviderId; message: string } | null {
   const provider = model.split("/", 1)[0];
   if (provider !== "openai" && provider !== "xai") return null;
 
@@ -61,8 +61,8 @@ export function getProviderAuthenticationError(
       ? Boolean(sandboxEnv[config.marker])
       : mode === "api_key"
         ? Boolean(sandboxEnv[config.apiKey])
-        : Boolean(sandboxEnv[config.marker] || sandboxEnv[config.apiKey]);
-  return available ? null : PROVIDER_AUTH_ERROR[provider];
+        : Boolean(sandboxEnv[config.apiKey] || sandboxEnv[config.marker]);
+  return available ? null : { provider, message: PROVIDER_AUTH_ERROR[provider] };
 }
 
 export function prepareManagedProviderEnv({

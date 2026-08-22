@@ -48,14 +48,24 @@ import {
 } from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
-import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import type {
+  ModelProviderSelections,
+  ProviderAuthSelection,
+  SubscriptionProviderId,
+} from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
-import { setProviderSelection } from "@/lib/provider-selection";
+import {
+  buildInteractiveProviderRoutingIdentity,
+  parseStoredProviderSelections,
+  reconcileProviderSelections,
+  setProviderSelection,
+} from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
 
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
@@ -88,6 +98,7 @@ export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
+  const [providerSelectionsHydrated, setProviderSelectionsHydrated] = useState(false);
   const providerAccounts = useProviderAccounts();
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
@@ -102,24 +113,48 @@ export default function Home() {
     loading: skillPreviewLoading,
     suggestions: skillSuggestions,
   } = useSkillResolutionPreview(currentSkillPreviewTarget, skillSelection);
-  const routedProviderAccountIds = new Set([
-    ...providerAccounts.defaults.map((providerDefault) => providerDefault.providerAccountId),
-    ...Object.values(providerSelections).flatMap((selection) =>
-      selection?.mode === "provider_account" ? [selection.accountId] : []
-    ),
-  ]);
 
   useEffect(() => {
     if (hasHydratedModelPreferencesRef.current) return;
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
+    const storedProviderSelections = parseStoredProviderSelections(
+      localStorage.getItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY)
+    );
     setStoredPreference({
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
+    if (storedProviderSelections) setProviderSelections(storedProviderSelections);
+    setProviderSelectionsHydrated(true);
     hasHydratedModelPreferencesRef.current = true;
   }, []);
+
+  const availableProviderSelections = providerAccounts.loading
+    ? providerSelections
+    : reconcileProviderSelections(providerSelections, providerAccounts.accounts);
+
+  useEffect(() => {
+    if (
+      !providerSelectionsHydrated ||
+      providerAccounts.loading ||
+      availableProviderSelections === providerSelections
+    ) {
+      return;
+    }
+
+    setProviderSelections(availableProviderSelections);
+    localStorage.setItem(
+      LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
+      JSON.stringify(availableProviderSelections)
+    );
+  }, [
+    availableProviderSelections,
+    providerAccounts.loading,
+    providerSelections,
+    providerSelectionsHydrated,
+  ]);
 
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? storedPreference,
@@ -127,36 +162,30 @@ export default function Home() {
   );
 
   const warmRequest: WarmDraftSessionRequest | null =
-    session && !loadingEnabledModels && targetRequestFields
+    session &&
+    providerSelectionsHydrated &&
+    !providerAccounts.loading &&
+    !loadingEnabledModels &&
+    targetRequestFields
       ? {
           ...targetRequestFields,
           model: selectedModel,
           reasoningEffort,
           skillSelection,
-          providerSelections,
-          providerDefaults: providerAccounts.defaults.map(
-            ({ provider, providerAccountId, unattendedMode }) => ({
-              provider,
-              providerAccountId,
-              unattendedMode,
-            })
-          ),
-          providerAccountStates: providerAccounts.accounts
-            .filter((account) => routedProviderAccountIds.has(account.id))
-            .map(({ id, provider, status, archivedAt }) => ({
-              id,
-              provider,
-              status,
-              archivedAt,
-            })),
+          providerSelections: availableProviderSelections,
         }
       : null;
+  const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
+    availableProviderSelections,
+    providerAccounts.defaults,
+    providerAccounts.accounts
+  );
   const {
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
-  } = useWarmDraftSession(warmRequest);
+  } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -180,6 +209,15 @@ export default function Home() {
       saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [saveModelPreferenceDraft, selectedModel]
+  );
+
+  const handleProviderSelectionChange = useCallback(
+    (provider: SubscriptionProviderId, selection: ProviderAuthSelection | undefined) => {
+      const next = setProviderSelection(availableProviderSelections, provider, selection);
+      setProviderSelections(next);
+      localStorage.setItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY, JSON.stringify(next));
+    },
+    [availableProviderSelections]
   );
 
   const handlePromptChange = (value: string) => {
@@ -206,7 +244,14 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitInFlightRef.current || sessionAttachments.isUploading || loadingEnabledModels) return;
+    if (
+      submitInFlightRef.current ||
+      sessionAttachments.isUploading ||
+      providerAccounts.loading ||
+      loadingEnabledModels
+    ) {
+      return;
+    }
     const hasAttachments = sessionAttachments.attachments.length > 0;
     if (!prompt.trim() && !hasAttachments) return;
     if (!isLaunchable) {
@@ -300,8 +345,8 @@ export default function Home() {
       skillPreview={skillPreview}
       skillPreviewLoading={skillPreviewLoading}
       skillSuggestions={skillSuggestions}
-      providerSelections={providerSelections}
-      setProviderSelections={setProviderSelections}
+      providerSelections={availableProviderSelections}
+      onProviderSelectionChange={handleProviderSelectionChange}
       providerAccounts={providerAccounts}
     />
   );
@@ -329,7 +374,7 @@ function HomeContent({
   skillPreviewLoading,
   skillSuggestions,
   providerSelections,
-  setProviderSelections,
+  onProviderSelectionChange,
   providerAccounts,
 }: {
   isAuthenticated: boolean;
@@ -359,7 +404,10 @@ function HomeContent({
   skillPreviewLoading: boolean;
   skillSuggestions: PromptSkillSuggestionSource;
   providerSelections: ModelProviderSelections;
-  setProviderSelections: React.Dispatch<React.SetStateAction<ModelProviderSelections>>;
+  onProviderSelectionChange: (
+    provider: SubscriptionProviderId,
+    selection: ProviderAuthSelection | undefined
+  ) => void;
   providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
   const { isOpen } = useSidebarContext();
@@ -474,6 +522,7 @@ function HomeContent({
                       disabled={
                         (!prompt.trim() && attachments.items.length === 0) ||
                         attachmentsLocked ||
+                        providerAccounts.loading ||
                         !isLaunchable
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
@@ -538,9 +587,7 @@ function HomeContent({
                         )}
                         value={providerSelections[selectedProvider]}
                         onChange={(selection) =>
-                          setProviderSelections((current) =>
-                            setProviderSelection(current, selectedProvider, selection)
-                          )
+                          onProviderSelectionChange(selectedProvider, selection)
                         }
                       />
                     )}

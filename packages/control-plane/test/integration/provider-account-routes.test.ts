@@ -142,7 +142,12 @@ describe("provider account management routes", () => {
         accountId: "acct-integration",
       },
     });
-    await second.json<{ account: { id: string } }>();
+    expect(second.ok).toBe(true);
+    const secondBody = await second.json<{ account: { id: string; displayName: string } }>();
+    expect(secondBody.account).toMatchObject({
+      id: firstBody.account.id,
+      displayName: "First",
+    });
 
     await expect(
       managementFetch("/model-provider-account-defaults").then((response) => response.json())

@@ -119,7 +119,7 @@ export class ModelProviderAccountService {
     }
 
     try {
-      const created = await this.atomicWriter.createAccountWithCredential({
+      const account = await this.atomicWriter.createAccountWithCredential({
         id: this.dependencies.generateId(),
         provider: input.provider,
         displayName: input.displayName,
@@ -133,7 +133,7 @@ export class ModelProviderAccountService {
         },
       });
       return {
-        account: created.account,
+        account,
         reconnectedExisting: false,
       };
     } catch (cause) {

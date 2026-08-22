@@ -45,7 +45,7 @@ tenancy consistently across repositories, environments, sessions, secrets, integ
 | Storage          | D1 metadata, revisions, and text files for V1; design permits later R2 packages.         |
 | Delivery         | Sandbox-authenticated manifest endpoint; no skill content in environment variables.      |
 | Installation     | Atomically materialize into OpenCode's global skills directory before startup.           |
-| Conflicts        | Reject duplicate discovered skill names; do not depend on undocumented precedence.       |
+| Conflicts        | Prefer discovered skills and drop colliding managed entries with a warning.              |
 | Failure policy   | Fail sandbox startup if a selected manifest cannot be authenticated or installed.        |
 | Versioning       | Keep immutable revisions internally; defer history, diffs, tags, rollback, and Git sync. |
 | Access control   | All admitted users can read and modify skills in V1; preserve clear future ACL seams.    |
@@ -430,8 +430,9 @@ project and global `.opencode/skills`, `.claude/skills`, and `.agents/skills` lo
 scan after multi-repository assembly, include bundled sources directly, and exclude the
 platform-owned managed destination because a snapshot may contain this session's previous complete
 tree. Reconcile that destination by manifest digest instead. If a selected managed skill has the
-same canonical name as another discovered skill, fail startup with a diagnostic naming both sources.
-Do not merge directories, overwrite files, or silently omit one skill.
+same canonical name as another discovered skill, keep the discovered skill, remove the managed entry
+from staging, and log a warning naming the managed skill and every discovered path. Continue
+installing all non-colliding managed skills without merging or overwriting directories.
 
 Repository-to-repository skill conflicts already predate this feature and remain governed by the
 current multi-repository assembly behavior. Normalizing that behavior is a separate change.
@@ -772,7 +773,7 @@ control-plane URL, session ID, and sandbox authentication token.
 2. Request the pinned session manifest from the control plane.
 3. Revalidate schema, names, paths, counts, sizes, UTF-8, and every file SHA-256 hash.
 4. Scan all skill locations discovered by the pinned OpenCode version except the managed destination
-   and reject selected-name collisions.
+   and drop colliding managed entries with a structured warning.
 5. Build the complete managed tree in a temporary directory on the same filesystem.
 6. Set executable bits only where the manifest permits; remove other write/execute bits as
    appropriate.
@@ -857,7 +858,7 @@ explicit because mutating their skills in place would break reproducibility.
 | Sandbox download auth failure         | Fail startup; do not start OpenCode without selected skills.   |
 | Control-plane timeout                 | Retry with bounded exponential backoff, then fail startup.     |
 | Manifest or file hash mismatch        | Delete staging content and fail startup.                       |
-| Name collision                        | Fail startup with both sources and remediation guidance.       |
+| Name collision                        | Drop the managed entry, warn with discovered paths, continue.  |
 | Snapshot contains stale managed files | Replace the complete managed directory before startup.         |
 
 Use a named TypeScript timeout constant in milliseconds and a Python timeout constant in seconds.
@@ -928,7 +929,7 @@ Build `@open-inspect/shared` before dependent packages.
 - Atomic replacement and cleanup after an interrupted staging write.
 - Stale files disappear on snapshot restore.
 - A matching installed digest can take the validated fast path.
-- Managed/repository and managed/bundled name collisions fail clearly.
+- Managed/repository and managed/bundled name collisions drop only the managed entries and warn.
 - Download retry, timeout, and authentication behavior.
 - Python and TypeScript canonical digest fixtures produce identical values.
 
@@ -971,7 +972,7 @@ Build `@open-inspect/shared` before dependent packages.
 
 - Add the sandbox endpoint and runtime materializer across every supported provider.
 - Enable for internal sessions first, then opt-in installations, then by default.
-- Monitor boot failure rate, download latency, collision errors, and bytes per manifest.
+- Monitor boot failure rate, download latency, collision warnings, and bytes per manifest.
 
 ### Phase 4: Governance and distribution
 
@@ -1034,11 +1035,12 @@ This dirties or requires excluding every checkout, duplicates content in multi-r
 and does not fit repository-less sessions. OpenCode's global skill location is the appropriate
 managed location.
 
-### Let nearest or latest source win name conflicts
+### Let installation order choose name conflicts
 
 OpenCode does not document a precedence rule for all discovered locations. Silent overwrite can
-select different instructions than the UI preview and can merge companion files. Rejecting
-collisions is safer and diagnosable.
+select different instructions than the UI preview and can merge companion files. Explicitly keeping
+the discovered skill, dropping the managed entry, and logging the decision is deterministic and
+diagnosable.
 
 ### Make profiles copied bundles
 
@@ -1080,10 +1082,10 @@ A session must always store the resolved revision ID and digest, never a moving 
 ## Product Validation
 
 V1 deliberately chooses admitted-user editing, personal-only profiles, All for unconfigured bot and
-automation sessions, bounded UTF-8 text packages, startup failure on name collision, and immediate
-publication of each successful save. Deleted revisions are retained for at least as long as any
-referencing session. Authorship survives user offboarding and does not make the skill part of the
-departing user's data.
+automation sessions, bounded UTF-8 text packages, discovered-skill precedence on name collision, and
+immediate publication of each successful save. Deleted revisions are retained for at least as long
+as any referencing session. Authorship survives user offboarding and does not make the skill part of
+the departing user's data.
 
 Before implementation, customer discovery should validate that the proposed 1 MiB per-skill and 5
 MiB per-session limits cover initial use cases and that immediate publication is acceptable. If

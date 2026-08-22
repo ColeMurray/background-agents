@@ -159,22 +159,43 @@ async def test_materializer_replaces_destination(tmp_path):
     assert (destination / "managed" / "SKILL.md").stat().st_mode & 0o777 == 0o400
 
 
-async def test_materializer_rejects_bundled_name_collision(tmp_path):
+async def test_materializer_drops_only_managed_skills_that_collide_with_discovered_skills(tmp_path):
     document = _installation(name="conflict")
+    document["skills"].append(_installation(name="alias")["skills"][0])
+    document["skills"].append(_installation(name="bundled")["skills"][0])
+    document["skills"].append(_installation(name="kept")["skills"][0])
     client = MagicMock()
     client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
-    bundled = tmp_path / "bundled" / "conflict"
-    bundled.mkdir(parents=True)
-    (bundled / "SKILL.md").write_text("---\nname: conflict\n---\n")
+    repository = tmp_path / "repository"
+    discovered = repository / ".claude" / "skills" / "conflict"
+    discovered.mkdir(parents=True)
+    (discovered / "SKILL.md").write_text("---\nname: conflict\n---\n")
+    alias_discovered = repository / ".agents" / "skills" / "different-directory"
+    alias_discovered.mkdir(parents=True)
+    (alias_discovered / "SKILL.md").write_text("---\nname: alias\n---\n")
+    bundled_discovered = tmp_path / "bundled" / "bundled"
+    bundled_discovered.mkdir(parents=True)
+    (bundled_discovered / "SKILL.md").write_text("---\nname: bundled\n---\n")
+    destination = tmp_path / "global" / "skills"
+    log = MagicMock()
     materializer = ManagedSkillsMaterializer(
         client,
-        tmp_path / "global" / "skills",
-        MagicMock(),
+        destination,
+        log,
         bundled_skills_path=tmp_path / "bundled",
     )
 
-    with pytest.raises(ManagedSkillsError, match="collides"):
-        await materializer.materialize((), tmp_path / "workspace")
+    await materializer.materialize((MagicMock(path=repository),), tmp_path / "workspace")
+
+    assert sorted(entry.name for entry in destination.iterdir()) == ["kept"]
+    log.warn.assert_called_once_with(
+        "managed_skills.collisions_dropped",
+        collisions=[
+            {"name": "alias", "paths": [str(alias_discovered)]},
+            {"name": "bundled", "paths": [str(bundled_discovered)]},
+            {"name": "conflict", "paths": [str(discovered)]},
+        ],
+    )
 
 
 async def test_materializer_ignores_invalid_utf8_during_collision_scan(tmp_path):

@@ -457,26 +457,23 @@ class ManagedSkillsMaterializer:
                 seen.add(root)
                 yield root
 
-    def _check_collisions(
+    def _find_collisions(
         self,
         selected: AbstractSet[str],
         repositories: Sequence[RepoEntry],
         workdir: Path,
-    ) -> None:
-        """Reject ambiguous names across every OpenCode skill discovery root."""
+    ) -> dict[str, set[Path]]:
+        """Collect managed names shadowed by an existing discovered skill."""
+        found: dict[str, set[Path]] = {}
         for root in self._collision_roots(repositories, workdir):
             if not root.is_dir():
                 continue
             for child in root.iterdir():
                 if not child.is_dir():
                     continue
-                collisions = self._skill_names(child) & selected
-                if collisions:
-                    name = sorted(collisions)[0]
-                    raise ManagedSkillsError(
-                        f"managed skill {name!r} collides with discovered skill at {child}",
-                        code="name_collision",
-                    )
+                for name in self._skill_names(child) & selected:
+                    found.setdefault(name, set()).add(child)
+        return found
 
     @staticmethod
     def _write_journal(journal: Path) -> None:
@@ -626,7 +623,21 @@ class ManagedSkillsMaterializer:
             staging, backup, journal = self._begin_staging()
             try:
                 manifest_sha256, names = await self._fetch_into_staging(staging)
-                self._check_collisions(names, repositories, workdir)
+                collisions = self._find_collisions(names, repositories, workdir)
+                if collisions:
+                    for name in collisions:
+                        self._remove_path(staging / name)
+                    names.difference_update(collisions)
+                    self.log.warn(
+                        "managed_skills.collisions_dropped",
+                        collisions=[
+                            {
+                                "name": name,
+                                "paths": sorted(str(path) for path in collisions[name]),
+                            }
+                            for name in sorted(collisions)
+                        ],
+                    )
                 self._commit_staging(staging, backup, journal)
             except Exception:
                 self._abort_staging(staging, backup, journal)

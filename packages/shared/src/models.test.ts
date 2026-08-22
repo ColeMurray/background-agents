@@ -52,6 +52,7 @@ const ZEN_MODELS = [
   "opencode/qwen3.7-max",
   "opencode/glm-5",
   "opencode/glm-5.1",
+  "opencode/glm-5.2",
 ] as const;
 
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
