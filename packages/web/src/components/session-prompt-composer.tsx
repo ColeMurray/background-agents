@@ -8,7 +8,7 @@ import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { ModelIcon, PaperclipIcon, SendIcon, StopIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-attachments";
 import type { Artifact } from "@/types/session";
@@ -61,6 +61,7 @@ export function SessionPromptComposer({
   attachments,
   model,
 }: SessionPromptComposerProps) {
+  const { labels } = useKeyboardShortcuts();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
   const sessionPromptable = session.status !== "archived" && session.status !== "cancelled";
@@ -182,12 +183,12 @@ export function SessionPromptComposer({
                 title={
                   prompt.isProcessing
                     ? "Queue follow-up; runs after the current prompt"
-                    : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
+                    : `Send (${labels["send-prompt"]})`
                 }
                 aria-label={
                   prompt.isProcessing
                     ? "Queue follow-up; runs after the current prompt"
-                    : `Send (${SHORTCUT_LABELS.SEND_PROMPT})`
+                    : `Send (${labels["send-prompt"]})`
                 }
               >
                 {prompt.isProcessing && <span className="text-xs font-medium">Queue</span>}

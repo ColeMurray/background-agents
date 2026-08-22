@@ -56,6 +56,7 @@ import {
   SessionReadRequestError,
 } from "@/lib/session-read-state";
 import { usePromptInput } from "@/hooks/use-prompt-input";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 
@@ -65,6 +66,7 @@ const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
 const DEFAULT_SESSION_STATUS = "created" as const;
 
 export default function SessionPage() {
+  const { shortcuts } = useKeyboardShortcuts();
   const initialSnapshot = useSessionSnapshot();
   const sessionId = initialSnapshot.session.id;
   const {
@@ -137,7 +139,8 @@ export default function SessionPage() {
     reasoningEffort,
     loadingEnabledModels,
     sessionState?.status ?? DEFAULT_SESSION_STATUS,
-    ready
+    ready,
+    shortcuts["send-prompt"]
   );
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
   const cancellingPromptIdsRef = useRef(new Set<string>());

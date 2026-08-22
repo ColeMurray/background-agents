@@ -154,6 +154,10 @@
       "import": "./dist/types/skills.js",
       "types": "./dist/types/skills.d.ts"
     },
+    "./types/keyboard-shortcuts": {
+      "import": "./dist/types/keyboard-shortcuts.js",
+      "types": "./dist/types/keyboard-shortcuts.d.ts"
+    },
     "./types/prompts": {
       "import": "./dist/types/prompts.js",
       "types": "./dist/types/prompts.d.ts"

@@ -9,7 +9,8 @@ import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { matchesShortcut } from "@/lib/keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
@@ -405,6 +406,7 @@ function HomeContent({
   providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
   const { isOpen } = useSidebarContext();
+  const { shortcuts, labels } = useKeyboardShortcuts();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentsLocked = creating || attachments.isUploading;
@@ -422,7 +424,7 @@ function HomeContent({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
 
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    if (matchesShortcut(e.nativeEvent, shortcuts["send-prompt"])) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -520,8 +522,8 @@ function HomeContent({
                         !isLaunchable
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
-                      aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
+                      title={`Send (${labels["send-prompt"]})`}
+                      aria-label={`Send (${labels["send-prompt"]})`}
                     >
                       {creating ? (
                         <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
