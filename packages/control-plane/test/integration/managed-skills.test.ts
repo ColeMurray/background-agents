@@ -568,6 +568,81 @@ describe("managed skills persistence and resolution", () => {
     expect((await skills.get(skill.id))?.assignments).toMatchObject([{ type: "global" }]);
   });
 
+  it("validates more assigned environments than the engine has parameter slots", async () => {
+    // `assignments` is request input with no length bound. Validating it with
+    // one parameter per environment failed outright past the engine ceiling, so
+    // a skill assigned to more than MAX_D1_QUERY_PARAMETERS environments could
+    // not be created at all.
+    const environments = new EnvironmentStore(env.DB);
+    const ids = Array.from({ length: 101 }, (_, index) => `env_${String(index).padStart(3, "0")}`);
+    for (const id of ids) {
+      await environments.create(
+        {
+          id,
+          name: id,
+          description: null,
+          prebuild_enabled: 0,
+          channel_associations: null,
+          created_at: 1,
+          updated_at: 1,
+        },
+        []
+      );
+    }
+
+    const skills = new SkillStore(env.DB);
+    const skill = await skills.create(
+      {
+        name: "widely-assigned",
+        content,
+        assignments: ids.map((environmentId) => ({ type: "environment" as const, environmentId })),
+      },
+      "user_1"
+    );
+    expect(skill.assignments).toHaveLength(101);
+
+    // A missing environment among many must still be rejected rather than
+    // passing because the per-chunk counts happened to sum correctly.
+    await expect(
+      skills.create(
+        {
+          name: "partly-assigned",
+          content,
+          assignments: [...ids, "env_missing"].map((environmentId) => ({
+            type: "environment" as const,
+            environmentId,
+          })),
+        },
+        "user_1"
+      )
+    ).rejects.toThrow(/environments do not exist/);
+  });
+
+  it("groups membership per profile when listing, including empty ones", async () => {
+    // list() groups in memory rather than with a json_group_array aggregate.
+    // The aggregate also supplied the empty-membership case through a FILTER,
+    // so that has to survive the change.
+    const catalog = await seedGlobalCatalog(3);
+    const profiles = new SkillProfileStore(env.DB);
+    await profiles.create("user_1", "Two", [catalog[0].id, catalog[1].id]);
+    await profiles.create("user_1", "One", [catalog[2].id]);
+    await profiles.create("user_1", "Empty", []);
+    await profiles.create("user_2", "Other user", [catalog[0].id]);
+
+    // Ordered by lower(name), and each profile keeps only its own members.
+    await expect(profiles.list("user_1")).resolves.toEqual([
+      expect.objectContaining({ name: "Empty", skillIds: [] }),
+      expect.objectContaining({ name: "One", skillIds: [catalog[2].id] }),
+      expect.objectContaining({
+        name: "Two",
+        skillIds: [catalog[0].id, catalog[1].id].sort(),
+      }),
+    ]);
+    await expect(profiles.list("user_2")).resolves.toMatchObject([
+      { name: "Other user", skillIds: [catalog[0].id] },
+    ]);
+  });
+
   it("tracks environment assignment provenance changes through database-owned triggers", async () => {
     const environments = new EnvironmentStore(env.DB);
     await environments.create(
