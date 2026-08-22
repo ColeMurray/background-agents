@@ -21,6 +21,7 @@ import {
   type ModelProviderId,
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
+import { bulkInsertStatements } from "./bulk-insert";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import {
   SessionInboxStore,
@@ -363,6 +364,10 @@ export class SessionIndexStore {
    * Build manifest statements for the session-creation batch. The caller owns
    * execution so the session, repository snapshot, and pinned skills commit
    * atomically rather than leaving a partially initialized session.
+   *
+   * Revisions are packed into multi-row INSERTs: the pinned set is as wide as
+   * the applicable catalog, and a statement per skill would spend the
+   * invocation's whole query budget on one session create.
    */
   private bindManifestInserts(
     sessionId: string,
@@ -385,26 +390,21 @@ export class SessionIndexStore {
           manifest.manifestSha256,
           manifest.resolvedAt
         ),
-      ...manifest.skills.map((skill, position) =>
-        this.db
-          .prepare(
-            `INSERT INTO session_skill_revisions
-             (session_id, position, skill_id, revision_id, skill_name, description,
-              revision_number, revision_sha256, total_bytes, assignment_sources)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            sessionId,
-            position,
-            skill.skillId,
-            skill.revisionId,
-            skill.name,
-            skill.description,
-            skill.revisionNumber,
-            skill.revisionSha256,
-            skill.totalBytes,
-            JSON.stringify(skill.assignmentSources)
-          )
+      ...bulkInsertStatements(
+        this.db,
+        "session_skill_revisions",
+        manifest.skills.map((skill, position) => ({
+          session_id: sessionId,
+          position,
+          skill_id: skill.skillId,
+          revision_id: skill.revisionId,
+          skill_name: skill.name,
+          description: skill.description,
+          revision_number: skill.revisionNumber,
+          revision_sha256: skill.revisionSha256,
+          total_bytes: skill.totalBytes,
+          assignment_sources: JSON.stringify(skill.assignmentSources),
+        }))
       ),
     ];
   }

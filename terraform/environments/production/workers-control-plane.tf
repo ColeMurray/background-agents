@@ -214,6 +214,9 @@ module "control_plane_worker" {
   # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
   cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
+  # module.e2b_infra is deliberately absent: its template build depends on THIS
+  # worker instead (see e2b.tf), so control-plane deploys land before template
+  # rebuilds — the compatible order for E2B boots.
   depends_on = [
     null_resource.control_plane_build,
     module.session_index_kv,
@@ -222,7 +225,6 @@ module "control_plane_worker" {
     module.daytona_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
-    module.e2b_infra,
     module.modal_app,
   ]
 }

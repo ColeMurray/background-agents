@@ -39,7 +39,7 @@ fi
 uv sync --frozen
 
 # build-template.py reads E2B_TEMPLATE_ID / E2B_API_KEY / E2B_API_URL /
-# E2B_TEMPLATE_CPU / E2B_TEMPLATE_MEM from the environment.
+# E2B_TEMPLATE_CPU / E2B_TEMPLATE_MEMORY_MB from the environment.
 uv run python build-template.py
 
 echo "E2B template ${E2B_TEMPLATE_ID} built successfully"

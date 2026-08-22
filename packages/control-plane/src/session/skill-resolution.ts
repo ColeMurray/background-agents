@@ -1,5 +1,4 @@
 import {
-  MAX_MANAGED_SKILLS_PER_SESSION,
   MAX_MANAGED_SKILL_MANIFEST_BYTES,
   type ResolvedSkill,
   type SessionSkillManifestSelection,
@@ -95,13 +94,13 @@ export async function resolveManagedSkills(
   throw new SkillResolutionError("Managed skills catalog changed during resolution", 409);
 }
 
+/**
+ * Manifest size is bounded by total content bytes, not skill count. A count cap
+ * would gate the whole installation on a per-session limit: assignments are
+ * additive and global ones apply everywhere, so exceeding it failed every
+ * session create and automation run at once.
+ */
 function enforceManifestLimits(skills: ResolvedSkill[]): void {
-  if (skills.length > MAX_MANAGED_SKILLS_PER_SESSION) {
-    throw new SkillResolutionError(
-      `Managed skill selection exceeds the ${MAX_MANAGED_SKILLS_PER_SESSION} skill limit`,
-      400
-    );
-  }
   const totalBytes = skills.reduce((total, skill) => total + skill.totalBytes, 0);
   if (totalBytes > MAX_MANAGED_SKILL_MANIFEST_BYTES) {
     throw new SkillResolutionError("Managed skill selection exceeds the content size limit", 400);

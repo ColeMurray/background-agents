@@ -514,6 +514,18 @@ variable "e2b_auto_pause" {
   default     = true
 }
 
+variable "e2b_template_cpu" {
+  description = "vCPU count for the E2B sandbox template (and every sandbox created from it)."
+  type        = number
+  default     = 2
+}
+
+variable "e2b_template_memory_mb" {
+  description = "Memory (MB, even number) for the E2B sandbox template. Default sized for the agent toolchain (OpenCode + code-server + builds); lower it on plans that cap sandbox memory. The full invariant (positive, even, integral) is validated at the e2b-infra module boundary."
+  type        = number
+  default     = 4096
+}
+
 variable "nextauth_secret" {
   description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
   type        = string

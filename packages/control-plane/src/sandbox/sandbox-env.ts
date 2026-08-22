@@ -141,9 +141,9 @@ export interface ImageBuildCallbackEnvValues {
   failureCallbackUrl: string;
   token: string;
   /**
-   * Omitted from the returned map when absent: OpenComputer bakes the
+   * Omitted from the returned map when absent: OpenComputer and E2B bake the
    * callback env at create time, before the provider session id exists, and
-   * delivers the id separately at runtime start.
+   * deliver the id separately when starting the runtime.
    */
   providerSessionId?: string;
 }

@@ -17,13 +17,16 @@ export type AutomationInvocationSource = "schedule" | "manual" | "event";
  * skipped; `partial_failed` means the runs finished terminal with a mix of
  * completed and failed.
  */
-export type AutomationInvocationStatus =
-  | "starting"
-  | "running"
-  | "completed"
-  | "failed"
-  | "partial_failed"
-  | "skipped";
+export const automationInvocationStatusSchema = z.enum([
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "partial_failed",
+  "skipped",
+]);
+
+export type AutomationInvocationStatus = z.infer<typeof automationInvocationStatusSchema>;
 
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
@@ -87,6 +90,20 @@ const automationSchema = z.object({
 });
 
 export type Automation = z.infer<typeof automationSchema>;
+
+const automationExecutionSummarySchema = z.object({
+  id: z.string(),
+  status: automationInvocationStatusSchema,
+  createdAt: z.number(),
+});
+
+export type AutomationExecutionSummary = z.infer<typeof automationExecutionSummarySchema>;
+
+const automationListItemSchema = automationSchema.extend({
+  recentExecutions: z.array(automationExecutionSummarySchema),
+});
+
+export type AutomationListItem = z.infer<typeof automationListItemSchema>;
 
 export const createAutomationRequestSchema = z.object({
   name: z.string(),
@@ -158,12 +175,12 @@ export interface AutomationRun {
 
 export const listAutomationsResponseSchema = z.discriminatedUnion("hasMore", [
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(false),
     nextCursor: z.null(),
   }),
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(true),
     nextCursor: z.string().min(1),
   }),

@@ -2,10 +2,10 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
-import type { Automation } from "@open-inspect/shared/types/automations";
+import type { AutomationListItem } from "@open-inspect/shared/types/automations";
 import { AutomationsList } from "./automations-list";
 
 expect.extend(matchers);
@@ -27,7 +27,7 @@ vi.mock("@/hooks/use-environments", () => ({
 
 const noop = () => {};
 
-function makeAutomation(overrides: Partial<Automation> = {}): Automation {
+function makeAutomation(overrides: Partial<AutomationListItem> = {}): AutomationListItem {
   return {
     id: "auto-1",
     name: "Nightly review",
@@ -49,12 +49,13 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
     repositories: [{ repoOwner: "acme", repoName: "web-app", repoId: 1, baseBranch: "main" }],
     environmentIds: [],
     providerSelections: {},
+    recentExecutions: [],
     ...overrides,
   };
 }
 
 describe("AutomationsList repository labels", () => {
-  const renderList = (automations: Automation[]) =>
+  const renderList = (automations: AutomationListItem[]) =>
     render(
       <AutomationsList
         automations={automations}
@@ -111,6 +112,104 @@ describe("AutomationsList schedule metadata", () => {
     );
 
     expect(screen.getByText("Next: in 2h")).toBeInTheDocument();
+    expect(screen.getByText("Daily at 9 AM (UTC)")).toBeInTheDocument();
+  });
+});
+
+describe("AutomationsList actions", () => {
+  it("offers row actions from the compact menu", async () => {
+    const onTrigger = vi.fn();
+    render(
+      <AutomationsList
+        automations={[makeAutomation()]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={onTrigger}
+        onDelete={noop}
+      />
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Nightly review" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Trigger now" }));
+
+    expect(onTrigger).toHaveBeenCalledWith("auto-1");
+  });
+
+  it("confirms deletion selected from the compact menu", async () => {
+    const onDelete = vi.fn();
+    render(
+      <AutomationsList
+        automations={[makeAutomation()]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={onDelete}
+      />
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Nightly review" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDelete).toHaveBeenCalledWith("auto-1");
+  });
+});
+
+describe("AutomationsList execution activity", () => {
+  it("shows recent execution statuses from oldest to newest", () => {
+    render(
+      <AutomationsList
+        automations={[
+          makeAutomation({
+            recentExecutions: [
+              { id: "inv-new", status: "failed", createdAt: 200 },
+              { id: "inv-old", status: "completed", createdAt: 100 },
+            ],
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    const activity = screen.getByRole("list", {
+      name: "Last 2 executions, oldest to newest",
+    });
+    expect(activity.children[0]).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Completed")
+    );
+    expect(activity.children[1]).toHaveAttribute("aria-label", expect.stringContaining("Failed"));
+    expect(activity.children[0]).toHaveAttribute("data-status-shape", "completed");
+    expect(activity.children[1]).toHaveAttribute("data-status-shape", "failed");
+    expect(activity.children[0]).toHaveAttribute("tabindex", "0");
+  });
+
+  it("shows an explicit empty history state", () => {
+    render(
+      <AutomationsList
+        automations={[makeAutomation()]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.getByText("No runs")).toBeInTheDocument();
   });
 });
 
