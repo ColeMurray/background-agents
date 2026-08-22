@@ -91,7 +91,10 @@ import { buildSessionTargetSecretSources } from "./session-target-secrets";
 import type { RepoIdentity, SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
-import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
+import {
+  getProviderAuthenticationError as resolveProviderAuthenticationError,
+  prepareManagedProviderEnv,
+} from "../sandbox/managed-provider-env";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
@@ -538,6 +541,7 @@ export class SessionDO extends DurableObject<Env> {
         this.participantService,
         this.callbackService,
         this.statusService,
+        (model) => this.getProviderAuthenticationError(model),
         (messageId, messageCreatedAt, completedAt) =>
           this.terminalMessageProjection.recordTerminalMessage({
             messageId,
@@ -1831,10 +1835,36 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private async getUserEnvVars(): Promise<Record<string, string> | undefined> {
+    const context = await this.loadUserEnvContext();
+    if (!context) return undefined;
+    return Object.keys(context.sandboxEnv).length === 0 ? undefined : context.sandboxEnv;
+  }
+
+  private async getProviderAuthenticationError(model: string): Promise<string | null> {
+    const context = await this.loadUserEnvContext();
+    if (!context) return null;
+    const issue = resolveProviderAuthenticationError(
+      model,
+      context.sandboxEnv,
+      context.providerAuthModes
+    );
+    if (!issue) return null;
+    this.log.error("provider_auth.unavailable", {
+      event: "provider_auth.unavailable",
+      provider: issue.provider,
+      auth_mode: context.providerAuthModes[issue.provider],
+    });
+    return issue.message;
+  }
+
+  private async loadUserEnvContext(): Promise<{
+    sandboxEnv: Record<string, string>;
+    providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>;
+  } | null> {
     const session = this.getSession();
     if (!session) {
       this.log.warn("Cannot load secrets: no session");
-      return undefined;
+      return null;
     }
 
     const db = this.db;
@@ -1855,7 +1885,7 @@ export class SessionDO extends DurableObject<Env> {
         brokerSecrets: {},
         providerAuthModes,
       });
-      return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
+      return { sandboxEnv, providerAuthModes };
     }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
@@ -1907,7 +1937,7 @@ export class SessionDO extends DurableObject<Env> {
       brokerSecrets: managedSecrets,
       providerAuthModes,
     });
-    return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
+    return { sandboxEnv, providerAuthModes };
   }
 
   /**

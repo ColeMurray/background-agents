@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { prepareLegacyManagedProviderEnv, prepareManagedProviderEnv } from "./managed-provider-env";
+import {
+  getProviderAuthenticationError,
+  prepareLegacyManagedProviderEnv,
+  prepareManagedProviderEnv,
+} from "./managed-provider-env";
 
 describe("prepareLegacyManagedProviderEnv", () => {
   it("replaces durable OAuth credentials with provider markers", () => {
@@ -111,5 +115,63 @@ describe("prepareManagedProviderEnv", () => {
         },
       })
     ).toEqual({ OPENAI_OAUTH_MANAGED: "1", XAI_API_KEY: "xai-key" });
+  });
+});
+
+describe("getProviderAuthenticationError", () => {
+  it("rejects a Grok launch whose legacy fallback has no usable xAI credential", () => {
+    expect(
+      getProviderAuthenticationError(
+        "xai/grok-4.5",
+        {},
+        {
+          openai: "legacy_scoped_oauth",
+          xai: "legacy_scoped_oauth",
+        }
+      )
+    ).toEqual({
+      provider: "xai",
+      message:
+        "No xAI authentication is configured for this session. Select a connected SuperGrok account, configure an xAI default, or provide XAI_API_KEY, then create a new session.",
+    });
+  });
+
+  it.each([
+    ["provider account", { XAI_OAUTH_MANAGED: "1" }, "provider_account"],
+    ["API key", { XAI_API_KEY: "configured" }, "api_key"],
+    ["legacy refresh token", { XAI_OAUTH_MANAGED: "1" }, "legacy_scoped_oauth"],
+  ] as const)("accepts xAI %s authentication", (_label, sandboxEnv, authMode) => {
+    expect(
+      getProviderAuthenticationError("xai/grok-4.5", sandboxEnv, {
+        openai: "legacy_scoped_oauth",
+        xai: authMode,
+      })
+    ).toBeNull();
+  });
+
+  it("rejects explicit OpenAI API-key mode without an API key", () => {
+    expect(
+      getProviderAuthenticationError(
+        "openai/gpt-5.4",
+        {},
+        {
+          openai: "api_key",
+          xai: "legacy_scoped_oauth",
+        }
+      )?.message
+    ).toContain("OPENAI_API_KEY");
+  });
+
+  it("does not validate providers outside subscription account routing", () => {
+    expect(
+      getProviderAuthenticationError(
+        "anthropic/claude-opus-4-6",
+        {},
+        {
+          openai: "legacy_scoped_oauth",
+          xai: "legacy_scoped_oauth",
+        }
+      )
+    ).toBeNull();
   });
 });

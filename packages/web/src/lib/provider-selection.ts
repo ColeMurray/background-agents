@@ -2,6 +2,7 @@ import {
   modelProviderSelectionsSchema,
   SUBSCRIPTION_PROVIDER_IDS,
   type ModelProviderAccount,
+  type ModelProviderAccountDefault,
   type ModelProviderSelections,
   type ProviderAuthSelection,
   type SubscriptionProviderId,
@@ -9,6 +10,50 @@ import {
 
 export type ProviderSelectionDrafts = ModelProviderSelections;
 export const EMPTY_PROVIDER_SELECTIONS: ProviderSelectionDrafts = {};
+
+export type InteractiveProviderRoutingIdentity = Record<
+  SubscriptionProviderId,
+  | { mode: "api_key" | "legacy_scoped_oauth" }
+  | {
+      mode: "provider_account";
+      accountId: string;
+      status: ModelProviderAccount["status"] | "unavailable";
+      archivedAt: number | null;
+    }
+>;
+
+export function buildInteractiveProviderRoutingIdentity(
+  selections: ModelProviderSelections,
+  defaults: ModelProviderAccountDefault[],
+  accounts: ModelProviderAccount[]
+): InteractiveProviderRoutingIdentity {
+  return Object.fromEntries(
+    SUBSCRIPTION_PROVIDER_IDS.map((provider) => {
+      const explicit = selections[provider];
+      if (explicit?.mode === "api_key") return [provider, { mode: "api_key" }];
+
+      const accountId =
+        explicit?.mode === "provider_account"
+          ? explicit.accountId
+          : defaults.find((providerDefault) => providerDefault.provider === provider)
+              ?.providerAccountId;
+      if (!accountId) return [provider, { mode: "legacy_scoped_oauth" }];
+
+      const account = accounts.find(
+        (candidate) => candidate.id === accountId && candidate.provider === provider
+      );
+      return [
+        provider,
+        {
+          mode: "provider_account",
+          accountId,
+          status: account?.status ?? "unavailable",
+          archivedAt: account?.archivedAt ?? null,
+        },
+      ];
+    })
+  ) as InteractiveProviderRoutingIdentity;
+}
 
 export function parseStoredProviderSelections(
   value: string | null
