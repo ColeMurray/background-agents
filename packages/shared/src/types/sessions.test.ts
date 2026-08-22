@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionReadActionSchema, sessionReadResultSchema } from "./sessions";
+import { sandboxStatusSchema, sessionReadActionSchema, sessionReadResultSchema } from "./sessions";
 import { createSessionRequestSchema } from "./session-api";
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
@@ -57,5 +57,40 @@ describe("createSessionRequestSchema provider selections", () => {
         providerSelections: { anthropic: { mode: "api_key" } },
       }).success
     ).toBe(false);
+  });
+});
+
+describe("sandbox status vocabulary", () => {
+  // Pinned deliberately. `syncing` and `running` were carried in this union,
+  // the zod enum, the DB schema comment, the web label map, the web
+  // starting/active sets, and the Python mirror -- while no code path in any
+  // language ever wrote either one. `running` was not merely unused: PR #970
+  // gated sandbox authorization on it and had to be reverted (#980), because
+  // the WebSocket connect writes "ready" and nothing ever writes "running".
+  //
+  // `warming` looks similar but is NOT dead: it is never persisted, yet the
+  // client sets it optimistically on the separate `sandbox_warming` message
+  // (web/src/lib/session-socket/reducer.ts) and Modal reports it from
+  // manager.py. It stays.
+  //
+  // If this assertion fails because a member was added, make sure something
+  // actually writes it before widening the union.
+  it("contains only states some code path can produce", () => {
+    expect(sandboxStatusSchema.options).toEqual([
+      "pending",
+      "spawning",
+      "connecting",
+      "warming",
+      "ready",
+      "stale",
+      "snapshotting",
+      "stopped",
+      "failed",
+    ]);
+  });
+
+  it("rejects the removed dead states", () => {
+    expect(sandboxStatusSchema.safeParse("syncing").success).toBe(false);
+    expect(sandboxStatusSchema.safeParse("running").success).toBe(false);
   });
 });
