@@ -54,6 +54,11 @@ export interface CreateAccountWithCredentialInput {
   >;
 }
 
+export interface CreateAccountWithCredentialResult {
+  account: ModelProviderAccount;
+  becameDefault: boolean;
+}
+
 interface DeviceAuthorizationCredentialInput {
   authorization: ProcessingProviderAuthorization;
   externalAccountId: string;
@@ -85,7 +90,7 @@ export type DeviceAuthorizationReconnectOutcome =
 export interface ModelProviderAccountAtomicWriter {
   createAccountWithCredential(
     input: CreateAccountWithCredentialInput
-  ): Promise<ModelProviderAccount>;
+  ): Promise<CreateAccountWithCredentialResult>;
   reconnectCredentialAndAccount(input: AccountConnectionWriteInput): Promise<boolean>;
   completeVerificationCredentialAndAccount(
     input: CompleteVerificationCredentialAndAccountInput
@@ -115,7 +120,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
 
   async createAccountWithCredential(
     input: CreateAccountWithCredentialInput
-  ): Promise<ModelProviderAccount> {
+  ): Promise<CreateAccountWithCredentialResult> {
     const accountStatement = this.accounts.bindCreate({ ...input, lastVerifiedAt: input.now });
     const credentialStatement = await this.credentials.bindCreateForAccountBatch({
       providerAccountId: input.id,
@@ -123,10 +128,14 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       ...input.credential,
       now: input.now,
     });
-    await this.db.batch([accountStatement, credentialStatement]);
+    const results = await this.db.batch([
+      accountStatement,
+      credentialStatement,
+      this.bindFirstAccountDefault(input.id, input.provider, input.actorId, input.now),
+    ]);
     const account = await this.accounts.getById(input.id);
     if (!account) throw new Error("Created provider account could not be read");
-    return account;
+    return { account, becameDefault: results[2].meta.changes === 1 };
   }
 
   async reconnectCredentialAndAccount(input: AccountConnectionWriteInput): Promise<boolean> {
@@ -215,9 +224,16 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         accountLifecycleVersion: 0,
         reconnectedExisting: false,
       }),
+      this.bindFirstAccountDefault(
+        input.accountId,
+        input.authorization.provider,
+        input.authorization.userId,
+        input.now
+      ),
     ]);
-    if (results.every((result) => result.meta.changes === 1)) return { type: "created" };
-    if (results.some((result) => result.meta.changes !== 0)) {
+    const requiredResults = results.slice(0, 3);
+    if (requiredResults.every((result) => result.meta.changes === 1)) return { type: "created" };
+    if (requiredResults.some((result) => result.meta.changes !== 0)) {
       throw new Error("Provider authorization create finalization violated atomic invariants");
     }
     if (!(await this.ownsDeviceAuthorizationClaim(input.authorization, input.now))) {
@@ -400,6 +416,43 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         input.accountId,
         input.credentialVersion,
         input.encryptedPayload
+      );
+  }
+
+  private bindFirstAccountDefault(
+    accountId: string,
+    provider: ModelProviderId,
+    actorId: string,
+    now: number
+  ): SqlStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO model_provider_account_defaults
+          (provider, provider_account_id, unattended_mode, created_by, updated_by,
+           created_at, updated_at)
+         SELECT ?, id, 'provider_account', ?, ?, ?, ?
+         FROM model_provider_accounts
+         WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM model_provider_account_defaults WHERE provider = ?
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM model_provider_accounts
+             WHERE provider = ? AND status = 'active' AND archived_at IS NULL AND id <> ?
+           )
+         ON CONFLICT(provider) DO NOTHING`
+      )
+      .bind(
+        provider,
+        actorId,
+        actorId,
+        now,
+        now,
+        accountId,
+        provider,
+        provider,
+        provider,
+        accountId
       );
   }
 

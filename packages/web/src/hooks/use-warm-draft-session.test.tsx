@@ -23,6 +23,8 @@ const request = (model = "openai/gpt-5.4"): WarmDraftSessionRequest => ({
     openai: { mode: "provider_account", accountId: "a".repeat(32) },
     xai: { mode: "api_key" },
   },
+  providerDefaults: [],
+  providerAccountStates: [],
 });
 
 describe("useWarmDraftSession", () => {
@@ -31,6 +33,8 @@ describe("useWarmDraftSession", () => {
   it("derives one stable identity from the complete launch request", () => {
     expect(warmDraftSessionIdentity(request())).toBe(
       warmDraftSessionIdentity({
+        providerDefaults: [],
+        providerAccountStates: [],
         providerSelections: {
           xai: { mode: "api_key" },
           openai: { accountId: "a".repeat(32), mode: "provider_account" },
@@ -59,6 +63,172 @@ describe("useWarmDraftSession", () => {
 
     rerender({ launchRequest: request("openai/gpt-5.5") });
     await waitFor(() => expect(retireWarmDraftSession).toHaveBeenCalledWith("session-1"));
+    expect(result.current.sessionId).toBeNull();
+  });
+
+  it("retires a draft and warms the explicit provider account after authentication changes", async () => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(Response.json({ sessionId: "legacy-session", status: "created" }))
+      .mockResolvedValueOnce(Response.json({ sessionId: "account-session", status: "created" }));
+    const initial = { ...request(), providerSelections: {} };
+    const explicit = {
+      ...initial,
+      providerSelections: {
+        xai: { mode: "provider_account" as const, accountId: "b".repeat(32) },
+      },
+    };
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: initial } }
+    );
+
+    await act(async () => {
+      await result.current.warm();
+    });
+    rerender({ launchRequest: explicit });
+    await waitFor(() => expect(retireWarmDraftSession).toHaveBeenCalledWith("legacy-session"));
+    await act(async () => {
+      await result.current.warm();
+    });
+
+    expect(browserApiFetch).toHaveBeenLastCalledWith(
+      "/api/sessions",
+      expect.objectContaining({ body: JSON.stringify(explicit) })
+    );
+    expect(result.current.sessionId).toBe("account-session");
+  });
+
+  it("retires a draft when its implicit provider default changes", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ sessionId: "default-session", status: "created" })
+    );
+    const initial: WarmDraftSessionRequest = {
+      ...request(),
+      providerSelections: {},
+      providerDefaults: [
+        {
+          provider: "xai" as const,
+          providerAccountId: "a".repeat(32),
+          unattendedMode: "provider_account" as const,
+        },
+      ],
+      providerAccountStates: [
+        {
+          id: "a".repeat(32),
+          provider: "xai",
+          status: "active",
+          archivedAt: null,
+        },
+      ],
+    };
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: initial } }
+    );
+
+    await act(async () => {
+      await result.current.warm();
+    });
+    rerender({
+      launchRequest: {
+        ...initial,
+        providerDefaults: [
+          {
+            ...initial.providerDefaults[0],
+            providerAccountId: "b".repeat(32),
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => expect(retireWarmDraftSession).toHaveBeenCalledWith("default-session"));
+    expect(result.current.sessionId).toBeNull();
+  });
+
+  it("retires a draft when the implicit default account becomes unavailable", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ sessionId: "active-default-session", status: "created" })
+    );
+    const initial: WarmDraftSessionRequest = {
+      ...request(),
+      providerSelections: {},
+      providerDefaults: [
+        {
+          provider: "xai" as const,
+          providerAccountId: "a".repeat(32),
+          unattendedMode: "provider_account" as const,
+        },
+      ],
+      providerAccountStates: [
+        {
+          id: "a".repeat(32),
+          provider: "xai",
+          status: "active",
+          archivedAt: null,
+        },
+      ],
+    };
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: initial } }
+    );
+
+    await act(async () => {
+      await result.current.warm();
+    });
+    rerender({
+      launchRequest: {
+        ...initial,
+        providerAccountStates: [
+          {
+            ...initial.providerAccountStates[0],
+            status: "reconnect_required" as const,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() =>
+      expect(retireWarmDraftSession).toHaveBeenCalledWith("active-default-session")
+    );
+    expect(result.current.sessionId).toBeNull();
+  });
+
+  it("retires a draft when an explicitly selected account becomes unavailable", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ sessionId: "explicit-account-session", status: "created" })
+    );
+    const accountId = "b".repeat(32);
+    const initial: WarmDraftSessionRequest = {
+      ...request(),
+      providerSelections: { xai: { mode: "provider_account", accountId } },
+      providerAccountStates: [
+        { id: accountId, provider: "xai", status: "active", archivedAt: null },
+      ],
+    };
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: initial } }
+    );
+
+    await act(async () => {
+      await result.current.warm();
+    });
+    rerender({
+      launchRequest: {
+        ...initial,
+        providerAccountStates: [
+          {
+            ...initial.providerAccountStates[0],
+            status: "reconnect_required" as const,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() =>
+      expect(retireWarmDraftSession).toHaveBeenCalledWith("explicit-account-session")
+    );
     expect(result.current.sessionId).toBeNull();
   });
 

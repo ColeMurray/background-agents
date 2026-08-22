@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import type {
+  ModelProviderAccount,
+  ModelProviderAccountDefault,
+  ModelProviderSelections,
+} from "@open-inspect/shared/types/provider-accounts";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
@@ -12,6 +16,11 @@ export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   reasoningEffort?: string;
   skillSelection: SessionSkillSelection;
   providerSelections: ModelProviderSelections;
+  providerDefaults: Pick<
+    ModelProviderAccountDefault,
+    "provider" | "providerAccountId" | "unattendedMode"
+  >[];
+  providerAccountStates: Pick<ModelProviderAccount, "id" | "provider" | "status" | "archivedAt">[];
 };
 
 export function warmDraftSessionIdentity(request: WarmDraftSessionRequest | null): string | null {

@@ -37,8 +37,11 @@ describe("ProviderAuthControls menu", () => {
       />
     );
 
-    const trigger = screen.getByRole("button", { name: "OpenAI authentication options" });
+    const trigger = screen.getByRole("button", {
+      name: "OpenAI authentication options, Team ChatGPT",
+    });
     expect(trigger).toHaveAttribute("title", "OpenAI authentication");
+    expect(trigger).toHaveTextContent("OpenAI: Team ChatGPT");
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 
     expect(await screen.findByText("Session options")).toBeInTheDocument();
@@ -55,6 +58,32 @@ describe("ProviderAuthControls menu", () => {
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No account" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
+  });
+
+  it("shows the effective default on the compact trigger", () => {
+    render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[account]}
+        defaultValue={{
+          provider: "openai",
+          providerAccountId: account.id,
+          unattendedMode: "provider_account",
+          createdBy: null,
+          updatedBy: null,
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "OpenAI authentication options, Team ChatGPT",
+      })
+    ).toHaveTextContent("OpenAI: Team ChatGPT");
   });
 
   it("shows the effective unattended API-key default", () => {

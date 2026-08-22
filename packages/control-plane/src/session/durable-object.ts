@@ -91,7 +91,10 @@ import { buildSessionTargetSecretSources } from "./session-target-secrets";
 import type { RepoIdentity, SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
-import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
+import {
+  getProviderAuthenticationError,
+  prepareManagedProviderEnv,
+} from "../sandbox/managed-provider-env";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
@@ -1855,7 +1858,7 @@ export class SessionDO extends DurableObject<Env> {
         brokerSecrets: {},
         providerAuthModes,
       });
-      return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
+      return this.requireProviderAuthentication(session, sandboxEnv, providerAuthModes);
     }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
@@ -1907,6 +1910,28 @@ export class SessionDO extends DurableObject<Env> {
       brokerSecrets: managedSecrets,
       providerAuthModes,
     });
+    return this.requireProviderAuthentication(session, sandboxEnv, providerAuthModes);
+  }
+
+  private requireProviderAuthentication(
+    session: SessionRow,
+    sandboxEnv: Record<string, string>,
+    providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>
+  ): Record<string, string> | undefined {
+    const authenticationError = getProviderAuthenticationError(
+      session.model,
+      sandboxEnv,
+      providerAuthModes
+    );
+    if (authenticationError) {
+      const provider = session.model.split("/", 1)[0];
+      this.log.error("provider_auth.unavailable", {
+        event: "provider_auth.unavailable",
+        provider,
+        auth_mode: providerAuthModes[provider as SubscriptionProviderId],
+      });
+      throw new Error(authenticationError);
+    }
     return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
   }
 

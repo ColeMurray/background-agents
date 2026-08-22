@@ -51,7 +51,7 @@ import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion"
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
-import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
+import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
 import { setProviderSelection } from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
@@ -102,6 +102,12 @@ export default function Home() {
     loading: skillPreviewLoading,
     suggestions: skillSuggestions,
   } = useSkillResolutionPreview(currentSkillPreviewTarget, skillSelection);
+  const routedProviderAccountIds = new Set([
+    ...providerAccounts.defaults.map((providerDefault) => providerDefault.providerAccountId),
+    ...Object.values(providerSelections).flatMap((selection) =>
+      selection?.mode === "provider_account" ? [selection.accountId] : []
+    ),
+  ]);
 
   useEffect(() => {
     if (hasHydratedModelPreferencesRef.current) return;
@@ -120,7 +126,7 @@ export default function Home() {
     loadingEnabledModels ? undefined : enabledModels
   );
 
-  const warmRequest =
+  const warmRequest: WarmDraftSessionRequest | null =
     session && !loadingEnabledModels && targetRequestFields
       ? {
           ...targetRequestFields,
@@ -128,6 +134,21 @@ export default function Home() {
           reasoningEffort,
           skillSelection,
           providerSelections,
+          providerDefaults: providerAccounts.defaults.map(
+            ({ provider, providerAccountId, unattendedMode }) => ({
+              provider,
+              providerAccountId,
+              unattendedMode,
+            })
+          ),
+          providerAccountStates: providerAccounts.accounts
+            .filter((account) => routedProviderAccountIds.has(account.id))
+            .map(({ id, provider, status, archivedAt }) => ({
+              id,
+              provider,
+              status,
+              archivedAt,
+            })),
         }
       : null;
   const {
