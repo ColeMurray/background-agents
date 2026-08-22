@@ -492,7 +492,11 @@ describe("Home", () => {
     const view = render(<Home />);
 
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    const send = screen.getByRole("button", { name: /send/i });
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith("/api/sessions", expect.anything());
+    expect(screen.queryByText("Failed to create session")).not.toBeInTheDocument();
 
     mocks.providerAccountsLoadingValue = false;
     view.rerender(<Home />);

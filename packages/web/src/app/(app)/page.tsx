@@ -238,7 +238,14 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitInFlightRef.current || sessionAttachments.isUploading || loadingEnabledModels) return;
+    if (
+      submitInFlightRef.current ||
+      sessionAttachments.isUploading ||
+      providerAccounts.loading ||
+      loadingEnabledModels
+    ) {
+      return;
+    }
     const hasAttachments = sessionAttachments.attachments.length > 0;
     if (!prompt.trim() && !hasAttachments) return;
     if (!isLaunchable) {
@@ -509,6 +516,7 @@ function HomeContent({
                       disabled={
                         (!prompt.trim() && attachments.items.length === 0) ||
                         attachmentsLocked ||
+                        providerAccounts.loading ||
                         !isLaunchable
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
