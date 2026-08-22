@@ -44,6 +44,10 @@ export class ProviderResourceError extends Error {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 async function requestProviderResponse(
   path: BrowserApiPath,
   init?: { method?: string; body?: unknown; signal?: AbortSignal }
@@ -55,14 +59,15 @@ async function requestProviderResponse(
     signal: init?.signal,
   });
   if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      retryable?: boolean;
-    };
+    const payload: unknown = await response.json().catch(() => ({}));
+    const errorMessage =
+      isRecord(payload) && typeof payload.error === "string" ? payload.error : undefined;
+    const retryable =
+      isRecord(payload) && typeof payload.retryable === "boolean" ? payload.retryable : undefined;
     throw new ProviderResourceError(
-      payload.error || "Provider account request failed",
+      errorMessage || "Provider account request failed",
       response.status,
-      typeof payload.retryable === "boolean" ? payload.retryable : undefined
+      retryable
     );
   }
   return response;

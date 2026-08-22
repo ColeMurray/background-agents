@@ -134,4 +134,13 @@ describe("useWarmDraftSession", () => {
     });
     expect(retireWarmDraftSession).toHaveBeenCalledWith("orphaned-session");
   });
+
+  it("ignores malformed create-session responses", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ sessionId: { id: "unsafe" } }));
+    const { result } = renderHook(() => useWarmDraftSession(request()));
+
+    await expect(result.current.warm()).resolves.toBeNull();
+    expect(retireWarmDraftSession).not.toHaveBeenCalled();
+    expect(result.current.sessionId).toBeNull();
+  });
 });
