@@ -7,6 +7,7 @@ import pytest
 
 from src import web_api
 from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS, MAX_BUILD_TIMEOUT_SECONDS
+from src.sandbox.modal_call import ModalCallTimeoutError
 
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
 CALLBACK_CONTEXT = {
@@ -90,6 +91,61 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
         build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds=2400,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "service_method", "payload"),
+    [
+        (
+            web_api.api_create_build_sandbox,
+            "create",
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": REPOSITORIES,
+                **CALLBACK_CONTEXT,
+            },
+        ),
+        (
+            web_api.api_start_build_sandbox,
+            "start",
+            {
+                "build_id": "imgb-1",
+                "provider_session_id": "modal-session-1",
+                "callback_token": "callback-token",
+            },
+        ),
+        (
+            web_api.api_snapshot_build_sandbox,
+            "snapshot",
+            {"build_id": "imgb-1", "provider_session_id": "modal-session-1"},
+        ),
+        (
+            web_api.api_terminate_build_sandbox,
+            "terminate",
+            {
+                "build_id": "imgb-1",
+                "provider_session_id": "modal-session-1",
+                "reason": "image_build_complete",
+            },
+        ),
+    ],
+)
+async def test_build_endpoints_map_sdk_deadline_to_gateway_timeout(
+    monkeypatch, endpoint, service_method, payload
+):
+    service = _patch_dependencies(monkeypatch)
+    getattr(service, service_method).side_effect = ModalCallTimeoutError(
+        "Modal SDK operation deadline exceeded"
+    )
+
+    with pytest.raises(web_api.HTTPException) as exc_info:
+        await _call(endpoint, payload)
+
+    assert exc_info.value.status_code == 504
+    assert exc_info.value.detail["code"] == "MODAL_SDK_DEADLINE_EXCEEDED"
 
 
 @pytest.mark.asyncio
@@ -618,3 +674,28 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
     assert result["data"]["image_id"] == "im-session-1"
     manager.get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
     manager.take_snapshot.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_generic_snapshot_lookup_deadline_returns_gateway_timeout(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    manager = SimpleNamespace(
+        get_sandbox_by_id=AsyncMock(
+            side_effect=ModalCallTimeoutError("Modal sandbox lookup deadline exceeded")
+        ),
+        take_snapshot=AsyncMock(),
+    )
+    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+
+    with pytest.raises(web_api.HTTPException) as exc_info:
+        await _call_generic_snapshot(
+            {
+                "sandbox_id": "modal-session-1",
+                "session_id": "session-1",
+                "reason": "manual",
+            }
+        )
+
+    assert exc_info.value.status_code == 504
+    assert exc_info.value.detail["code"] == "MODAL_SDK_DEADLINE_EXCEEDED"
+    manager.take_snapshot.assert_not_awaited()

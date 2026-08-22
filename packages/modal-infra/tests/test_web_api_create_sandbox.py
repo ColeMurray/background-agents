@@ -9,6 +9,7 @@ from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox import manager as manager_module
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS
+from src.sandbox.modal_call import ModalCallTimeoutError
 
 
 def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,6 +131,54 @@ async def test_create_sandbox_forwards_timeout(monkeypatch):
 
     assert result["success"] is True
     assert captured["config"].timeout_seconds == 14_400
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_maps_sdk_deadline_to_gateway_timeout(monkeypatch):
+    class TimeoutManager:
+        async def create_sandbox(self, _config):
+            raise ModalCallTimeoutError("Modal sandbox creation deadline exceeded")
+
+    _patch_auth(monkeypatch)
+    monkeypatch.setattr(manager_module, "SandboxManager", TimeoutManager)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_create_sandbox(
+            {
+                "session_id": "sess-1",
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+            }
+        )
+
+    assert exc_info.value.status_code == 504
+    assert exc_info.value.detail == {
+        "code": "MODAL_SDK_DEADLINE_EXCEEDED",
+        "message": "Modal sandbox creation deadline exceeded",
+    }
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_maps_sdk_deadline_to_gateway_timeout(monkeypatch):
+    class TimeoutManager:
+        async def restore_from_snapshot(self, **_kwargs):
+            raise ModalCallTimeoutError("Modal sandbox creation deadline exceeded")
+
+    _patch_auth(monkeypatch)
+    monkeypatch.setattr(manager_module, "SandboxManager", TimeoutManager)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_restore_sandbox(
+            {
+                "snapshot_image_id": "image-1",
+                "session_config": {"session_id": "sess-1"},
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+            }
+        )
+
+    assert exc_info.value.status_code == 504
+    assert exc_info.value.detail["code"] == "MODAL_SDK_DEADLINE_EXCEEDED"
 
 
 @pytest.mark.asyncio
