@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => ({
     updatedAt: number;
     archivedAt: null;
   }>,
+  providerAccountsLoadingValue: false,
   skillPreview: {
     skills: [
       {
@@ -134,7 +135,7 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
     providers: [],
     accounts: mocks.providerAccountsValue,
     defaults: [],
-    loading: false,
+    loading: mocks.providerAccountsLoadingValue,
     error: undefined,
     refresh: vi.fn(),
   }),
@@ -167,6 +168,7 @@ beforeEach(() => {
     },
   ];
   mocks.providerAccountsValue = [];
+  mocks.providerAccountsLoadingValue = false;
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -477,6 +479,27 @@ describe("Home", () => {
       model: openAiModel,
       providerSelections: { openai: { mode: "provider_account", accountId } },
     });
+  });
+
+  it("waits for provider accounts and removes a stale stored selection", async () => {
+    const staleAccountId = "b".repeat(32);
+    localStorage.setItem(
+      "open-inspect-last-provider-selections",
+      JSON.stringify({ xai: { mode: "provider_account", accountId: staleAccountId } })
+    );
+    mocks.providerAccountsLoadingValue = true;
+    const user = userEvent.setup();
+    const view = render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith("/api/sessions", expect.anything());
+
+    mocks.providerAccountsLoadingValue = false;
+    view.rerender(<Home />);
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(sessionCreateBody()).toMatchObject({ providerSelections: {} }));
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe("{}");
   });
 
   it("waits for environments to load before restoring a stored environment", async () => {

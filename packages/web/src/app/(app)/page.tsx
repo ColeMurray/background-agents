@@ -56,7 +56,11 @@ import type {
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
-import { parseStoredProviderSelections, setProviderSelection } from "@/lib/provider-selection";
+import {
+  parseStoredProviderSelections,
+  reconcileProviderSelections,
+  setProviderSelection,
+} from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
@@ -93,6 +97,7 @@ export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
+  const [providerSelectionsHydrated, setProviderSelectionsHydrated] = useState(false);
   const providerAccounts = useProviderAccounts();
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
@@ -121,8 +126,34 @@ export default function Home() {
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
     if (storedProviderSelections) setProviderSelections(storedProviderSelections);
+    setProviderSelectionsHydrated(true);
     hasHydratedModelPreferencesRef.current = true;
   }, []);
+
+  const availableProviderSelections = providerAccounts.loading
+    ? providerSelections
+    : reconcileProviderSelections(providerSelections, providerAccounts.accounts);
+
+  useEffect(() => {
+    if (
+      !providerSelectionsHydrated ||
+      providerAccounts.loading ||
+      availableProviderSelections === providerSelections
+    ) {
+      return;
+    }
+
+    setProviderSelections(availableProviderSelections);
+    localStorage.setItem(
+      LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
+      JSON.stringify(availableProviderSelections)
+    );
+  }, [
+    availableProviderSelections,
+    providerAccounts.loading,
+    providerSelections,
+    providerSelectionsHydrated,
+  ]);
 
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? storedPreference,
@@ -130,13 +161,17 @@ export default function Home() {
   );
 
   const warmRequest =
-    session && !loadingEnabledModels && targetRequestFields
+    session &&
+    providerSelectionsHydrated &&
+    !providerAccounts.loading &&
+    !loadingEnabledModels &&
+    targetRequestFields
       ? {
           ...targetRequestFields,
           model: selectedModel,
           reasoningEffort,
           skillSelection,
-          providerSelections,
+          providerSelections: availableProviderSelections,
         }
       : null;
   const {
@@ -172,11 +207,11 @@ export default function Home() {
 
   const handleProviderSelectionChange = useCallback(
     (provider: SubscriptionProviderId, selection: ProviderAuthSelection | undefined) => {
-      const next = setProviderSelection(providerSelections, provider, selection);
+      const next = setProviderSelection(availableProviderSelections, provider, selection);
       setProviderSelections(next);
       localStorage.setItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY, JSON.stringify(next));
     },
-    [providerSelections]
+    [availableProviderSelections]
   );
 
   const handlePromptChange = (value: string) => {
@@ -297,7 +332,7 @@ export default function Home() {
       skillPreview={skillPreview}
       skillPreviewLoading={skillPreviewLoading}
       skillSuggestions={skillSuggestions}
-      providerSelections={providerSelections}
+      providerSelections={availableProviderSelections}
       onProviderSelectionChange={handleProviderSelectionChange}
       providerAccounts={providerAccounts}
     />

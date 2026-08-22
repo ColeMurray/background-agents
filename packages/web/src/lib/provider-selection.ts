@@ -1,5 +1,7 @@
 import {
   modelProviderSelectionsSchema,
+  SUBSCRIPTION_PROVIDER_IDS,
+  type ModelProviderAccount,
   type ModelProviderSelections,
   type ProviderAuthSelection,
   type SubscriptionProviderId,
@@ -18,6 +20,33 @@ export function parseStoredProviderSelections(
   } catch {
     return null;
   }
+}
+
+export function reconcileProviderSelections(
+  selections: ModelProviderSelections,
+  accounts: ModelProviderAccount[]
+): ModelProviderSelections {
+  let changed = false;
+  const next: ModelProviderSelections = {};
+
+  for (const provider of SUBSCRIPTION_PROVIDER_IDS) {
+    const selection = selections[provider];
+    if (!selection) continue;
+
+    const available =
+      selection.mode === "api_key" ||
+      accounts.some(
+        (account) =>
+          account.id === selection.accountId &&
+          account.provider === provider &&
+          account.status === "active" &&
+          !account.archivedAt
+      );
+    if (available) next[provider] = selection;
+    else changed = true;
+  }
+
+  return changed ? next : selections;
 }
 
 export function setProviderSelection(

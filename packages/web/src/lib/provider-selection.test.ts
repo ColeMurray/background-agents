@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
   parseStoredProviderSelections,
+  reconcileProviderSelections,
   setProviderSelection,
   type ProviderSelectionDrafts,
 } from "./provider-selection";
 
 describe("provider selection state", () => {
+  const account = {
+    id: "a".repeat(32),
+    provider: "openai" as const,
+    displayName: "Team ChatGPT",
+    externalAccountId: null,
+    status: "active" as const,
+    createdBy: null,
+    updatedBy: null,
+    lastVerifiedAt: null,
+    lastUsedAt: null,
+    createdAt: 1,
+    updatedAt: 1,
+    archivedAt: null,
+  };
+
   it("retains explicit state for every provider while another provider changes", () => {
     let state: ProviderSelectionDrafts = {};
     state = setProviderSelection(state, "openai", {
@@ -51,4 +67,24 @@ describe("provider selection state", () => {
       expect(parseStoredProviderSelections(value)).toBeNull();
     }
   );
+
+  it("removes unavailable accounts while preserving API-key selections", () => {
+    expect(
+      reconcileProviderSelections(
+        {
+          openai: { mode: "provider_account", accountId: account.id },
+          xai: { mode: "api_key" },
+        },
+        [{ ...account, status: "disabled" }]
+      )
+    ).toEqual({ xai: { mode: "api_key" } });
+  });
+
+  it("retains selections for active matching accounts", () => {
+    const selections: ProviderSelectionDrafts = {
+      openai: { mode: "provider_account", accountId: account.id },
+    };
+
+    expect(reconcileProviderSelections(selections, [account])).toBe(selections);
+  });
 });
