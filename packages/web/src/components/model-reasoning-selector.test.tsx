@@ -37,6 +37,11 @@ const items = [
         name: "GPT 5.6 Sol",
         description: "Frontier model",
       },
+      {
+        id: "openai/gpt-5.5",
+        name: "GPT 5.5",
+        description: "Latest flagship model",
+      },
     ],
   },
   {
@@ -126,7 +131,47 @@ describe("ModelReasoningSelector", () => {
     const trigger = screen.getByRole("button", { name: /model and effort/i });
     expect(trigger).toHaveTextContent("gpt 5.6 solMedium");
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-    expect(await screen.findByRole("menuitem", { name: /effort.*medium/i })).toBeInTheDocument();
+    const effortMenu = await screen.findByRole("menuitem", { name: /effort.*medium/i });
+    effortMenu.focus();
+    fireEvent.keyDown(effortMenu, { key: "ArrowRight" });
+    expect(await screen.findByRole("menuitemradio", { name: "Default" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+  });
+
+  it("allows returning to the default effort", async () => {
+    const onReasoningEffortChange = vi.fn();
+    const { rerender } = render(
+      <ModelReasoningSelector
+        selectedModel="openai/gpt-5.5"
+        reasoningEffort="high"
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={onReasoningEffortChange}
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: /model and effort/i });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const effortMenu = await screen.findByRole("menuitem", { name: /effort/i });
+    effortMenu.focus();
+    fireEvent.keyDown(effortMenu, { key: "ArrowRight" });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Default" }));
+    expect(onReasoningEffortChange).toHaveBeenCalledWith(undefined);
+
+    rerender(
+      <ModelReasoningSelector
+        selectedModel="openai/gpt-5.5"
+        reasoningEffort={undefined}
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={onReasoningEffortChange}
+      />
+    );
+    expect(screen.getByRole("button", { name: /model and effort/i })).toHaveTextContent(
+      "gpt 5.5Default"
+    );
   });
 
   it("drills into model options without a clipped side menu on mobile", async () => {

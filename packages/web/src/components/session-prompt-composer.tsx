@@ -49,7 +49,7 @@ type SessionPromptComposerProps = {
     reasoningEffort: ReasoningEffort | undefined;
     items: ModelCategory[];
     onModelChange: (model: ValidModel) => void;
-    onReasoningEffortChange: (value: ReasoningEffort) => void;
+    onReasoningEffortChange: (value: ReasoningEffort | undefined) => void;
   };
 };
 

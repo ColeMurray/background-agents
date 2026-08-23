@@ -621,7 +621,7 @@ function useModelSelection(sessionState: SessionState) {
   }, []);
 
   const setReasoningEffort = useCallback(
-    (nextReasoningEffort: ReasoningEffort) => {
+    (nextReasoningEffort: ReasoningEffort | undefined) => {
       setModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [selectedModel]

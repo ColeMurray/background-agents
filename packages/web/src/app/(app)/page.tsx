@@ -206,7 +206,7 @@ export default function Home() {
   );
 
   const handleReasoningEffortChange = useCallback(
-    (nextReasoningEffort: ReasoningEffort) => {
+    (nextReasoningEffort: ReasoningEffort | undefined) => {
       saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [saveModelPreferenceDraft, selectedModel]
@@ -386,7 +386,7 @@ function HomeContent({
   selectedModel: ValidModel;
   setSelectedModel: (value: ValidModel) => void;
   reasoningEffort: ReasoningEffort | undefined;
-  setReasoningEffort: (value: ReasoningEffort) => void;
+  setReasoningEffort: (value: ReasoningEffort | undefined) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   attachments: {

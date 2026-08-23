@@ -32,7 +32,9 @@ export function resolveModelPreference(
   return {
     model,
     reasoningEffort:
-      reasoningConfig?.efforts.find((effort) => effort === preference.reasoningEffort) ??
-      reasoningConfig?.default,
+      preference.reasoningEffort === undefined
+        ? undefined
+        : (reasoningConfig?.efforts.find((effort) => effort === preference.reasoningEffort) ??
+          reasoningConfig?.default),
   };
 }

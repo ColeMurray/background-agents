@@ -29,9 +29,11 @@ type ModelReasoningSelectorProps = {
   reasoningEffort: ReasoningEffort | undefined;
   items: ModelCategory[];
   onModelChange: (model: ValidModel) => void;
-  onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onReasoningEffortChange: (effort: ReasoningEffort | undefined) => void;
   disabled?: boolean;
 };
+
+const DEFAULT_EFFORT_VALUE = "__default__";
 
 function formatEffort(effort: string): string {
   return effort === "xhigh" ? "XHigh" : `${effort.charAt(0).toUpperCase()}${effort.slice(1)}`;
@@ -126,7 +128,7 @@ export function ModelReasoningSelector({
                 reasoningConfig && (
                   <EffortOptions
                     efforts={reasoningConfig.efforts}
-                    value={selectedEffort}
+                    value={reasoningEffort}
                     onChange={onReasoningEffortChange}
                   />
                 )
@@ -159,7 +161,7 @@ export function ModelReasoningSelector({
                 <DropdownMenuSubContent align="end" collisionPadding={8} className="w-40">
                   <EffortOptions
                     efforts={reasoningConfig.efforts}
-                    value={selectedEffort}
+                    value={reasoningEffort}
                     onChange={onReasoningEffortChange}
                   />
                 </DropdownMenuSubContent>
@@ -220,16 +222,21 @@ function EffortOptions({
 }: {
   efforts: readonly ReasoningEffort[];
   value: ReasoningEffort | undefined;
-  onChange: (effort: ReasoningEffort) => void;
+  onChange: (effort: ReasoningEffort | undefined) => void;
 }) {
   return (
     <DropdownMenuRadioGroup
-      value={value}
+      value={value ?? DEFAULT_EFFORT_VALUE}
       onValueChange={(nextValue) => {
+        if (nextValue === DEFAULT_EFFORT_VALUE) {
+          onChange(undefined);
+          return;
+        }
         const effort = efforts.find((candidate) => candidate === nextValue);
         if (effort) onChange(effort);
       }}
     >
+      <DropdownMenuRadioItem value={DEFAULT_EFFORT_VALUE}>Default</DropdownMenuRadioItem>
       {efforts.map((effort) => (
         <DropdownMenuRadioItem key={effort} value={effort}>
           {formatEffort(effort)}
