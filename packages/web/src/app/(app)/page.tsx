@@ -470,6 +470,10 @@ function HomeContent({
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
+              <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
+                <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
+              </div>
+
               <div
                 className={`border border-border bg-input ${isDraggingOver ? "ring-2 ring-accent" : ""}`}
                 onPaste={handlePaste}
@@ -545,18 +549,24 @@ function HomeContent({
                   </div>
                 </div>
 
-                {/* Footer row with target and model controls */}
+                {/* Footer row with session controls */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
-                  {/* Left side - Target selector + Model controls */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                    <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
-
                     <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}
                       items={modelOptions}
                       onModelChange={setSelectedModel}
                       onReasoningEffortChange={setReasoningEffort}
+                      disabled={creating}
+                    />
+
+                    <SessionSkillSelector
+                      value={skillSelection}
+                      onChange={setSkillSelection}
+                      target={skillPreviewTarget}
+                      preview={skillPreview}
+                      previewLoading={skillPreviewLoading}
                       disabled={creating}
                     />
 
@@ -575,15 +585,6 @@ function HomeContent({
                         }
                       />
                     )}
-
-                    <SessionSkillSelector
-                      value={skillSelection}
-                      onChange={setSkillSelection}
-                      target={skillPreviewTarget}
-                      preview={skillPreview}
-                      previewLoading={skillPreviewLoading}
-                      disabled={creating}
-                    />
                   </div>
                 </div>
               </div>

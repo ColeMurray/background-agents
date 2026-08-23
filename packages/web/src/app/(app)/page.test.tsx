@@ -499,6 +499,10 @@ describe("Home", () => {
     const authenticationTrigger = await screen.findByRole("button", {
       name: /^OpenAI authentication options/,
     });
+    const skillTrigger = screen.getByRole("button", { name: /all skills/i });
+    expect(
+      skillTrigger.compareDocumentPosition(authenticationTrigger) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     fireEvent.pointerDown(authenticationTrigger, { button: 0, ctrlKey: false });
     const authenticationMenu = await screen.findByRole("menuitem", {
       name: "OpenAI authentication",
@@ -572,10 +576,20 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /background-agents/i });
   });
 
-  it("keeps the composer footer compact", async () => {
+  it("shows the repository and branch above the composer", async () => {
     render(<Home />);
 
+    const repository = await screen.findByRole("button", { name: /background-agents/i });
     const branch = await screen.findByText("main");
+    const composer = screen.getByPlaceholderText("What do you want to build?");
+    expect(
+      repository.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      branch.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(repository.querySelectorAll("svg")).toHaveLength(1);
+    expect(branch.closest("button")?.querySelectorAll("svg")).toHaveLength(1);
     expect(branch).toHaveClass("max-w-[9rem]", "truncate");
     expect(screen.queryByText("build agent")).not.toBeInTheDocument();
   });
