@@ -64,7 +64,7 @@ export interface SkillImportResult {
   skillMarkdown: string;
   revisionSha256: string;
   totalBytes: number;
-  files: { path: string; sizeBytes: number; executable: boolean }[];
+  files: { path: string; content: string; sizeBytes: number; executable: boolean }[];
 }
 
 interface FetchedSourceFile {
@@ -403,6 +403,7 @@ export async function fetchSkillImport(
     totalBytes: revision.totalBytes,
     files: revision.files.map((file) => ({
       path: file.path,
+      content: file.content,
       sizeBytes: file.sizeBytes,
       executable: file.executable,
     })),

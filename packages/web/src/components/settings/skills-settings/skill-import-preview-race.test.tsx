@@ -69,7 +69,14 @@ const preview: SkillImportPreviewResponse = {
   skillMarkdown: "---\nname: deploy-service\n---\n",
   revisionSha256: "c".repeat(64),
   totalBytes: 40,
-  files: [{ path: "SKILL.md", sizeBytes: 40, executable: false }],
+  files: [
+    {
+      path: "SKILL.md",
+      content: "---\nname: deploy-service\n---\n",
+      sizeBytes: 40,
+      executable: false,
+    },
+  ],
   warnings: [],
   nameAvailable: true,
 };

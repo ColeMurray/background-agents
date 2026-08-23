@@ -36,7 +36,7 @@ import {
   parsePattern,
   type RequestContext,
   type Route,
-  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   defineRoutes,
 } from "./shared";
 
@@ -78,7 +78,6 @@ function audit(ctx: RequestContext, event: SkillAuditEvent): void {
 
 function canonicalUserId(ctx: RequestContext): string | null {
   if (ctx.principal?.kind === "user") return ctx.principal.userId;
-  if (ctx.principal?.kind === "service") return ctx.principal.actor?.canonicalUserId ?? null;
   return null;
 }
 
@@ -309,10 +308,17 @@ async function handleImportSkill(
 async function recordedImportSource(
   ctx: RequestContext,
   skillId: string,
-  ref: string | null | undefined
+  ref: string | null | undefined,
+  providerName: string
 ): Promise<SkillImportSourceInput | Response> {
   const source = await new SkillStore(ctx.db).latestImportSource(skillId);
   if (!source) return error("This skill was not imported from a repository", 409);
+  if (source.provider !== providerName) {
+    return error(
+      `This skill was imported from ${source.provider}, but this deployment uses ${providerName}`,
+      409
+    );
+  }
   return {
     repository: { repoOwner: source.repoOwner, repoName: source.repoName },
     ref: ref ?? source.requestedRef,
@@ -334,14 +340,11 @@ async function handlePreviewSkillReimport(
   if (!parsed.success) return error("Invalid skill re-import", 400);
   const skill = await new SkillStore(ctx.db).get(id);
   if (!skill) return error("Skill not found", 404);
-  const source = await recordedImportSource(ctx, id, parsed.data.ref);
-  if (source instanceof Response) return source;
   try {
-    const result = await fetchSkillImport(
-      createRouteSourceControlProvider(env),
-      source,
-      skill.name
-    );
+    const provider = createRouteSourceControlProvider(env);
+    const source = await recordedImportSource(ctx, id, parsed.data.ref, provider.name);
+    if (source instanceof Response) return source;
+    const result = await fetchSkillImport(provider, source, skill.name);
     return json(await importPreviewResponse(ctx, result, skill.name));
   } catch (e) {
     return skillImportWriteError(e);
@@ -367,14 +370,11 @@ async function handleReimportSkill(
   const store = new SkillStore(ctx.db);
   const skill = await store.get(id);
   if (!skill) return error("Skill not found", 404);
-  const source = await recordedImportSource(ctx, id, parsed.data.ref);
-  if (source instanceof Response) return source;
   try {
-    const result = await fetchSkillImport(
-      createRouteSourceControlProvider(env),
-      source,
-      skill.name
-    );
+    const provider = createRouteSourceControlProvider(env);
+    const source = await recordedImportSource(ctx, id, parsed.data.ref, provider.name);
+    if (source instanceof Response) return source;
+    const result = await fetchSkillImport(provider, source, skill.name);
     const stale = confirmedImport(result, parsed.data);
     if (stale) return stale;
     const applied = await store.applyImportedRevision(
@@ -621,7 +621,7 @@ function profileWriteError(value: unknown): Response {
   throw value;
 }
 
-export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
+export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   { method: "GET", pattern: parsePattern("/skills"), handler: handleListSkills },
   { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
   {

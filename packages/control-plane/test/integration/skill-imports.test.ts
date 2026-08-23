@@ -4,6 +4,7 @@ import { SKILL_LIST_PAGE_SIZE, type SkillImportSource } from "@open-inspect/shar
 import { SkillConflictError, SkillStore } from "../../src/db/skills";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
+import { insertCanonicalUser, insertIdentity } from "./identity-seed-helpers";
 
 const content = {
   description: "Imported deployment instructions",
@@ -170,6 +171,50 @@ describe("managed skill import routes", () => {
     expect(await response.json()).toEqual({
       error: "This skill was not imported from a repository",
     });
+  });
+
+  it("refuses to re-import provenance from a different SCM provider", async () => {
+    const skill = await importedSkill(new SkillStore(env.DB));
+    await env.DB.prepare(
+      "UPDATE skill_import_sources SET provider = 'gitlab' WHERE revision_id = ?"
+    )
+      .bind(skill.currentRevisionId)
+      .run();
+
+    const response = await serviceFetch(`https://test.local/skills/${skill.id}/reimport/preview`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "This skill was imported from gitlab, but this deployment uses github",
+    });
+  });
+
+  it("does not let a linked service actor administer installation-wide skills", async () => {
+    await insertCanonicalUser({
+      id: "canonical-slack-user",
+      email: "linked-slack-user@example.com",
+    });
+    await insertIdentity({
+      id: "slack-skill-admin",
+      userId: "canonical-slack-user",
+      provider: "slack",
+      providerUserId: "U_SKILL_ADMIN",
+    });
+
+    const response = await serviceFetch("https://test.local/skills/import/preview", {
+      method: "POST",
+      service: "slack-bot",
+      actor: "slack:U_SKILL_ADMIN",
+      body: JSON.stringify({
+        source: { repository: { repoOwner: "acme", repoName: "skills" } },
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "Human user authentication required" });
   });
 
   it("requires a revision precondition before re-importing", async () => {

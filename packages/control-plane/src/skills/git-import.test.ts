@@ -119,6 +119,9 @@ describe("fetchSkillImport", () => {
       "scripts/deploy.sh",
     ]);
     expect(result.files.find((file) => file.path === "scripts/deploy.sh")?.executable).toBe(true);
+    expect(result.files.find((file) => file.path === "scripts/deploy.sh")?.content).toBe(
+      "#!/bin/sh\n"
+    );
     expect(result.warnings).toEqual([]);
     expect(result.source).toMatchObject({
       provider: "github",

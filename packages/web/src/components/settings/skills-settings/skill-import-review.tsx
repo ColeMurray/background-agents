@@ -14,6 +14,8 @@ export function SkillImportSourceSummary({
 }) {
   return (
     <dl className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-[10rem_1fr]">
+      <dt className="text-muted-foreground">Provider</dt>
+      <dd className="font-mono text-foreground">{source.provider}</dd>
       <dt className="text-muted-foreground">Repository</dt>
       <dd className="font-mono text-foreground">
         {source.repoOwner}/{source.repoName}
@@ -68,12 +70,19 @@ export function SkillImportReview({ preview }: { preview: SkillImportPreviewResp
         </h4>
         <ul className="mt-2 divide-y divide-border-muted rounded border border-border-muted text-xs">
           {preview.files.map((file) => (
-            <li key={file.path} className="flex items-center justify-between gap-3 px-3 py-1.5">
-              <span className="truncate font-mono text-foreground">{file.path}</span>
-              <span className="shrink-0 text-muted-foreground">
-                {file.executable && <span className="mr-2">executable</span>}
-                {file.sizeBytes.toLocaleString()} bytes
-              </span>
+            <li key={file.path} className="px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate font-mono text-foreground">{file.path}</span>
+                <span className="shrink-0 text-muted-foreground">
+                  {file.executable && <span className="mr-2">executable</span>}
+                  {file.sizeBytes.toLocaleString()} bytes
+                </span>
+              </div>
+              {file.path !== "SKILL.md" && (
+                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-3">
+                  {file.content}
+                </pre>
+              )}
             </li>
           ))}
         </ul>

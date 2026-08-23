@@ -95,14 +95,11 @@ export class SourceControlProviderError extends Error {
   }
 }
 
-/**
- * Parse a provider API response body against its wire schema.
- *
- * A body that is not JSON or does not match the schema throws a permanent
- * SourceControlProviderError naming the offending fields — provider/schema
- * drift must fail loudly rather than flow onward as apparently-valid state.
- */
-function blobLimitError(blobId: string, actualBytes: number, maxBytes: number) {
+function blobLimitError(
+  blobId: string,
+  actualBytes: number,
+  maxBytes: number
+): SourceControlProviderError {
   return new SourceControlProviderError(
     `Blob ${blobId} is ${actualBytes} bytes, over the ${maxBytes}-byte limit`,
     "permanent",
@@ -119,6 +116,7 @@ export async function readResponseBytesWithinLimit(
   const contentLength = response.headers.get("content-length");
   const declared = contentLength === null ? null : Number(contentLength);
   if (declared !== null && Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
     throw blobLimitError(blobId, declared, maxBytes);
   }
   if (!response.body) return new Uint8Array();
@@ -150,6 +148,13 @@ export async function readResponseBytesWithinLimit(
   return bytes;
 }
 
+/**
+ * Parse a provider API response body against its wire schema.
+ *
+ * A body that is not JSON or does not match the schema throws a permanent
+ * SourceControlProviderError naming the offending fields — provider/schema
+ * drift must fail loudly rather than flow onward as apparently-valid state.
+ */
 export async function parseProviderResponse<Schema extends z.ZodType>(
   response: Response,
   schema: Schema,

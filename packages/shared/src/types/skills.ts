@@ -337,6 +337,7 @@ export const skillImportPreviewResponseSchema = z.strictObject({
   files: z.array(
     z.strictObject({
       path: z.string(),
+      content: z.string(),
       sizeBytes: z.number().int().nonnegative(),
       executable: z.boolean(),
     })

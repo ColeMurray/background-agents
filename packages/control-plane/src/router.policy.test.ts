@@ -89,6 +89,10 @@ describe("route policy table", () => {
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],
     ["GET", "/sessions/session-1/skills"],
+    ["GET", "/skills"],
+    ["POST", "/skills/import"],
+    ["POST", "/skills/skill-1/reimport"],
+    ["GET", "/skill-profiles"],
   ])("owns the human-user restriction for %s %s", (method, path) => {
     expect(routeFor(method, path)?.authentication.kind).toBe("user");
   });
