@@ -10,6 +10,8 @@ import {
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  scmGlobalConfigSchema,
+  scmSettingsSchema,
   slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "./integrations";
@@ -70,6 +72,24 @@ describe("resolveBuildTimeoutSeconds", () => {
 
   it("keeps the default below the maximum", () => {
     expect(DEFAULT_BUILD_TIMEOUT_SECONDS).toBeLessThan(MAX_BUILD_TIMEOUT_SECONDS);
+  });
+});
+
+describe("SCM settings schemas", () => {
+  it("parses valid global and repo settings", () => {
+    expect(
+      scmGlobalConfigSchema.safeParse({
+        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "agent" },
+      }).success
+    ).toBe(true);
+    expect(scmSettingsSchema.safeParse({ alwaysUseDraftMode: false }).success).toBe(true);
+  });
+
+  it("rejects malformed global and repo settings", () => {
+    expect(scmGlobalConfigSchema.safeParse({ defaults: { pullRequestLabel: 123 } }).success).toBe(
+      false
+    );
+    expect(scmSettingsSchema.safeParse({ alwaysUseDraftMode: "yes" }).success).toBe(false);
   });
 });
 

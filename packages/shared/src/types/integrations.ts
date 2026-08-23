@@ -32,12 +32,25 @@ export interface GitHubBotSettings {
  *
  * Provider-agnostic: applies to both GitHub and GitLab.
  */
-export interface ScmSettings {
-  /** Always open pull/merge requests created by sessions as drafts. */
-  alwaysUseDraftMode?: boolean;
-  /** Label applied to pull/merge requests created by sessions. */
-  pullRequestLabel?: string;
-}
+export const scmSettingsSchema = z
+  .object({
+    /** Always open pull/merge requests created by sessions as drafts. */
+    alwaysUseDraftMode: z.boolean().optional(),
+    /** Label applied to pull/merge requests created by sessions. */
+    pullRequestLabel: z.string().optional(),
+  })
+  .strict();
+
+export type ScmSettings = z.infer<typeof scmSettingsSchema>;
+
+export const scmGlobalConfigSchema = z
+  .object({
+    enabledRepos: z.array(z.string()).optional(),
+    defaults: scmSettingsSchema.optional(),
+  })
+  .strict();
+
+export type ScmGlobalConfig = z.infer<typeof scmGlobalConfigSchema>;
 
 /** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
 export type ScmRepoSettings = ScmSettings;
@@ -387,7 +400,7 @@ export interface IntegrationSettingsMap {
   vnc: IntegrationEntry<VncSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
-  scm: IntegrationEntry<ScmSettings>;
+  scm: { global: ScmGlobalConfig; repo: ScmRepoSettings };
 }
 
 /** Derived type for the GitHub bot global config. */
@@ -396,7 +409,6 @@ export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type VncGlobalConfig = IntegrationSettingsMap["vnc"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
-export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
 /** Full MCP server config with decrypted credentials. Internal use only. */
