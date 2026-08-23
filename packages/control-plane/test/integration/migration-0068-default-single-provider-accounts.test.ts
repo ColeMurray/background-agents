@@ -20,12 +20,12 @@ async function seedAccount(
 }
 
 async function applyMigration(): Promise<void> {
-  const migration = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith("0067"));
-  if (!migration) throw new Error("Migration 0067 not found in TEST_MIGRATIONS");
+  const migration = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith("0068"));
+  if (!migration) throw new Error("Migration 0068 not found in TEST_MIGRATIONS");
   await env.DB.batch(migration.queries.map((query) => env.DB.prepare(query)));
 }
 
-describe("migration 0067: default single provider accounts", () => {
+describe("migration 0068: default single provider accounts", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
