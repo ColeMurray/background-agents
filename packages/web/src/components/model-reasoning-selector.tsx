@@ -8,7 +8,7 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import { formatModelNameLower } from "@/lib/format";
-import { BackIcon, ChevronDownIcon, ModelIcon } from "@/components/ui/icons";
+import { BackIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
 import {
   DropdownMenu,
@@ -60,7 +60,6 @@ export function ModelReasoningSelector({
           className="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           aria-label={`Model and effort: ${modelLabel}${selectedEffort ? `, ${selectedEffort}` : ""}`}
         >
-          <ModelIcon className="size-3.5 shrink-0" />
           <span className="max-w-[9rem] truncate sm:max-w-none">{modelLabel}</span>
           {selectedEffort && (
             <span className="shrink-0 text-secondary-foreground">

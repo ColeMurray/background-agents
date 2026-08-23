@@ -41,7 +41,7 @@ describe("ProviderAuthControls menu", () => {
       name: "OpenAI authentication options, Team ChatGPT",
     });
     expect(trigger).toHaveAttribute("title", "OpenAI authentication");
-    expect(trigger).toHaveTextContent("OpenAI: Team ChatGPT");
+    expect(trigger).toHaveTextContent("");
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 
     expect(await screen.findByText("Session options")).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe("ProviderAuthControls menu", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
   });
 
-  it("shows the effective default on the compact trigger", () => {
+  it("keeps the effective default in the compact trigger's accessible label", () => {
     render(
       <ProviderAuthControls
         variant="menu"
@@ -83,10 +83,10 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Team ChatGPT",
       })
-    ).toHaveTextContent("OpenAI: Team ChatGPT");
+    ).toHaveTextContent("");
   });
 
-  it("shows when the configured default account is unavailable", () => {
+  it("identifies an unavailable default account in the compact trigger's accessible label", () => {
     render(
       <ProviderAuthControls
         variant="menu"
@@ -109,7 +109,7 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Unavailable account",
       })
-    ).toHaveTextContent("OpenAI: Unavailable account");
+    ).toHaveTextContent("");
   });
 
   it("shows the effective unattended API-key default", () => {

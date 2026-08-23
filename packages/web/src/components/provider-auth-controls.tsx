@@ -101,15 +101,12 @@ export function ProviderAuthControls({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className={`flex max-w-52 items-center gap-1.5 rounded px-2 py-1 text-xs transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
+            className={`rounded p-1 transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
             aria-label={`${providerName} authentication options, ${triggerSelectionLabel}`}
             title={`${providerName} authentication`}
             disabled={disabled}
           >
-            <span className="truncate">
-              {providerName}: {triggerSelectionLabel}
-            </span>
-            <MoreIcon className="size-3.5 shrink-0" />
+            <MoreIcon className="size-3.5" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" className="w-52 max-w-[calc(100vw-2rem)]">

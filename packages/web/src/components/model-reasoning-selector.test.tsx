@@ -53,9 +53,9 @@ describe("ModelReasoningSelector", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: /model and effort/i })).toHaveTextContent(
-      "claude sonnet 4.6High"
-    );
+    const trigger = screen.getByRole("button", { name: /model and effort/i });
+    expect(trigger).toHaveTextContent("claude sonnet 4.6High");
+    expect(trigger.querySelectorAll("svg")).toHaveLength(1);
   });
 
   it("selects model and effort through nested menus", async () => {
