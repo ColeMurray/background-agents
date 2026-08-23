@@ -1,6 +1,17 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxRepository } from "./sandbox-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import type { Logger } from "../logger";
+
+function createLog() {
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn(),
+  } as unknown as Logger;
+}
 
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
@@ -24,10 +35,12 @@ function createMockSql() {
 describe("SandboxRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
   let repository: SandboxRepository;
+  let log: Logger;
 
   beforeEach(() => {
     mock = createMockSql();
-    repository = new SandboxRepository(mock.sql);
+    log = createLog();
+    repository = new SandboxRepository(mock.sql, log);
   });
 
   describe("getSandbox", () => {
@@ -40,6 +53,29 @@ describe("SandboxRepository", () => {
       const sandbox = { id: "sb-1", status: "ready" };
       mock.setData(`SELECT * FROM sandbox LIMIT 1`, [sandbox]);
       expect(repository.getSandbox()).toEqual(sandbox);
+    });
+
+    // This is the read boundary for the sandbox row: the column is bare TEXT
+    // with no CHECK constraint and roughly forty sites consume this status, so
+    // validating here is what stops the same row meaning different things to
+    // different callers. `failed` is the conservative landing spot -- it
+    // refuses to reuse a sandbox we cannot classify while still allowing a
+    // clean spawn, where `pending` would let it be picked up as if fresh.
+    it("validates an unmodelled status to failed and warns", () => {
+      mock.setData(`SELECT * FROM sandbox LIMIT 1`, [{ id: "sb-1", status: "running" }]);
+
+      expect(repository.getSandbox()).toEqual({ id: "sb-1", status: "failed" });
+      expect(log.warn).toHaveBeenCalledWith(
+        "sandbox.status.unrecognized",
+        expect.objectContaining({ status: "running" })
+      );
+    });
+
+    it("leaves a missing status as pending without warning", () => {
+      mock.setData(`SELECT * FROM sandbox LIMIT 1`, [{ id: "sb-1", status: null }]);
+
+      expect(repository.getSandbox()).toEqual({ id: "sb-1", status: "pending" });
+      expect(log.warn).not.toHaveBeenCalled();
     });
   });
 

@@ -72,7 +72,18 @@ export function ProviderAuthControls({
   const effectiveDefaultLabel =
     unattended && defaultValue?.unattendedMode === "api_key"
       ? "No account"
-      : defaultAccount?.displayName;
+      : defaultValue
+        ? (defaultAccount?.displayName ?? "Unavailable account")
+        : undefined;
+  const explicitAccount =
+    value?.mode === "provider_account"
+      ? available.find((account) => account.id === value.accountId)
+      : undefined;
+  const triggerSelectionLabel = value
+    ? value.mode === "api_key"
+      ? "No account"
+      : (explicitAccount?.displayName ?? "Unavailable account")
+    : (effectiveDefaultLabel ?? "Use default");
   const policyDescription = effectiveDefaultLabel
     ? `${policyLabel}: ${effectiveDefaultLabel}`
     : policyLabel;
@@ -90,12 +101,15 @@ export function ProviderAuthControls({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className={`rounded p-1 transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
-            aria-label={`${providerName} authentication options`}
+            className={`flex max-w-52 items-center gap-1.5 rounded px-2 py-1 text-xs transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
+            aria-label={`${providerName} authentication options, ${triggerSelectionLabel}`}
             title={`${providerName} authentication`}
             disabled={disabled}
           >
-            <MoreIcon className="size-4" />
+            <span className="truncate">
+              {providerName}: {triggerSelectionLabel}
+            </span>
+            <MoreIcon className="size-3.5 shrink-0" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" className="w-52 max-w-[calc(100vw-2rem)]">
@@ -142,6 +156,11 @@ export function ProviderAuthControls({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={POLICY}>{policyDescription}</SelectItem>
+          {value?.mode === "provider_account" && !explicitAccount && (
+            <SelectItem value={`${ACCOUNT_PREFIX}${value.accountId}`}>
+              Unavailable account
+            </SelectItem>
+          )}
           {available.map((account) => (
             <SelectItem key={account.id} value={`${ACCOUNT_PREFIX}${account.id}`}>
               {account.displayName}

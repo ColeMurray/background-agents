@@ -56,8 +56,12 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
-import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
-import { reconcileProviderSelections, setProviderSelection } from "@/lib/provider-selection";
+import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
+import {
+  buildInteractiveProviderRoutingIdentity,
+  reconcileProviderSelections,
+  setProviderSelection,
+} from "@/lib/provider-selection";
 import {
   readStoredProviderSelections,
   storeProviderSelections,
@@ -155,7 +159,7 @@ export default function Home() {
     loadingEnabledModels ? undefined : enabledModels
   );
 
-  const warmRequest =
+  const warmRequest: WarmDraftSessionRequest | null =
     session &&
     providerSelectionsHydrated &&
     !providerAccounts.loading &&
@@ -169,12 +173,17 @@ export default function Home() {
           providerSelections: availableProviderSelections,
         }
       : null;
+  const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
+    availableProviderSelections,
+    providerAccounts.defaults,
+    providerAccounts.accounts
+  );
   const {
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
-  } = useWarmDraftSession(warmRequest);
+  } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -236,6 +245,7 @@ export default function Home() {
     if (
       submitInFlightRef.current ||
       sessionAttachments.isUploading ||
+      !providerSelectionsHydrated ||
       providerAccounts.loading ||
       loadingEnabledModels
     ) {
@@ -325,6 +335,7 @@ export default function Home() {
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}
+      providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
@@ -353,6 +364,7 @@ function HomeContent({
   attachments,
   creating,
   isCreatingSession,
+  providerSelectionsHydrated,
   error,
   handleSubmit,
   modelOptions,
@@ -383,6 +395,7 @@ function HomeContent({
   };
   creating: boolean;
   isCreatingSession: boolean;
+  providerSelectionsHydrated: boolean;
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
@@ -512,6 +525,7 @@ function HomeContent({
                       disabled={
                         (!prompt.trim() && attachments.items.length === 0) ||
                         attachmentsLocked ||
+                        !providerSelectionsHydrated ||
                         providerAccounts.loading ||
                         !isLaunchable
                       }

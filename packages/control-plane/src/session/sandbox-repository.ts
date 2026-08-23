@@ -2,10 +2,15 @@ import type { GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { SandboxRow } from "./types";
+import type { Logger } from "../logger";
+import { coerceSandboxStatus } from "../sandbox/sandbox-status";
+
+/** A sandbox row exactly as SQLite returns it, before the status is validated. */
+type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
 
 /** Minimal sandbox state needed for circuit breaker spawn decisions. */
 export interface SandboxCircuitBreakerState {
-  status: string;
+  status: SandboxStatus;
   created_at: number;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
@@ -39,24 +44,39 @@ export interface ResumeSandboxData {
 
 /** Persistence for the sandbox scoped to one session. */
 export class SandboxRepository {
-  constructor(private readonly sql: SqlStorage) {}
+  constructor(
+    private readonly sql: SqlStorage,
+    private readonly log: Logger
+  ) {}
 
   private rows<T>(result: SqlResult): T[] {
     return result.toArray() as T[];
   }
 
+  /**
+   * The session's sandbox row, with its status validated.
+   *
+   * Parsing happens here rather than at any individual consumer so every
+   * caller sees the same value: the column is bare TEXT with no CHECK
+   * constraint, and roughly forty sites read this status across snapshot,
+   * access, alarm, WebSocket, and lifecycle paths. Coercing at one of them
+   * would give the same row different semantics depending on which accessor a
+   * caller happened to use.
+   */
   getSandbox(): SandboxRow | null {
     const result = this.sql.exec(`SELECT * FROM sandbox LIMIT 1`);
-    const rows = this.rows<SandboxRow>(result);
-    return rows[0] ?? null;
+    const rows = this.rows<RawSandboxRow>(result);
+    const row = rows[0];
+    return row ? { ...row, status: coerceSandboxStatus(row.status, this.log) } : null;
   }
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
       `SELECT status, created_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
-    const rows = this.rows<SandboxCircuitBreakerState>(result);
-    return rows[0] ?? null;
+    const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
+    const row = rows[0];
+    return row ? { ...row, status: coerceSandboxStatus(row.status, this.log) } : null;
   }
 
   createSandbox(data: CreateSandboxData): void {

@@ -132,7 +132,6 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(result.sandboxId).toBe("sandbox-456");
       expect(result.providerObjectId).toBe("daytona-sandbox-id");
-      expect(result.status).toBe("started");
       expect(result.createdAt).toBeGreaterThan(0);
 
       // Verify create was called with correct params

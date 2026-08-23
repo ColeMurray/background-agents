@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
-import { initSession, seedSandboxAuthHash, waitForSandboxStatus } from "./helpers";
+import {
+  initSession,
+  queryDO,
+  seedMessage,
+  seedSandboxAuthHash,
+  waitForSandboxStatus,
+} from "./helpers";
 
 describe("GET /internal/state", () => {
   it("state includes sandbox after init", async () => {
@@ -67,7 +73,11 @@ describe("POST /internal/archive", () => {
 });
 
 describe("POST /internal/unarchive", () => {
-  it("unarchive restores to active", async () => {
+  // Unarchive restores; it does not start work. Asserting "active" was the
+  // defect: nothing settles an idle `active` session, because every settle path
+  // runs off execution events, so a restored session with no queued work stayed
+  // in the in-progress group until someone prompted it again.
+  it("unarchive restores an empty session to created, not active", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 
     // First archive
@@ -86,13 +96,85 @@ describe("POST /internal/unarchive", () => {
 
     expect(res.status).toBe(200);
     const body = await res.json<{ status: string }>();
-    expect(body.status).toBe("active");
+    expect(body.status).toBe("created");
 
     // Verify via state endpoint
     const stateRes = await stub.fetch("http://internal/internal/state");
     const state = await stateRes.json<{ status: string }>();
-    expect(state.status).toBe("active");
+    expect(state.status).toBe("created");
   });
+
+  it("unarchive restores a session with finished work to completed", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    const [participant] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "msg-1",
+      authorId: participant.id,
+      content: "do the thing",
+      source: "web",
+      status: "completed",
+      createdAt: 1000,
+    });
+
+    await stub.fetch("http://internal/internal/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1" }),
+    });
+
+    const res = await stub.fetch("http://internal/internal/unarchive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json<{ status: string }>()).toEqual({ status: "completed" });
+
+    const stateRes = await stub.fetch("http://internal/internal/state");
+    expect((await stateRes.json<{ status: string }>()).status).toBe("completed");
+  });
+
+  // The handler unit test mocks the settle service, so these are what actually
+  // pin each message state to the status it produces.
+  // Only terminal message states appear here: a session with a pending or
+  // processing message cannot be archived at all (the archive handler 409s), so
+  // an archived session always has zero queued work.
+  it.each([["failed", "failed"]] as const)(
+    "unarchive settles a %s message to %s",
+    async (messageStatus, expected) => {
+      const { stub } = await initSession({ userId: "user-1" });
+      const [participant] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants LIMIT 1"
+      );
+      await seedMessage(stub, {
+        id: "msg-1",
+        authorId: participant.id,
+        content: "do the thing",
+        source: "web",
+        status: messageStatus,
+        createdAt: 1000,
+      });
+
+      await stub.fetch("http://internal/internal/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "user-1" }),
+      });
+      const res = await stub.fetch("http://internal/internal/unarchive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "user-1" }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json<{ status: string }>()).toEqual({ status: expected });
+    }
+  );
 });
 
 describe("POST /internal/prompt", () => {

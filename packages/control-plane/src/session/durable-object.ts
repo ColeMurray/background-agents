@@ -63,6 +63,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionCoreRepository } from "./session-core-repository";
 import { SandboxRepository } from "./sandbox-repository";
+import { DEFAULT_SANDBOX_STATUS } from "../sandbox/sandbox-status";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -91,7 +92,10 @@ import { buildSessionTargetSecretSources } from "./session-target-secrets";
 import type { RepoIdentity, SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
-import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
+import {
+  getProviderAuthenticationError as resolveProviderAuthenticationError,
+  prepareManagedProviderEnv,
+} from "../sandbox/managed-provider-env";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
@@ -316,11 +320,13 @@ export class SessionDO extends DurableObject<Env> {
     );
     this.participantRepository = new ParticipantRepository(this.sql);
     this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
-    this.sandboxRepository = new SandboxRepository(this.sql);
     this.sessionCoreRepository = new SessionCoreRepository(this.sql, (closure) =>
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
+    // After this.log: the sandbox repository validates the status it reads and
+    // warns on anything unmodelled, so it needs a logger.
+    this.sandboxRepository = new SandboxRepository(this.sql, this.log);
     const ensureInitialized = (rehydrateAlarm?: boolean) => this.ensureInitialized(rehydrateAlarm);
     const clock: Clock = {
       nowMs: () => Date.now(),
@@ -538,6 +544,7 @@ export class SessionDO extends DurableObject<Env> {
         this.participantService,
         this.callbackService,
         this.statusService,
+        (model) => this.getProviderAuthenticationError(model),
         (messageId, messageCreatedAt, completedAt) =>
           this.terminalMessageProjection.recordTerminalMessage({
             messageId,
@@ -1629,7 +1636,7 @@ export class SessionDO extends DurableObject<Env> {
       baseBranch: session.base_branch,
       branchName: session.branch_name,
       status: session.status,
-      sandboxStatus: sandbox?.status ?? "pending",
+      sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
       messageCount: this.messageRepository.getMessageCount(),
       createdAt: session.created_at,
       model: session.model ?? DEFAULT_MODEL,
@@ -1680,7 +1687,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
     const sandbox = this.getSandbox();
-    if (!sandbox || (sandbox.status !== "ready" && sandbox.status !== "running")) {
+    if (!sandbox || sandbox.status !== "ready") {
       return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
     }
 
@@ -1693,7 +1700,7 @@ export class SessionDO extends DurableObject<Env> {
     if (
       !current ||
       current.id !== sandbox.id ||
-      (current.status !== "ready" && current.status !== "running") ||
+      current.status !== "ready" ||
       current.code_server_url !== sandbox.code_server_url ||
       current.code_server_password !== sandbox.code_server_password ||
       current.vnc_url !== sandbox.vnc_url ||
@@ -1831,10 +1838,36 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private async getUserEnvVars(): Promise<Record<string, string> | undefined> {
+    const context = await this.loadUserEnvContext();
+    if (!context) return undefined;
+    return Object.keys(context.sandboxEnv).length === 0 ? undefined : context.sandboxEnv;
+  }
+
+  private async getProviderAuthenticationError(model: string): Promise<string | null> {
+    const context = await this.loadUserEnvContext();
+    if (!context) return null;
+    const issue = resolveProviderAuthenticationError(
+      model,
+      context.sandboxEnv,
+      context.providerAuthModes
+    );
+    if (!issue) return null;
+    this.log.error("provider_auth.unavailable", {
+      event: "provider_auth.unavailable",
+      provider: issue.provider,
+      auth_mode: context.providerAuthModes[issue.provider],
+    });
+    return issue.message;
+  }
+
+  private async loadUserEnvContext(): Promise<{
+    sandboxEnv: Record<string, string>;
+    providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>;
+  } | null> {
     const session = this.getSession();
     if (!session) {
       this.log.warn("Cannot load secrets: no session");
-      return undefined;
+      return null;
     }
 
     const db = this.db;
@@ -1855,7 +1888,7 @@ export class SessionDO extends DurableObject<Env> {
         brokerSecrets: {},
         providerAuthModes,
       });
-      return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
+      return { sandboxEnv, providerAuthModes };
     }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
@@ -1907,7 +1940,7 @@ export class SessionDO extends DurableObject<Env> {
       brokerSecrets: managedSecrets,
       providerAuthModes,
     });
-    return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
+    return { sandboxEnv, providerAuthModes };
   }
 
   /**
@@ -1956,8 +1989,8 @@ export class SessionDO extends DurableObject<Env> {
     return false;
   }
 
-  private updateSandboxStatus(status: string): void {
-    this.sandboxRepository.updateSandboxStatus(status as SandboxStatus);
+  private updateSandboxStatus(status: SandboxStatus): void {
+    this.sandboxRepository.updateSandboxStatus(status);
   }
 
   // HTTP handlers

@@ -9,6 +9,7 @@ import {
   type ProviderCredentialExchangeAccountStatus,
 } from "./provider-account-credentials";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { ProviderDefaultStore } from "./provider-account-defaults";
 
 interface CredentialWriteInput {
   providerAccountId: string;
@@ -103,6 +104,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
   private readonly accounts: ModelProviderAccountStore;
   private readonly credentials: ProviderCredentialStore;
   private readonly authorizations: ProviderAccountAuthorizationStore;
+  private readonly defaults: ProviderDefaultStore;
 
   constructor(
     private readonly db: SqlDatabase,
@@ -111,6 +113,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
     this.accounts = new ModelProviderAccountStore(db);
     this.credentials = new ProviderCredentialStore(db, encryptionKey);
     this.authorizations = new ProviderAccountAuthorizationStore(db);
+    this.defaults = new ProviderDefaultStore(db);
   }
 
   async createAccountWithCredential(
@@ -123,7 +126,16 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
       ...input.credential,
       now: input.now,
     });
-    await this.db.batch([accountStatement, credentialStatement]);
+    await this.db.batch([
+      accountStatement,
+      credentialStatement,
+      this.defaults.bindSetForFirstActiveAccount(
+        input.id,
+        input.provider,
+        input.actorId,
+        input.now
+      ),
+    ]);
     const account = await this.accounts.getById(input.id);
     if (!account) throw new Error("Created provider account could not be read");
     return account;
@@ -215,9 +227,16 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         accountLifecycleVersion: 0,
         reconnectedExisting: false,
       }),
+      this.defaults.bindSetForFirstActiveAccount(
+        input.accountId,
+        input.authorization.provider,
+        input.authorization.userId,
+        input.now
+      ),
     ]);
-    if (results.every((result) => result.meta.changes === 1)) return { type: "created" };
-    if (results.some((result) => result.meta.changes !== 0)) {
+    const requiredResults = results.slice(0, 3);
+    if (requiredResults.every((result) => result.meta.changes === 1)) return { type: "created" };
+    if (requiredResults.some((result) => result.meta.changes !== 0)) {
       throw new Error("Provider authorization create finalization violated atomic invariants");
     }
     if (!(await this.ownsDeviceAuthorizationClaim(input.authorization, input.now))) {

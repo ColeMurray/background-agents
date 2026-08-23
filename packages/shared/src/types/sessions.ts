@@ -2,6 +2,11 @@ import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
 import type { SessionListRepository } from "./repositories";
 
+/**
+ * A session's conversation lifecycle: durable, user-visible, and independent
+ * of whether any compute is currently attached. See `SandboxStatus` for the
+ * compute side; the two are at different levels and share no vocabulary.
+ */
 export const sessionStatusSchema = z.enum([
   "created",
   "active",
@@ -12,32 +17,33 @@ export const sessionStatusSchema = z.enum([
 ]);
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 
-export type SandboxStatus =
-  | "pending"
-  | "spawning"
-  | "connecting"
-  | "warming"
-  | "syncing"
-  | "ready"
-  | "running"
-  | "stale"
-  | "snapshotting"
-  | "stopped"
-  | "failed";
-
+/**
+ * The state of a session's CURRENT sandbox incarnation.
+ *
+ * A session has many incarnations over its lifetime, so this never describes
+ * the session itself — see `SessionStatus` for that. A session may be
+ * `completed` with a live sandbox attached, or `active` with none at all. Do
+ * not render this as the session's status: doing so is what let the sidebar
+ * and the header disagree about the same session.
+ *
+ * Every member here must be producible by some code path. `syncing` and
+ * `running` were removed because nothing in any language ever wrote them;
+ * `warming` is kept because, although it is never persisted, the web client
+ * sets it optimistically on the `sandbox_warming` message and Modal reports
+ * it from its own manager.
+ */
 export const sandboxStatusSchema = z.enum([
   "pending",
   "spawning",
   "connecting",
   "warming",
-  "syncing",
   "ready",
-  "running",
   "stale",
   "snapshotting",
   "stopped",
   "failed",
 ]);
+export type SandboxStatus = z.infer<typeof sandboxStatusSchema>;
 
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
 

@@ -489,7 +489,7 @@ describe("Home", () => {
     const first = render(<Home />);
 
     const authenticationTrigger = await screen.findByRole("button", {
-      name: "OpenAI authentication options",
+      name: /^OpenAI authentication options/,
     });
     fireEvent.pointerDown(authenticationTrigger, { button: 0, ctrlKey: false });
     const authenticationMenu = await screen.findByRole("menuitem", {
@@ -507,7 +507,7 @@ describe("Home", () => {
     localStorage.setItem("open-inspect-last-provider-selections", storedSelection);
     render(<Home />);
     const user = userEvent.setup();
-    await screen.findByRole("button", { name: "OpenAI authentication options" });
+    await screen.findByRole("button", { name: /^OpenAI authentication options/ });
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
     await user.click(screen.getByRole("button", { name: /send/i }));
 

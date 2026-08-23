@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildInteractiveProviderRoutingIdentity,
   parseStoredProviderSelections,
   reconcileProviderSelections,
   setProviderSelection,
@@ -86,5 +87,50 @@ describe("provider selection state", () => {
     };
 
     expect(reconcileProviderSelections(selections, [account])).toBe(selections);
+  });
+
+  it("derives interactive routing from explicit selections before defaults", () => {
+    expect(
+      buildInteractiveProviderRoutingIdentity(
+        { openai: { mode: "api_key" } },
+        [
+          {
+            provider: "openai",
+            providerAccountId: account.id,
+            unattendedMode: "provider_account",
+            createdBy: null,
+            updatedBy: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+        [account]
+      )
+    ).toEqual({
+      openai: { mode: "api_key" },
+      xai: { mode: "legacy_scoped_oauth" },
+    });
+  });
+
+  it("tracks default account eligibility without unattended policy noise", () => {
+    const providerDefault = {
+      provider: "openai" as const,
+      providerAccountId: account.id,
+      unattendedMode: "api_key" as const,
+      createdBy: null,
+      updatedBy: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    expect(buildInteractiveProviderRoutingIdentity({}, [providerDefault], [account])).toEqual({
+      openai: {
+        mode: "provider_account",
+        accountId: account.id,
+        status: "active",
+        archivedAt: null,
+      },
+      xai: { mode: "legacy_scoped_oauth" },
+    });
   });
 });

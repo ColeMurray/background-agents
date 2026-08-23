@@ -37,8 +37,11 @@ describe("ProviderAuthControls menu", () => {
       />
     );
 
-    const trigger = screen.getByRole("button", { name: "OpenAI authentication options" });
+    const trigger = screen.getByRole("button", {
+      name: "OpenAI authentication options, Team ChatGPT",
+    });
     expect(trigger).toHaveAttribute("title", "OpenAI authentication");
+    expect(trigger).toHaveTextContent("OpenAI: Team ChatGPT");
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 
     expect(await screen.findByText("Session options")).toBeInTheDocument();
@@ -55,6 +58,58 @@ describe("ProviderAuthControls menu", () => {
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No account" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
+  });
+
+  it("shows the effective default on the compact trigger", () => {
+    render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[account]}
+        defaultValue={{
+          provider: "openai",
+          providerAccountId: account.id,
+          unattendedMode: "provider_account",
+          createdBy: null,
+          updatedBy: null,
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "OpenAI authentication options, Team ChatGPT",
+      })
+    ).toHaveTextContent("OpenAI: Team ChatGPT");
+  });
+
+  it("shows when the configured default account is unavailable", () => {
+    render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="openai"
+        accounts={[{ ...account, status: "reconnect_required" }]}
+        defaultValue={{
+          provider: "openai",
+          providerAccountId: account.id,
+          unattendedMode: "provider_account",
+          createdBy: null,
+          updatedBy: null,
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "OpenAI authentication options, Unavailable account",
+      })
+    ).toHaveTextContent("OpenAI: Unavailable account");
   });
 
   it("shows the effective unattended API-key default", () => {
@@ -83,6 +138,19 @@ describe("ProviderAuthControls menu", () => {
     expect(screen.queryByText(/Use defaults when each run starts: Team ChatGPT/)).toBeNull();
   });
 
+  it("labels an unavailable account in the standard selector", () => {
+    render(
+      <ProviderAuthControls
+        provider="openai"
+        accounts={[]}
+        value={{ mode: "provider_account", accountId: account.id }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Unavailable account");
+  });
+
   it("disables both control variants while the owning form is locked", () => {
     const { rerender } = render(
       <ProviderAuthControls
@@ -93,7 +161,9 @@ describe("ProviderAuthControls menu", () => {
         onChange={vi.fn()}
       />
     );
-    expect(screen.getByRole("button", { name: "OpenAI authentication options" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "OpenAI authentication options, Use default" })
+    ).toBeDisabled();
 
     rerender(
       <ProviderAuthControls provider="openai" accounts={[account]} disabled onChange={vi.fn()} />
@@ -111,7 +181,9 @@ describe("ProviderAuthControls menu", () => {
         onChange={onChange}
       />
     );
-    const trigger = screen.getByRole("button", { name: "OpenAI authentication options" });
+    const trigger = screen.getByRole("button", {
+      name: "OpenAI authentication options, Use default",
+    });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     const authenticationMenu = await screen.findByRole("menuitem", {
       name: "OpenAI authentication",

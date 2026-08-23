@@ -147,6 +147,14 @@ describe("provider account device authorization routes", () => {
       reconnectedExisting: false,
     });
 
+    const providerDefault = await env.DB.prepare(
+      "SELECT provider_account_id, unattended_mode FROM model_provider_account_defaults WHERE provider = 'xai'"
+    ).first<{ provider_account_id: string; unattended_mode: string }>();
+    expect(providerDefault).toEqual({
+      provider_account_id: connectedBody.account.id,
+      unattended_mode: "provider_account",
+    });
+
     const legacyReconnect = await request(
       `/model-provider-accounts/${connectedBody.account.id}/reconnect`,
       "POST",

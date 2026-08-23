@@ -481,6 +481,9 @@ export function ProviderAccountsSettings() {
                 const providerDefault = defaults.find(
                   (item) => item.provider === provider.provider
                 );
+                const defaultAccount = accounts.find(
+                  (account) => account.id === providerDefault?.providerAccountId
+                );
                 return (
                   <div
                     key={provider.provider}
@@ -491,31 +494,49 @@ export function ProviderAccountsSettings() {
                       {provider.subscriptionName}
                     </div>
                     <div>
-                      <Label htmlFor={`unattended-${provider.provider}`}>Authentication</Label>
-                      <Select
-                        disabled={saving || !providerDefault}
-                        value={providerDefault?.unattendedMode ?? "api_key"}
-                        onValueChange={(value: "provider_account" | "api_key") => {
-                          if (providerDefault && !operationInFlightRef.current)
-                            void run(
-                              () =>
-                                setProviderAccountDefault(
-                                  provider.provider,
-                                  providerDefault.providerAccountId,
-                                  value
-                                ),
-                              "Authentication updated"
-                            );
-                        }}
-                      >
-                        <SelectTrigger id={`unattended-${provider.provider}`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="provider_account">Use default account</SelectItem>
-                          <SelectItem value="api_key">No account</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      {providerDefault ? (
+                        <>
+                          <Label htmlFor={`unattended-${provider.provider}`}>
+                            Automated authentication
+                          </Label>
+                          <Select
+                            disabled={saving}
+                            value={providerDefault.unattendedMode}
+                            onValueChange={(value: "provider_account" | "api_key") => {
+                              if (!operationInFlightRef.current)
+                                void run(
+                                  () =>
+                                    setProviderAccountDefault(
+                                      provider.provider,
+                                      providerDefault.providerAccountId,
+                                      value
+                                    ),
+                                  "Authentication updated"
+                                );
+                            }}
+                          >
+                            <SelectTrigger id={`unattended-${provider.provider}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="provider_account">
+                                Use default: {defaultAccount?.displayName ?? "Unavailable account"}
+                              </SelectItem>
+                              <SelectItem value="api_key">No account (API key)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </>
+                      ) : (
+                        <div className="rounded-md border border-dashed border-border-muted px-3 py-2">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Automated authentication
+                          </p>
+                          <p className="text-sm text-foreground">No default account selected</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            Choose Make default from an account above.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

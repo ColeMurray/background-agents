@@ -84,8 +84,8 @@ export function SessionSidebar({
 
   const {
     needsAttention,
-    running,
-    recent,
+    inProgress,
+    finished,
     childrenMap,
     loading,
     sessionsError,
@@ -287,7 +287,7 @@ export function SessionSidebar({
           </div>
         ) : (
           <>
-            {needsAttention.length === 0 && running.length === 0 && recent.length === 0 ? (
+            {needsAttention.length === 0 && inProgress.length === 0 && finished.length === 0 ? (
               hasSessionListError ? (
                 <div className="flex items-center justify-between gap-2 px-4 py-8 text-sm text-destructive">
                   <span>Unable to load sessions</span>
@@ -308,8 +308,8 @@ export function SessionSidebar({
                   sectionPagination.needsAttention,
                   true
                 )}
-                {renderSessionGroup("Running", running, sectionPagination.running)}
-                {renderSessionGroup("Recent", recent, sectionPagination.recent)}
+                {renderSessionGroup("In progress", inProgress, sectionPagination.inProgress)}
+                {renderSessionGroup("Recent", finished, sectionPagination.finished)}
               </>
             )}
 

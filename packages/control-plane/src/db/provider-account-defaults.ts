@@ -6,7 +6,7 @@ import {
   assertModelProviderId,
   type ModelProviderId,
 } from "../model-provider-accounts/provider-auth-contracts";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export type ProviderUnattendedMode = ProviderAuthMode;
 export type ProviderDefault = ModelProviderAccountDefault;
@@ -65,6 +65,44 @@ export class ProviderDefaultStore {
     if (result.meta.changes === 0) {
       throw new ProviderDefaultConstraintError(`Default requires an active ${provider} account`);
     }
+  }
+
+  bindSetForFirstActiveAccount(
+    accountId: string,
+    provider: ModelProviderId,
+    actorId: string,
+    now: number
+  ): SqlStatement {
+    assertModelProviderId(provider);
+    return this.db
+      .prepare(
+        `INSERT INTO model_provider_account_defaults
+          (provider, provider_account_id, unattended_mode, created_by, updated_by,
+           created_at, updated_at)
+         SELECT ?, id, 'provider_account', ?, ?, ?, ?
+         FROM model_provider_accounts
+         WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM model_provider_account_defaults WHERE provider = ?
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM model_provider_accounts
+             WHERE provider = ? AND status = 'active' AND archived_at IS NULL AND id <> ?
+           )
+         ON CONFLICT(provider) DO NOTHING`
+      )
+      .bind(
+        provider,
+        actorId,
+        actorId,
+        now,
+        now,
+        accountId,
+        provider,
+        provider,
+        provider,
+        accountId
+      );
   }
 
   async get(provider: ModelProviderId): Promise<ProviderDefault | null> {

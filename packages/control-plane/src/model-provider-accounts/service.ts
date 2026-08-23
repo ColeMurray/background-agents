@@ -95,7 +95,10 @@ export class ModelProviderAccountService {
   async create(
     input: ConnectModelProviderAccountRequest,
     actorId: string
-  ): Promise<{ account: ModelProviderAccount; reconnectedExisting: boolean }> {
+  ): Promise<{
+    account: ModelProviderAccount;
+    reconnectedExisting: boolean;
+  }> {
     const adapter = this.requireAdapter(input.provider);
     const connected = await this.connect(adapter, input);
     const now = this.dependencies.now();
@@ -116,20 +119,21 @@ export class ModelProviderAccountService {
     }
 
     try {
+      const account = await this.atomicWriter.createAccountWithCredential({
+        id: this.dependencies.generateId(),
+        provider: input.provider,
+        displayName: input.displayName,
+        externalAccountId,
+        actorId,
+        now,
+        credential: {
+          credentialSchemaVersion: adapter.credentialSchemaVersion,
+          payload: connected.credential,
+          accessTokenExpiresAt: connected.accessTokenExpiresAt,
+        },
+      });
       return {
-        account: await this.atomicWriter.createAccountWithCredential({
-          id: this.dependencies.generateId(),
-          provider: input.provider,
-          displayName: input.displayName,
-          externalAccountId,
-          actorId,
-          now,
-          credential: {
-            credentialSchemaVersion: adapter.credentialSchemaVersion,
-            payload: connected.credential,
-            accessTokenExpiresAt: connected.accessTokenExpiresAt,
-          },
-        }),
+        account,
         reconnectedExisting: false,
       };
     } catch (cause) {
