@@ -101,7 +101,7 @@ function dateLabel(timestamp: number | null) {
 function relativeDateLabel(timestamp: number | null) {
   if (!timestamp) return "Never";
   const relative = formatRelativeTime(timestamp);
-  return relative === "just now" ? relative : `${relative} ago`;
+  return relative === "now" ? relative : `${relative} ago`;
 }
 
 function ProviderIcon({
