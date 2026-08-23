@@ -6,7 +6,7 @@ import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
 import { environmentScope, getRow, seedEnvironment } from "./image-build-helpers";
 
-const QUEUE_NAME = "image-build-finalization-test";
+const QUEUE_NAME = "open-inspect-image-build-finalization-test";
 const COMPLETION_HASH = "a".repeat(64);
 
 async function seedAcceptedBuild(buildId: string): Promise<ImageBuildStore> {

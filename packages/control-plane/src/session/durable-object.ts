@@ -17,6 +17,7 @@ import {
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { ClientMessage } from "@open-inspect/shared/types/websocket";
+import type { SessionCallbackJob } from "@open-inspect/shared/types/session-callback-jobs";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
@@ -58,7 +59,7 @@ import type {
   SessionProviderAuthMode,
   SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
-import type { Env, ClientInfo } from "../types";
+import type { ClientInfo, SessionDOEnv } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionCoreRepository } from "./session-core-repository";
@@ -176,7 +177,7 @@ interface SessionSnapshotEnrichment {
 
 type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
 
-export class SessionDO extends DurableObject<Env> {
+export class SessionDO extends DurableObject<SessionDOEnv> {
   private sql: SqlStorage;
   /**
    * The DO's global-database handle — the single point where env.DB is read.
@@ -300,7 +301,7 @@ export class SessionDO extends DurableObject<Env> {
     diffRetry: () => this.diffsHandler.retry(),
   });
 
-  constructor(ctx: DurableObjectState, env: Env) {
+  constructor(ctx: DurableObjectState, env: SessionDOEnv) {
     super(ctx, env);
     // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
     this.db = env.DB ?? null;
@@ -447,9 +448,15 @@ export class SessionDO extends DurableObject<Env> {
         : undefined;
 
       this._callbackService = new CallbackNotificationService({
-        repository: this.sessionCoreRepository,
         messageRepository: this.messageRepository,
-        env: this.env,
+        jobs: {
+          send: (job: SessionCallbackJob) => {
+            if (!this.env.SESSION_CALLBACK_QUEUE) {
+              throw new Error("SESSION_CALLBACK_QUEUE binding is required");
+            }
+            return this.env.SESSION_CALLBACK_QUEUE.send(job);
+          },
+        },
         completeAutomationRun: scheduler
           ? (completion) => scheduler.runComplete(completion)
           : undefined,

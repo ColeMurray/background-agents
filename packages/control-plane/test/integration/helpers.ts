@@ -275,18 +275,20 @@ export async function seedMessage(
     status: string;
     createdAt: number;
     startedAt?: number;
+    callbackContext?: string;
   }
 ): Promise<void> {
   await runInDurableObject(stub, (instance: SessionDO) => {
     instance.ctx.storage.sql.exec(
-      "INSERT INTO messages (id, author_id, content, source, status, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO messages (id, author_id, content, source, status, created_at, started_at, callback_context) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       msg.id,
       msg.authorId,
       msg.content,
       msg.source,
       msg.status,
       msg.createdAt,
-      msg.startedAt ?? null
+      msg.startedAt ?? null,
+      msg.callbackContext ?? null
     );
   });
 }

@@ -3,6 +3,7 @@
  */
 
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
+import type { SessionCallbackJob } from "@open-inspect/shared/types/session-callback-jobs";
 
 // Environment bindings
 export interface Env {
@@ -21,6 +22,7 @@ export interface Env {
 
   // Durable callback-to-finalizer handoff for provider-session image builds.
   IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
+  SESSION_CALLBACK_QUEUE?: Queue<SessionCallbackJob>;
 
   // R2 buckets
   MEDIA_BUCKET: R2Bucket;
@@ -105,6 +107,12 @@ export interface Env {
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
 }
+
+/** Session-host bindings exclude callback delivery destinations and signing keys. */
+export type SessionDOEnv = Omit<
+  Env,
+  "SLACK_BOT" | "LINEAR_BOT" | "SERVICE_AUTH_SECRET_SLACK_BOT" | "SERVICE_AUTH_SECRET_LINEAR_BOT"
+>;
 
 // Client info (stored in DO memory)
 export interface ClientInfo {

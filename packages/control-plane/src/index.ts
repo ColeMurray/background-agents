@@ -7,7 +7,7 @@
 import { handleRequest } from "./router";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
-import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
+import { consumeControlPlaneQueue } from "./queue-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import {
   ABANDONED_DRAFT_SWEEP_CRON,
@@ -77,7 +77,7 @@ export default {
     await new Scheduler(env.DB, env, createCloudflareBackgroundTasks(ctx)).tick();
   },
 
-  queue: consumeImageBuildFinalizations,
+  queue: consumeControlPlaneQueue,
 };
 
 /**

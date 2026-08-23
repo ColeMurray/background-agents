@@ -117,7 +117,7 @@ export default defineConfig({
             }
             throw new Error(`Unexpected outbound request: ${request.url}`);
           },
-          queueProducers: ["IMAGE_BUILD_FINALIZATION_QUEUE"],
+          queueProducers: ["IMAGE_BUILD_FINALIZATION_QUEUE", "SESSION_CALLBACK_QUEUE"],
           bindings: {
             IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
             SERVICE_AUTH_SECRET_WEB: "test-service-secret-web",

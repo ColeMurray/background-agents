@@ -236,6 +236,9 @@ export type {
   ImageBuildRecordView,
 } from "./image-builds";
 
+export { sessionCallbackJobSchema } from "./session-callback-jobs";
+export type { SessionCallbackJob } from "./session-callback-jobs";
+
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {
   AnalyticsDays,

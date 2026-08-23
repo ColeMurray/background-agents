@@ -12,6 +12,16 @@ resource "cloudflare_queue" "image_build_finalization_dlq" {
   queue_name = "open-inspect-image-build-finalization-dlq-${local.name_suffix}"
 }
 
+resource "cloudflare_queue" "session_callback" {
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-session-callback-${local.name_suffix}"
+}
+
+resource "cloudflare_queue" "session_callback_dlq" {
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-session-callback-dlq-${local.name_suffix}"
+}
+
 # Build control-plane worker bundle (only runs during apply, not plan)
 resource "null_resource" "control_plane_build" {
   triggers = {
@@ -59,6 +69,10 @@ module "control_plane_worker" {
     {
       binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
       queue_name   = cloudflare_queue.image_build_finalization.queue_name
+    },
+    {
+      binding_name = "SESSION_CALLBACK_QUEUE"
+      queue_name   = cloudflare_queue.session_callback.queue_name
     }
   ]
 
@@ -235,6 +249,23 @@ resource "cloudflare_queue_consumer" "image_build_finalization" {
   type              = "worker"
   script_name       = module.control_plane_worker.worker_name
   dead_letter_queue = cloudflare_queue.image_build_finalization_dlq.queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 5
+    max_retries      = 12
+    retry_delay      = 15
+  }
+
+  depends_on = [module.control_plane_worker]
+}
+
+resource "cloudflare_queue_consumer" "session_callback" {
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.session_callback.queue_id
+  type              = "worker"
+  script_name       = module.control_plane_worker.worker_name
+  dead_letter_queue = cloudflare_queue.session_callback_dlq.queue_name
   settings = {
     batch_size       = 1
     max_wait_time_ms = 1000
