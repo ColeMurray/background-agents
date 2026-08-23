@@ -2,6 +2,7 @@ import {
   DEFAULT_KEYBOARD_SHORTCUTS,
   GLOBAL_KEYBOARD_SHORTCUT_ACTIONS,
   KEYBOARD_SHORTCUT_ACTIONS,
+  isKeyboardShortcutBindingAllowed,
   keyboardShortcutBindingKey,
   keyboardShortcutBindingSchema,
   type KeyboardShortcutAction,
@@ -40,7 +41,10 @@ export function matchesShortcut(event: KeyboardEvent, binding: KeyboardShortcutB
   );
 }
 
-export function captureShortcut(event: KeyboardEvent): KeyboardShortcutBinding | null {
+export function captureShortcut(
+  event: KeyboardEvent,
+  action: KeyboardShortcutAction
+): KeyboardShortcutBinding | null {
   const binding = {
     code: event.code,
     primary: event.metaKey || event.ctrlKey,
@@ -48,7 +52,9 @@ export function captureShortcut(event: KeyboardEvent): KeyboardShortcutBinding |
     shift: event.shiftKey,
   };
   const parsed = keyboardShortcutBindingSchema.safeParse(binding);
-  return parsed.success ? parsed.data : null;
+  return parsed.success && isKeyboardShortcutBindingAllowed(action, parsed.data)
+    ? parsed.data
+    : null;
 }
 
 export function formatShortcut(binding: KeyboardShortcutBinding): string {

@@ -10,6 +10,7 @@ import { serviceFetch } from "./helpers";
 
 const customShortcuts = {
   ...DEFAULT_KEYBOARD_SHORTCUTS,
+  "send-prompt": { code: "Enter", primary: false, alt: false, shift: false },
   "open-command-menu": { code: "KeyP", primary: true, alt: false, shift: false },
 };
 

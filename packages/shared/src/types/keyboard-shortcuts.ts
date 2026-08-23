@@ -22,8 +22,8 @@ export const keyboardShortcutBindingSchema = z
     alt: z.boolean(),
     shift: z.boolean(),
   })
-  .refine(({ primary, alt }) => primary || alt, {
-    message: "A primary or Alt modifier is required",
+  .refine(({ code, primary, alt }) => primary || alt || code === "Enter", {
+    message: "A primary or Alt modifier is required unless the key is Enter",
   })
   .refine(({ code }) => !MODIFIER_CODES.has(code), {
     message: "A non-modifier key is required",
@@ -60,6 +60,13 @@ export type GlobalKeyboardShortcutAction = {
 }[KeyboardShortcutAction];
 export type KeyboardShortcutPreferences = Record<KeyboardShortcutAction, KeyboardShortcutBinding>;
 
+export function isKeyboardShortcutBindingAllowed(
+  action: KeyboardShortcutAction,
+  binding: KeyboardShortcutBinding
+): boolean {
+  return action === "send-prompt" || binding.primary || binding.alt;
+}
+
 export const KEYBOARD_SHORTCUT_ACTIONS = Object.keys(
   KEYBOARD_SHORTCUT_DEFINITIONS
 ) as KeyboardShortcutAction[];
@@ -89,6 +96,13 @@ export const keyboardShortcutPreferencesSchema: z.ZodType<KeyboardShortcutPrefer
     const seen = new Set<string>();
     for (const action of KEYBOARD_SHORTCUT_ACTIONS) {
       const binding = shortcuts[action];
+      if (!isKeyboardShortcutBindingAllowed(action, binding)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [action],
+          message: "A primary or Alt modifier is required for this action",
+        });
+      }
       const canonical = keyboardShortcutBindingKey(binding);
       if (seen.has(canonical)) {
         ctx.addIssue({

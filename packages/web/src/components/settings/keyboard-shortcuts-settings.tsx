@@ -69,7 +69,7 @@ export function KeyboardShortcutsSettings() {
       setRecording(null);
       return;
     }
-    const binding = captureShortcut(event.nativeEvent);
+    const binding = captureShortcut(event.nativeEvent, action);
     if (!binding) return;
     event.preventDefault();
     event.stopPropagation();
@@ -95,6 +95,15 @@ export function KeyboardShortcutsSettings() {
   if (loading) {
     return <p className="text-sm text-muted-foreground">Loading keyboard shortcuts...</p>;
   }
+
+  const sendShortcut = draft["send-prompt"];
+  const newlineShortcut =
+    sendShortcut.code === "Enter" &&
+    !sendShortcut.primary &&
+    !sendShortcut.alt &&
+    !sendShortcut.shift
+      ? "Shift+Enter"
+      : "Enter";
 
   return (
     <div>
@@ -151,7 +160,8 @@ export function KeyboardShortcutsSettings() {
       </div>
 
       <p className="mt-4 text-sm text-muted-foreground">
-        In the composer, {formatShortcut(draft["send-prompt"])} sends and Enter creates a newline.
+        In the composer, {formatShortcut(sendShortcut)} sends and {newlineShortcut} creates a
+        newline.
       </p>
 
       <div className="mt-6 flex gap-3">

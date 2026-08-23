@@ -82,14 +82,19 @@ describe("matchGlobalShortcut", () => {
 describe("shortcut capture and display", () => {
   it("captures Meta and Control as the portable primary modifier", () => {
     expect(
-      captureShortcut(createKeyEvent({ code: "KeyJ", metaKey: true, shiftKey: true }))
+      captureShortcut(
+        createKeyEvent({ code: "KeyJ", metaKey: true, shiftKey: true }),
+        "open-command-menu"
+      )
     ).toEqual({
       code: "KeyJ",
       primary: true,
       alt: false,
       shift: true,
     });
-    expect(captureShortcut(createKeyEvent({ code: "KeyJ", ctrlKey: true }))).toEqual({
+    expect(
+      captureShortcut(createKeyEvent({ code: "KeyJ", ctrlKey: true }), "open-command-menu")
+    ).toEqual({
       code: "KeyJ",
       primary: true,
       alt: false,
@@ -98,8 +103,25 @@ describe("shortcut capture and display", () => {
   });
 
   it("ignores modifiers and combinations without primary or Alt", () => {
-    expect(captureShortcut(createKeyEvent({ code: "ShiftLeft", shiftKey: true }))).toBeNull();
-    expect(captureShortcut(createKeyEvent({ code: "KeyJ", shiftKey: true }))).toBeNull();
+    expect(
+      captureShortcut(createKeyEvent({ code: "ShiftLeft", shiftKey: true }), "open-command-menu")
+    ).toBeNull();
+    expect(
+      captureShortcut(createKeyEvent({ code: "KeyJ", shiftKey: true }), "open-command-menu")
+    ).toBeNull();
+  });
+
+  it("captures Enter with or without Shift only for sending prompts", () => {
+    expect(captureShortcut(createKeyEvent({ code: "Enter" }), "send-prompt")).toEqual({
+      code: "Enter",
+      primary: false,
+      alt: false,
+      shift: false,
+    });
+    expect(
+      captureShortcut(createKeyEvent({ code: "Enter", shiftKey: true }), "send-prompt")
+    ).toEqual({ code: "Enter", primary: false, alt: false, shift: true });
+    expect(captureShortcut(createKeyEvent({ code: "Enter" }), "open-command-menu")).toBeNull();
   });
 
   it("formats common physical key codes", () => {

@@ -101,4 +101,23 @@ describe("usePromptInput", () => {
     fireEvent.keyDown(input, { key: "j", code: "KeyJ", altKey: true });
     expect(mocks.sendPrompt).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["Enter", false],
+    ["Shift+Enter", true],
+  ])("submits with %s when configured", (_label, shiftKey) => {
+    mocks.sendPrompt.mockResolvedValue({ ok: true });
+    render(
+      <PromptHarness
+        canSubmit
+        sendShortcut={{ code: "Enter", primary: false, alt: false, shift: shiftKey }}
+      />
+    );
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Ship it" } });
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", shiftKey });
+
+    expect(mocks.sendPrompt).toHaveBeenCalledOnce();
+  });
 });

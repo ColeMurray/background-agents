@@ -42,6 +42,32 @@ describe("KeyboardShortcutsSettings", () => {
     });
   });
 
+  it.each([
+    ["{Enter}", "Enter", false, "Shift+Enter"],
+    ["{Shift>}{Enter}{/Shift}", "Shift+Enter", true, "Enter"],
+  ])("records %s for sending prompts", async (keys, label, shift, newlineLabel) => {
+    const user = userEvent.setup();
+    render(<KeyboardShortcutsSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Record shortcut for Send prompt/ }));
+    await user.keyboard(keys);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_content, element) =>
+          element?.tagName === "P" &&
+          element.textContent ===
+            `In the composer, ${label} sends and ${newlineLabel} creates a newline.`
+      )
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(save).toHaveBeenCalledWith({
+      ...DEFAULT_KEYBOARD_SHORTCUTS,
+      "send-prompt": { code: "Enter", primary: false, alt: false, shift },
+    });
+  });
+
   it("cancels recording with Escape", async () => {
     const user = userEvent.setup();
     render(<KeyboardShortcutsSettings />);

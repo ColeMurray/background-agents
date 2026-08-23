@@ -25,11 +25,26 @@ describe("keyboard shortcut preferences", () => {
     ).toBe(false);
   });
 
-  it("requires primary or alt and a non-modifier key", () => {
+  it("allows Enter with or without Shift for sending prompts", () => {
+    expect(
+      keyboardShortcutPreferencesSchema.safeParse({
+        ...DEFAULT_KEYBOARD_SHORTCUTS,
+        "send-prompt": { code: "Enter", primary: false, alt: false, shift: false },
+      }).success
+    ).toBe(true);
     expect(
       keyboardShortcutPreferencesSchema.safeParse({
         ...DEFAULT_KEYBOARD_SHORTCUTS,
         "send-prompt": { code: "Enter", primary: false, alt: false, shift: true },
+      }).success
+    ).toBe(true);
+  });
+
+  it("requires primary or alt for other actions and a non-modifier key", () => {
+    expect(
+      keyboardShortcutPreferencesSchema.safeParse({
+        ...DEFAULT_KEYBOARD_SHORTCUTS,
+        "open-command-menu": { code: "Enter", primary: false, alt: false, shift: false },
       }).success
     ).toBe(false);
     expect(
