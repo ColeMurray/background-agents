@@ -11,8 +11,7 @@ mobile drill-down.
 ## August 21, 2026
 
 **Configurable keyboard shortcuts.** Set per-user shortcuts for sending prompts, opening search or a
-new session, and toggling the sidebar. Settings can record, validate, reset, and persist bindings,
-including Enter or Shift+Enter for sending.
+new session, and toggling the sidebar. Settings can record, validate, reset, and persist bindings.
 
 **Recent automation activity.** Automation rows now show the latest execution outcomes at a glance,
 alongside clearer compact schedules, responsive mobile actions, and confirmation before deletion.
@@ -23,19 +22,20 @@ alongside clearer compact schedules, responsive mobile actions, and confirmation
 
 **Managed provider accounts.** Connect and manage multiple ChatGPT and SuperGrok subscription
 accounts from Settings using device authorization, choose accounts for sessions and automations, and
-configure defaults for unattended runs. Sandboxes receive short-lived access without exposing stored
-refresh credentials.
+configure defaults for unattended runs. These installation-wide accounts and defaults are available
+to every admitted user, while sandboxes receive short-lived access without exposing stored refresh
+credentials.
 
 **Prebuilt images for E2B.** E2B can now build, snapshot, reuse, and delete repository and
 environment images, with reliable startup from prebuilt snapshots and configurable template CPU and
 memory.
 
-**Actionable sandbox failures.** Session status now shows the provider's actual startup or recovery
-error and preserves it across reloads, while clearing stale details when a retry begins.
+**Actionable sandbox failures.** Session status now shows the provider's startup or recovery error
+when available and preserves it across reloads, while clearing stale details when a retry begins.
 
 **Automatic retirement of stale sandbox snapshots.** Session snapshots now record their runtime
-version and restore only when compatible; old or unknown snapshots trigger a fresh sandbox instead
-of repeatedly reviving a broken runtime.
+version and restore only when compatible. Incompatible or unknown snapshots trigger a fresh sandbox
+instead of repeatedly reviving a broken runtime, which may discard uncommitted filesystem state.
 
 ## August 16, 2026
 
