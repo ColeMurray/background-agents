@@ -27,7 +27,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { GrokIcon, MoreIcon, OpenAIIcon, PlusIcon } from "@/components/ui/icons";
+import { MoreIcon, PlusIcon } from "@/components/ui/icons";
+import { SubscriptionProviderIcon } from "@/components/subscription-provider-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -102,17 +103,6 @@ function relativeDateLabel(timestamp: number | null) {
   if (!timestamp) return "Never";
   const relative = formatRelativeTime(timestamp);
   return relative === "now" ? relative : `${relative} ago`;
-}
-
-function ProviderIcon({
-  provider,
-  className = "size-6",
-}: {
-  provider: SubscriptionProviderId;
-  className?: string;
-}) {
-  const Icon = provider === "openai" ? OpenAIIcon : GrokIcon;
-  return <Icon aria-hidden="true" className={`${className} shrink-0 text-primary`} />;
 }
 
 function legacyKeyLocationLabel(location: LegacyProviderKeyLocation): string {
@@ -277,7 +267,10 @@ export function ProviderAccountsSettings() {
                         beginConnection(CONNECTION_STRATEGIES[provider.provider].add())
                       }
                     >
-                      <ProviderIcon provider={provider.provider} className="size-5" />
+                      <SubscriptionProviderIcon
+                        provider={provider.provider}
+                        className="size-5 text-primary"
+                      />
                       <span>{provider.subscriptionName}</span>
                     </DropdownMenuItem>
                   ))}
@@ -303,7 +296,10 @@ export function ProviderAccountsSettings() {
                     >
                       <div className="flex min-w-0 items-start gap-3">
                         <div className="flex size-10 shrink-0 items-center justify-center text-foreground">
-                          <ProviderIcon provider={account.provider} className="size-6" />
+                          <SubscriptionProviderIcon
+                            provider={account.provider}
+                            className="size-6 text-primary"
+                          />
                         </div>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -490,7 +486,10 @@ export function ProviderAccountsSettings() {
                     className="grid gap-3 p-4 sm:grid-cols-[minmax(8rem,0.6fr)_1fr] sm:items-end"
                   >
                     <div className="flex items-center gap-2 self-center font-medium text-foreground">
-                      <ProviderIcon provider={provider.provider} className="size-5" />
+                      <SubscriptionProviderIcon
+                        provider={provider.provider}
+                        className="size-5 text-primary"
+                      />
                       {provider.subscriptionName}
                     </div>
                     <div>

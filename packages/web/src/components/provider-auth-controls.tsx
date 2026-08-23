@@ -8,7 +8,7 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import { SUBSCRIPTION_PROVIDER_DISPLAY_METADATA } from "@open-inspect/shared/types/provider-accounts";
 import { Label } from "@/components/ui/label";
-import { GrokIcon, OpenAIIcon } from "@/components/ui/icons";
+import { SubscriptionProviderIcon } from "@/components/subscription-provider-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,17 +36,6 @@ const DEFAULT_POLICY_LABEL = "Use default";
 const DEFAULT_UNATTENDED = false;
 const DEFAULT_VARIANT = "select";
 const DEFAULT_DISABLED = false;
-
-function ProviderIcon({
-  provider,
-  className = "size-3.5",
-}: {
-  provider: SubscriptionProviderId;
-  className?: string;
-}) {
-  const Icon = provider === "openai" ? OpenAIIcon : GrokIcon;
-  return <Icon aria-hidden="true" className={`${className} shrink-0`} />;
-}
 
 export function ProviderAuthControls({
   provider,
@@ -117,7 +106,7 @@ export function ProviderAuthControls({
             title={`${providerName} authentication`}
             disabled={disabled}
           >
-            <ProviderIcon provider={provider} />
+            <SubscriptionProviderIcon provider={provider} className="size-3.5" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" className="w-52 max-w-[calc(100vw-2rem)]">
@@ -128,7 +117,7 @@ export function ProviderAuthControls({
               disabled={disabled}
               aria-label={`${providerName} authentication`}
             >
-              <ProviderIcon provider={provider} />
+              <SubscriptionProviderIcon provider={provider} className="size-3.5" />
               authentication
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
@@ -162,7 +151,7 @@ export function ProviderAuthControls({
   return (
     <div className="space-y-1.5">
       <Label htmlFor={`provider-auth-${provider}`} className="flex items-center gap-1.5">
-        <ProviderIcon provider={provider} className="size-4" />
+        <SubscriptionProviderIcon provider={provider} className="size-4" />
         authentication
       </Label>
       <Select value={selected} onValueChange={handleChange} disabled={disabled}>
