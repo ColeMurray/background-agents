@@ -399,6 +399,8 @@ export async function openClientWs(
     subscribe?: boolean;
     userId?: string;
     canonicalUserId?: string;
+    scmLogin?: string;
+    scmName?: string;
   }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
@@ -422,6 +424,8 @@ export async function openClientWs(
     body: JSON.stringify({
       userId: opts.userId ?? "user-1",
       canonicalUserId: opts.canonicalUserId,
+      scmLogin: opts.scmLogin,
+      scmName: opts.scmName,
     }),
   });
   const { token, participantId } = await tokenRes.json<{

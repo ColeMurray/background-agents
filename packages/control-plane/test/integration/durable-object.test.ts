@@ -1,7 +1,107 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import { MIGRATIONS } from "../../src/session/schema";
+import {
+  initNamedSession,
+  openClientWs,
+  queryDO,
+  seedMessage,
+  waitForSandboxStatus,
+} from "./helpers";
+
+/**
+ * Test-only field stamped onto a live instance so a test can prove the next
+ * callback landed on a *different* object. Deliberately not one of the DO's own
+ * fields: the upcoming composition-root refactor may rename or remove those,
+ * and this check must keep working (or the tests below would silently stop
+ * exercising reconstruction).
+ */
+const INSTANCE_MARKER = "pre-eviction-instance";
+type MarkedSessionDO = SessionDO & { __evictionMarker?: string };
+
+/**
+ * Tear down the running instance and return a stub bound to its replacement.
+ *
+ * `ctx.abort()` discards every in-memory field — `initialized`, the WebSocket
+ * manager's ClientInfo cache, every lazily built service — while leaving the
+ * DO's SQLite intact. That is exactly the state a callback finds after an
+ * eviction or a hibernation wake, and it is the one state the request-path
+ * integration tests never reach.
+ */
+async function evictSessionDO(sessionName: string): Promise<DurableObjectStub> {
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionName));
+  // Let the (always-failing) test spawn settle so no background write is still
+  // in flight when abort() breaks the output gate.
+  await waitForSandboxStatus(stub, "failed");
+  await expect(
+    runInDurableObject(stub, (instance: MarkedSessionDO) => {
+      instance.__evictionMarker = INSTANCE_MARKER;
+      return instance.__evictionMarker;
+    })
+  ).resolves.toBe(INSTANCE_MARKER);
+
+  await expect(
+    runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.abort("test: force eviction");
+    })
+  ).rejects.toThrow();
+
+  const restored = env.SESSION.get(env.SESSION.idFromName(sessionName));
+  // The marker is gone only if this really is a different object. Without this
+  // check, a harness change that made abort() a no-op would leave every test
+  // below green while none of them exercised reconstruction.
+  await expect(
+    runInDurableObject(restored, (instance: MarkedSessionDO) => instance.__evictionMarker)
+  ).resolves.toBeUndefined();
+  return restored;
+}
+
+/**
+ * Deliver one client frame the way a hibernating runtime does: over a socket
+ * the running instance has never seen, carrying nothing but the `wsid:` tag
+ * that survived in storage. Returns whatever the DO wrote back to that socket.
+ */
+async function deliverOnRestoredSocket(
+  stub: DurableObjectStub,
+  wsId: string,
+  message: unknown
+): Promise<{
+  received: Record<string, unknown>[];
+  closes: { code: number; reason: string }[];
+}> {
+  return runInDurableObject(stub, async (instance: SessionDO) => {
+    const pair = new WebSocketPair();
+    const clientSocket = pair[0];
+    const restoredSocket = pair[1];
+    instance.ctx.acceptWebSocket(restoredSocket, [`wsid:${wsId}`]);
+    clientSocket.accept();
+
+    const received: Record<string, unknown>[] = [];
+    const closes: { code: number; reason: string }[] = [];
+    clientSocket.addEventListener("message", (event) => {
+      received.push(JSON.parse(typeof event.data === "string" ? event.data : "{}"));
+    });
+    clientSocket.addEventListener("close", (event) => {
+      closes.push({ code: event.code, reason: event.reason });
+    });
+
+    await instance.webSocketMessage(restoredSocket, JSON.stringify(message));
+    // Frames and close events reach the paired socket asynchronously.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { received, closes };
+  });
+}
+
+/** The single ws_client_mapping row a subscribed client leaves behind. */
+async function persistedClientMapping(stub: DurableObjectStub) {
+  const rows = await queryDO<{ ws_id: string; participant_id: string }>(
+    stub,
+    "SELECT ws_id, participant_id FROM ws_client_mapping"
+  );
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
 
 describe("SessionDO Durable Object", () => {
   it("returns 404 for uninitialized session state", async () => {
@@ -172,6 +272,141 @@ describe("SessionDO Durable Object", () => {
       expect(uncorrelated[0]).not.toHaveProperty("trace_id");
       expect(uncorrelated[0]).not.toHaveProperty("request_id");
       expect(uncorrelated[0]).toHaveProperty("session_id");
+    });
+  });
+
+  describe("eviction and hibernation restore", () => {
+    it("handles a client prompt delivered to a reconstructed instance", async () => {
+      const sessionName = `do-evict-prompt-${Date.now()}`;
+      await initNamedSession(sessionName);
+      const { ws } = await openClientWs(sessionName, { subscribe: true });
+      const mapping = await persistedClientMapping(
+        env.SESSION.get(env.SESSION.idFromName(sessionName))
+      );
+      ws.close();
+
+      const restored = await evictSessionDO(sessionName);
+      const clientRequestId = crypto.randomUUID();
+
+      // Reaching prompt_queued at all proves ensureInitialized() re-ran on the
+      // new instance: the message queue is built from this.messenger, which
+      // exists only after initialization.
+      const { received, closes } = await deliverOnRestoredSocket(restored, mapping.ws_id, {
+        type: "prompt",
+        clientRequestId,
+        content: "queued after eviction",
+      });
+
+      expect(closes).toEqual([]);
+      expect(received).toContainEqual(
+        expect.objectContaining({ type: "prompt_queued", clientRequestId })
+      );
+
+      const messages = await queryDO<{ content: string; author_id: string }>(
+        restored,
+        "SELECT content, author_id FROM messages"
+      );
+      expect(messages).toEqual([
+        { content: "queued after eviction", author_id: mapping.participant_id },
+      ]);
+
+      // The prompt starts another (failing) spawn; drain it before teardown.
+      await waitForSandboxStatus(restored, "failed");
+    });
+
+    it("runs the alarm handler on a reconstructed instance", async () => {
+      const sessionName = `do-evict-alarm-${Date.now()}`;
+      const { stub } = await initNamedSession(sessionName);
+      const tokenResponse = await stub.fetch("http://internal/internal/ws-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "user-1" }),
+      });
+      const { participantId } = await tokenResponse.json<{ participantId: string }>();
+
+      // Older than any execution timeout, so the alarm's stuck-message watchdog fires.
+      const startedAt = Date.now() - 24 * 60 * 60 * 1000;
+      await seedMessage(stub, {
+        id: "stuck-across-eviction",
+        authorId: participantId,
+        content: "stuck",
+        source: "web",
+        status: "processing",
+        createdAt: startedAt,
+        startedAt,
+      });
+
+      const restored = await evictSessionDO(sessionName);
+      await runInDurableObject(restored, (instance: SessionDO) =>
+        instance.ctx.storage.setAlarm(Date.now() + 60_000)
+      );
+
+      await expect(runDurableObjectAlarm(restored)).resolves.toBe(true);
+
+      // Failing the message needs both halves of the graph ensureInitialized(false)
+      // rebuilds: the alarm handler and the messenger it broadcasts through.
+      const messages = await queryDO<{ status: string; error_message: string | null }>(
+        restored,
+        "SELECT status, error_message FROM messages"
+      );
+      expect(messages).toEqual([
+        { status: "failed", error_message: "Execution timed out (stuck processing)" },
+      ]);
+    });
+
+    it("rebuilds client identity from ws_client_mapping when the in-memory cache is gone", async () => {
+      const sessionName = `do-evict-identity-${Date.now()}`;
+      await initNamedSession(sessionName);
+      const { ws } = await openClientWs(sessionName, {
+        subscribe: true,
+        userId: "user-1",
+        canonicalUserId: "canonical-user-42",
+        scmLogin: "ada",
+        scmName: "Ada Lovelace",
+      });
+      const mapping = await persistedClientMapping(
+        env.SESSION.get(env.SESSION.idFromName(sessionName))
+      );
+      ws.close();
+
+      const restored = await evictSessionDO(sessionName);
+
+      const { received, closes } = await deliverOnRestoredSocket(restored, mapping.ws_id, {
+        type: "presence",
+        status: "idle",
+      });
+
+      expect(closes).toEqual([]);
+      // Presence is projected from the recovered ClientInfo, so the broadcast
+      // is the DO reporting back every identity field it rebuilt from storage.
+      expect(received.find((message) => message.type === "presence_update")).toMatchObject({
+        participants: [
+          {
+            participantId: mapping.participant_id,
+            // canonical_user_id wins over the raw user_id, as it does at subscribe time.
+            userId: "canonical-user-42",
+            name: "Ada Lovelace",
+            avatar: "https://github.com/ada.png",
+            status: "idle",
+          },
+        ],
+      });
+    });
+
+    it("closes a restored socket with 4002 when no mapping survived", async () => {
+      const sessionName = `do-evict-no-mapping-${Date.now()}`;
+      await initNamedSession(sessionName);
+
+      const restored = await evictSessionDO(sessionName);
+
+      const { received, closes } = await deliverOnRestoredSocket(
+        restored,
+        "ws-id-that-never-subscribed",
+        { type: "typing" }
+      );
+
+      expect(received).toEqual([]);
+      expect(closes).toEqual([{ code: 4002, reason: "Session expired, please reconnect" }]);
     });
   });
 });
