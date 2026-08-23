@@ -2406,27 +2406,20 @@ describe("SandboxLifecycleManager", () => {
         status: "ready",
         last_heartbeat: Date.now() - 100_000, // Past the 90s heartbeat timeout
       });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      return new SandboxLifecycleManager(
         createMockProvider(),
-        storage,
+        createMockStorage(createMockSession(), sandbox),
         createMockBroadcaster(),
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
         createTestConfig()
       );
-      return { manager, storage };
     }
 
-    it("does not throw on a terminating path when no callbacks were ever set", async () => {
-      const { manager, storage } = staleHeartbeatManager();
-
-      await expect(manager.handleAlarm()).resolves.toBeUndefined();
-
-      expect(storage.calls).toContain("updateSandboxStatus:stale");
-    });
-
+    // The terminating path with no callbacks set is already covered by
+    // "does not call onSandboxTerminating when no callback provided" in the
+    // "handleAlarm" block above; only the terminated path needs a new case.
     it("does not throw on a terminated path when no callbacks were ever set", async () => {
       const manager = new SandboxLifecycleManager(
         createMockProvider(),
@@ -2444,7 +2437,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("fires both callbacks on the heartbeat-stale path once wired after construction", async () => {
-      const { manager } = staleHeartbeatManager();
+      const manager = staleHeartbeatManager();
       const onSandboxTerminating = vi.fn(async () => {});
       const onSandboxTerminated = vi.fn(async () => {});
 
@@ -2474,7 +2467,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("rejects a second wiring so a duplicate composition root cannot silently win", () => {
-      const { manager } = staleHeartbeatManager();
+      const manager = staleHeartbeatManager();
 
       manager.setCallbacks({ onSandboxTerminating: vi.fn(async () => {}) });
 
@@ -2484,7 +2477,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("keeps the first wiring intact after a rejected second wiring", async () => {
-      const { manager } = staleHeartbeatManager();
+      const manager = staleHeartbeatManager();
       const first = vi.fn(async () => {});
       const second = vi.fn(async () => {});
 
