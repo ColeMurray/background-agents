@@ -439,12 +439,9 @@ export function MetadataSection({
       {/* Non-fatal boot/runtime warnings */}
       {warnings.length > 0 && (
         <div className="space-y-1">
-          {warnings.map((warning) => (
+          {warnings.map((warning, index) => (
             <div
-              key={
-                warning.ackId ??
-                `${warning.scope}-${warning.timestamp}-${warning.repoOwner ?? ""}-${warning.repoName ?? ""}-${warning.message}`
-              }
+              key={warning.ackId ?? `${warning.scope}-${warning.timestamp}-${index}`}
               className="flex items-start gap-2 text-xs text-warning"
             >
               <ErrorIcon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
