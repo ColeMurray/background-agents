@@ -11,11 +11,13 @@ import type { SessionCallbackJob } from "@open-inspect/shared/types/session-call
 import worker from "../../src/index";
 import type { Env } from "../../src/types";
 import type { FetchClient } from "../../src/platform-ports";
+import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, seedMessage } from "./helpers";
 
 describe("session callback Queue integration", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await cleanD1Tables();
   });
 
   it("delivers an accepted completion after the producing actor is evicted", async () => {
