@@ -30,12 +30,22 @@ const items = [
     ],
   },
   {
-    category: "Other",
+    category: "OpenAI",
     models: [
       {
-        id: "xai/grok-build-0.1",
-        name: "Grok Build 0.1",
-        description: "Coding model",
+        id: "openai/gpt-5.6-sol",
+        name: "GPT 5.6 Sol",
+        description: "Frontier model",
+      },
+    ],
+  },
+  {
+    category: "xAI",
+    models: [
+      {
+        id: "xai/grok-4.6",
+        name: "Grok 4.6",
+        description: "Latest Grok model",
       },
     ],
   },
@@ -76,11 +86,11 @@ describe("ModelReasoningSelector", () => {
     const modelMenu = await screen.findByRole("menuitem", { name: /model/i });
     modelMenu.focus();
     fireEvent.keyDown(modelMenu, { key: "ArrowRight" });
-    const grokOption = await screen.findByRole("menuitemradio", { name: /grok build/i });
+    const grokOption = await screen.findByRole("menuitemradio", { name: /grok 4.6/i });
     expect(grokOption.closest('[role="menu"]')).toHaveClass("max-h-56", "overflow-y-auto");
     expect(grokOption.closest('[role="menu"]')).toHaveAttribute("data-align", "end");
     fireEvent.click(grokOption);
-    expect(onModelChange).toHaveBeenCalledWith("xai/grok-build-0.1");
+    expect(onModelChange).toHaveBeenCalledWith("xai/grok-4.6");
 
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     const effortMenu = await screen.findByRole("menuitem", { name: /effort/i });
@@ -90,6 +100,33 @@ describe("ModelReasoningSelector", () => {
     expect(maxEffort.closest('[role="menu"]')).toHaveAttribute("data-align", "end");
     fireEvent.click(maxEffort);
     expect(onReasoningEffortChange).toHaveBeenCalledWith("max");
+  });
+
+  it("keeps effort controls visible when switching back from Grok to a model without a default", async () => {
+    const { rerender } = render(
+      <ModelReasoningSelector
+        selectedModel="xai/grok-4.6"
+        reasoningEffort="high"
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+      />
+    );
+
+    rerender(
+      <ModelReasoningSelector
+        selectedModel="openai/gpt-5.6-sol"
+        reasoningEffort={undefined}
+        items={items}
+        onModelChange={vi.fn()}
+        onReasoningEffortChange={vi.fn()}
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: /model and effort/i });
+    expect(trigger).toHaveTextContent("gpt 5.6 solDefault");
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(await screen.findByRole("menuitem", { name: /effort.*default/i })).toBeInTheDocument();
   });
 
   it("drills into model options without a clipped side menu on mobile", async () => {
