@@ -152,7 +152,7 @@ export const MODEL_CATALOG = [
         description: "Frontier model for complex professional work",
         reasoning: {
           efforts: ["none", "low", "medium", "high", "xhigh"],
-          default: undefined,
+          default: "medium",
         },
       },
       {
@@ -161,7 +161,7 @@ export const MODEL_CATALOG = [
         description: "Balanced, cost-efficient everyday work",
         reasoning: {
           efforts: ["none", "low", "medium", "high", "xhigh"],
-          default: undefined,
+          default: "medium",
         },
       },
       {
@@ -170,7 +170,7 @@ export const MODEL_CATALOG = [
         description: "Fast, cost-efficient high-volume workloads",
         reasoning: {
           efforts: ["none", "low", "medium", "high", "xhigh", "max"],
-          default: undefined,
+          default: "medium",
         },
       },
       {

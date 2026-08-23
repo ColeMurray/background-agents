@@ -102,7 +102,7 @@ describe("ModelReasoningSelector", () => {
     expect(onReasoningEffortChange).toHaveBeenCalledWith("max");
   });
 
-  it("keeps effort controls visible when switching back from Grok to a model without a default", async () => {
+  it("shows the default effort when switching back from Grok", async () => {
     const { rerender } = render(
       <ModelReasoningSelector
         selectedModel="xai/grok-4.6"
@@ -124,9 +124,9 @@ describe("ModelReasoningSelector", () => {
     );
 
     const trigger = screen.getByRole("button", { name: /model and effort/i });
-    expect(trigger).toHaveTextContent("gpt 5.6 solDefault");
+    expect(trigger).toHaveTextContent("gpt 5.6 solMedium");
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-    expect(await screen.findByRole("menuitem", { name: /effort.*default/i })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: /effort.*medium/i })).toBeInTheDocument();
   });
 
   it("drills into model options without a clipped side menu on mobile", async () => {
