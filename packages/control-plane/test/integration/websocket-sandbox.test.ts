@@ -79,6 +79,57 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(ws).toBeNull();
   });
 
+  it.each(["archived", "cancelled"] as const)(
+    "upgrade for %s session returns 410",
+    async (status) => {
+      const name = `ws-session-${status}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "ready",
+      });
+      await runInDurableObject(stub, (instance: SessionDO) => {
+        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      });
+
+      const { ws, response } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+
+      expect(response.status).toBe(410);
+      expect(ws).toBeNull();
+    }
+  );
+
+  it.each(["completed", "failed"] as const)(
+    "upgrade for %s session allows a connecting sandbox",
+    async (status) => {
+      const name = `ws-session-${status}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "connecting",
+      });
+      await runInDurableObject(stub, (instance: SessionDO) => {
+        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      });
+
+      const { ws, response } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+
+      expect(response.status).toBe(101);
+      expect(ws).not.toBeNull();
+      ws!.accept();
+      await waitForSandboxStatus(stub, "ready");
+      ws!.close();
+    }
+  );
+
   it("sandbox connect sets status to ready", async () => {
     const name = `ws-sandbox-ready-${Date.now()}`;
     const { stub } = await initNamedSession(name);

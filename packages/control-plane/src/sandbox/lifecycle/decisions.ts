@@ -9,7 +9,7 @@
  * then executes the appropriate side effects (API calls, broadcasts, etc.)
  */
 
-import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SandboxStatus, SessionStatus } from "@open-inspect/shared/types/sessions";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
@@ -38,6 +38,15 @@ export function isDeadSandboxStatus(status: SandboxStatus): boolean {
  */
 export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean {
   return status === "stopped" || status === "stale";
+}
+
+const SANDBOX_RECONNECT_BLOCKED_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
+  "archived",
+  "cancelled",
+]);
+
+export function isSessionSandboxReconnectBlocked(status: SessionStatus): boolean {
+  return SANDBOX_RECONNECT_BLOCKED_SESSION_STATUSES.has(status);
 }
 
 // ==================== Circuit Breaker ====================

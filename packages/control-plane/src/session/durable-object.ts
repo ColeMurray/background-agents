@@ -44,7 +44,10 @@ import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { ScmSettingsStore } from "../db/scm-settings";
 import { SessionIndexStore } from "../db/session-index";
-import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
+import {
+  isSandboxReconnectBlockedStatus,
+  isSessionSandboxReconnectBlocked,
+} from "../sandbox/lifecycle/decisions";
 import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import {
@@ -1128,6 +1131,23 @@ export class SessionDO extends DurableObject<Env> {
       // Get expected values from DB
       const sandbox = this.getSandbox();
       const expectedSandboxId = sandbox?.modal_sandbox_id;
+
+      // Reject connection if the session itself is closed for good. Narrower
+      // than "not active": `completed` and `failed` sessions are idle, not
+      // over — warm-on-typing spawns a sandbox for one before the follow-up
+      // prompt arrives, and rejecting its bridge stranded that prompt.
+      const currentSession = this.getSession();
+      if (currentSession && isSessionSandboxReconnectBlocked(currentSession.status)) {
+        log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "rejected",
+          reject_reason: "session_terminal",
+          session_status: currentSession.status,
+          duration_ms: Date.now() - wsStartTime,
+        });
+        return new Response("Session is terminal", { status: 410 });
+      }
 
       // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout).
       // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
