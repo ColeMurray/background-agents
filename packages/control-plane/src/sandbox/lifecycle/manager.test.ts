@@ -948,7 +948,6 @@ describe("SandboxLifecycleManager", () => {
           mcpServerLookup,
           slackAgentNotifyLookup,
         },
-        {},
         imageBuildLookup
       );
 
@@ -990,9 +989,9 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig(),
-        { onSandboxTerminated }
+        createTestConfig()
       );
+      manager.setCallbacks({ onSandboxTerminated });
 
       await manager.spawnSandbox();
 
@@ -2185,9 +2184,9 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig(),
-        { onSandboxTerminating }
+        createTestConfig()
       );
+      manager.setCallbacks({ onSandboxTerminating });
 
       await manager.handleAlarm();
 
@@ -2211,9 +2210,9 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false, 0), // No clients
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig(),
-        { onSandboxTerminating }
+        createTestConfig()
       );
+      manager.setCallbacks({ onSandboxTerminating });
 
       await manager.handleAlarm();
 
@@ -2325,9 +2324,9 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig(),
-        { onSandboxTerminating }
+        createTestConfig()
       );
+      manager.setCallbacks({ onSandboxTerminating });
 
       await manager.handleAlarm();
 
@@ -2384,9 +2383,9 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig(),
-        { onSandboxTerminated }
+        createTestConfig()
       );
+      manager.setCallbacks({ onSandboxTerminated });
 
       const terminating = manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
 
@@ -2398,6 +2397,104 @@ describe("SandboxLifecycleManager", () => {
       resolveStop({ success: true });
       await terminating;
       expect(onSandboxTerminated).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("setCallbacks", () => {
+    function staleHeartbeatManager() {
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: Date.now() - 100_000, // Past the 90s heartbeat timeout
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      return { manager, storage };
+    }
+
+    it("does not throw on a terminating path when no callbacks were ever set", async () => {
+      const { manager, storage } = staleHeartbeatManager();
+
+      await expect(manager.handleAlarm()).resolves.toBeUndefined();
+
+      expect(storage.calls).toContain("updateSandboxStatus:stale");
+    });
+
+    it("does not throw on a terminated path when no callbacks were ever set", async () => {
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        createMockStorage(),
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(
+        manager.terminateUnresponsiveSandbox("stop_confirmation_timeout")
+      ).resolves.toBeUndefined();
+    });
+
+    it("fires both callbacks on the heartbeat-stale path once wired after construction", async () => {
+      const { manager } = staleHeartbeatManager();
+      const onSandboxTerminating = vi.fn(async () => {});
+      const onSandboxTerminated = vi.fn(async () => {});
+
+      manager.setCallbacks({ onSandboxTerminating, onSandboxTerminated });
+      await manager.handleAlarm();
+
+      expect(onSandboxTerminating).toHaveBeenCalledOnce();
+      expect(onSandboxTerminated).toHaveBeenCalledOnce();
+    });
+
+    it("fires onSandboxTerminated on terminateUnresponsiveSandbox once wired after construction", async () => {
+      const onSandboxTerminated = vi.fn(async () => {});
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        createMockStorage(),
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      manager.setCallbacks({ onSandboxTerminated });
+      await manager.terminateUnresponsiveSandbox("stop_send_failed");
+
+      expect(onSandboxTerminated).toHaveBeenCalledOnce();
+    });
+
+    it("rejects a second wiring so a duplicate composition root cannot silently win", () => {
+      const { manager } = staleHeartbeatManager();
+
+      manager.setCallbacks({ onSandboxTerminating: vi.fn(async () => {}) });
+
+      expect(() => manager.setCallbacks({ onSandboxTerminating: vi.fn(async () => {}) })).toThrow(
+        /already wired/i
+      );
+    });
+
+    it("keeps the first wiring intact after a rejected second wiring", async () => {
+      const { manager } = staleHeartbeatManager();
+      const first = vi.fn(async () => {});
+      const second = vi.fn(async () => {});
+
+      manager.setCallbacks({ onSandboxTerminating: first });
+      expect(() => manager.setCallbacks({ onSandboxTerminating: second })).toThrow();
+
+      await manager.handleAlarm();
+
+      expect(first).toHaveBeenCalledOnce();
+      expect(second).not.toHaveBeenCalled();
     });
   });
 
@@ -2592,7 +2689,6 @@ describe("SandboxLifecycleManager", () => {
         createMockAlarmScheduler(),
         createMockIdGenerator(),
         createTestConfig(),
-        {},
         overrides?.imageBuildLookup
       );
       return { manager, provider, storage };
@@ -2807,7 +2903,6 @@ describe("SandboxLifecycleManager", () => {
         overrides?.alarmScheduler ?? createMockAlarmScheduler(),
         createMockIdGenerator(),
         createTestConfig(),
-        {},
         overrides?.environmentImageLookup
       );
       return { manager, provider, storage };
@@ -3042,7 +3137,6 @@ describe("SandboxLifecycleManager", () => {
         createMockAlarmScheduler(),
         createMockIdGenerator(),
         { ...createTestConfig(), mcpServerLookup: overrides?.mcpServerLookup },
-        {},
         overrides?.imageBuildLookup
       );
       return { manager, provider, storage };

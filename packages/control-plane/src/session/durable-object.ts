@@ -398,10 +398,32 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Get the lifecycle manager, creating it lazily if needed.
    * The manager is created with adapters that delegate to the DO's methods.
+   *
+   * The termination callbacks are wired here, immediately after construction,
+   * rather than passed to the constructor: the message queue they notify is
+   * itself built on top of the manager, so constructor injection in both
+   * directions is impossible. This getter is the only site that constructs a
+   * manager, so wiring here runs exactly once (the null guard) and is guaranteed
+   * to precede any path that could fire a callback — a manager cannot exist
+   * un-wired.
+   *
+   * The callbacks resolve `this.messageQueue` when they fire, not when they are
+   * wired. That is load-bearing while the lazy getters remain: `messageQueue`
+   * re-enters this getter, and forcing the queue here would both recurse and
+   * construct it before `ensureInitialized()` installs the session-scoped logger
+   * it captures. Phase 2 replaces these with a direct queue reference once a
+   * composition root builds both eagerly.
    */
   private get lifecycleManager(): SandboxLifecycleManager {
     if (!this._lifecycleManager) {
-      this._lifecycleManager = this.createLifecycleManager();
+      const lifecycle = this.createLifecycleManager();
+      // Assign before wiring so a re-entrant `lifecycleManager` read resolves to
+      // this instance instead of constructing a second one.
+      this._lifecycleManager = lifecycle;
+      lifecycle.setCallbacks({
+        onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
+        onSandboxTerminated: () => this.messageQueue.resumeAfterSandboxTermination(),
+      });
     }
     return this._lifecycleManager;
   }
@@ -1055,10 +1077,6 @@ export class SessionDO extends DurableObject<Env> {
       this.alarmScheduler,
       idGenerator,
       config,
-      {
-        onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
-        onSandboxTerminated: () => this.messageQueue.resumeAfterSandboxTermination(),
-      },
       imageBuildLookup
     );
   }

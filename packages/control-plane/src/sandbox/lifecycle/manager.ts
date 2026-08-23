@@ -273,6 +273,11 @@ export interface SlackAgentNotifyLookup {
 /**
  * Optional callbacks from the lifecycle manager to the session DO.
  * Lightweight callback interface — the manager doesn't know what the callbacks do.
+ *
+ * Wired after construction via {@link SandboxLifecycleManager.setCallbacks} rather
+ * than passed to the constructor: the collaborator that implements these (the
+ * session message queue) itself depends on the manager, so taking them as a
+ * constructor argument would make the two mutually un-constructible.
  */
 export interface LifecycleCallbacks {
   /** Called when the sandbox is being terminated (heartbeat stale, inactivity timeout). */
@@ -315,6 +320,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   private isSpawningSandbox = false;
   private providerStartupPending = false;
 
+  /**
+   * Wired once, after construction, by {@link setCallbacks}. Every call site
+   * invokes these optionally (`?.()`) so a manager that is never wired — or one
+   * wired with a partial set — is fully functional and simply skips the
+   * notification.
+   */
+  private callbacks: LifecycleCallbacks = {};
+  private callbacksWired = false;
+
   /** Session-scoped logger. Falls back to module-level logger if no sessionId configured. */
   private readonly log: Logger;
 
@@ -326,10 +340,32 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
     private readonly config: SandboxLifecycleConfig,
-    private readonly callbacks: LifecycleCallbacks = {},
     private readonly imageBuildLookup?: ImageBuildLookup
   ) {
     this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
+  }
+
+  /**
+   * Wire the termination callbacks. Separate from the constructor so the manager
+   * can be built before the collaborator that implements the callbacks — that
+   * collaborator (the session message queue) consumes the manager's
+   * {@link SandboxLifecycle} surface, so constructor injection in both directions
+   * is impossible.
+   *
+   * Deliberately NOT idempotent: a second call throws rather than overwriting.
+   * This is one-time wiring performed by whoever owns the manager's construction,
+   * and a second caller means two owners disagree about which collaborator gets
+   * notified — silently letting the last one win would drop terminations on the
+   * floor. Callers that legitimately need to re-wire should build a new manager.
+   *
+   * @throws if called more than once on the same instance.
+   */
+  setCallbacks(callbacks: LifecycleCallbacks): void {
+    if (this.callbacksWired) {
+      throw new Error("SandboxLifecycleManager callbacks are already wired");
+    }
+    this.callbacksWired = true;
+    this.callbacks = callbacks;
   }
 
   /**
