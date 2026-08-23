@@ -1,3 +1,4 @@
+import { MAX_SANDBOX_SKILL_PAGE_SIZE } from "@open-inspect/shared/types/skills";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionSkillStore } from "../db/session-skills";
 import { hashSessionSkillManifest } from "../skills/content-addressing";
@@ -36,15 +37,40 @@ async function handleSessionSkillsView(
   return response;
 }
 
+/**
+ * Read the optional page window. Absent `limit` means the caller wants the whole
+ * installation in one response, which is how sandbox runtimes predating paging
+ * call this endpoint.
+ */
+function installationPage(request: Request): { after: number; limit: number } | Response | null {
+  const params = new URL(request.url).searchParams;
+  const rawLimit = params.get("limit");
+  if (rawLimit === null) return null;
+  const limit = Number(rawLimit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SANDBOX_SKILL_PAGE_SIZE) {
+    return error(`limit must be an integer between 1 and ${MAX_SANDBOX_SKILL_PAGE_SIZE}`, 400);
+  }
+  const rawCursor = params.get("cursor");
+  if (rawCursor === null) return { after: -1, limit };
+  const after = Number(rawCursor);
+  if (!Number.isInteger(after) || after < 0) return error("cursor is not a valid position", 400);
+  return { after, limit };
+}
+
 async function handleSandboxInstallation(
-  _request: Request,
+  request: Request,
   _env: Env,
   match: RegExpMatchArray,
   ctx: SandboxRouteContext
 ): Promise<Response> {
   const id = sessionId(match);
   if (id instanceof Response) return id;
-  const manifest = await new SessionSkillStore(ctx.db).getSandboxInstallation(id);
+  const page = installationPage(request);
+  if (page instanceof Response) return page;
+  const manifest = await new SessionSkillStore(ctx.db).getSandboxInstallation(
+    id,
+    page ?? undefined
+  );
   // Sessions created before managed-skills shipped have no pinned row. Treat
   // them as an empty legacy manifest so snapshot restores remain bootable.
   const resolvedManifest =
@@ -54,11 +80,14 @@ async function handleSandboxInstallation(
           schemaVersion: 1 as const,
           manifestSha256: await hashSessionSkillManifest({ mode: "all" }, []),
           skills: [],
+          nextCursor: null,
         }
       : null);
   if (!resolvedManifest) return error("Session skill manifest not found", 404);
   const response = json(resolvedManifest);
-  response.headers.set("ETag", `"${resolvedManifest.manifestSha256}"`);
+  // The digest covers the whole manifest, so it is stable across pages and
+  // cannot identify one. Only tag a response that is the entire installation.
+  if (page === null) response.headers.set("ETag", `"${resolvedManifest.manifestSha256}"`);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }

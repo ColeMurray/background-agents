@@ -64,6 +64,7 @@ instructions.
 | `opencode/qwen3.7-max`  | Qwen3.7 Max  | Alibaba Cloud | Not supported     | N/A            |
 | `opencode/glm-5`        | GLM 5        | Z.ai 744B MoE | Not supported     | N/A            |
 | `opencode/glm-5.1`      | GLM 5.1      | Z.ai          | Not supported     | N/A            |
+| `opencode/glm-5.2`      | GLM 5.2      | Z.ai          | Not supported     | N/A            |
 
 ## Z.AI Coding Plan
 

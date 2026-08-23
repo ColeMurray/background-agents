@@ -199,13 +199,13 @@ await configureGitIdentity({
 
 Choose the AI model that fits your task, with per-session reasoning effort controls:
 
-| Provider         | Models                                                              |
-| ---------------- | ------------------------------------------------------------------- |
-| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6/5, Opus 4.5/4.6/4.7/4.8/5, Fable 5 |
-| OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                        |
-| xAI / SuperGrok  | Grok models (opt-in)                                                |
-| OpenCode Zen     | Kimi K2.5/K2.6/K3, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)    |
-| Z.AI Coding Plan | GLM 5.2/5.3 (opt-in)                                                |
+| Provider         | Models                                                               |
+| ---------------- | -------------------------------------------------------------------- |
+| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6/5, Opus 4.5/4.6/4.7/4.8/5, Fable 5  |
+| OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                         |
+| xAI / SuperGrok  | Grok models (opt-in)                                                 |
+| OpenCode Zen     | Kimi K2.5/K2.6/K3, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1/5.2 (opt-in) |
+| Z.AI Coding Plan | GLM 5.2/5.3 (opt-in)                                                 |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
 Grok models work with an eligible SuperGrok subscription through control-plane-managed OAuth. See

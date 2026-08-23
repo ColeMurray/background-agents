@@ -6,6 +6,7 @@ import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
 import { retireWarmDraftSession } from "@/lib/warm-session";
+import type { InteractiveProviderRoutingIdentity } from "@/lib/provider-selection";
 
 export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   model: string;
@@ -14,7 +15,10 @@ export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   providerSelections: ModelProviderSelections;
 };
 
-export function warmDraftSessionIdentity(request: WarmDraftSessionRequest | null): string | null {
+export function warmDraftSessionIdentity(
+  request: WarmDraftSessionRequest | null,
+  routingIdentity?: InteractiveProviderRoutingIdentity
+): string | null {
   if (!request) return null;
   const canonicalize = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(canonicalize);
@@ -28,11 +32,14 @@ export function warmDraftSessionIdentity(request: WarmDraftSessionRequest | null
     }
     return value;
   };
-  return JSON.stringify(canonicalize(request));
+  return JSON.stringify(canonicalize({ request, routingIdentity }));
 }
 
-export function useWarmDraftSession(request: WarmDraftSessionRequest | null) {
-  const identity = warmDraftSessionIdentity(request);
+export function useWarmDraftSession(
+  request: WarmDraftSessionRequest | null,
+  routingIdentity?: InteractiveProviderRoutingIdentity
+) {
+  const identity = warmDraftSessionIdentity(request, routingIdentity);
   const requestRef = useRef(request);
   const identityRef = useRef(identity);
   const sessionIdRef = useRef<string | null>(null);

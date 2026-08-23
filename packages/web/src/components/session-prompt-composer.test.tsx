@@ -17,17 +17,10 @@ vi.mock("@/components/action-bar", () => ({
 vi.mock("@/components/attachment-preview-strip", () => ({
   AttachmentPreviewStrip: () => null,
 }));
-vi.mock("@/components/reasoning-effort-pills", () => ({
-  ReasoningEffortPills: ({ disabled }: { disabled?: boolean }) => (
-    <button type="button" disabled={disabled}>
-      Reasoning
-    </button>
-  ),
-}));
-vi.mock("@/components/ui/combobox", () => ({
-  Combobox: ({ children, disabled }: { children: React.ReactNode; disabled?: boolean }) => (
-    <button type="button" disabled={disabled} aria-label="Model">
-      {children}
+vi.mock("@/components/model-reasoning-selector", () => ({
+  ModelReasoningSelector: ({ disabled }: { disabled?: boolean }) => (
+    <button type="button" disabled={disabled} aria-label="Model and effort">
+      Model and effort
     </button>
   ),
 }));
@@ -92,7 +85,7 @@ function ComposerHarness({
         onRemove: vi.fn(),
       }}
       model={{
-        selectedModel: "model-1",
+        selectedModel: "anthropic/claude-sonnet-4-6",
         reasoningEffort: undefined,
         items: [],
         onModelChange: vi.fn(),
@@ -124,8 +117,7 @@ describe("SessionPromptComposer", () => {
     fireEvent.change(input, { target: { value: "Updated while connecting" } });
     expect(screen.getByDisplayValue("Updated while connecting")).toBeEnabled();
     expect(screen.getByTitle("Attach images")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Model" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Reasoning" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Model and effort" })).toBeEnabled();
     expect(screen.getByTitle(/Send/)).toBeDisabled();
   });
 
@@ -174,8 +166,7 @@ describe("SessionPromptComposer", () => {
   it("keeps model controls editable while processing and blocks terminal sessions", () => {
     const { rerender } = render(<ComposerHarness initialValue="Follow up" isProcessing />);
     expect(screen.getByTitle("Queue follow-up; runs after the current prompt")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Model" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Reasoning" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Model and effort" })).toBeEnabled();
 
     rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
     expect(screen.getByTitle(/Send/)).toBeDisabled();

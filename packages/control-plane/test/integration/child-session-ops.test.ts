@@ -12,6 +12,7 @@ import {
   openClientWs,
   collectMessages,
   seedMessage,
+  TEST_SESSION_PROVIDER_AUTH,
 } from "./helpers";
 
 describe("Child session operations (list, get, cancel)", () => {
@@ -40,6 +41,7 @@ describe("Child session operations (list, get, cancel)", () => {
       baseBranch: null,
       status: "active",
       spawnDepth: 0,
+      providerAuth: TEST_SESSION_PROVIDER_AUTH,
       createdAt: now,
       updatedAt: now,
     });
@@ -55,6 +57,7 @@ describe("Child session operations (list, get, cancel)", () => {
       parentSessionId: pName,
       spawnSource: "agent",
       spawnDepth: 1,
+      providerAuth: TEST_SESSION_PROVIDER_AUTH,
       createdAt: now + 1,
       updatedAt: now + 1,
     });

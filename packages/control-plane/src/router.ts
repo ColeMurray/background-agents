@@ -43,6 +43,7 @@ import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
 import { skillRoutes } from "./routes/skills";
+import { keyboardShortcutRoutes } from "./routes/keyboard-shortcuts";
 import { sessionRoutes } from "./routes/sessions";
 import { modelProviderAccountRoutes } from "./routes/model-provider-accounts";
 import { handleSlackNotify } from "./routes/slack-notify";
@@ -357,6 +358,9 @@ export const routes: Route[] = [
 
   // Installation-wide managed skills and personal profiles
   ...skillRoutes,
+
+  // Personal keyboard shortcuts
+  ...keyboardShortcutRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,

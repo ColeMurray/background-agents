@@ -50,7 +50,7 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     runtime_version: null,
     auth_token: null,
     auth_token_hash: null,
-    status: "running",
+    status: "ready",
     git_sync_status: "pending",
     last_heartbeat: 999,
     last_activity: null,
@@ -678,7 +678,7 @@ describe("createSessionLifecycleHandler", () => {
       sandbox: {
         id: "sandbox-1",
         modalSandboxId: "modal-1",
-        status: "running",
+        status: "ready",
         gitSyncStatus: "pending",
         lastHeartbeat: 999,
       },
@@ -1003,11 +1003,22 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).not.toHaveBeenCalled();
   });
 
-  it("unarchives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+  // Unarchive must not assert a status of its own. Forcing "active" left a
+  // session with no queued work claiming to be working: nothing settles an idle
+  // `active` session, because every settle path is driven by execution events,
+  // so it stayed in the sidebar's in-progress group until the next prompt.
+  // Deriving the status from message state is what makes the restore honest.
+  //
+  // The settle service is mocked here, so this asserts delegation and
+  // pass-through only -- one behaviour, not four. Which status each message
+  // state actually produces is covered against real DO storage in
+  // test/integration/session-lifecycle.test.ts.
+  it("delegates to the settle service and returns whatever it decides", async () => {
+    const { handler, getSession, getParticipantByUserId, transition, settleFromMessageState } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
     getParticipantByUserId.mockReturnValue(createParticipant());
-    transition.mockResolvedValue(true);
+    settleFromMessageState.mockResolvedValue("completed");
 
     const response = await handler.unarchive(
       new Request("http://internal/internal/unarchive", {
@@ -1018,8 +1029,9 @@ describe("createSessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "active" });
-    expect(transition).toHaveBeenCalledWith("active");
+    expect(await response.json()).toEqual({ status: "completed" });
+    expect(settleFromMessageState).toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it("returns 409 when unarchiving a session that is not archived", async () => {
@@ -1060,7 +1072,7 @@ describe("createSessionLifecycleHandler", () => {
     } = createHandler();
     const ws = {} as WebSocket;
     getSession.mockReturnValue(createSession({ status: "active" }));
-    getSandbox.mockReturnValue(createSandbox({ status: "running" }));
+    getSandbox.mockReturnValue(createSandbox({ status: "ready" }));
     cancelSession.mockResolvedValue(undefined);
     getSandboxSocket.mockReturnValue(ws);
 

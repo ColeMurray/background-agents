@@ -270,6 +270,8 @@ jobs:
           TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
           TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
           TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
+          TF_VAR_e2b_template_cpu: "${{ secrets.E2B_TEMPLATE_CPU || '2' }}"
+          TF_VAR_e2b_template_memory_mb: "${{ secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
 
       - name: Post Plan Results
         uses: actions/github-script@v8
@@ -439,6 +441,8 @@ jobs:
           TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
           TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
           TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
+          TF_VAR_e2b_template_cpu: "${{ secrets.E2B_TEMPLATE_CPU || '2' }}"
+          TF_VAR_e2b_template_memory_mb: "${{ secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

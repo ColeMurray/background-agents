@@ -161,7 +161,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   runtime_version TEXT,                             -- SANDBOX_VERSION reported by the running sandbox
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
   auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
-  status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'syncing', 'ready', 'running', 'stale', 'snapshotting', 'stopped', 'failed'
+  -- Default must match DEFAULT_SANDBOX_STATUS (sandbox/sandbox-status.ts).
+  status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'ready', 'stale', 'snapshotting', 'stopped', 'failed'
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot

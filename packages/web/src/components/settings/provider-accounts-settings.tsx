@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   modelProviderAccountReconnectMethod,
@@ -27,7 +27,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { GrokIcon, MoreIcon, OpenAIIcon, PlusIcon } from "@/components/ui/icons";
+import { MoreIcon, PlusIcon } from "@/components/ui/icons";
+import { SubscriptionProviderIcon } from "@/components/subscription-provider-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -101,18 +102,7 @@ function dateLabel(timestamp: number | null) {
 function relativeDateLabel(timestamp: number | null) {
   if (!timestamp) return "Never";
   const relative = formatRelativeTime(timestamp);
-  return relative === "just now" ? relative : `${relative} ago`;
-}
-
-function ProviderIcon({
-  provider,
-  className = "size-6",
-}: {
-  provider: SubscriptionProviderId;
-  className?: string;
-}) {
-  const Icon = provider === "openai" ? OpenAIIcon : GrokIcon;
-  return <Icon aria-hidden="true" className={`${className} shrink-0 text-primary`} />;
+  return relative === "now" ? relative : `${relative} ago`;
 }
 
 function legacyKeyLocationLabel(location: LegacyProviderKeyLocation): string {
@@ -184,8 +174,11 @@ export function ProviderAccountsSettings() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [saving, setSaving] = useState(false);
+  const operationInFlightRef = useRef(false);
 
   async function run(operation: () => Promise<unknown>, success: string) {
+    if (operationInFlightRef.current) return;
+    operationInFlightRef.current = true;
     setSaving(true);
     try {
       await operation();
@@ -196,8 +189,17 @@ export function ProviderAccountsSettings() {
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "Provider account request failed");
     } finally {
+      operationInFlightRef.current = false;
       setSaving(false);
     }
+  }
+
+  function beginConnection(next: Connection) {
+    if (!operationInFlightRef.current) setConnection(next);
+  }
+
+  function beginConfirmation(next: Exclude<Confirm, null>) {
+    if (!operationInFlightRef.current) setConfirm(next);
   }
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading provider accounts...</p>;
@@ -250,7 +252,7 @@ export function ProviderAccountsSettings() {
               <h3 className="font-medium text-foreground">Connected accounts</h3>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="subtle">
+                  <Button size="sm" variant="subtle" disabled={saving}>
                     <PlusIcon className="size-4" />
                     Add account
                   </Button>
@@ -260,9 +262,15 @@ export function ProviderAccountsSettings() {
                   {providers.map((provider) => (
                     <DropdownMenuItem
                       key={provider.provider}
-                      onSelect={() => setConnection(CONNECTION_STRATEGIES[provider.provider].add())}
+                      disabled={saving}
+                      onSelect={() =>
+                        beginConnection(CONNECTION_STRATEGIES[provider.provider].add())
+                      }
                     >
-                      <ProviderIcon provider={provider.provider} className="size-5" />
+                      <SubscriptionProviderIcon
+                        provider={provider.provider}
+                        className="size-5 text-primary"
+                      />
                       <span>{provider.subscriptionName}</span>
                     </DropdownMenuItem>
                   ))}
@@ -288,7 +296,10 @@ export function ProviderAccountsSettings() {
                     >
                       <div className="flex min-w-0 items-start gap-3">
                         <div className="flex size-10 shrink-0 items-center justify-center text-foreground">
-                          <ProviderIcon provider={account.provider} className="size-6" />
+                          <SubscriptionProviderIcon
+                            provider={account.provider}
+                            className="size-6 text-primary"
+                          />
                         </div>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -331,8 +342,9 @@ export function ProviderAccountsSettings() {
                         <Button
                           size="xs"
                           variant="subtle"
+                          disabled={saving}
                           onClick={() =>
-                            setConnection(
+                            beginConnection(
                               CONNECTION_STRATEGIES[account.provider].reconnect(account)
                             )
                           }
@@ -343,6 +355,7 @@ export function ProviderAccountsSettings() {
                           <Button
                             size="xs"
                             variant="subtle"
+                            disabled={saving}
                             onClick={() =>
                               void run(
                                 () => runProviderAccountAction(account.id, "enable"),
@@ -356,7 +369,8 @@ export function ProviderAccountsSettings() {
                           <Button
                             size="xs"
                             variant="subtle"
-                            onClick={() => setConfirm({ account, action: "disable" })}
+                            disabled={saving}
+                            onClick={() => beginConfirmation({ account, action: "disable" })}
                           >
                             Disable
                           </Button>
@@ -364,6 +378,7 @@ export function ProviderAccountsSettings() {
                         <Button
                           size="xs"
                           variant="subtle"
+                          disabled={saving}
                           onClick={() =>
                             void run(
                               () => runProviderAccountAction(account.id, "verify"),
@@ -388,6 +403,7 @@ export function ProviderAccountsSettings() {
                           <DropdownMenuContent align="end">
                             {account.status === "active" && !isDefault && (
                               <DropdownMenuItem
+                                disabled={saving}
                                 onSelect={() =>
                                   void run(
                                     () =>
@@ -404,7 +420,9 @@ export function ProviderAccountsSettings() {
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuItem
+                              disabled={saving}
                               onSelect={() => {
+                                if (operationInFlightRef.current) return;
                                 const displayName = window
                                   .prompt("Account name", account.displayName)
                                   ?.trim();
@@ -432,7 +450,8 @@ export function ProviderAccountsSettings() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               className="text-destructive focus:text-destructive"
-                              onSelect={() => setConfirm({ account, action: "archive" })}
+                              disabled={saving}
+                              onSelect={() => beginConfirmation({ account, action: "archive" })}
                             >
                               Archive
                             </DropdownMenuItem>
@@ -458,41 +477,65 @@ export function ProviderAccountsSettings() {
                 const providerDefault = defaults.find(
                   (item) => item.provider === provider.provider
                 );
+                const defaultAccount = accounts.find(
+                  (account) => account.id === providerDefault?.providerAccountId
+                );
                 return (
                   <div
                     key={provider.provider}
                     className="grid gap-3 p-4 sm:grid-cols-[minmax(8rem,0.6fr)_1fr] sm:items-end"
                   >
                     <div className="flex items-center gap-2 self-center font-medium text-foreground">
-                      <ProviderIcon provider={provider.provider} className="size-5" />
+                      <SubscriptionProviderIcon
+                        provider={provider.provider}
+                        className="size-5 text-primary"
+                      />
                       {provider.subscriptionName}
                     </div>
                     <div>
-                      <Label htmlFor={`unattended-${provider.provider}`}>Authentication</Label>
-                      <Select
-                        disabled={!providerDefault}
-                        value={providerDefault?.unattendedMode ?? "api_key"}
-                        onValueChange={(value: "provider_account" | "api_key") => {
-                          if (providerDefault)
-                            void run(
-                              () =>
-                                setProviderAccountDefault(
-                                  provider.provider,
-                                  providerDefault.providerAccountId,
-                                  value
-                                ),
-                              "Authentication updated"
-                            );
-                        }}
-                      >
-                        <SelectTrigger id={`unattended-${provider.provider}`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="provider_account">Use default account</SelectItem>
-                          <SelectItem value="api_key">No account</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      {providerDefault ? (
+                        <>
+                          <Label htmlFor={`unattended-${provider.provider}`}>
+                            Automated authentication
+                          </Label>
+                          <Select
+                            disabled={saving}
+                            value={providerDefault.unattendedMode}
+                            onValueChange={(value: "provider_account" | "api_key") => {
+                              if (!operationInFlightRef.current)
+                                void run(
+                                  () =>
+                                    setProviderAccountDefault(
+                                      provider.provider,
+                                      providerDefault.providerAccountId,
+                                      value
+                                    ),
+                                  "Authentication updated"
+                                );
+                            }}
+                          >
+                            <SelectTrigger id={`unattended-${provider.provider}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="provider_account">
+                                Use default: {defaultAccount?.displayName ?? "Unavailable account"}
+                              </SelectItem>
+                              <SelectItem value="api_key">No account (API key)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </>
+                      ) : (
+                        <div className="rounded-md border border-dashed border-border-muted px-3 py-2">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            Automated authentication
+                          </p>
+                          <p className="text-sm text-foreground">No default account selected</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            Choose Make default from an account above.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

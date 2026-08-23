@@ -152,6 +152,7 @@ export class SessionMessageQueue {
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
+    private readonly getProviderAuthenticationError: (model: string) => Promise<string | null>,
     private readonly projectTerminalMessage: (
       messageId: string,
       messageCreatedAt: number,
@@ -303,6 +304,21 @@ export class SessionMessageQueue {
       return;
     }
     const now = Date.now();
+    const session = this.repository.getSession();
+    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
+    const authenticationError = await this.getProviderAuthenticationError(resolvedModel);
+    if (authenticationError) {
+      this.log.error("provider_auth.unavailable", {
+        event: "provider_auth.unavailable",
+        model: resolvedModel,
+      });
+      if (this.failMessage(message, authenticationError, now, "pending")) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
+      }
+      return;
+    }
 
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
@@ -350,8 +366,6 @@ export class SessionMessageQueue {
       )
     );
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
-    const session = this.repository.getSession();
-    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     const requestedEffort =
       message.reasoning_effort ??
       session?.reasoning_effort ??

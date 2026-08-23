@@ -134,6 +134,10 @@
       "import": "./dist/types/session-inbox.js",
       "types": "./dist/types/session-inbox.d.ts"
     },
+    "./types/session-activity": {
+      "import": "./dist/types/session-activity.js",
+      "types": "./dist/types/session-activity.d.ts"
+    },
     "./types/artifacts": {
       "import": "./dist/types/artifacts.js",
       "types": "./dist/types/artifacts.d.ts"
@@ -153,6 +157,10 @@
     "./types/skills": {
       "import": "./dist/types/skills.js",
       "types": "./dist/types/skills.d.ts"
+    },
+    "./types/keyboard-shortcuts": {
+      "import": "./dist/types/keyboard-shortcuts.js",
+      "types": "./dist/types/keyboard-shortcuts.d.ts"
     },
     "./types/prompts": {
       "import": "./dist/types/prompts.js",

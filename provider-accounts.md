@@ -215,13 +215,25 @@ implements a typed adapter behind a registry:
 
 ```ts
 interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
-  readonly provider: SubscriptionProviderId;
+  readonly provider: ModelProviderId;
   readonly credentialSchemaVersion: number;
+  readonly refreshBufferMs: number;
+  readonly deviceAuthorization?: ProviderDeviceAuthorizationCapability<TCredential, unknown>;
 
   parseConnectInput(input: unknown): TConnectInput;
   connect(input: TConnectInput): Promise<ProviderConnectionResult<TCredential>>;
   parseCredential(payload: unknown, schemaVersion: number): TCredential;
-  refresh(credential: TCredential): Promise<ProviderRefreshResult<TCredential>>;
+  refresh(credential: TCredential, now?: number): Promise<ProviderRefreshResult<TCredential>>;
+  cachedAccess(credential: TCredential): CachedProviderAccess | null;
+  validateReconnectInputIdentity(
+    input: TConnectInput,
+    expectedExternalAccountId: string | null
+  ): void;
+  runtimeMetadata(
+    credential: TCredential,
+    externalAccountId: string | null
+  ): Record<string, string>;
+  validateExternalIdentity(actual: string | undefined, expected: string | null): void;
 }
 
 interface ProviderConnectionResult<TCredential> {
@@ -567,9 +579,10 @@ expresses subscription intent.
 
 ### Provider completeness
 
-Session creation resolves auth rows for every enabled, connectable subscription provider, not only
-the initial model's provider. This keeps later per-prompt model changes deterministic. It also means
-the initiating user can review the effective provider accounts before launch.
+Session creation resolves one auth row for every provider in `SUBSCRIPTION_PROVIDER_IDS`, not only
+the initial model's provider. That closed set is the completeness contract even when an adapter is
+temporarily unavailable. This keeps later per-prompt model changes deterministic. It also means the
+initiating user can review the effective provider accounts before launch.
 
 If no account is available for a provider, the session can still be created for other providers. The
 legacy row uses a matching scoped refresh token when one is available in the resolved secrets;

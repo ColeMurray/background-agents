@@ -15,6 +15,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { buildValidatedSkillRevision } from "../skills/content-addressing";
 import { isUniqueConstraintError } from "./errors";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const RESERVED_SKILL_NAMES = new Set([
@@ -92,8 +93,6 @@ interface SkillListResult {
   hasMore: boolean;
   nextCursor: string | null;
 }
-
-const MAX_D1_QUERY_PARAMETERS = 100;
 
 /** Mutable catalog operations backed by immutable content revisions. */
 export class SkillStore {
@@ -479,32 +478,62 @@ export class SkillStore {
   }
 
   async filesForRevision(revisionId: string): Promise<SkillFile[]> {
-    return (await this.filesForRevisions([revisionId])).get(revisionId) ?? [];
-  }
-
-  async filesForRevisions(revisionIds: string[]): Promise<Map<string, SkillFile[]>> {
-    const files = new Map<string, SkillFile[]>();
-    for (const revisionId of revisionIds) files.set(revisionId, []);
-    if (revisionIds.length === 0) return files;
-    const placeholders = revisionIds.map(() => "?").join(", ");
     const result = await this.db
       .prepare(
-        `SELECT revision_id, path, content, content_sha256, size_bytes, executable
-         FROM skill_revision_files WHERE revision_id IN (${placeholders})
-         ORDER BY revision_id, path`
+        `SELECT path, content, content_sha256, size_bytes, executable
+         FROM skill_revision_files WHERE revision_id = ?
+         ORDER BY path`
       )
-      .bind(...revisionIds)
+      .bind(revisionId)
+      .all<FileRow>();
+    return (result.results ?? []).map((row) => this.toFile(row));
+  }
+
+  /**
+   * Load installation files for the revisions a session pinned, optionally
+   * narrowed to one page of manifest positions.
+   *
+   * Keyed by session rather than by a revision-ID list on purpose: the IDs
+   * already live in `session_skill_revisions`, so passing them back as bound
+   * parameters would cap the manifest at the engine's parameter ceiling for no
+   * gain. Narrowing by position keeps that property — three parameters whether
+   * the page holds one revision or a thousand.
+   */
+  async filesForSessionRevisions(
+    sessionId: string,
+    page?: { after: number; limit: number }
+  ): Promise<Map<string, SkillFile[]>> {
+    const pinnedRevisions = page
+      ? `SELECT revision_id FROM session_skill_revisions
+         WHERE session_id = ? AND position > ? ORDER BY position LIMIT ?`
+      : "SELECT revision_id FROM session_skill_revisions WHERE session_id = ?";
+    const result = await this.db
+      .prepare(
+        `SELECT f.revision_id, f.path, f.content, f.content_sha256, f.size_bytes, f.executable
+         FROM skill_revision_files f
+         WHERE f.revision_id IN (${pinnedRevisions})
+         ORDER BY f.revision_id, f.path`
+      )
+      .bind(...(page ? [sessionId, page.after, page.limit] : [sessionId]))
       .all<FileRow & { revision_id: string }>();
+    const files = new Map<string, SkillFile[]>();
     for (const row of result.results ?? []) {
-      files.get(row.revision_id)?.push({
-        path: row.path,
-        content: row.content,
-        sha256: row.content_sha256,
-        sizeBytes: row.size_bytes,
-        executable: row.executable === 1,
-      });
+      const existing = files.get(row.revision_id);
+      const file = this.toFile(row);
+      if (existing) existing.push(file);
+      else files.set(row.revision_id, [file]);
     }
     return files;
+  }
+
+  private toFile(row: FileRow): SkillFile {
+    return {
+      path: row.path,
+      content: row.content,
+      sha256: row.content_sha256,
+      sizeBytes: row.size_bytes,
+      executable: row.executable === 1,
+    };
   }
 
   private currentSkillSelect(): string {
@@ -697,12 +726,22 @@ export class SkillStore {
       ),
     ];
     if (environmentIds.length === 0) return;
-    const placeholders = environmentIds.map(() => "?").join(", ");
-    const row = await this.db
-      .prepare(`SELECT COUNT(*) AS count FROM environments WHERE id IN (${placeholders})`)
-      .bind(...environmentIds)
-      .first<{ count: number }>();
-    if ((row?.count ?? 0) !== environmentIds.length) {
+    // `assignments` is request input and carries no length bound, so this
+    // cannot bind a parameter per environment: past the engine ceiling it
+    // fails outright with `too many SQL variables` instead of reporting a
+    // validation error, which made a skill assigned to more than
+    // MAX_D1_QUERY_PARAMETERS environments impossible to create.
+    let found = 0;
+    for (let start = 0; start < environmentIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = environmentIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const row = await this.db
+        .prepare(`SELECT COUNT(*) AS count FROM environments WHERE id IN (${placeholders})`)
+        .bind(...chunk)
+        .first<{ count: number }>();
+      found += row?.count ?? 0;
+    }
+    if (found !== environmentIds.length) {
       throw new SkillValidationError("One or more assigned environments do not exist");
     }
   }

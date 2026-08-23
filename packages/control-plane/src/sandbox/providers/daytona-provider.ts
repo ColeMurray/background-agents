@@ -106,7 +106,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.id,
-        status: sandbox.state,
         createdAt: Date.now(),
         codeServerUrl,
         codeServerPassword,

@@ -4,7 +4,8 @@ import { useState, type ReactNode } from "react";
 import type { ProviderDeviceAuthorizationStatusResponse } from "@open-inspect/shared/types/provider-accounts";
 import { useProviderDeviceAuthorization } from "@/hooks/use-provider-device-authorization";
 import { Button } from "@/components/ui/button";
-import { CheckIcon, CopyIcon, GrokIcon, OpenAIIcon } from "@/components/ui/icons";
+import { CheckIcon, CopyIcon } from "@/components/ui/icons";
+import { SubscriptionProviderIcon } from "@/components/subscription-provider-icon";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 
 export const CHATGPT_DEVICE_AUTHORIZATION_SETTINGS_URL =
@@ -25,14 +26,12 @@ const PROVIDER_CONTENT = {
     defaultDisplayName: "ChatGPT account",
     description:
       "Authorize Codex with OpenAI. Your credentials stay between OpenAI and the control plane.",
-    Icon: OpenAIIcon,
   },
   xai: {
     accountName: "SuperGrok",
     defaultDisplayName: "SuperGrok account",
     description:
       "Use your X Premium+ or SuperGrok subscription for Grok. Your credentials stay between xAI and the control plane.",
-    Icon: GrokIcon,
   },
 } as const;
 
@@ -55,7 +54,6 @@ export function ProviderDeviceAuthorizationDialog({
 }) {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const content = PROVIDER_CONTENT[target.provider];
-  const ProviderIcon = content.Icon;
   const { authorization, failure, status, remainingMs, retry, cancel } =
     useProviderDeviceAuthorization(
       target.provider,
@@ -76,7 +74,10 @@ export function ProviderDeviceAuthorizationDialog({
         <div className="border-b border-border-muted bg-muted/30 px-5 py-5 sm:px-7">
           <div className="flex items-start gap-3">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-full border border-border bg-background">
-              <ProviderIcon className="size-5 text-foreground" />
+              <SubscriptionProviderIcon
+                provider={target.provider}
+                className="size-5 text-foreground"
+              />
             </div>
             <div>
               <DialogTitle>

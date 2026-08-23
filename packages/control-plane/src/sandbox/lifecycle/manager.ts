@@ -51,6 +51,7 @@ import {
   type SelectedImageBuild,
 } from "./image-selection";
 import type { AlarmScheduler } from "../../platform-ports";
+import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
 
 export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
@@ -67,7 +68,7 @@ const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
  * Sandbox state with circuit breaker info (subset of full SandboxRow).
  */
 interface SandboxCircuitBreakerInfo {
-  status: string;
+  status: SandboxStatus;
   created_at: number;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
@@ -371,7 +372,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Evaluate spawn decision
     const spawnState = {
-      status: (sandboxState?.status || "pending") as SandboxStatus,
+      status: sandboxState?.status ?? DEFAULT_SANDBOX_STATUS,
       createdAt: sandboxState?.created_at || 0,
       providerObjectId: sandboxState?.modal_object_id || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,
@@ -1090,9 +1091,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Restore previous status if we weren't in a terminal state
     if (!isTerminalState && reason !== "heartbeat_timeout") {
-      this.storage.updateSandboxStatus(previousStatus as SandboxStatus);
+      this.storage.updateSandboxStatus(previousStatus);
       this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
-      if (previousStatus === "ready" || previousStatus === "running") {
+      if (previousStatus === "ready") {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });
       }
     }
@@ -1237,7 +1238,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     // Check connecting timeout — sandbox failed to connect within allowed time
     const connectingResult = evaluateConnectingTimeout(
-      sandbox.status as SandboxStatus,
+      sandbox.status,
       sandbox.created_at,
       this.config.connectingTimeout,
       now
@@ -1325,7 +1326,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     const connectedClients = this.getConnectedClientCount();
     const inactivityState = {
       lastActivity: sandbox.last_activity,
-      status: sandbox.status as SandboxStatus,
+      status: sandbox.status,
       connectedClientCount: connectedClients,
     };
 
@@ -1443,7 +1444,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     const warmState = {
       hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
-      status: sandbox?.status as SandboxStatus | null,
+      // Not coerced, deliberately: `WarmState.status` is `SandboxStatus | null`
+      // and a session with no sandbox row yet is the ordinary case on the
+      // warm-on-typing path. Coercing here would turn "no sandbox" into
+      // DEFAULT_SANDBOX_STATUS and skip the spawn this method exists to start.
+      status: sandbox?.status ?? null,
       isSpawningInMemory: this.isSpawningSandbox,
     };
 

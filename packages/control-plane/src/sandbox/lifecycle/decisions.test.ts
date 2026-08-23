@@ -35,7 +35,7 @@ describe("isSandboxReconnectBlockedStatus", () => {
     expect(isSandboxReconnectBlockedStatus(status)).toBe(true);
   });
 
-  it.each(["pending", "spawning", "connecting", "ready", "running", "failed"] as const)(
+  it.each(["pending", "spawning", "connecting", "ready", "failed"] as const)(
     "allows reconnects for %s sandboxes",
     (status) => {
       expect(isSandboxReconnectBlockedStatus(status)).toBe(false);
@@ -745,11 +745,11 @@ describe("evaluateInactivityTimeout", () => {
     }
   });
 
-  it("only applies to ready/running status", () => {
+  it("only applies to ready status", () => {
     const now = Date.now();
     const state: InactivityState = {
       lastActivity: now - config.timeoutMs - 60000,
-      status: "spawning", // Not ready or running
+      status: "spawning", // Not ready
       connectedClientCount: 0,
     };
 
@@ -758,11 +758,11 @@ describe("evaluateInactivityTimeout", () => {
     expect(decision.action).toBe("schedule");
   });
 
-  it('returns "timeout" for running status', () => {
+  it('returns "timeout" for ready status', () => {
     const now = Date.now();
     const state: InactivityState = {
       lastActivity: now - config.timeoutMs - 1000,
-      status: "running",
+      status: "ready",
       connectedClientCount: 0,
     };
 
@@ -904,7 +904,7 @@ describe("evaluateConnectingTimeout", () => {
     const now = Date.now();
     const old = now - 999_999;
 
-    for (const status of ["pending", "ready", "running", "stopped", "failed", "stale"] as const) {
+    for (const status of ["pending", "ready", "stopped", "failed", "stale"] as const) {
       const result = evaluateConnectingTimeout(status, old, config, now);
       expect(result.isTimedOut).toBe(false);
     }

@@ -20,7 +20,7 @@ const TEST_NAMED_SESSION_DEFAULTS = {
   repoId: 12345,
   userId: "user-1",
 } as const;
-const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
+export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
   { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
   { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
 ];
@@ -165,8 +165,6 @@ export async function initSession(overrides?: {
   scmLogin?: string;
   providerAuth?: SessionModelProviderAuthInput[];
 }) {
-  const id = env.SESSION.newUniqueId();
-  const stub = env.SESSION.get(id);
   const defaults = {
     sessionName: `test-${Date.now()}-${crypto.randomUUID()}`,
     repoOwner: "acme",
@@ -175,6 +173,8 @@ export async function initSession(overrides?: {
     userId: "user-1",
     ...overrides,
   };
+  const id = env.SESSION.idFromName(defaults.sessionName);
+  const stub = env.SESSION.get(id);
   const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
