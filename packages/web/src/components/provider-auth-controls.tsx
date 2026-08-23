@@ -8,7 +8,7 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import { SUBSCRIPTION_PROVIDER_DISPLAY_METADATA } from "@open-inspect/shared/types/provider-accounts";
 import { Label } from "@/components/ui/label";
-import { MoreIcon } from "@/components/ui/icons";
+import { GrokIcon, MoreIcon, OpenAIIcon } from "@/components/ui/icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +36,17 @@ const DEFAULT_POLICY_LABEL = "Use default";
 const DEFAULT_UNATTENDED = false;
 const DEFAULT_VARIANT = "select";
 const DEFAULT_DISABLED = false;
+
+function ProviderIcon({
+  provider,
+  className = "size-3.5",
+}: {
+  provider: SubscriptionProviderId;
+  className?: string;
+}) {
+  const Icon = provider === "openai" ? OpenAIIcon : GrokIcon;
+  return <Icon aria-hidden="true" className={`${className} shrink-0`} />;
+}
 
 export function ProviderAuthControls({
   provider,
@@ -106,9 +117,8 @@ export function ProviderAuthControls({
             title={`${providerName} authentication`}
             disabled={disabled}
           >
-            <span className="truncate">
-              {providerName}: {triggerSelectionLabel}
-            </span>
+            <ProviderIcon provider={provider} />
+            <span className="truncate">{triggerSelectionLabel}</span>
             <MoreIcon className="size-3.5 shrink-0" />
           </button>
         </DropdownMenuTrigger>
@@ -116,8 +126,12 @@ export function ProviderAuthControls({
           <DropdownMenuLabel>Session options</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger disabled={disabled}>
-              {providerName} authentication
+            <DropdownMenuSubTrigger
+              disabled={disabled}
+              aria-label={`${providerName} authentication`}
+            >
+              <ProviderIcon provider={provider} />
+              authentication
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               collisionPadding={8}
@@ -149,9 +163,15 @@ export function ProviderAuthControls({
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={`provider-auth-${provider}`}>{providerName} authentication</Label>
+      <Label htmlFor={`provider-auth-${provider}`} className="flex items-center gap-1.5">
+        <ProviderIcon provider={provider} className="size-4" />
+        authentication
+      </Label>
       <Select value={selected} onValueChange={handleChange} disabled={disabled}>
-        <SelectTrigger id={`provider-auth-${provider}`}>
+        <SelectTrigger
+          id={`provider-auth-${provider}`}
+          aria-label={`${providerName} authentication`}
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

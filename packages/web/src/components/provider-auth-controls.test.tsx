@@ -41,7 +41,8 @@ describe("ProviderAuthControls menu", () => {
       name: "OpenAI authentication options, Team ChatGPT",
     });
     expect(trigger).toHaveAttribute("title", "OpenAI authentication");
-    expect(trigger).toHaveTextContent("OpenAI: Team ChatGPT");
+    expect(trigger).toHaveTextContent("Team ChatGPT");
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 
     expect(await screen.findByText("Session options")).toBeInTheDocument();
@@ -58,6 +59,24 @@ describe("ProviderAuthControls menu", () => {
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No account" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
+  });
+
+  it("uses the Grok logo for xAI authentication", () => {
+    render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="xai"
+        accounts={[{ ...account, provider: "xai", displayName: "SuperGrok" }]}
+        value={{ mode: "provider_account", accountId: account.id }}
+        onChange={vi.fn()}
+      />
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: "xAI authentication options, SuperGrok",
+    });
+    expect(trigger).toHaveTextContent("SuperGrok");
+    expect(screen.getByTitle("Grok")).toBeInTheDocument();
   });
 
   it("shows the effective default on the compact trigger", () => {
@@ -83,7 +102,8 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Team ChatGPT",
       })
-    ).toHaveTextContent("OpenAI: Team ChatGPT");
+    ).toHaveTextContent("Team ChatGPT");
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
   });
 
   it("shows when the configured default account is unavailable", () => {
@@ -109,7 +129,8 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Unavailable account",
       })
-    ).toHaveTextContent("OpenAI: Unavailable account");
+    ).toHaveTextContent("Unavailable account");
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
   });
 
   it("shows the effective unattended API-key default", () => {
