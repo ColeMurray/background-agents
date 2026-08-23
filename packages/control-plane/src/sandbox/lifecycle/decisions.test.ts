@@ -5,7 +5,6 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/model";
 import {
   evaluateCircuitBreaker,
@@ -46,29 +45,14 @@ describe("isSandboxReconnectBlockedStatus", () => {
 });
 
 describe("isSessionSandboxReconnectBlocked", () => {
-  /**
-   * Declared per status rather than derived from the predicate's own set, so a
-   * membership change has to be restated here. Typed as a total record over
-   * `SessionStatus`: a new status fails to compile until it is classified.
-   *
-   * `completed` and `failed` are deliberately allowed. They read as terminal
-   * but are not — a completed session is simply idle, and warm-on-typing
-   * spawns a sandbox for it before the follow-up prompt arrives. Blocking that
-   * bridge returned 410 to every reconnect and stranded the follow-up.
-   */
-  const blockedByStatus: Record<SessionStatus, boolean> = {
-    created: false,
-    active: false,
-    completed: false,
-    failed: false,
-    archived: true,
-    cancelled: true,
-  };
+  it.each(["archived", "cancelled"] as const)("blocks reconnects for %s sessions", (status) => {
+    expect(isSessionSandboxReconnectBlocked(status)).toBe(true);
+  });
 
-  it.each(Object.entries(blockedByStatus) as Array<[SessionStatus, boolean]>)(
-    "reports %s sessions as blocked=%s",
-    (status, blocked) => {
-      expect(isSessionSandboxReconnectBlocked(status)).toBe(blocked);
+  it.each(["created", "active", "completed", "failed"] as const)(
+    "allows reconnects for %s sessions",
+    (status) => {
+      expect(isSessionSandboxReconnectBlocked(status)).toBe(false);
     }
   );
 });

@@ -1132,23 +1132,6 @@ export class SessionDO extends DurableObject<Env> {
       const sandbox = this.getSandbox();
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
-      // Reject connection if the session itself is closed for good. Narrower
-      // than "not active": `completed` and `failed` sessions are idle, not
-      // over — warm-on-typing spawns a sandbox for one before the follow-up
-      // prompt arrives, and rejecting its bridge stranded that prompt.
-      const currentSession = this.getSession();
-      if (currentSession && isSessionSandboxReconnectBlocked(currentSession.status)) {
-        log.warn("ws.connect", {
-          event: "ws.connect",
-          ws_type: "sandbox",
-          outcome: "rejected",
-          reject_reason: "session_terminal",
-          session_status: currentSession.status,
-          duration_ms: Date.now() - wsStartTime,
-        });
-        return new Response("Session is terminal", { status: 410 });
-      }
-
       // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout).
       // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
       // still connect — a slow boot that outlived the connecting watchdog
@@ -1190,6 +1173,27 @@ export class SessionDO extends DurableObject<Env> {
           duration_ms: Date.now() - wsStartTime,
         });
         return new Response("Unauthorized: Invalid auth token", { status: 401 });
+      }
+
+      // Reject connection if the session itself is closed for good. Narrower
+      // than "not active": `completed` and `failed` sessions are idle, not
+      // over — warm-on-typing spawns a sandbox for one before the follow-up
+      // prompt arrives, and rejecting its bridge stranded that prompt.
+      //
+      // Read after authentication, not before: token hashing is a non-storage
+      // await, so the input gate lets a cancel or archive land while this
+      // request is suspended. Admission needs a fresh, synchronous read.
+      const currentSession = this.getSession();
+      if (currentSession && isSessionSandboxReconnectBlocked(currentSession.status)) {
+        log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "rejected",
+          reject_reason: "session_terminal",
+          session_status: currentSession.status,
+          duration_ms: Date.now() - wsStartTime,
+        });
+        return new Response("Session is terminal", { status: 410 });
       }
 
       // Auth passed — continue to WebSocket accept below
