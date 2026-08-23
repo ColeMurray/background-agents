@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { CompleteImageBuildCallback, FailImageBuildCallback } from "./types";
 
+export const IMAGE_BUILD_FINALIZATION_QUEUE_NAME_PREFIX = "open-inspect-image-build-finalization-";
+
 /** Versioned, secret-free command accepted by the finalization Queue. */
 export const imageBuildFinalizationJobSchema = z.object({
   version: z.literal(1),

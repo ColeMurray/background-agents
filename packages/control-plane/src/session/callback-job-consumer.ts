@@ -41,27 +41,24 @@ const CALLBACK_ENDPOINTS: Record<SessionCallbackJob["type"], string> = {
 };
 
 function callbackPayload(job: SessionCallbackJob): Record<string, unknown> | null {
-  const timestamp = Date.now();
   if (job.type === "session.started") {
-    return { ...job.payload, timestamp };
+    return job.payload;
   }
   if (job.type === "session.completed") {
     const { source: _source, ...payload } = job.payload;
-    const callback = { ...payload, timestamp };
     if (job.payload.source === "linear") {
-      const parsed = linearCompletionCallbackPayloadSchema.safeParse(callback);
+      const parsed = linearCompletionCallbackPayloadSchema.safeParse(payload);
       return parsed.success ? parsed.data : null;
     }
-    return callback;
+    return payload;
   }
 
   const { source: _source, messageId: _messageId, ...payload } = job.payload;
-  const callback = { ...payload, timestamp };
   if (job.payload.source === "linear") {
-    const parsed = linearToolCallCallbackPayloadSchema.safeParse(callback);
+    const parsed = linearToolCallCallbackPayloadSchema.safeParse(payload);
     return parsed.success ? parsed.data : null;
   }
-  return callback;
+  return payload;
 }
 
 export async function deliverSessionCallbackJob(

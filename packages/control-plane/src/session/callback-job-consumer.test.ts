@@ -17,6 +17,7 @@ const LINEAR_CONTEXT = {
   issueUrl: "https://linear.app/acme/issue/ENG-1",
   model: "anthropic/claude-haiku-4-5",
 };
+const CALLBACK_TIMESTAMP = 1_700_000_000_000;
 
 function message(body: unknown) {
   return {
@@ -47,6 +48,7 @@ function completionJob(source: string | null = "slack"): SessionCallbackJob {
       messageId: "message-1",
       source,
       success: true,
+      timestamp: CALLBACK_TIMESTAMP,
       context: source === "linear" ? LINEAR_CONTEXT : { channel: "C123", threadTs: "123.45" },
     },
   };
@@ -70,6 +72,7 @@ describe("session callback Queue consumer", () => {
     const body = JSON.parse(String(fetch.mock.calls[0][1]?.body));
     expect(linearCompletionCallbackSchema.safeParse(body).success).toBe(true);
     expect(body.context.issueId).toBe("issue-1");
+    expect(body.timestamp).toBe(CALLBACK_TIMESTAMP);
     expect(await verifyCallbackSignature(body, "linear-secret")).toBe(true);
   });
 
@@ -87,7 +90,12 @@ describe("session callback Queue consumer", () => {
       {
         version: 1,
         type: "session.started",
-        payload: { sessionId: "session-1", messageId: "message-1", context: LINEAR_CONTEXT },
+        payload: {
+          sessionId: "session-1",
+          messageId: "message-1",
+          timestamp: CALLBACK_TIMESTAMP,
+          context: LINEAR_CONTEXT,
+        },
       },
       env
     );
@@ -102,6 +110,7 @@ describe("session callback Queue consumer", () => {
           tool: "bash",
           args: {},
           callId: "call-1",
+          timestamp: CALLBACK_TIMESTAMP,
           context: { channel: "C123" },
         },
       },
@@ -118,6 +127,8 @@ describe("session callback Queue consumer", () => {
     );
     const startBody = JSON.parse(String(linearFetch.mock.calls[0][1]?.body));
     const toolBody = JSON.parse(String(slackFetch.mock.calls[0][1]?.body));
+    expect(startBody.timestamp).toBe(CALLBACK_TIMESTAMP);
+    expect(toolBody.timestamp).toBe(CALLBACK_TIMESTAMP);
     expect(await verifyCallbackSignature(startBody, "linear-secret")).toBe(true);
     expect(await verifyCallbackSignature(toolBody, "slack-secret")).toBe(true);
   });
@@ -161,6 +172,7 @@ describe("session callback Queue consumer", () => {
         tool: "bash",
         args: {},
         callId: "call-1",
+        timestamp: CALLBACK_TIMESTAMP,
         context: { channel: "C123" },
       },
     });

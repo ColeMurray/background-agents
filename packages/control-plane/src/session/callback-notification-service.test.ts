@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCallbackJob } from "@open-inspect/shared/types/session-callback-jobs";
 import type { Logger } from "../logger";
 import type { MessageRepository } from "./message-repository";
@@ -50,6 +50,10 @@ describe("CallbackNotificationService", () => {
     harness = createHarness();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("enqueues unsigned completion data without bot dependencies", async () => {
     harness.repository.getMessageCallbackContext.mockReturnValue({
       source: "slack",
@@ -67,6 +71,7 @@ describe("CallbackNotificationService", () => {
         source: "slack",
         success: false,
         error: "sandbox failed",
+        timestamp: expect.any(Number),
         context: { channel: "C123", threadTs: "123.45" },
       },
     });
@@ -87,6 +92,7 @@ describe("CallbackNotificationService", () => {
       payload: {
         sessionId: "session-123",
         messageId: "message-1",
+        timestamp: expect.any(Number),
         context: LINEAR_CONTEXT,
       },
     });
@@ -156,12 +162,12 @@ describe("CallbackNotificationService", () => {
       callId: "call-1",
       status: "running",
     });
-    vi.setSystemTime(1_700_000_005_000);
+    vi.setSystemTime(1_700_000_001_000);
     await harness.service.notifyToolCall("message-1", {
       type: "tool_call",
       tool: "bash",
       args: { command: "ls" },
-      callId: "call-1",
+      callId: "call-2",
       status: "completed",
     });
 
@@ -177,7 +183,29 @@ describe("CallbackNotificationService", () => {
         callId: "call-1",
       }),
     });
-    vi.useRealTimers();
+  });
+
+  it("deduplicates a tool call after the throttle window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    harness.repository.getMessageCallbackContext.mockReturnValue({
+      source: "slack",
+      callback_context: JSON.stringify({ channel: "C123" }),
+    });
+
+    await harness.service.notifyToolCall("message-1", {
+      type: "tool_call",
+      tool: "bash",
+      callId: "call-1",
+    });
+    vi.setSystemTime(1_700_000_005_000);
+    await harness.service.notifyToolCall("message-1", {
+      type: "tool_call",
+      tool: "bash",
+      callId: "call-1",
+    });
+
+    expect(harness.send).toHaveBeenCalledOnce();
   });
 
   it("allows a later tool event to enqueue when Queue publication failed", async () => {
@@ -201,6 +229,5 @@ describe("CallbackNotificationService", () => {
     });
 
     expect(harness.send).toHaveBeenCalledTimes(2);
-    vi.useRealTimers();
   });
 });

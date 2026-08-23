@@ -12,6 +12,7 @@ const sessionCompletedJobSchema = z.strictObject({
     source: z.string().nullable(),
     success: z.boolean(),
     error: z.string().optional(),
+    timestamp: z.number().refine(Number.isFinite),
     context: callbackContextSchema,
   }),
 });
@@ -22,6 +23,7 @@ const sessionStartedJobSchema = z.strictObject({
   payload: z.strictObject({
     sessionId: nonEmptyStringSchema,
     messageId: nonEmptyStringSchema,
+    timestamp: z.number().refine(Number.isFinite),
     context: callbackContextSchema,
   }),
 });
@@ -37,6 +39,7 @@ const toolCallJobSchema = z.strictObject({
     args: z.record(z.string(), z.unknown()),
     callId: z.string(),
     status: z.string().optional(),
+    timestamp: z.number().refine(Number.isFinite),
     context: callbackContextSchema,
   }),
 });

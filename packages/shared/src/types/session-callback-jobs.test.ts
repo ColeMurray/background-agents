@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { sessionCallbackJobSchema } from "./session-callback-jobs";
 
+const completedPayload = {
+  sessionId: "session-1",
+  messageId: "message-1",
+  source: "slack",
+  success: true,
+  timestamp: 1_700_000_000_000,
+  context: {},
+};
+
 describe("sessionCallbackJobSchema", () => {
   it.each(["session.completed", "session.started", "tool_call"])(
     "accepts the %s envelope",
@@ -11,11 +20,13 @@ describe("sessionCallbackJobSchema", () => {
           messageId: "message-1",
           source: "slack",
           success: true,
+          timestamp: 1_700_000_000_000,
           context: {},
         },
         "session.started": {
           sessionId: "session-1",
           messageId: "message-1",
+          timestamp: 1_700_000_000_000,
           context: {},
         },
         tool_call: {
@@ -25,6 +36,7 @@ describe("sessionCallbackJobSchema", () => {
           tool: "bash",
           args: {},
           callId: "call-1",
+          timestamp: 1_700_000_000_000,
           context: {},
         },
       } as const;
@@ -35,19 +47,22 @@ describe("sessionCallbackJobSchema", () => {
     }
   );
 
-  it("rejects unknown fields and versions", () => {
+  it("rejects unsupported versions", () => {
     expect(
       sessionCallbackJobSchema.safeParse({
         version: 2,
         type: "session.completed",
-        payload: {
-          sessionId: "session-1",
-          messageId: "message-1",
-          source: "slack",
-          success: true,
-          context: {},
-          signature: "must-not-enter-the-queue",
-        },
+        payload: completedPayload,
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects signatures in the unsigned job payload", () => {
+    expect(
+      sessionCallbackJobSchema.safeParse({
+        version: 1,
+        type: "session.completed",
+        payload: { ...completedPayload, signature: "must-not-enter-the-queue" },
       }).success
     ).toBe(false);
   });

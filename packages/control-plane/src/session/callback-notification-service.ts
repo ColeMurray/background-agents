@@ -22,6 +22,7 @@ export interface CallbackServiceDeps {
 }
 
 const NOTIFIED_CALL_IDS_CAP = 500;
+const TOOL_CALL_THROTTLE_INTERVAL_MS = 3000;
 const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
 
 function parseCallbackContext(value: string): Record<string, unknown> | null {
@@ -87,7 +88,7 @@ export class CallbackNotificationService {
     await this.jobs.send({
       version: 1,
       type: "session.started",
-      payload: { sessionId: this.getSessionId(), messageId, context },
+      payload: { sessionId: this.getSessionId(), messageId, timestamp: Date.now(), context },
     });
   }
 
@@ -148,6 +149,7 @@ export class CallbackNotificationService {
           source,
           success,
           ...(error != null ? { error } : {}),
+          timestamp: callbackData.timestamp,
           context,
         },
       });
@@ -290,7 +292,7 @@ export class CallbackNotificationService {
       });
       return;
     }
-    if (now - this.lastToolCallCallbackTs < 3000) return;
+    if (now - this.lastToolCallCallbackTs < TOOL_CALL_THROTTLE_INTERVAL_MS) return;
 
     try {
       await this.jobs.send({
@@ -304,6 +306,7 @@ export class CallbackNotificationService {
           args: args ?? EMPTY_TOOL_ARGS,
           callId,
           ...(event.status !== undefined ? { status: event.status } : {}),
+          timestamp: now,
           context,
         },
       });
