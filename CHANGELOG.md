@@ -17,15 +17,7 @@ including Enter or Shift+Enter for sending.
 **Recent automation activity.** Automation rows now show the latest execution outcomes at a glance,
 alongside clearer compact schedules, responsive mobile actions, and confirmation before deletion.
 
-**Managed skills at larger scale.** Sessions and profiles are no longer limited to 20 managed
-skills. Large manifests are installed page by page and persisted in batches, while name collisions
-skip only the conflicting managed skill instead of preventing the sandbox from starting.
-
 **OpenCode Zen GLM 5.2.** Adds `opencode/glm-5.2` to the opt-in OpenCode Zen catalog.
-
-**Better support for system services in sandboxes.** Sandbox images now include account and init
-helpers and expose system administration paths, allowing setup hooks to create users and start
-services such as PostgreSQL, Elasticsearch, and nginx.
 
 ## August 20, 2026
 
