@@ -119,6 +119,14 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }));
 
+vi.mock("@/components/model-reasoning-selector", () => ({
+  ModelReasoningSelector: ({ disabled }: { disabled?: boolean }) => (
+    <button type="button" disabled={disabled} aria-label="Model and effort">
+      Model and effort
+    </button>
+  ),
+}));
+
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: mocks.reposValue, loading: mocks.loadingReposValue }),
 }));

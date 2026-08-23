@@ -8,7 +8,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { formatModelNameLower } from "@/lib/format";
 import { matchesShortcut } from "@/lib/keyboard-shortcuts";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
@@ -36,9 +35,9 @@ import {
   type SessionTargetSelection,
 } from "@/hooks/use-session-target-picker";
 import { SessionTargetPicker } from "@/components/session-target-picker";
-import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
-import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { ModelReasoningSelector } from "@/components/model-reasoning-selector";
+import { PaperclipIcon, SendIcon } from "@/components/ui/icons";
+import type { ComboboxGroup } from "@/components/ui/combobox";
 import { SessionSkillSelector } from "@/components/session-skill-selector";
 import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
@@ -545,16 +544,15 @@ function HomeContent({
                   </div>
                 </div>
 
-                {/* Footer row with target and model selectors */}
+                {/* Footer row with target and model controls */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
-                  {/* Left side - Target selector + Model selector */}
+                  {/* Left side - Target selector + Model controls */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
 
-                    {/* Model selector */}
-                    <Combobox
-                      value={selectedModel}
-                      onChange={(value) => setSelectedModel(value)}
+                    <ModelReasoningSelector
+                      selectedModel={selectedModel}
+                      reasoningEffort={reasoningEffort}
                       items={
                         modelOptions.map((group) => ({
                           category: group.category,
@@ -565,22 +563,8 @@ function HomeContent({
                           })),
                         })) as ComboboxGroup[]
                       }
-                      direction="up"
-                      dropdownWidth="w-56"
-                      disabled={creating}
-                      triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                      <ModelIcon className="w-3.5 h-3.5" />
-                      <span className="truncate max-w-[9rem] sm:max-w-none">
-                        {formatModelNameLower(selectedModel)}
-                      </span>
-                    </Combobox>
-
-                    {/* Reasoning effort pills */}
-                    <ReasoningEffortPills
-                      selectedModel={selectedModel}
-                      reasoningEffort={reasoningEffort}
-                      onSelect={setReasoningEffort}
+                      onModelChange={setSelectedModel}
+                      onReasoningEffortChange={setReasoningEffort}
                       disabled={creating}
                     />
 
