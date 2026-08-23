@@ -10,6 +10,7 @@ import {
   conditionRegistry,
   DEFAULT_GITHUB_CONCLUSION,
   GITHUB_CONCLUSIONS,
+  getGitHubEventConditionTypes,
 } from "@open-inspect/shared/triggers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -28,9 +29,10 @@ interface ConditionBuilderProps {
   conditions: TriggerCondition[];
   onChange: (conditions: TriggerCondition[]) => void;
   triggerSource: AutomationEventSource;
+  eventType?: string;
 }
 
-const CONDITION_LABELS: Record<string, string> = {
+export const CONDITION_LABELS: Record<string, string> = {
   sentry_project: "Sentry Project",
   sentry_level: "Error Level",
   jsonpath: "JSONPath Filter",
@@ -52,11 +54,20 @@ const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
 
-export function ConditionBuilder({ conditions, onChange, triggerSource }: ConditionBuilderProps) {
-  // Get available condition types for this trigger source
-  const availableTypes = Object.entries(conditionRegistry)
-    .filter(([_, handler]) => handler.appliesTo.includes(triggerSource))
-    .map(([type]) => type);
+export function ConditionBuilder({
+  conditions,
+  onChange,
+  triggerSource,
+  eventType,
+}: ConditionBuilderProps) {
+  const availableTypes =
+    triggerSource === "github"
+      ? eventType
+        ? [...getGitHubEventConditionTypes(eventType)]
+        : []
+      : Object.entries(conditionRegistry)
+          .filter(([_, handler]) => handler.appliesTo.includes(triggerSource))
+          .map(([type]) => type);
 
   const addCondition = (type: string) => {
     let newCondition: TriggerCondition;
@@ -83,22 +94,12 @@ export function ConditionBuilder({ conditions, onChange, triggerSource }: Condit
       case "label":
         newCondition = { type: "label", operator: "any_of", value: [] };
         break;
-      case "path_glob":
-        newCondition = { type: "path_glob", operator: "any_match", value: [] };
-        break;
       case "actor":
         newCondition = { type: "actor", operator: "include", value: [] };
         break;
       case "conclusion":
         newCondition = {
           type: "conclusion",
-          operator: "eq",
-          value: DEFAULT_GITHUB_CONCLUSION,
-        };
-        break;
-      case "check_conclusion":
-        newCondition = {
-          type: "check_conclusion",
           operator: "eq",
           value: DEFAULT_GITHUB_CONCLUSION,
         };

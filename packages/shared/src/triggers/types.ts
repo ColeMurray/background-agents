@@ -158,7 +158,6 @@ export const githubAutomationEventSchema = z.object({
   actor: z.string().optional(),
   changedFiles: z.array(z.string()).optional(),
   conclusion: z.string().optional(),
-  checkConclusion: z.string().optional(),
   workflowName: z.string().optional(),
   /** Present only on pull_request events. */
   pullRequest: z

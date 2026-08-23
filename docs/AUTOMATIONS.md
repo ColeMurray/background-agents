@@ -239,6 +239,12 @@ number in its deduplication key, so it can admit each GitHub rerun once.
 **Conclusion** also works for completed check suites. **Check Conclusion** remains available for
 existing check-suite automations.
 
+Each event type offers only the conditions its payload can answer, so the choices change with the
+event you pick — pull requests offer branch, target branch, label, and actor; issues offer label and
+actor; comments offer actor. Changing the event type removes conditions the new one cannot answer,
+and the form says which. GitHub webhook payloads carry no file list, so path-pattern filtering is
+not offered for any GitHub event.
+
 ---
 
 ## Slack Message Triggers

@@ -264,7 +264,6 @@ function normalizeCheckSuite(eventType: string, payload: CheckSuitePayload): Git
     branch: checkSuite.head_branch ?? undefined,
     actor: getActor(payload),
     conclusion,
-    checkConclusion: conclusion,
     contextBlock: buildCheckSuiteContextBlock(payload),
     meta: {
       checkSuiteId: checkSuite.id,
@@ -274,10 +273,8 @@ function normalizeCheckSuite(eventType: string, payload: CheckSuitePayload): Git
 }
 
 /**
- * Normalize `workflow_run.completed`. Including the attempt number in the
- * trigger key deduplicates each attempt independently. Grouping concurrency by
- * workflow name suppresses a new run while an invocation for that workflow is
- * still active.
+ * Normalize `workflow_run.completed`. The attempt number deduplicates each
+ * attempt independently, while the run id keeps all attempts in one concurrency scope.
  */
 function normalizeWorkflowRun(
   eventType: string,
@@ -290,7 +287,7 @@ function normalizeWorkflowRun(
     source: "github",
     eventType,
     triggerKey: `workflow_run:${run.id}:${run.run_attempt}`,
-    concurrencyKey: `workflow:${run.name}`,
+    concurrencyKey: `workflow_run:${run.id}`,
     repoOwner: getRepoOwner(payload),
     repoName: getRepoName(payload),
     branch: run.head_branch ?? undefined,

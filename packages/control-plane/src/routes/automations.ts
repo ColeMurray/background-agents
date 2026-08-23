@@ -117,6 +117,17 @@ function parseTriggerConfig(value: unknown): ParseTriggerConfigResult {
   };
 }
 
+function getTriggerConditionError(
+  triggerType: AutomationTriggerType,
+  triggerConfig: TriggerConfig,
+  eventType?: string
+): string | null {
+  const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
+  if (!source) return null;
+  const errors = validateConditions(triggerConfig.conditions, source, conditionRegistry, eventType);
+  return errors.length > 0 ? errors.join("; ") : null;
+}
+
 /** Warn if next run is more than 31 days away. */
 const FAR_FUTURE_THRESHOLD_MS = 31 * 24 * 60 * 60 * 1000;
 
@@ -545,18 +556,13 @@ async function handleCreateAutomation(
   }
 
   // Validate conditions
-  if (body.triggerConfig?.conditions) {
-    const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
-    if (source) {
-      const conditionErrors = validateConditions(
-        body.triggerConfig.conditions,
-        source,
-        conditionRegistry
-      );
-      if (conditionErrors.length > 0) {
-        return error(conditionErrors.join("; "), 400);
-      }
-    }
+  if (body.triggerConfig) {
+    const conditionError = getTriggerConditionError(
+      triggerType,
+      body.triggerConfig,
+      body.eventType
+    );
+    if (conditionError) return error(conditionError, 400);
   }
 
   // Slack triggers require explicit scoping (at least one watched channel).
@@ -888,39 +894,42 @@ async function handleUpdateAutomation(
     updateFields.event_type = body.eventType;
   }
 
-  // Validate trigger config (conditions) — only for non-schedule types
-  if (body.triggerConfig !== undefined) {
-    if (body.triggerConfig === null) {
-      // A slack_event's trigger_config holds its required scoping (channel +
-      // text_match) and the watched-channel index is derived from it. Clearing
-      // it would leave the automation enabled but untriggerable, so reject null
-      // — pause or delete instead. (Other sources may clear conditions to a
-      // match-all, so null stays allowed for them.)
-      if (existing.trigger_type === "slack_event") {
-        return error(
-          "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
-          400
-        );
-      }
-    } else {
-      if (existing.trigger_type === "slack_event") {
-        const slackError = validateSlackTriggerConfig(body.triggerConfig);
-        if (slackError) return error(slackError, 400);
-      }
-      if (body.triggerConfig.conditions) {
-        const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type as AutomationTriggerType];
-        if (source) {
-          const conditionErrors = validateConditions(
-            body.triggerConfig.conditions,
-            source,
-            conditionRegistry
-          );
-          if (conditionErrors.length > 0) {
-            return error(conditionErrors.join("; "), 400);
-          }
-        }
-      }
+  let triggerConfigToValidate = body.triggerConfig;
+  if (
+    body.eventType !== undefined &&
+    triggerConfigToValidate === undefined &&
+    existing.trigger_config
+  ) {
+    // This column was written through parseTriggerConfig, so a failure here is a
+    // corrupt row, not user input — parseTriggerConfig's per-condition messages
+    // would have no one to help.
+    try {
+      triggerConfigToValidate = triggerConfigSchema.parse(JSON.parse(existing.trigger_config));
+    } catch {
+      return error("Stored triggerConfig is invalid", 500);
     }
+  }
+
+  // A slack_event's trigger_config holds its required channel scope. Clearing it
+  // would leave the automation enabled but untriggerable.
+  if (body.triggerConfig === null && existing.trigger_type === "slack_event") {
+    return error(
+      "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
+      400
+    );
+  }
+  if (body.triggerConfig && existing.trigger_type === "slack_event") {
+    const slackError = validateSlackTriggerConfig(body.triggerConfig);
+    if (slackError) return error(slackError, 400);
+  }
+
+  if (triggerConfigToValidate) {
+    const conditionError = getTriggerConditionError(
+      existing.trigger_type as AutomationTriggerType,
+      triggerConfigToValidate,
+      body.eventType ?? existing.event_type ?? undefined
+    );
+    if (conditionError) return error(conditionError, 400);
   }
 
   // trigger_config is a single source-interpreted JSON blob (the conditions),

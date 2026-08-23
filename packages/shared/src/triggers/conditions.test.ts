@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { matchesConditions, validateConditions } from "./conditions";
-import { conditionRegistry, GITHUB_CONCLUSIONS } from "./registry";
+import { conditionRegistry } from "./registry";
+import { GITHUB_CONCLUSIONS } from "./github";
 import { buildMockEvent } from "./testing";
 
 describe("matchesConditions", () => {
@@ -156,24 +157,17 @@ describe("matchesConditions", () => {
   });
 
   describe("GitHub conclusion", () => {
-    it("matches a workflow conclusion without using the check-suite field", () => {
+    it("matches the canonical conclusion field", () => {
       const event = buildMockEvent("github", { conclusion: "failure" });
       const conditions = [
         { type: "conclusion" as const, operator: "eq" as const, value: "failure" },
       ];
 
       expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
-      expect(
-        matchesConditions(
-          conditions,
-          buildMockEvent("github", { checkConclusion: "failure" }),
-          conditionRegistry
-        )
-      ).toBe(false);
     });
 
-    it("keeps the check conclusion condition compatible", () => {
-      const event = buildMockEvent("github", { checkConclusion: "failure" });
+    it("keeps the legacy check conclusion condition compatible with the canonical field", () => {
+      const event = buildMockEvent("github", { conclusion: "failure" });
       const conditions = [
         { type: "check_conclusion" as const, operator: "eq" as const, value: "failure" },
       ];
@@ -217,30 +211,99 @@ describe("validateConditions", () => {
     const errors = validateConditions(
       [{ type: "target_branch", operator: "glob_match", value: [] }],
       "github",
-      conditionRegistry
+      conditionRegistry,
+      "pull_request.opened"
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("target branch");
   });
 
-  it("accepts target_branch for github triggers", () => {
+  it("accepts target_branch for pull request triggers", () => {
     const errors = validateConditions(
       [{ type: "target_branch", operator: "glob_match", value: ["stable", "main"] }],
       "github",
-      conditionRegistry
+      conditionRegistry,
+      "pull_request.opened"
     );
     expect(errors).toHaveLength(0);
   });
 
+  it("rejects GitHub conditions when no event type is known", () => {
+    expect(
+      validateConditions(
+        [{ type: "branch", operator: "glob_match", value: ["main"] }],
+        "github",
+        conditionRegistry
+      )
+    ).toEqual(['Condition "branch" requires a GitHub event type']);
+  });
+
+  it.each([
+    { type: "workflow_name" as const, value: "CI" },
+    { type: "conclusion" as const, value: "success" },
+    { type: "check_conclusion" as const, value: "success" },
+  ])("rejects $type for an incompatible GitHub event type", ({ type, value }) => {
+    const errors = validateConditions(
+      [{ type, operator: "eq", value }],
+      "github",
+      conditionRegistry,
+      "pull_request.opened"
+    );
+
+    expect(errors).toEqual([
+      `Condition "${type}" does not apply to GitHub event pull_request.opened`,
+    ]);
+  });
+
+  it("rejects fields absent from the event type's payload", () => {
+    expect(
+      validateConditions(
+        [{ type: "label", operator: "any_of", value: ["bug"] }],
+        "github",
+        conditionRegistry,
+        "workflow_run.completed"
+      )
+    ).toEqual(['Condition "label" does not apply to GitHub event workflow_run.completed']);
+  });
+
+  it("rejects path_glob outright — no source can supply a file list", () => {
+    expect(
+      validateConditions(
+        [{ type: "path_glob", operator: "any_match", value: ["src/**"] }],
+        "github",
+        conditionRegistry,
+        "pull_request.opened"
+      )
+    ).toEqual(['Condition "path_glob" does not apply to github triggers']);
+  });
+
+  it("accepts workflow_name only for workflow runs", () => {
+    expect(
+      validateConditions(
+        [{ type: "workflow_name", operator: "eq", value: "CI" }],
+        "github",
+        conditionRegistry,
+        "workflow_run.completed"
+      )
+    ).toHaveLength(0);
+  });
+
   it.each(GITHUB_CONCLUSIONS)("accepts the %s GitHub conclusion", (conclusion) => {
-    for (const type of ["conclusion", "check_conclusion"] as const) {
-      expect(
-        validateConditions(
-          [{ type, operator: "eq", value: conclusion }],
-          "github",
-          conditionRegistry
-        )
-      ).toHaveLength(0);
-    }
+    expect(
+      validateConditions(
+        [{ type: "conclusion", operator: "eq", value: conclusion }],
+        "github",
+        conditionRegistry,
+        "workflow_run.completed"
+      )
+    ).toHaveLength(0);
+    expect(
+      validateConditions(
+        [{ type: "check_conclusion", operator: "eq", value: conclusion }],
+        "github",
+        conditionRegistry,
+        "check_suite.completed"
+      )
+    ).toHaveLength(0);
   });
 });

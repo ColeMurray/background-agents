@@ -12,7 +12,6 @@ import {
 import { ConditionBuilder } from "./condition-builder";
 
 type ChannelListing = { id: string; name: string; isPrivate: boolean; isMember: boolean };
-const DEFAULT_TRIGGER_SOURCE = "slack" as const satisfies AutomationEventSource;
 // Mutable per-test channel listing; the hoisted use-slack-channels mock closes over it.
 let slackChannelsMock: { channels: ChannelListing[]; loading: boolean; error?: string };
 vi.mock("@/hooks/use-slack-channels", () => ({
@@ -29,11 +28,17 @@ beforeEach(() => {
 
 function renderBuilder(
   conditions: TriggerCondition[],
-  triggerSource: "slack" | "github" = DEFAULT_TRIGGER_SOURCE
+  triggerSource: AutomationEventSource = "slack",
+  eventType?: string
 ) {
   const onChange = vi.fn();
   render(
-    <ConditionBuilder conditions={conditions} onChange={onChange} triggerSource={triggerSource} />
+    <ConditionBuilder
+      conditions={conditions}
+      onChange={onChange}
+      triggerSource={triggerSource}
+      eventType={eventType}
+    />
   );
   return onChange;
 }
@@ -109,7 +114,8 @@ describe("ConditionBuilder — GitHub workflow editors", () => {
   it("stores the exact workflow name", () => {
     const onChange = renderBuilder(
       [{ type: "workflow_name", operator: "eq", value: "" }],
-      "github"
+      "github",
+      "workflow_run.completed"
     );
 
     fireEvent.change(screen.getByPlaceholderText(/Exact workflow name/), {
@@ -122,9 +128,57 @@ describe("ConditionBuilder — GitHub workflow editors", () => {
   });
 
   it.each(GITHUB_CONCLUSIONS)("renders the %s conclusion", (conclusion) => {
-    renderBuilder([{ type: "conclusion", operator: "eq", value: conclusion }], "github");
+    renderBuilder(
+      [{ type: "conclusion", operator: "eq", value: conclusion }],
+      "github",
+      "workflow_run.completed"
+    );
 
     expect(screen.getByText("Conclusion")).toBeInTheDocument();
     expect(screen.getAllByRole("combobox")[0]).toHaveTextContent(conclusion);
+  });
+
+  it("offers workflow filters only for workflow run events", () => {
+    renderBuilder([], "github", "workflow_run.completed");
+
+    fireEvent.click(screen.getByText("Add condition..."));
+
+    expect(screen.getByText("Workflow Name")).toBeInTheDocument();
+    expect(screen.getByText("Conclusion")).toBeInTheDocument();
+    expect(screen.queryByText("Check Conclusion")).not.toBeInTheDocument();
+  });
+
+  it("does not offer workflow filters for pull request events", () => {
+    renderBuilder([], "github", "pull_request.opened");
+
+    fireEvent.click(screen.getByText("Add condition..."));
+
+    expect(screen.queryByText("Workflow Name")).not.toBeInTheDocument();
+    expect(screen.queryByText("Conclusion")).not.toBeInTheDocument();
+    expect(screen.queryByText("Check Conclusion")).not.toBeInTheDocument();
+    expect(screen.queryByText("Path Glob")).not.toBeInTheDocument();
+    expect(screen.getByText("Target branch")).toBeInTheDocument();
+  });
+
+  it("leaves a persisted condition the event type cannot answer for the user to remove", () => {
+    const onChange = renderBuilder(
+      [{ type: "path_glob", operator: "any_match", value: ["src/**"] }],
+      "github",
+      "pull_request.opened"
+    );
+
+    expect(screen.getByText("Path Glob")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps a persisted legacy check conclusion condition editable", () => {
+    const onChange = renderBuilder(
+      [{ type: "check_conclusion", operator: "eq", value: "failure" }],
+      "github",
+      "check_suite.completed"
+    );
+
+    expect(screen.getByText("Check Conclusion")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

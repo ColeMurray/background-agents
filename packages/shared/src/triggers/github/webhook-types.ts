@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { WebhookEventMap } from "@octokit/webhooks-types";
+import type { ConditionType } from "../types";
 
 type GitHubWebhookEvent = Extract<keyof WebhookEventMap, string>;
 
@@ -10,6 +11,7 @@ type GitHubEventCatalogEntry<E extends GitHubWebhookEvent = GitHubWebhookEvent> 
   displayName: string;
   description: string;
   shortLabel: string;
+  supportedConditions: readonly ConditionType[];
 };
 
 export const GITHUB_WEBHOOK_EVENT_CATALOG = [
@@ -19,6 +21,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Opened",
     description: "A pull request was opened",
     shortLabel: "PR opened",
+    supportedConditions: ["branch", "target_branch", "label", "actor"],
   },
   {
     event: "pull_request",
@@ -26,6 +29,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Updated",
     description: "New commits pushed to a pull request",
     shortLabel: "PR updated",
+    supportedConditions: ["branch", "target_branch", "label", "actor"],
   },
   {
     event: "pull_request",
@@ -33,6 +37,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Closed",
     description: "A pull request was closed or merged",
     shortLabel: "PR closed",
+    supportedConditions: ["branch", "target_branch", "label", "actor"],
   },
   {
     event: "issue_comment",
@@ -40,6 +45,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Issue Comment",
     description: "A comment was added to an issue or PR",
     shortLabel: "comment created",
+    supportedConditions: ["actor"],
   },
   {
     event: "pull_request_review_comment",
@@ -47,6 +53,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Review Comment",
     description: "A review comment was added to a pull request",
     shortLabel: "review comment created",
+    supportedConditions: ["branch", "target_branch", "actor"],
   },
   {
     event: "check_suite",
@@ -54,6 +61,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Check Suite Completed",
     description: "A CI check suite finished running",
     shortLabel: "CI completed",
+    supportedConditions: ["branch", "actor", "conclusion"],
   },
   {
     event: "workflow_run",
@@ -61,6 +69,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Workflow Run Completed",
     description: "A GitHub Actions workflow run finished",
     shortLabel: "workflow completed",
+    supportedConditions: ["branch", "actor", "conclusion", "workflow_name"],
   },
   {
     event: "issues",
@@ -68,6 +77,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Issue Opened",
     description: "A new issue was opened",
     shortLabel: "issue opened",
+    supportedConditions: ["label", "actor"],
   },
   {
     event: "issues",
@@ -75,9 +85,24 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Issue Labeled",
     description: "A label was added to an issue",
     shortLabel: "issue labeled",
+    supportedConditions: ["label", "actor"],
   },
 ] as const satisfies readonly GitHubEventCatalogEntry[];
 
+export function getGitHubEventConditionTypes(eventType: string): readonly ConditionType[] {
+  const entry = GITHUB_WEBHOOK_EVENT_CATALOG.find(
+    ({ event, action }) => `${event}.${action}` === eventType
+  );
+  return entry?.supportedConditions ?? [];
+}
+
+export function isGitHubConditionSupported(
+  eventType: string,
+  conditionType: ConditionType
+): boolean {
+  const preferredType = conditionType === "check_conclusion" ? "conclusion" : conditionType;
+  return getGitHubEventConditionTypes(eventType).includes(preferredType);
+}
 // ─── Webhook payload schemas ──────────────────────────────────────────────────
 //
 // Each schema is the single source of truth for one supported event: it produces

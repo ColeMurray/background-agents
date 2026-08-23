@@ -37,18 +37,22 @@ export type { ConditionHandler, ConditionRegistry } from "./conditions";
 export { matchesConditions, validateConditions } from "./conditions";
 
 // Registry
-export {
-  conditionRegistry,
-  triggerSources,
-  DEFAULT_GITHUB_CONCLUSION,
-  GITHUB_CONCLUSIONS,
-} from "./registry";
+export { conditionRegistry, triggerSources } from "./registry";
 
 // Glob utility
 export { matchGlob } from "./glob";
 
 // GitHub source module
-export { githubSource, normalizeGitHubEvent, GITHUB_WEBHOOK_EVENT_CATALOG } from "./github";
+export {
+  githubSource,
+  githubConditions,
+  normalizeGitHubEvent,
+  DEFAULT_GITHUB_CONCLUSION,
+  GITHUB_CONCLUSIONS,
+  GITHUB_WEBHOOK_EVENT_CATALOG,
+  getGitHubEventConditionTypes,
+  isGitHubConditionSupported,
+} from "./github";
 
 // Sentry source module
 export {

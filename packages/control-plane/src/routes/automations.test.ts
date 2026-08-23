@@ -777,6 +777,27 @@ describe("automation route handlers", () => {
       });
     });
 
+    it("rejects conditions that do not apply to the GitHub event type", async () => {
+      const response = await callRoute("POST", "/automations", {
+        body: {
+          name: "PR workflow filter",
+          instructions: "Review the pull request.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Condition "workflow_name" does not apply to GitHub event pull_request.opened',
+      });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
     it("stores the user principal's canonical id without consulting the user store", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
@@ -1021,6 +1042,29 @@ describe("automation route handlers", () => {
       await expect(response.json()).resolves.toEqual({
         error: "Cannot set triggerConfig on schedule automations",
       });
+    });
+
+    it("rejects an event type change that would leave incompatible conditions", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "workflow_run.completed",
+        trigger_config: JSON.stringify({
+          conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+        }),
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { eventType: "pull_request.opened" },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Condition "workflow_name" does not apply to GitHub event pull_request.opened',
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
     });
 
     it("updates reasoning effort when valid for the selected model", async () => {

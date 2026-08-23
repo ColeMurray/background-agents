@@ -11,6 +11,7 @@ import type {
   ConditionType,
   TriggerCondition,
 } from "./types";
+import { isGitHubConditionSupported } from "./github/webhook-types";
 
 type ConditionOf<K extends ConditionType> = Extract<TriggerCondition, { type: K }>;
 
@@ -49,7 +50,8 @@ export function matchesConditions(
 export function validateConditions(
   conditions: TriggerCondition[],
   triggerSource: AutomationEventSource,
-  registry: ConditionRegistry
+  registry: ConditionRegistry,
+  eventType?: string
 ): string[] {
   const errors: string[] = [];
   for (const condition of conditions) {
@@ -57,6 +59,16 @@ export function validateConditions(
     if (!handler.appliesTo.includes(triggerSource)) {
       errors.push(`Condition "${condition.type}" does not apply to ${triggerSource} triggers`);
       continue;
+    }
+    if (triggerSource === "github") {
+      if (!eventType) {
+        errors.push(`Condition "${condition.type}" requires a GitHub event type`);
+        continue;
+      }
+      if (!isGitHubConditionSupported(eventType, condition.type)) {
+        errors.push(`Condition "${condition.type}" does not apply to GitHub event ${eventType}`);
+        continue;
+      }
     }
     const err = handler.validate(condition);
     if (err) errors.push(err);
