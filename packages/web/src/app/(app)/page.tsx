@@ -20,6 +20,8 @@ import {
   getDefaultReasoningEffort,
   getSubscriptionProviderForModel,
   type ModelCategory,
+  type ReasoningEffort,
+  type ValidModel,
 } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -37,7 +39,6 @@ import {
 import { SessionTargetPicker } from "@/components/session-target-picker";
 import { ModelReasoningSelector } from "@/components/model-reasoning-selector";
 import { PaperclipIcon, SendIcon } from "@/components/ui/icons";
-import type { ComboboxGroup } from "@/components/ui/combobox";
 import { SessionSkillSelector } from "@/components/session-skill-selector";
 import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
@@ -198,14 +199,14 @@ export default function Home() {
   }, []);
 
   const handleModelChange = useCallback(
-    (model: string) => {
+    (model: ValidModel) => {
       saveModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
     },
     [saveModelPreferenceDraft]
   );
 
   const handleReasoningEffortChange = useCallback(
-    (nextReasoningEffort: string | undefined) => {
+    (nextReasoningEffort: ReasoningEffort) => {
       saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [saveModelPreferenceDraft, selectedModel]
@@ -382,10 +383,10 @@ function HomeContent({
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
-  selectedModel: string;
-  setSelectedModel: (value: string) => void;
-  reasoningEffort: string | undefined;
-  setReasoningEffort: (value: string | undefined) => void;
+  selectedModel: ValidModel;
+  setSelectedModel: (value: ValidModel) => void;
+  reasoningEffort: ReasoningEffort | undefined;
+  setReasoningEffort: (value: ReasoningEffort) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   attachments: {
@@ -553,16 +554,7 @@ function HomeContent({
                     <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}
-                      items={
-                        modelOptions.map((group) => ({
-                          category: group.category,
-                          options: group.models.map((model) => ({
-                            value: model.id,
-                            label: model.name,
-                            description: model.description,
-                          })),
-                        })) as ComboboxGroup[]
-                      }
+                      items={modelOptions}
                       onModelChange={setSelectedModel}
                       onReasoningEffortChange={setReasoningEffort}
                       disabled={creating}

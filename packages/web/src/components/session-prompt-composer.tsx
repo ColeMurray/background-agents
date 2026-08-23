@@ -5,7 +5,6 @@ import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import { ActionBar } from "@/components/action-bar";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ModelReasoningSelector } from "@/components/model-reasoning-selector";
-import type { ComboboxGroup } from "@/components/ui/combobox";
 import { PaperclipIcon, SendIcon, StopIcon } from "@/components/ui/icons";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
@@ -14,6 +13,7 @@ import type { Artifact } from "@/types/session";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
+import type { ModelCategory, ReasoningEffort, ValidModel } from "@open-inspect/shared/models";
 
 type SessionPromptComposerProps = {
   session: {
@@ -45,11 +45,11 @@ type SessionPromptComposerProps = {
     onRemove: (id: string) => void;
   };
   model: {
-    selectedModel: string;
-    reasoningEffort: string | undefined;
-    items: ComboboxGroup[];
-    onModelChange: (model: string) => void;
-    onReasoningEffortChange: (value: string | undefined) => void;
+    selectedModel: ValidModel;
+    reasoningEffort: ReasoningEffort | undefined;
+    items: ModelCategory[];
+    onModelChange: (model: ValidModel) => void;
+    onReasoningEffortChange: (value: ReasoningEffort) => void;
   };
 };
 

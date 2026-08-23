@@ -29,10 +29,14 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  type ReasoningEffort,
+  type ValidModel,
+} from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import type { ComboboxGroup } from "@/components/ui/combobox";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
 import type {
@@ -117,7 +121,7 @@ export default function SessionPage() {
     reasoningEffort,
     setReasoningEffort,
     handleModelChange,
-    modelItems,
+    enabledModelOptions,
     loadingEnabledModels,
   } = useModelSelection(sessionState);
   const {
@@ -384,7 +388,7 @@ export default function SessionPage() {
         model={{
           selectedModel,
           reasoningEffort,
-          items: modelItems,
+          items: enabledModelOptions,
           onModelChange: handleModelChange,
           onReasoningEffortChange: setReasoningEffort,
         }}
@@ -612,25 +616,12 @@ function useModelSelection(sessionState: SessionState) {
     },
     loadingEnabledModels ? undefined : enabledModels
   );
-  const modelItems = useMemo<ComboboxGroup[]>(
-    () =>
-      enabledModelOptions.map((group) => ({
-        category: group.category,
-        options: group.models.map((model) => ({
-          value: model.id,
-          label: model.name,
-          description: model.description,
-        })),
-      })),
-    [enabledModelOptions]
-  );
-
-  const handleModelChange = useCallback((model: string) => {
+  const handleModelChange = useCallback((model: ValidModel) => {
     setModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
   }, []);
 
   const setReasoningEffort = useCallback(
-    (nextReasoningEffort: string | undefined) => {
+    (nextReasoningEffort: ReasoningEffort) => {
       setModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [selectedModel]
@@ -641,7 +632,7 @@ function useModelSelection(sessionState: SessionState) {
     reasoningEffort,
     setReasoningEffort,
     handleModelChange,
-    modelItems,
+    enabledModelOptions,
     loadingEnabledModels,
   };
 }

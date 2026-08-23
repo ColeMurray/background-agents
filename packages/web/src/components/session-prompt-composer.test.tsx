@@ -85,7 +85,7 @@ function ComposerHarness({
         onRemove: vi.fn(),
       }}
       model={{
-        selectedModel: "model-1",
+        selectedModel: "anthropic/claude-sonnet-4-6",
         reasoningEffort: undefined,
         items: [],
         onModelChange: vi.fn(),

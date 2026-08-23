@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import type { ModelCategory } from "@open-inspect/shared/models";
 import { ModelReasoningSelector } from "./model-reasoning-selector";
 
 const mocks = vi.hoisted(() => ({ isMobile: false }));
@@ -20,19 +21,25 @@ afterEach(() => {
 const items = [
   {
     category: "Anthropic",
-    options: [
+    models: [
       {
-        value: "anthropic/claude-sonnet-4-6",
-        label: "Claude Sonnet 4.6",
+        id: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
         description: "Balanced, fast coding",
       },
     ],
   },
   {
     category: "Other",
-    options: [{ value: "opencode/grok-code", label: "Grok Code" }],
+    models: [
+      {
+        id: "xai/grok-build-0.1",
+        name: "Grok Build 0.1",
+        description: "Coding model",
+      },
+    ],
   },
-];
+] satisfies ModelCategory[];
 
 describe("ModelReasoningSelector", () => {
   it("combines the selected model and effort in one trigger", () => {
@@ -69,16 +76,19 @@ describe("ModelReasoningSelector", () => {
     const modelMenu = await screen.findByRole("menuitem", { name: /model/i });
     modelMenu.focus();
     fireEvent.keyDown(modelMenu, { key: "ArrowRight" });
-    const grokOption = await screen.findByRole("menuitemradio", { name: /grok code/i });
+    const grokOption = await screen.findByRole("menuitemradio", { name: /grok build/i });
     expect(grokOption.closest('[role="menu"]')).toHaveClass("max-h-56", "overflow-y-auto");
+    expect(grokOption.closest('[role="menu"]')).toHaveAttribute("data-align", "end");
     fireEvent.click(grokOption);
-    expect(onModelChange).toHaveBeenCalledWith("opencode/grok-code");
+    expect(onModelChange).toHaveBeenCalledWith("xai/grok-build-0.1");
 
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     const effortMenu = await screen.findByRole("menuitem", { name: /effort/i });
     effortMenu.focus();
     fireEvent.keyDown(effortMenu, { key: "ArrowRight" });
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
+    const maxEffort = await screen.findByRole("menuitemradio", { name: "Max" });
+    expect(maxEffort.closest('[role="menu"]')).toHaveAttribute("data-align", "end");
+    fireEvent.click(maxEffort);
     expect(onReasoningEffortChange).toHaveBeenCalledWith("max");
   });
 
