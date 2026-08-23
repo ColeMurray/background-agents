@@ -356,6 +356,7 @@ export const skillImportPreviewResponseSchema = z.strictObject({
 const importConfirmationSchema = z.strictObject({
   expectedCommitSha: commitShaSchema,
   expectedSourceSha256: sha256Schema,
+  expectedRevisionSha256: sha256Schema,
 });
 
 export const importSkillInputSchema = importConfirmationSchema.extend({

@@ -1307,3 +1307,56 @@ describe("response validation (zod boundary)", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("managed-skill repository reads", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("classifies symlinks and submodules as unsupported tree entries", async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          { path: "SKILL.md", type: "blob", mode: "100644", id: "file" },
+          { path: "run.sh", type: "blob", mode: "100755", id: "exec" },
+          { path: "link", type: "blob", mode: "120000", id: "link" },
+          { path: "module", type: "commit", mode: "160000", id: "module" },
+        ]),
+        { headers: { "content-type": "application/json" } }
+      )
+    );
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const tree = await provider.listTree({ owner: "acme", name: "skills", commitSha: "abc" });
+
+    expect(tree.entries.map(({ type, executable }) => ({ type, executable }))).toEqual([
+      { type: "file", executable: false },
+      { type: "file", executable: true },
+      { type: "other", executable: false },
+      { type: "other", executable: false },
+    ]);
+  });
+
+  it("cancels an undeclared oversized blob while streaming it", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5, 6]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    mockFetch.mockResolvedValueOnce(new Response(body));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const error = await provider
+      .readBlob({ owner: "acme", name: "skills", blobId: "big", maxBytes: 4 })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SourceControlProviderError);
+    expect((error as SourceControlProviderError).httpStatus).toBe(413);
+    expect(cancelled).toBe(true);
+  });
+});

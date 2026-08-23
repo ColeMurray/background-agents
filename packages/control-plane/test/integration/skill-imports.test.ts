@@ -180,6 +180,7 @@ describe("managed skill import routes", () => {
       body: JSON.stringify({
         expectedCommitSha: source.commitSha,
         expectedSourceSha256: source.sourceSha256,
+        expectedRevisionSha256: "c".repeat(64),
       }),
     });
 

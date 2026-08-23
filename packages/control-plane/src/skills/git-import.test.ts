@@ -5,6 +5,7 @@ import {
   skillImportSourceInputSchema,
 } from "@open-inspect/shared/types/skills";
 import type { GetRepositoryConfig, RepositoryTree, SourceControlProvider } from "../source-control";
+import { SourceControlProviderError } from "../source-control";
 import { fetchSkillImport, SkillImportError } from "./git-import";
 
 const COMMIT = "a".repeat(40);
@@ -339,6 +340,18 @@ describe("fetchSkillImport", () => {
     await fetchSkillImport(provider, source());
 
     expect(blobLimits).toEqual([MAX_SKILL_FILE_BYTES]);
+  });
+
+  it("reports an upstream blob-limit rejection as an import validation error", async () => {
+    const provider = fakeProvider({ "SKILL.md": { content: SKILL_MD } });
+    provider.readBlob = async () => {
+      throw new SourceControlProviderError("Blob is over the limit", "permanent", 413);
+    };
+
+    const error = await fetchSkillImport(provider, source()).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SkillImportError);
+    expect((error as SkillImportError).status).toBe(400);
   });
 
   it("enforces the revision limit on a tree that reports no sizes", async () => {

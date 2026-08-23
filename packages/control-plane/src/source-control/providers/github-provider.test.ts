@@ -1094,3 +1094,56 @@ describe("response validation (zod boundary)", () => {
     expect((err as SourceControlProviderError).errorType).toBe("permanent");
   });
 });
+
+describe("managed-skill repository reads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+  });
+
+  it("classifies symlinks and submodules as unsupported tree entries", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({
+        tree: [
+          { path: "SKILL.md", type: "blob", mode: "100644", sha: "file", size: 10 },
+          { path: "run.sh", type: "blob", mode: "100755", sha: "exec", size: 5 },
+          { path: "link", type: "blob", mode: "120000", sha: "link", size: 8 },
+          { path: "module", type: "commit", mode: "160000", sha: "module" },
+        ],
+      })
+    );
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    const tree = await provider.listTree({ owner: "acme", name: "skills", commitSha: "abc" });
+
+    expect(tree.entries.map(({ type, executable }) => ({ type, executable }))).toEqual([
+      { type: "file", executable: false },
+      { type: "file", executable: true },
+      { type: "other", executable: false },
+      { type: "other", executable: false },
+    ]);
+  });
+
+  it("cancels an undeclared oversized blob while streaming it", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5, 6]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response(body));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    const error = await provider
+      .readBlob({ owner: "acme", name: "skills", blobId: "big", maxBytes: 4 })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SourceControlProviderError);
+    expect((error as SourceControlProviderError).httpStatus).toBe(413);
+    expect(cancelled).toBe(true);
+  });
+});

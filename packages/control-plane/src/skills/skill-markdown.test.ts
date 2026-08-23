@@ -22,9 +22,9 @@ describe("parseSkillMarkdown", () => {
     expect(parsed.body).toBe("# Deploy\n");
   });
 
-  it("keeps colons and attached hashes inside plain scalars", () => {
-    expect(scalar("---\ndescription: Use when: deploying issue#1\n---\n", "description")).toBe(
-      "Use when: deploying issue#1"
+  it("keeps legal colons and attached hashes inside plain scalars", () => {
+    expect(scalar("---\ndescription: Use when:deploying issue#1\n---\n", "description")).toBe(
+      "Use when:deploying issue#1"
     );
   });
 
@@ -71,6 +71,12 @@ describe("parseSkillMarkdown", () => {
     expect(scalar("---\ndescription: >-\n  first\n  second\n---\n", "description")).toBe(
       "first second"
     );
+    expect(scalar("---\ndescription: >\n  first\n\n  second\n---\n", "description")).toBe(
+      "first\nsecond\n"
+    );
+    expect(scalar("---\ndescription: >\n  text\n    code\n  text\n---\n", "description")).toBe(
+      "text\n  code\ntext\n"
+    );
   });
 
   it("folds an indented plain scalar continued across lines", () => {
@@ -86,6 +92,17 @@ describe("parseSkillMarkdown", () => {
       kind: "map",
       value: { team: "platform", tier: "1" },
     });
+  });
+
+  it("reads an inline string map", () => {
+    expect(
+      parseSkillMarkdown("---\nmetadata: {team: platform}\n---\n").frontmatter.get("metadata")
+    ).toEqual({ kind: "map", value: { team: "platform" } });
+  });
+
+  it("uses the failsafe schema so scalar-looking values stay strings", () => {
+    expect(scalar("---\nvalue: true\n---\n", "value")).toBe("true");
+    expect(scalar("---\nvalue: 123\n---\n", "value")).toBe("123");
   });
 
   it("reads block and flow sequences", () => {
@@ -117,14 +134,15 @@ describe("parseSkillMarkdown", () => {
     ["duplicate key", "---\nname: a\nname: b\n---\n"],
     ["tab indentation", "---\nmetadata:\n\tteam: platform\n---\n"],
     ["anchors", "---\nname: &anchor deploy\n---\n"],
-    ["inline maps", "---\nmetadata: {team: platform}\n---\n"],
+    ["aliases", "---\nname: &anchor deploy\nother: *anchor\n---\n"],
+    ["custom tags", "---\nname: !custom deploy\n---\n"],
+    ["a non-map root", "---\n- deploy\n---\n"],
     ["unterminated quotes", '---\nname: "deploy\n---\n'],
     ["deeper nesting", "---\nmetadata:\n  team:\n    name: platform\n---\n"],
     ["mixed sequence and map", "---\ntools:\n  - read\n  write: yes\n---\n"],
     ["a code point above the Unicode range", '---\nname: "\\U0011FFFF"\n---\n'],
     ["a lone surrogate escape", '---\nname: "\\uD800"\n---\n'],
     ["text after a quoted scalar", '---\nname: "deploy" trailing\n---\n'],
-    ["the keep chomping indicator", "---\ndescription: |+\n  text\n---\n"],
     ["text after a flow sequence", "---\ntools: [shell] trailing\n---\n"],
     ["an unterminated flow sequence", "---\ntools: [shell, git\n---\n"],
   ])("rejects %s", (_case, markdown) => {

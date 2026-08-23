@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createSkillInputSchema,
+  importSkillInputSchema,
   listSkillsResponseSchema,
   sessionSkillSelectionSchema,
   skillContentInputSchema,
@@ -96,5 +97,18 @@ describe("managed skill contracts", () => {
     expect(
       listSkillsResponseSchema.safeParse({ skills: [], hasMore: true, nextCursor: null }).success
     ).toBe(false);
+  });
+
+  it("requires confirmation of the complete previewed revision", () => {
+    const input = {
+      source: { repository: { repoOwner: "acme", repoName: "skills" } },
+      expectedCommitSha: "a".repeat(40),
+      expectedSourceSha256: "b".repeat(64),
+    };
+
+    expect(importSkillInputSchema.safeParse(input).success).toBe(false);
+    expect(
+      importSkillInputSchema.safeParse({ ...input, expectedRevisionSha256: "c".repeat(64) }).success
+    ).toBe(true);
   });
 });

@@ -28,10 +28,11 @@ import type {
   RepositoryTreeEntry,
 } from "../types";
 import {
-  assertBlobWithinLimit,
+  readResponseBytesWithinLimit,
   SourceControlProviderError,
   parseProviderResponse,
 } from "../errors";
+import { classifyGitTreeEntry } from "./git-tree";
 import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
@@ -649,7 +650,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         // null here and callers must enforce size budgets when reading blobs.
         entries.push({
           path: entry.path,
-          type: entry.type === "blob" ? "file" : entry.type === "tree" ? "directory" : "other",
+          type: classifyGitTreeEntry(entry.type, entry.mode),
           blobId: entry.id,
           sizeBytes: null,
           executable: entry.mode === "100755",
@@ -671,10 +672,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       "read blob"
     );
     if (!response.ok) throw await gitlabResponseError(response, "read blob");
-    // GitLab's tree listing carries no sizes, so this header is the only
-    // chance to refuse an oversized blob before buffering it.
-    assertBlobWithinLimit(response, config.maxBytes, config.blobId);
-    return new Uint8Array(await response.arrayBuffer());
+    return await readResponseBytesWithinLimit(response, config.maxBytes, config.blobId);
   }
 
   /** PAT-authenticated GitLab API request with transport failures classified. */

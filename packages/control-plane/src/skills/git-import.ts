@@ -426,7 +426,7 @@ export async function fetchSkillImport(
 /** Present an upstream failure as an import failure without leaking retry semantics. */
 function providerFailure(error: unknown, message: string): SkillImportError {
   if (error instanceof SourceControlProviderError) {
-    const status = error.errorType === "transient" ? 503 : 502;
+    const status = error.httpStatus === 413 ? 400 : error.errorType === "transient" ? 503 : 502;
     return new SkillImportError(`${message}: ${error.message}`, status);
   }
   return new SkillImportError(

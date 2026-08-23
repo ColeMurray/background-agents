@@ -95,6 +95,7 @@ describe("managed skills BFF routes", () => {
       ref: "main",
       expectedCommitSha: "a".repeat(40),
       expectedSourceSha256: "b".repeat(64),
+      expectedRevisionSha256: "c".repeat(64),
     };
     const request = new NextRequest("http://localhost/api/skills/skill-1/reimport", {
       method: "POST",

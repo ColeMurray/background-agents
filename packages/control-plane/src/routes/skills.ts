@@ -216,7 +216,11 @@ async function importPreviewResponse(
  */
 function confirmedImport(
   result: SkillImportResult,
-  expected: { expectedCommitSha: string; expectedSourceSha256: string }
+  expected: {
+    expectedCommitSha: string;
+    expectedSourceSha256: string;
+    expectedRevisionSha256: string;
+  }
 ): Response | null {
   if (result.source.commitSha !== expected.expectedCommitSha) {
     return error(
@@ -226,6 +230,9 @@ function confirmedImport(
   }
   if (result.source.sourceSha256 !== expected.expectedSourceSha256) {
     return error("The source content changed since it was previewed. Preview again.", 409);
+  }
+  if (result.revisionSha256 !== expected.expectedRevisionSha256) {
+    return error("The imported skill changed since it was previewed. Preview again.", 409);
   }
   return null;
 }

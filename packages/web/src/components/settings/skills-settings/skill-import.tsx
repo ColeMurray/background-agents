@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
   SkillAssignmentInput,
@@ -48,6 +48,7 @@ export function SkillImport({
   const [preview, setPreview] = useState<SkillImportPreviewResponse | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [importing, setImporting] = useState(false);
+  const previewRequestVersion = useRef(0);
   const [assignmentKeys, setAssignmentKeys] = useState(
     () => new Set(INITIAL_ASSIGNMENTS.map(assignmentKey))
   );
@@ -67,21 +68,24 @@ export function SkillImport({
   }
 
   async function runPreview() {
+    const requestVersion = ++previewRequestVersion.current;
     setLoadingPreview(true);
     try {
       const result = await previewSkillImport({
         source: sourceInput(),
         name: nameOverride.trim() || null,
       });
+      if (requestVersion !== previewRequestVersion.current) return;
       setPreview(result);
       if (!result.nameAvailable) {
         toast.warning(`A skill named ${result.name} already exists. Choose a different name.`);
       }
     } catch (error) {
+      if (requestVersion !== previewRequestVersion.current) return;
       setPreview(null);
       toast.error(errorMessage(error));
     } finally {
-      setLoadingPreview(false);
+      if (requestVersion === previewRequestVersion.current) setLoadingPreview(false);
     }
   }
 
@@ -93,7 +97,7 @@ export function SkillImport({
         source: sourceInput(),
         name: preview.name,
         assignments: buildAssignments(assignmentKeys, repos, environments, INITIAL_ASSIGNMENTS),
-        ...previewedSourceConfirmation(preview.source),
+        ...previewedSourceConfirmation(preview),
       });
       toast.success(`Imported ${skill.name}`);
       onImported(skill.id);
@@ -106,7 +110,9 @@ export function SkillImport({
 
   /** Any source edit invalidates the reviewed result. */
   function editSource(apply: () => void) {
+    previewRequestVersion.current += 1;
     apply();
+    setLoadingPreview(false);
     setPreview(null);
   }
 

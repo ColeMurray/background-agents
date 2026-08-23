@@ -160,8 +160,9 @@ skills written in the editor.
 
 An imported skill records its source repository, requested ref, resolved commit, subdirectory, and a
 digest of the imported bytes. That digest covers the content read upstream and is deliberately
-different from the revision digest, which covers the regenerated `SKILL.md`. A moving ref is always
-pinned to the commit it resolved to.
+different from the revision digest, which covers the complete stored revision tree, including the
+regenerated `SKILL.md` and supporting files. A moving ref is always pinned to the commit it resolved
+to.
 
 Open **Imported source** on the skill to pull the source again. Re-import reads the recorded
 repository and subdirectory; only the ref can be changed. Changed content is saved as a new

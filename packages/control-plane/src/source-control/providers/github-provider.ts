@@ -27,10 +27,11 @@ import type {
   RepositoryTree,
 } from "../types";
 import {
-  assertBlobWithinLimit,
+  readResponseBytesWithinLimit,
   SourceControlProviderError,
   parseProviderResponse,
 } from "../errors";
+import { classifyGitTreeEntry } from "./git-tree";
 import {
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
@@ -609,7 +610,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       // pre-download budget check from listTree alone.
       entries: data.tree.map((entry) => ({
         path: entry.path,
-        type: entry.type === "blob" ? "file" : entry.type === "tree" ? "directory" : "other",
+        type: classifyGitTreeEntry(entry.type, entry.mode),
         blobId: entry.sha,
         sizeBytes: entry.size ?? null,
         executable: entry.mode === "100755",
@@ -629,8 +630,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         "application/vnd.github.raw"
       );
       if (!response.ok) throw await githubResponseError(response, "read blob");
-      assertBlobWithinLimit(response, config.maxBytes, config.blobId);
-      return new Uint8Array(await response.arrayBuffer());
+      return await readResponseBytesWithinLimit(response, config.maxBytes, config.blobId);
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;
       throw SourceControlProviderError.fromFetchError(

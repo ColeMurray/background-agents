@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import type { Skill, SkillImportPreviewResponse } from "@open-inspect/shared/types/skills";
 import { previewSkillReimport, reimportSkill } from "@/hooks/use-managed-skills";
@@ -30,19 +30,23 @@ export function SkillReimport({
   const [preview, setPreview] = useState<SkillImportPreviewResponse | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [saving, setSaving] = useState(false);
+  const previewRequestVersion = useRef(0);
 
   if (!source) return null;
   const unchanged = preview !== null && preview.revisionSha256 === skill.revisionSha256;
 
   async function runPreview() {
+    const requestVersion = ++previewRequestVersion.current;
     setLoadingPreview(true);
     try {
-      setPreview(await previewSkillReimport(skill.id, ref.trim() || null));
+      const result = await previewSkillReimport(skill.id, ref.trim() || null);
+      if (requestVersion === previewRequestVersion.current) setPreview(result);
     } catch (error) {
+      if (requestVersion !== previewRequestVersion.current) return;
       setPreview(null);
       toast.error(errorMessage(error));
     } finally {
-      setLoadingPreview(false);
+      if (requestVersion === previewRequestVersion.current) setLoadingPreview(false);
     }
   }
 
@@ -60,7 +64,7 @@ export function SkillReimport({
     try {
       const result = await reimportSkill(skill.id, skill.currentRevisionId, {
         ref: ref.trim() || null,
-        ...previewedSourceConfirmation(preview.source),
+        ...previewedSourceConfirmation(preview),
       });
       toast.success(
         result.revisionCreated
@@ -95,7 +99,9 @@ export function SkillReimport({
             id="reimport-ref"
             value={ref}
             onChange={(event) => {
+              previewRequestVersion.current += 1;
               setRef(event.target.value);
+              setLoadingPreview(false);
               setPreview(null);
             }}
             placeholder={source.requestedRef ?? "default branch"}
