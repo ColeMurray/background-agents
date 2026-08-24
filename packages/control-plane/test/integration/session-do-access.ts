@@ -4,9 +4,15 @@ import type { SessionComponents } from "../../src/session/components";
 
 /**
  * The DO internals integration tests are allowed to reach: the (private)
- * idempotent initializer and the component graph it builds. `Pick`-typed
- * casts tie each helper to the real types so a rename breaks the helper
- * instead of silently passing.
+ * idempotent initializer and the component graph it builds.
+ *
+ * NOTE: `test/integration/**` is never typechecked (eslint + grep are the only
+ * static gates here), and the `as unknown` cast below has no structural tie to
+ * SessionDO — its members are private, so they cannot be `Pick`ed. Renaming
+ * `ensureInitialized` or `components` on the DO surfaces only as runtime
+ * TypeErrors across the integration suite; keep this interface in sync with
+ * SessionDO by hand. The `SessionComponents` import does keep component-graph
+ * renames visible, but in-editor only.
  */
 export interface SessionDOInternals {
   ensureInitialized(rehydrateAlarm?: boolean): void;

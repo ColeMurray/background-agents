@@ -59,7 +59,7 @@ import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
-import { resolvePublicSessionId } from "./public-session-id";
+import { createLatchedPublicSessionIdResolver, resolvePublicSessionId } from "./public-session-id";
 import { resolveScmSettings } from "./scm-settings-resolution";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -877,9 +877,14 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
     model: DEFAULT_MODEL,
-    // Re-derived per use: on the first-ever activation the manager is built
-    // during the init request, before the session row exists.
-    getSessionId: () => resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
+    // Re-derived per use until the session row exists: on the first-ever
+    // activation the manager is built during the init request, before the row
+    // is written. Latched afterwards — the manager derives log context from
+    // this on every log line, and the id is immutable once row-backed.
+    getSessionId: createLatchedPublicSessionIdResolver(
+      () => sessionCoreRepository.getSession(),
+      durableObjectId
+    ),
     inactivity: {
       ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
       timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
