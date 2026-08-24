@@ -140,7 +140,7 @@ export function SkillsCatalog() {
                   <span>
                     {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
                   </span>
-                  <span>· Created by {item.creatorDisplayName ?? item.createdBy}</span>
+                  <span>· Created by {item.creatorDisplayName || item.createdBy}</span>
                 </p>
               </button>
               <Switch

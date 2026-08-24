@@ -93,7 +93,7 @@ describe("SkillsCatalog", () => {
     const withDisplayName = skill("1", "first-skill");
     const withIdFallback = {
       ...skill("2", "second-skill"),
-      creatorDisplayName: null,
+      creatorDisplayName: "",
       createdBy: "user-2",
     };
     useSkillCatalogPageMock.mockReturnValue({
