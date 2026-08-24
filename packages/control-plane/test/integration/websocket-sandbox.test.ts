@@ -143,15 +143,23 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     // does not hold other events back while it runs. Cancelling mid-hash is the
     // real race: a status read taken before the await is already stale by the
     // time the upgrade is accepted.
+    //
+    // The cancel is queued as a microtask from the pre-authentication sandbox
+    // read. That read runs to completion — including the reconnect-blocked
+    // check, which therefore sees the pre-cancel row — before the microtask
+    // lands, so the mutation is guaranteed to fall inside the hash await.
     await runInDurableObject(stub, (instance: SessionDO) => {
-      const authenticating = instance as unknown as {
-        isValidSandboxToken: () => Promise<boolean>;
-      };
-      vi.spyOn(authenticating, "isValidSandboxToken").mockImplementation(async () => {
-        instance.ctx.storage.sql.exec("UPDATE session SET status = 'cancelled'");
-        instance.ctx.storage.sql.exec("UPDATE sandbox SET status = 'stopped'");
-        await Promise.resolve();
-        return true;
+      const repository = (
+        instance as unknown as { sandboxRepository: { getSandbox: () => unknown } }
+      ).sandboxRepository;
+      const readSandbox = repository.getSandbox.bind(repository);
+      vi.spyOn(repository, "getSandbox").mockImplementation(() => {
+        const sandbox = readSandbox();
+        queueMicrotask(() => {
+          instance.ctx.storage.sql.exec("UPDATE session SET status = 'cancelled'");
+          instance.ctx.storage.sql.exec("UPDATE sandbox SET status = 'stopped'");
+        });
+        return sandbox;
       });
     });
 
@@ -161,6 +169,9 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
 
     expect(response.status).toBe(410);
+    // Pin the branch: the pre-authentication sandbox check saw a live row, so
+    // only the post-authentication session read can have rejected this.
+    expect(await response.text()).toBe("Session is terminal");
     expect(ws).toBeNull();
     // The rejected upgrade must not flip the sandbox back to `ready`.
     expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
