@@ -199,8 +199,13 @@ export interface SandboxLifecycleConfig {
   controlPlaneUrl: string;
   /** Default model ID used when the session has no model override. */
   model: string;
-  /** Session ID for log correlation. Optional — logs will omit sessionId if not provided. */
-  sessionId?: string;
+  /**
+   * Session ID for log correlation, resolved per use. Optional — logs will
+   * omit sessionId if not provided. A thunk rather than a value because the
+   * manager can be constructed during the init request, before the session
+   * row (and its public id) exists.
+   */
+  getSessionId?: () => string;
   /** MCP server lookup for injecting servers into sandboxes. */
   mcpServerLookup?: McpServerLookup;
   /** Resolves the spawn-time agent-slack-notify gate. */
@@ -304,8 +309,26 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   private isSpawningSandbox = false;
   private providerStartupPending = false;
 
-  /** Session-scoped logger. Falls back to module-level logger if no sessionId configured. */
-  private readonly log: Logger;
+  /** Memoized session-scoped logger, keyed by the resolved session id. */
+  private logMemo?: { sessionId: string | undefined; logger: Logger };
+
+  /**
+   * Session-scoped logger. Falls back to the module-level logger if no
+   * session id is configured. Re-derived when the resolved id changes, so a
+   * manager built before the session row exists picks up the public id.
+   */
+  private get log(): Logger {
+    const sessionId = this.config.getSessionId?.();
+    let memo = this.logMemo;
+    if (!memo || memo.sessionId !== sessionId) {
+      memo = {
+        sessionId,
+        logger: sessionId ? log.child({ session_id: sessionId }) : log,
+      };
+      this.logMemo = memo;
+    }
+    return memo.logger;
+  }
 
   constructor(
     private readonly provider: SandboxProvider,
@@ -316,9 +339,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     private readonly idGenerator: IdGenerator,
     private readonly config: SandboxLifecycleConfig,
     private readonly imageBuildLookup?: ImageBuildLookup
-  ) {
-    this.log = config.sessionId ? log.child({ session_id: config.sessionId }) : log;
-  }
+  ) {}
 
   /**
    * Spawn a sandbox (fresh or from snapshot).

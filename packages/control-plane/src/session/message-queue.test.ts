@@ -217,7 +217,7 @@ function buildQueue() {
     projectTerminalMessage,
     sandboxLifecycle,
     null,
-    "github",
+    () => "github",
     createEarliestAlarmScheduler(
       { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
       {
@@ -231,7 +231,7 @@ function buildQueue() {
         completeDelivery: vi.fn(),
       }
     ),
-    EXECUTION_TIMEOUT_MS
+    () => EXECUTION_TIMEOUT_MS
   );
 
   return {
