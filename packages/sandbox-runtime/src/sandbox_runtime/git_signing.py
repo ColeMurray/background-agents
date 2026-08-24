@@ -145,7 +145,7 @@ class GitSigningRuntime:
             raise GitSigningError(
                 "Commit signing configuration unavailable",
                 status_code=status_code,
-                retryable=status_code not in {401, 403, 404, 410},
+                retryable=status_code in {408, 429} or status_code >= 500,
             ) from None
         except httpx.HTTPError:
             raise GitSigningError(

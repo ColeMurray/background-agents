@@ -417,9 +417,21 @@ async def test_refresh_blocks_on_non_success_or_malformed_broker_results(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [401, 403, 404, 410, 503])
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [
+        (400, False),
+        (401, False),
+        (403, False),
+        (404, False),
+        (408, True),
+        (410, False),
+        (429, True),
+        (503, True),
+    ],
+)
 async def test_refresh_preserves_broker_http_status_without_response_details(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, status: int
+    tmp_path, monkeypatch: pytest.MonkeyPatch, status: int, retryable: bool
 ):
     manifest = create_manifest(tmp_path)
 
@@ -438,7 +450,7 @@ async def test_refresh_preserves_broker_http_status_without_response_details(
         await runtime.refresh(None)
 
     assert exc_info.value.status_code == status
-    assert exc_info.value.retryable is (status not in {401, 403, 404, 410})
+    assert exc_info.value.retryable is retryable
     assert str(exc_info.value) == "Commit signing configuration unavailable"
     assert "secret upstream details" not in str(exc_info.value)
 
