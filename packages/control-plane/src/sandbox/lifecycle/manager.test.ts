@@ -220,20 +220,31 @@ function createMockStorage(
         sandbox.code_server_url = data.codeServer.url;
         sandbox.code_server_password = data.codeServer.password;
         calls.push(`updateSandboxCodeServer:${data.codeServer.url}`);
+      } else if (!data.preserveMissing) {
+        sandbox.code_server_url = null;
+        sandbox.code_server_password = null;
       }
       if (data.vnc) {
         sandbox.vnc_url = data.vnc.url;
         sandbox.vnc_password = data.vnc.password;
         calls.push(`updateSandboxVnc:${data.vnc.url}`);
+      } else if (!data.preserveMissing) {
+        sandbox.vnc_url = null;
+        sandbox.vnc_password = null;
       }
       if (data.tunnelUrls) {
         sandbox.tunnel_urls = JSON.stringify(data.tunnelUrls);
         calls.push("updateSandboxTunnelUrls");
+      } else if (!data.preserveMissing) {
+        sandbox.tunnel_urls = null;
       }
       if (data.ttyd) {
         sandbox.ttyd_url = data.ttyd.url;
         sandbox.ttyd_token = data.ttyd.token;
         calls.push("updateSandboxTtyd");
+      } else if (!data.preserveMissing) {
+        sandbox.ttyd_url = null;
+        sandbox.ttyd_token = null;
       }
       return true;
     }),
@@ -2425,6 +2436,31 @@ describe("SandboxLifecycleManager", () => {
       expect(alarmScheduler.alarms).toEqual([
         sandbox.boot_progress_at! + config.connectingTimeout.timeoutMs,
       ]);
+    });
+
+    it("fails a boot at its absolute deadline despite recent progress reports", async () => {
+      const now = Date.now();
+      const config = createTestConfig();
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        created_at: now - config.connectingTimeout.maxBootDurationMs,
+        boot_progress_at: now,
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        config
+      );
+
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+      expect(storage.calls).toContain("failBootIfUnchanged");
+      expect(sandbox.status).toBe("failed");
     });
 
     it("records only current boot progress and schedules its deadline", async () => {

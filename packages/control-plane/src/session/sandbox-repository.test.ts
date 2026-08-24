@@ -13,7 +13,7 @@ function createLog() {
   } as unknown as Logger;
 }
 
-function createMockSql() {
+function createMockSql(rowsWritten = 1) {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const data = new Map<string, unknown[]>();
   const sql: SqlStorage = {
@@ -22,7 +22,7 @@ function createMockSql() {
       return {
         toArray: () => data.get(query) ?? [],
         one: () => null,
-        rowsWritten: 1,
+        rowsWritten,
       };
     },
   };
@@ -223,6 +223,13 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
       expect(mock.calls[0].params).toEqual([5000, "sandbox-current"]);
     });
+
+    it("returns false when the fenced update matches no sandbox", () => {
+      const rejected = createMockSql(0);
+      const rejectedRepository = new SandboxRepository(rejected.sql, log);
+
+      expect(rejectedRepository.recordBootProgress("sandbox-stale", 5000)).toBe(false);
+    });
   });
 
   describe("failBootIfUnchanged", () => {
@@ -232,6 +239,13 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
       expect(mock.calls[0].query).toContain("MAX(created_at, COALESCE(boot_progress_at, 0)) = ?");
       expect(mock.calls[0].params).toEqual(["sandbox-current", 5000]);
+    });
+
+    it("returns false when the fenced update matches no sandbox", () => {
+      const rejected = createMockSql(0);
+      const rejectedRepository = new SandboxRepository(rejected.sql, log);
+
+      expect(rejectedRepository.failBootIfUnchanged("sandbox-stale", 5000)).toBe(false);
     });
   });
 
@@ -255,6 +269,26 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting', 'ready')");
       expect(mock.calls[0].query).toContain("modal_object_id = COALESCE(?, modal_object_id)");
       expect(mock.calls[0].params.at(-1)).toBe("sandbox-current");
+    });
+
+    it("returns false when the fenced update matches no sandbox", () => {
+      const rejected = createMockSql(0);
+      const rejectedRepository = new SandboxRepository(rejected.sql, log);
+
+      expect(
+        rejectedRepository.commitProviderStartup({
+          expectedSandboxId: "sandbox-stale",
+          providerObjectId: "provider-1",
+          codeServerUrl: null,
+          codeServerPassword: null,
+          vncUrl: null,
+          vncPassword: null,
+          tunnelUrls: null,
+          ttydUrl: null,
+          ttydToken: null,
+          preserveMissing: false,
+        })
+      ).toBe(false);
     });
 
     it("preserves missing access fields during resume", () => {

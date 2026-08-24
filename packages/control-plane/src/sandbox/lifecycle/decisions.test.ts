@@ -18,6 +18,7 @@ import {
   isSnapshotRuntimeCompatible,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
+  DEFAULT_MAX_BOOT_DURATION_MS,
   type CircuitBreakerState,
   type CircuitBreakerConfig,
   type SandboxState,
@@ -141,6 +142,7 @@ describe("evaluateSpawnDecision", () => {
     cooldownMs: 30000,
     readyWaitMs: 60000,
     spawningTimeoutMs: 120000,
+    maxBootDurationMs: DEFAULT_MAX_BOOT_DURATION_MS,
   };
 
   it('returns "restore" when snapshot exists and sandbox is stopped', () => {
@@ -330,6 +332,20 @@ describe("evaluateSpawnDecision", () => {
     };
 
     expect(evaluateSpawnDecision(state, config, now, false).action).toBe("skip");
+  });
+
+  it("spawns after the absolute boot duration despite recent boot progress", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - config.maxBootDurationMs,
+      bootProgressAt: now,
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    expect(evaluateSpawnDecision(state, config, now, false).action).toBe("spawn");
   });
 
   it('still skips a stale "spawning" when a spawn is in progress in-memory', () => {
@@ -901,7 +917,18 @@ describe("evaluateConnectingTimeout", () => {
       isTimedOut: false,
       elapsedMs: 20_000,
       livenessAt: now - 20_000,
+      deadlineAt: now - 20_000 + config.timeoutMs,
     });
+  });
+
+  it("times out at the absolute boot deadline despite recent progress", () => {
+    const now = Date.now();
+    const createdAt = now - config.maxBootDurationMs;
+    const result = evaluateConnectingTimeout("connecting", createdAt, config, now, now);
+
+    expect(result.isTimedOut).toBe(true);
+    expect(result.elapsedMs).toBe(config.maxBootDurationMs);
+    expect(result.deadlineAt).toBe(now);
   });
 
   it("times out when boot progress is stale", () => {

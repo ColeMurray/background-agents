@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -191,6 +192,23 @@ async def test_boot_progress_network_failure_is_nonfatal_and_redacted(tmp_path, 
     assert request_url.endswith("/sessions/session%2F1/boot-progress")
     supervisor.log.warn.assert_called_once_with(
         "supervisor.boot_progress_failed", error="ConnectError"
+    )
+    assert "secret-token" not in str(supervisor.log.warn.call_args)
+
+
+async def test_boot_progress_loop_continues_after_unexpected_failure(tmp_path, monkeypatch):
+    supervisor, *_ = _supervisor(tmp_path, [])
+    supervisor._report_boot_progress = AsyncMock(
+        side_effect=[RuntimeError("secret-token"), asyncio.CancelledError]
+    )
+    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", AsyncMock())
+
+    with suppress(asyncio.CancelledError):
+        await supervisor._boot_progress_loop()
+
+    assert supervisor._report_boot_progress.await_count == 2
+    supervisor.log.warn.assert_called_once_with(
+        "supervisor.boot_progress_failed", error="RuntimeError"
     )
     assert "secret-token" not in str(supervisor.log.warn.call_args)
 

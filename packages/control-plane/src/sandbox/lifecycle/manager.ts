@@ -1239,7 +1239,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.log.warn("Connecting timeout", {
         event: "sandbox.connecting_timeout",
         elapsed_ms: connectingResult.elapsedMs,
-        timeout_ms: this.config.connectingTimeout.timeoutMs,
+        liveness_timeout_ms: this.config.connectingTimeout.timeoutMs,
+        max_boot_duration_ms: this.config.connectingTimeout.maxBootDurationMs,
       });
       const sandboxId = sandbox.modal_sandbox_id;
       if (!sandboxId || !this.storage.failBootIfUnchanged(sandboxId, connectingResult.livenessAt)) {
@@ -1264,9 +1265,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
 
     if (sandbox.status === "spawning" || sandbox.status === "connecting") {
-      await this.alarmScheduler.schedule(
-        connectingResult.livenessAt + this.config.connectingTimeout.timeoutMs
-      );
+      await this.alarmScheduler.schedule(connectingResult.deadlineAt);
       return "no_action";
     }
 
@@ -1465,7 +1464,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   async recordBootProgress(sandboxId: string, timestamp: number): Promise<boolean> {
     if (!this.storage.recordBootProgress(sandboxId, timestamp)) return false;
-    await this.alarmScheduler.schedule(timestamp + this.config.connectingTimeout.timeoutMs);
+    const createdAt = this.storage.getSandbox()?.created_at ?? timestamp;
+    await this.alarmScheduler.schedule(
+      Math.min(
+        timestamp + this.config.connectingTimeout.timeoutMs,
+        createdAt + this.config.connectingTimeout.maxBootDurationMs
+      )
+    );
     return true;
   }
 

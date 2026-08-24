@@ -181,7 +181,11 @@ export interface SpawnConfig {
    * makes every later spawn attempt skip with "already spawning" forever.
    */
   spawningTimeoutMs: number;
+  /** Absolute maximum wall-clock duration for one boot attempt */
+  maxBootDurationMs: number;
 }
+
+export const DEFAULT_MAX_BOOT_DURATION_MS = 15 * 60 * 1000;
 
 /**
  * Default spawn configuration.
@@ -190,6 +194,7 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
   cooldownMs: 30000, // 30 seconds
   readyWaitMs: 60000, // 60 seconds
   spawningTimeoutMs: 120000, // 2 minutes — matches the connecting-timeout watchdog
+  maxBootDurationMs: DEFAULT_MAX_BOOT_DURATION_MS,
 };
 
 /**
@@ -269,7 +274,8 @@ export function evaluateSpawnDecision(
   isSpawningInMemory: boolean,
   supportsPersistentResume = false
 ): SpawnAction {
-  const timeSinceLastSpawn = now - Math.max(state.createdAt, state.bootProgressAt ?? 0);
+  const timeSinceLivenessMs = now - Math.max(state.createdAt, state.bootProgressAt ?? 0);
+  const bootDurationMs = now - state.createdAt;
 
   // In-memory flag first: it is set synchronously when a spawn/restore starts,
   // but the persisted "spawning" status lands only after the first await. A
@@ -316,7 +322,14 @@ export function evaluateSpawnDecision(
   // the session, instead of skipping indefinitely.
   if (
     (state.status === "spawning" || state.status === "connecting") &&
-    timeSinceLastSpawn < config.spawningTimeoutMs
+    bootDurationMs >= config.maxBootDurationMs
+  ) {
+    return { action: "spawn", reason: "previous boot exceeded maximum duration" };
+  }
+
+  if (
+    (state.status === "spawning" || state.status === "connecting") &&
+    timeSinceLivenessMs < config.spawningTimeoutMs
   ) {
     return { action: "skip", reason: `already ${state.status}` };
   }
@@ -327,10 +340,10 @@ export function evaluateSpawnDecision(
       return { action: "skip", reason: "sandbox ready with active WebSocket" };
     }
     // If no WebSocket but was recently spawned, wait for reconnect
-    if (timeSinceLastSpawn < config.readyWaitMs) {
+    if (timeSinceLivenessMs < config.readyWaitMs) {
       return {
         action: "wait",
-        reason: `status ready but no WebSocket, last spawn was ${Math.round(timeSinceLastSpawn / 1000)}s ago`,
+        reason: `status ready but no WebSocket, last liveness was ${Math.round(timeSinceLivenessMs / 1000)}s ago`,
       };
     }
   }
@@ -338,13 +351,13 @@ export function evaluateSpawnDecision(
   // Cooldown: don't spawn if last spawn was within cooldown period
   // Exception: failed or stopped status bypasses cooldown
   if (
-    timeSinceLastSpawn < config.cooldownMs &&
+    timeSinceLivenessMs < config.cooldownMs &&
     state.status !== "failed" &&
     state.status !== "stopped"
   ) {
     return {
       action: "wait",
-      reason: `last spawn was ${Math.round(timeSinceLastSpawn / 1000)}s ago, waiting`,
+      reason: `last liveness was ${Math.round(timeSinceLivenessMs / 1000)}s ago, waiting`,
     };
   }
 
@@ -544,8 +557,10 @@ export function evaluateHeartbeatHealth(
  * Configuration for the initial-connect watchdog.
  */
 export interface ConnectingTimeoutConfig {
-  /** Maximum time in ms a sandbox can stay in "connecting" before being failed */
+  /** Maximum time without boot liveness before the sandbox is failed */
   timeoutMs: number;
+  /** Absolute maximum wall-clock duration for one boot attempt */
+  maxBootDurationMs: number;
 }
 
 /**
@@ -555,6 +570,7 @@ export interface ConnectingTimeoutConfig {
  */
 export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
   timeoutMs: 120_000,
+  maxBootDurationMs: DEFAULT_MAX_BOOT_DURATION_MS,
 };
 
 /**
@@ -563,10 +579,12 @@ export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
 export interface ConnectingTimeoutResult {
   /** Whether the sandbox has exceeded the connecting timeout */
   isTimedOut: boolean;
-  /** Time elapsed since sandbox was created (ms) */
+  /** Time elapsed against the timeout that fired (ms) */
   elapsedMs: number;
   /** Timestamp from which the current liveness window is measured */
   livenessAt: number;
+  /** Next timestamp at which the boot must be evaluated */
+  deadlineAt: number;
 }
 
 /**
@@ -598,15 +616,20 @@ export function evaluateConnectingTimeout(
   bootProgressAt: number | null = null
 ): ConnectingTimeoutResult {
   if (status !== "connecting" && status !== "spawning") {
-    return { isTimedOut: false, elapsedMs: 0, livenessAt: createdAt };
+    return { isTimedOut: false, elapsedMs: 0, livenessAt: createdAt, deadlineAt: createdAt };
   }
 
   const livenessAt = Math.max(createdAt, bootProgressAt ?? 0);
-  const elapsedMs = now - livenessAt;
+  const livenessDeadlineAt = livenessAt + config.timeoutMs;
+  const absoluteDeadlineAt = createdAt + config.maxBootDurationMs;
+  const deadlineAt = Math.min(livenessDeadlineAt, absoluteDeadlineAt);
+  const absoluteTimedOut = now >= absoluteDeadlineAt;
+  const elapsedMs = now - (absoluteTimedOut ? createdAt : livenessAt);
   return {
-    isTimedOut: elapsedMs >= config.timeoutMs,
+    isTimedOut: now >= deadlineAt,
     elapsedMs,
     livenessAt,
+    deadlineAt,
   };
 }
 

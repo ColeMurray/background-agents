@@ -93,7 +93,10 @@ class SandboxSupervisor:
 
     async def _boot_progress_loop(self) -> None:
         while True:
-            await self._report_boot_progress()
+            try:
+                await self._report_boot_progress()
+            except Exception as error:
+                self.log.warn("supervisor.boot_progress_failed", error=type(error).__name__)
             await asyncio.sleep(self.BOOT_PROGRESS_INTERVAL_SECONDS)
 
     def _start_boot_progress(self) -> None:
