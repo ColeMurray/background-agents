@@ -580,9 +580,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
 
       if (!this.isProviderStartupCurrent(expectedSandboxId)) {
-        this.log.info("Ignoring late sandbox provider result", {
-          expected_sandbox_id: expectedSandboxId,
-        });
+        await this.discardLateProviderResult(expectedSandboxId, result.providerObjectId);
         return;
       }
 
@@ -875,9 +873,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
 
       if (!this.isProviderStartupCurrent(expectedSandboxId)) {
-        this.log.info("Ignoring late sandbox provider result", {
-          expected_sandbox_id: expectedSandboxId,
-        });
+        await this.discardLateProviderResult(expectedSandboxId, result.providerObjectId);
         return;
       }
 
@@ -1278,12 +1274,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         elapsed_ms: connectingResult.elapsedMs,
         timeout_ms: this.config.connectingTimeout.timeoutMs,
       });
-      await this.callbacks.onSandboxTerminating?.();
       const sandboxId = sandbox.modal_sandbox_id;
       if (!sandboxId || !this.storage.failBootIfUnchanged(sandboxId, connectingResult.livenessAt)) {
         this.log.info("Connecting timeout superseded by newer sandbox state");
         return;
       }
+      await this.callbacks.onSandboxTerminating?.();
       this.clearSandboxAccessState();
       if (this.canStopProviderSandbox()) {
         try {
@@ -1651,6 +1647,25 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   private isProviderStartupCurrent(expectedSandboxId: string): boolean {
     const sandbox = this.storage.getSandbox();
     return sandbox?.modal_sandbox_id === expectedSandboxId && !isDeadSandboxStatus(sandbox.status);
+  }
+
+  private async discardLateProviderResult(
+    expectedSandboxId: string,
+    providerObjectId?: string
+  ): Promise<void> {
+    this.log.info("Ignoring late sandbox provider result", {
+      expected_sandbox_id: expectedSandboxId,
+      provider_object_id: providerObjectId,
+    });
+    if (!providerObjectId || !this.canStopProviderSandbox()) return;
+    try {
+      await this.stopProviderSandbox("late_startup_result", undefined, providerObjectId);
+    } catch (error) {
+      this.log.warn("Provider stop failed for late sandbox result", {
+        provider_object_id: providerObjectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async enterProviderStartup(

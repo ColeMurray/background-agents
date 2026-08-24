@@ -12,6 +12,7 @@ import type { Env } from "../types";
 import {
   defineRoute,
   error,
+  getDecodedSessionId,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   parseJsonBody,
@@ -46,7 +47,7 @@ type SimpleProxyRouteConfig = {
 };
 
 function getSessionId(match: RegExpMatchArray): string | Response {
-  const sessionId = match.groups?.id;
+  const sessionId = getDecodedSessionId(match);
   return sessionId ? sessionId : error("Session ID required");
 }
 

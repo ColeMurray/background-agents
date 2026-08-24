@@ -72,6 +72,25 @@ describe("session runtime proxy routes", () => {
     await expect(requests[0].json()).resolves.toEqual({ sandboxId: "sandbox-1" });
   });
 
+  it("decodes session IDs before selecting the session runtime", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const env = createEnv(fetch);
+    const path = "/sessions/session%2F1/boot-progress";
+    const { handler, match } = getHandler("POST", path);
+
+    await handler(
+      new Request(`https://test.local${path}`, {
+        method: "POST",
+        body: JSON.stringify({ sandboxId: "sandbox-1" }),
+      }),
+      env,
+      match,
+      createCtx()
+    );
+
+    expect(env.SESSION.idFromName).toHaveBeenCalledWith("session/1");
+  });
+
   it.each([
     ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
     ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],
