@@ -57,19 +57,30 @@ async function evictSessionDO(sessionName: string): Promise<DurableObjectStub> {
   return restored;
 }
 
+/** Upper bound on how long a reply may take to cross the pair; matches `collectMessages`. */
+const RESTORED_SOCKET_TIMEOUT_MS = 2000;
+
 /**
  * Deliver one client frame the way a hibernating runtime does: over a socket
  * the running instance has never seen, carrying nothing but the `wsid:` tag
  * that survived in storage. Returns whatever the DO wrote back to that socket.
+ *
+ * Settles as soon as `until` matches a frame or the socket is closed, so no
+ * caller depends on a fixed sleep. `collectMessages` in helpers.ts does the same
+ * for frames, but cannot observe the close event the 4002 case asserts on, so
+ * the wait is rebuilt here rather than reused.
  */
 async function deliverOnRestoredSocket(
   stub: DurableObjectStub,
   wsId: string,
-  message: unknown
+  message: unknown,
+  // Default never matches: callers that expect no reply are settled by the close.
+  opts: { until?: (frame: Record<string, unknown>) => boolean } = {}
 ): Promise<{
   received: Record<string, unknown>[];
   closes: { code: number; reason: string }[];
 }> {
+  const until = opts.until ?? (() => false);
   return runInDurableObject(stub, async (instance: SessionDO) => {
     const pair = new WebSocketPair();
     const clientSocket = pair[0];
@@ -79,16 +90,29 @@ async function deliverOnRestoredSocket(
 
     const received: Record<string, unknown>[] = [];
     const closes: { code: number; reason: string }[] = [];
-    clientSocket.addEventListener("message", (event) => {
-      received.push(JSON.parse(typeof event.data === "string" ? event.data : "{}"));
-    });
-    clientSocket.addEventListener("close", (event) => {
-      closes.push({ code: event.code, reason: event.reason });
+    // Registered before the frame is delivered so nothing can be missed.
+    const settled = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, RESTORED_SOCKET_TIMEOUT_MS);
+      const finish = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      clientSocket.addEventListener("message", (event) => {
+        const frame = JSON.parse(typeof event.data === "string" ? event.data : "{}") as Record<
+          string,
+          unknown
+        >;
+        received.push(frame);
+        if (until(frame)) finish();
+      });
+      clientSocket.addEventListener("close", (event) => {
+        closes.push({ code: event.code, reason: event.reason });
+        finish();
+      });
     });
 
     await instance.webSocketMessage(restoredSocket, JSON.stringify(message));
-    // Frames and close events reach the paired socket asynchronously.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await settled;
     return { received, closes };
   });
 }
@@ -291,11 +315,12 @@ describe("SessionDO Durable Object", () => {
       // Reaching prompt_queued at all proves ensureInitialized() re-ran on the
       // new instance: the message queue is built from this.messenger, which
       // exists only after initialization.
-      const { received, closes } = await deliverOnRestoredSocket(restored, mapping.ws_id, {
-        type: "prompt",
-        clientRequestId,
-        content: "queued after eviction",
-      });
+      const { received, closes } = await deliverOnRestoredSocket(
+        restored,
+        mapping.ws_id,
+        { type: "prompt", clientRequestId, content: "queued after eviction" },
+        { until: (frame) => frame.type === "prompt_queued" }
+      );
 
       expect(closes).toEqual([]);
       expect(received).toContainEqual(
@@ -371,10 +396,12 @@ describe("SessionDO Durable Object", () => {
 
       const restored = await evictSessionDO(sessionName);
 
-      const { received, closes } = await deliverOnRestoredSocket(restored, mapping.ws_id, {
-        type: "presence",
-        status: "idle",
-      });
+      const { received, closes } = await deliverOnRestoredSocket(
+        restored,
+        mapping.ws_id,
+        { type: "presence", status: "idle" },
+        { until: (frame) => frame.type === "presence_update" }
+      );
 
       expect(closes).toEqual([]);
       // Presence is projected from the recovered ClientInfo, so the broadcast
@@ -399,6 +426,7 @@ describe("SessionDO Durable Object", () => {
 
       const restored = await evictSessionDO(sessionName);
 
+      // No `until`: the only expected reply is the close itself, which settles the wait.
       const { received, closes } = await deliverOnRestoredSocket(
         restored,
         "ws-id-that-never-subscribed",
