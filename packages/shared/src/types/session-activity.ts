@@ -52,6 +52,20 @@ export function isTurnSettled(status: SessionStatus): boolean {
   return TURN_SETTLED_STATUSES.has(status);
 }
 
+/** Whether a session accepts follow-up work and the sandbox needed to run it. */
+export function isSessionPromptable(status: SessionStatus): boolean {
+  switch (status) {
+    case "created":
+    case "active":
+    case "completed":
+    case "failed":
+      return true;
+    case "archived":
+    case "cancelled":
+      return false;
+  }
+}
+
 /**
  * The inactive statuses as SQL string literals, for the queries that filter on
  * them. Generated from the same set the predicate uses so a change to one

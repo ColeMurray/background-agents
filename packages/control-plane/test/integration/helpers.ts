@@ -8,6 +8,7 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
@@ -375,8 +376,8 @@ export function collectMessages(
 ): Promise<Record<string, unknown>[]> {
   return new Promise((resolve) => {
     const messages: Record<string, unknown>[] = [];
-    const timeout = opts?.timeoutMs ?? 2000;
-    const timer = setTimeout(() => resolve(messages), timeout);
+    const timeoutMs = opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS;
+    const timer = setTimeout(() => resolve(messages), timeoutMs);
 
     ws.addEventListener("message", (event) => {
       const msg = JSON.parse(typeof event.data === "string" ? event.data : "{}");
@@ -399,6 +400,8 @@ export async function openClientWs(
     subscribe?: boolean;
     userId?: string;
     canonicalUserId?: string;
+    scmLogin?: string;
+    scmName?: string;
   }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
@@ -422,6 +425,8 @@ export async function openClientWs(
     body: JSON.stringify({
       userId: opts.userId ?? "user-1",
       canonicalUserId: opts.canonicalUserId,
+      scmLogin: opts.scmLogin,
+      scmName: opts.scmName,
     }),
   });
   const { token, participantId } = await tokenRes.json<{

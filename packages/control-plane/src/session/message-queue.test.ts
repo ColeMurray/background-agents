@@ -772,7 +772,7 @@ describe("SessionMessageQueue", () => {
 
   it("leaves the prompt pending and timeline untouched when sandbox send fails", async () => {
     const h = buildQueue();
-    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-unsent" }));
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage({ id: "msg-unsent" }));
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
     h.wsManager.send.mockReturnValue(false);
 
@@ -793,6 +793,7 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "prompt_dispatch_send_failed"
     );
+    expect(h.repository.getNextPendingMessage).toHaveBeenCalledTimes(2);
   });
 
   it("does not dispatch when another worker wins the processing claim", async () => {
@@ -937,7 +938,7 @@ describe("SessionMessageQueue", () => {
 
   it("does not notify the integration when sandbox dispatch fails", async () => {
     const h = buildQueue();
-    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-failed" }));
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage({ id: "msg-failed" }));
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
     h.wsManager.send.mockReturnValue(false);
 
@@ -1098,6 +1099,7 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "stop_send_failed"
     );
+    expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
     expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
   });
 
@@ -1115,14 +1117,17 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "stop_send_failed"
     );
+    expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
   });
 
   it("terminates the sandbox after the bounded stop confirmation deadline", async () => {
     const h = buildQueue();
-    h.repository.getMessageAwaitingStopConfirmation.mockReturnValue({
-      id: "msg-stopped",
-      deadline: Date.now() - 1,
-    });
+    h.repository.getMessageAwaitingStopConfirmation
+      .mockReturnValueOnce({
+        id: "msg-stopped",
+        deadline: Date.now() - 1,
+      })
+      .mockReturnValue(null);
 
     await h.queue.recoverStopConfirmationTimeout();
 
@@ -1130,6 +1135,7 @@ describe("SessionMessageQueue", () => {
       "stop_confirmation_timeout"
     );
     expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
   });
 
   it("clears the marker and resumes only after definitive sandbox termination", async () => {

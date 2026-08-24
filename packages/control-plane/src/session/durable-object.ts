@@ -16,6 +16,7 @@ import {
 } from "@open-inspect/shared/types/server-messages";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import type { ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import { resolveAppName } from "@open-inspect/shared/app-name";
@@ -1062,10 +1063,6 @@ export class SessionDO extends DurableObject<Env> {
       this.alarmScheduler,
       idGenerator,
       config,
-      {
-        onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
-        onSandboxTerminated: () => this.messageQueue.resumeAfterSandboxTermination(),
-      },
       imageBuildLookup
     );
   }
@@ -1177,6 +1174,27 @@ export class SessionDO extends DurableObject<Env> {
           duration_ms: Date.now() - wsStartTime,
         });
         return new Response("Unauthorized: Invalid auth token", { status: 401 });
+      }
+
+      // Reject connection if the session itself is closed for good. Narrower
+      // than "not active": `completed` and `failed` sessions are idle, not
+      // over — warm-on-typing spawns a sandbox for one before the follow-up
+      // prompt arrives, and rejecting its bridge stranded that prompt.
+      //
+      // Read after authentication, not before: token hashing is a non-storage
+      // await, so the input gate lets a cancel or archive land while this
+      // request is suspended. Admission needs a fresh, synchronous read.
+      const currentSession = this.getSession();
+      if (currentSession && !isSessionPromptable(currentSession.status)) {
+        log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "rejected",
+          reject_reason: "session_terminal",
+          session_status: currentSession.status,
+          duration_ms: Date.now() - wsStartTime,
+        });
+        return new Response("Session is terminal", { status: 410 });
       }
 
       // Auth passed — continue to WebSocket accept below

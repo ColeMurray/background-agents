@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import { encryptToken } from "../../src/auth/crypto";
@@ -77,6 +77,95 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
 
     expect(response.status).toBe(410);
     expect(ws).toBeNull();
+  });
+
+  it.each(["archived", "cancelled"] as const)(
+    "upgrade for %s session returns 410",
+    async (status) => {
+      const name = `ws-session-${status}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "ready",
+      });
+      await runInDurableObject(stub, (instance: SessionDO) => {
+        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      });
+
+      const { ws, response } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+
+      expect(response.status).toBe(410);
+      expect(ws).toBeNull();
+    }
+  );
+
+  it.each(["completed", "failed"] as const)(
+    "upgrade for %s session allows a connecting sandbox",
+    async (status) => {
+      const name = `ws-session-${status}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "connecting",
+      });
+      await runInDurableObject(stub, (instance: SessionDO) => {
+        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      });
+
+      const { ws, response } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+
+      expect(response.status).toBe(101);
+      expect(ws).not.toBeNull();
+      ws!.accept();
+      await waitForSandboxStatus(stub, "ready");
+      ws!.close();
+    }
+  );
+
+  it("revalidates terminal state after asynchronous authentication", async () => {
+    const name = `ws-session-auth-race-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "ready",
+    });
+
+    // Token hashing is a non-storage await, so the Durable Object input gate
+    // does not hold other events back while it runs. Cancelling mid-hash is the
+    // real race: a status read taken before the await is already stale by the
+    // time the upgrade is accepted.
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      const authenticating = instance as unknown as {
+        isValidSandboxToken: () => Promise<boolean>;
+      };
+      vi.spyOn(authenticating, "isValidSandboxToken").mockImplementation(async () => {
+        instance.ctx.storage.sql.exec("UPDATE session SET status = 'cancelled'");
+        instance.ctx.storage.sql.exec("UPDATE sandbox SET status = 'stopped'");
+        await Promise.resolve();
+        return true;
+      });
+    });
+
+    const { ws, response } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+
+    expect(response.status).toBe(410);
+    expect(ws).toBeNull();
+    // The rejected upgrade must not flip the sandbox back to `ready`.
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
+      { status: "stopped" },
+    ]);
   });
 
   it("sandbox connect sets status to ready", async () => {
