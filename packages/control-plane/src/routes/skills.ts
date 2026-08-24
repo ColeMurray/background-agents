@@ -11,6 +11,7 @@ import {
   skillNameSchema,
   skillResolutionPreviewInputSchema,
   updateSkillProfileInputSchema,
+  type SkillImportProvenance,
   type SkillImportPreviewResponse,
   type SkillImportSourceInput,
 } from "@open-inspect/shared/types/skills";
@@ -306,13 +307,11 @@ async function handleImportSkill(
  * naming that branch, not by clearing the field, so a re-import never silently
  * jumps to a different branch than the one it was pinned to.
  */
-async function recordedImportSource(
-  ctx: RequestContext,
-  skillId: string,
+function recordedImportSource(
+  source: SkillImportProvenance | null,
   ref: string | null | undefined,
   providerName: string
-): Promise<SkillImportSourceInput | Response> {
-  const source = await new SkillStore(ctx.db).latestImportSource(skillId);
+): SkillImportSourceInput | Response {
   if (!source) return error("This skill was not imported from a repository", 409);
   if (source.provider !== providerName) {
     return error(
@@ -343,7 +342,7 @@ async function handlePreviewSkillReimport(
   if (!skill) return error("Skill not found", 404);
   try {
     const provider = createRouteSourceControlProvider(env);
-    const source = await recordedImportSource(ctx, id, parsed.data.ref, provider.name);
+    const source = recordedImportSource(skill.source, parsed.data.ref, provider.name);
     if (source instanceof Response) return source;
     const result = await fetchSkillImport(provider, source, skill.name);
     return json(await importPreviewResponse(ctx, result, skill.name));
@@ -371,9 +370,12 @@ async function handleReimportSkill(
   const store = new SkillStore(ctx.db);
   const skill = await store.get(id);
   if (!skill) return error("Skill not found", 404);
+  if (skill.currentRevisionId !== ifMatch) {
+    return error(`Current revision is ${skill.currentRevisionId}`, 409);
+  }
   try {
     const provider = createRouteSourceControlProvider(env);
-    const source = await recordedImportSource(ctx, id, parsed.data.ref, provider.name);
+    const source = recordedImportSource(skill.source, parsed.data.ref, provider.name);
     if (source instanceof Response) return source;
     const result = await fetchSkillImport(provider, source, skill.name);
     const stale = confirmedImport(result, parsed.data);
