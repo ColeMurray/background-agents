@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
-import type { SessionDO } from "../../src/session/durable-object";
+import { env } from "cloudflare:test";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
