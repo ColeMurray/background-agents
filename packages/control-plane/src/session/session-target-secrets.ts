@@ -84,13 +84,14 @@ export async function buildSessionTargetSecretSources(
   }
 
   const brokerSources = [globalSource];
+  const primary = input.members.find((member) => member.isPrimary);
   // Reverse position order: the primary (position 0) merges last and wins.
   for (const member of [...input.members].reverse()) {
     const secrets = await input.loadMemberSecrets(member);
     if (Object.keys(secrets).length > 0) {
       const source = { label: `${member.repoOwner}/${member.repoName}`, secrets };
       sources.push(source);
-      if (member.isPrimary) brokerSources.push(source);
+      if (member === primary) brokerSources.push(source);
     }
   }
   return { sources, brokerSources };

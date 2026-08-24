@@ -128,6 +128,18 @@ describe("buildSessionTargetSecretSources", () => {
     expect(brokerSources.map((s) => s.label)).toEqual(["global", "acme/web"]);
   });
 
+  it("admits only the first member when duplicate entries are marked primary", async () => {
+    const { brokerSources } = await buildSessionTargetSecretSources({
+      environmentId: null,
+      globalSecrets: {},
+      members: [member("Acme", "Web", 0, true), member("acme", "web", 1, true)],
+      loadMemberSecrets: async (m) => ({ TOKEN: `${m.repoOwner}/${m.repoName}` }),
+      loadEnvironmentSecrets: noEnvironmentSecrets,
+    });
+
+    expect(brokerSources.map((s) => s.label)).toEqual(["global", "Acme/Web"]);
+  });
+
   it("folds global + environment for an environment-launched session — member repos never inherit", async () => {
     const loadMemberSecrets = vi.fn();
 
