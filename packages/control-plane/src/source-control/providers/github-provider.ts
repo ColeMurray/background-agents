@@ -124,9 +124,6 @@ const githubBranchRefSchema = z.object({
   object: z.object({ sha: z.string().min(1) }),
 });
 
-/** Wire shape of GET /repos/{owner}/{repo}/commits/{ref}, limited to the SHA. */
-const githubCommitSchema = z.object({ sha: z.string().min(1) });
-
 /** Wire shape of GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1. */
 const githubTreeSchema = z.object({
   truncated: z.boolean().optional(),
@@ -585,18 +582,32 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   async resolveCommit(
     config: GetRepositoryConfig & { ref: string }
   ): Promise<ResolvedCommit | null> {
-    const data = await this.appJson(
-      `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
-        config.name
-      )}/commits/${encodeURIComponent(config.ref)}`,
-      githubCommitSchema,
-      "resolve commit",
-      true
-    );
-    return data === null ? null : { sha: data.sha };
+    try {
+      const response = await this.appFetch(
+        `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/commits/${encodeURIComponent(config.ref)}`,
+        "resolve commit",
+        "application/vnd.github.sha"
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) throw await githubResponseError(response, "resolve commit");
+      const sha = (await response.text()).trim();
+      if (!sha) throw new Error("GitHub returned an empty commit SHA");
+      return { sha };
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to resolve commit: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
   }
 
-  async listTree(config: GetRepositoryConfig & { commitSha: string }): Promise<RepositoryTree> {
+  async listTree(
+    config: GetRepositoryConfig & { commitSha: string; path?: string | null }
+  ): Promise<RepositoryTree> {
     const data = await this.appJsonRequired(
       `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
         config.name

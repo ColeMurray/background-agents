@@ -337,7 +337,7 @@ export interface PullRequestSnapshot {
  */
 export interface SourceControlProvider {
   /** Provider name for logging and debugging */
-  readonly name: string;
+  readonly name: SourceControlProviderName;
 
   //
   // User-authenticated operations
@@ -428,10 +428,12 @@ export interface SourceControlProvider {
    * response; `truncated` reports that cap being hit so callers can refuse to
    * act on a partial listing rather than silently dropping entries.
    *
-   * @param config - Repository identifier plus the commit to read
+   * @param config - Repository identifier plus the commit and optional subtree to read
    * @throws SourceControlProviderError
    */
-  listTree(config: GetRepositoryConfig & { commitSha: string }): Promise<RepositoryTree>;
+  listTree(
+    config: GetRepositoryConfig & { commitSha: string; path?: string | null }
+  ): Promise<RepositoryTree>;
 
   /**
    * Read one blob's raw bytes by its provider blob ID.
@@ -500,3 +502,9 @@ export interface SourceControlProvider {
    */
   buildGitPushSpec(config: BuildGitPushSpecConfig): GitPushSpec;
 }
+
+/** App-authenticated repository capabilities required by managed-skill imports. */
+export type RepositoryReader = Pick<
+  SourceControlProvider,
+  "name" | "checkRepositoryAccess" | "resolveCommit" | "listTree" | "readBlob"
+>;

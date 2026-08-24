@@ -28,7 +28,6 @@ const preview: SkillImportPreviewResponse = {
   license: null,
   compatibility: null,
   metadata: {},
-  skillMarkdown: "---\nname: deploy-service\n---\n# Deploy\n",
   revisionSha256: "c".repeat(64),
   totalBytes: 88,
   files: [

@@ -185,25 +185,32 @@ function isSafeRepositorySubdirectory(path: string): boolean {
 
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a SHA-256 digest");
 const commitShaSchema = z.string().regex(/^[0-9a-f]{7,64}$/, "must be a commit SHA");
+const skillImportRefValueSchema = wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH);
+const skillImportRefSchema = skillImportRefValueSchema.nullish();
+const skillImportSubdirectoryValueSchema = wellFormedString
+  .trim()
+  .refine(isSafeRepositorySubdirectory, {
+    message: "must be a safe relative POSIX path inside the repository",
+  });
 
 /** The resolved source of one import, without the time it was applied. */
 export const skillImportSourceSchema = z.strictObject({
-  provider: z.string(),
+  provider: z.enum(["github", "gitlab", "bitbucket"]),
   repoOwner: z.string(),
   repoName: z.string(),
   /** The ref the importer asked for; null when the default branch was used. */
-  requestedRef: z.string().nullable(),
+  requestedRef: skillImportRefValueSchema.nullable(),
   /** The ref actually read, after defaulting. */
-  resolvedRef: z.string(),
+  resolvedRef: skillImportRefValueSchema,
   /** Commit the content was read at — the pin for a moving ref. */
-  commitSha: z.string(),
-  subdirectory: z.string().nullable(),
+  commitSha: commitShaSchema,
+  subdirectory: skillImportSubdirectoryValueSchema.nullable(),
   /**
    * Digest of the imported source bytes. Deliberately distinct from a
    * revision's `revisionSha256`: the stored `SKILL.md` is regenerated from the
    * mapped fields, so stored bytes differ from the bytes read upstream.
    */
-  sourceSha256: z.string(),
+  sourceSha256: sha256Schema,
 });
 
 /** A stored import, as reported on a skill. */
@@ -297,7 +304,7 @@ const importRepositoryInputSchema = z
  */
 export const skillImportSourceInputSchema = z.strictObject({
   repository: importRepositoryInputSchema,
-  ref: wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH).nullish(),
+  ref: skillImportRefSchema,
   subdirectory: wellFormedString
     .trim()
     .nullish()
@@ -330,8 +337,6 @@ export const skillImportPreviewResponseSchema = z.strictObject({
   license: z.string().nullable(),
   compatibility: z.string().nullable(),
   metadata: z.record(z.string(), z.string()),
-  /** The `SKILL.md` that would be stored, regenerated from the mapped fields. */
-  skillMarkdown: z.string(),
   revisionSha256: z.string(),
   totalBytes: z.number().int().nonnegative(),
   files: z.array(
@@ -368,11 +373,11 @@ export const importSkillInputSchema = importConfirmationSchema.extend({
 
 /** Re-import reads the recorded repository and subdirectory; only the ref moves. */
 export const reimportSkillPreviewInputSchema = z.strictObject({
-  ref: wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH).nullish(),
+  ref: skillImportRefSchema,
 });
 
 export const reimportSkillInputSchema = importConfirmationSchema.extend({
-  ref: wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH).nullish(),
+  ref: skillImportRefSchema,
 });
 
 export const reimportSkillResponseSchema = z.strictObject({

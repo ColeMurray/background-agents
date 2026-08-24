@@ -5,6 +5,7 @@ import {
   listSkillsResponseSchema,
   sessionSkillSelectionSchema,
   skillContentInputSchema,
+  skillImportSourceSchema,
   skillNameSchema,
   skillResolutionPreviewInputSchema,
 } from "./skills";
@@ -110,5 +111,29 @@ describe("managed skill contracts", () => {
     expect(
       importSkillInputSchema.safeParse({ ...input, expectedRevisionSha256: "c".repeat(64) }).success
     ).toBe(true);
+  });
+
+  it("validates persisted import provenance invariants", () => {
+    const source = {
+      provider: "github",
+      repoOwner: "acme",
+      repoName: "skills",
+      requestedRef: "main",
+      resolvedRef: "main",
+      commitSha: "a".repeat(40),
+      subdirectory: "skills/deploy",
+      sourceSha256: "b".repeat(64),
+    };
+
+    expect(skillImportSourceSchema.safeParse(source).success).toBe(true);
+    expect(skillImportSourceSchema.safeParse({ ...source, provider: "unknown" }).success).toBe(
+      false
+    );
+    expect(skillImportSourceSchema.safeParse({ ...source, commitSha: "not-a-sha" }).success).toBe(
+      false
+    );
+    expect(
+      skillImportSourceSchema.safeParse({ ...source, subdirectory: "../deploy" }).success
+    ).toBe(false);
   });
 });

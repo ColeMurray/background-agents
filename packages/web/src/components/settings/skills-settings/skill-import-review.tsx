@@ -78,21 +78,12 @@ export function SkillImportReview({ preview }: { preview: SkillImportPreviewResp
                   {file.sizeBytes.toLocaleString()} bytes
                 </span>
               </div>
-              {file.path !== "SKILL.md" && (
-                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-3">
-                  {file.content}
-                </pre>
-              )}
+              <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-3">
+                {file.content}
+              </pre>
             </li>
           ))}
         </ul>
-      </div>
-
-      <div>
-        <h4 className="text-sm font-medium text-foreground">Generated SKILL.md</h4>
-        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-3 text-xs">
-          {preview.skillMarkdown}
-        </pre>
       </div>
     </div>
   );

@@ -1,11 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import type {
-  SkillAssignmentInput,
-  SkillImportPreviewResponse,
-} from "@open-inspect/shared/types/skills";
+import type { SkillAssignmentInput } from "@open-inspect/shared/types/skills";
 import { importSkill, previewSkillImport } from "@/hooks/use-managed-skills";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos } from "@/hooks/use-repos";
@@ -14,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SkillAssignments } from "./skill-assignments";
 import { SkillImportReview } from "./skill-import-review";
+import { useImportPreview } from "./use-import-preview";
 import {
   assignmentKey,
   buildAssignments,
@@ -45,10 +43,7 @@ export function SkillImport({
   const [ref, setRef] = useState("");
   const [subdirectory, setSubdirectory] = useState("");
   const [nameOverride, setNameOverride] = useState("");
-  const [preview, setPreview] = useState<SkillImportPreviewResponse | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState(false);
   const [importing, setImporting] = useState(false);
-  const previewRequestVersion = useRef(0);
   const [assignmentKeys, setAssignmentKeys] = useState(
     () => new Set(INITIAL_ASSIGNMENTS.map(assignmentKey))
   );
@@ -67,25 +62,22 @@ export function SkillImport({
     };
   }
 
+  const {
+    preview,
+    loading: loadingPreview,
+    run: loadPreview,
+    invalidate: invalidatePreview,
+  } = useImportPreview(() =>
+    previewSkillImport({
+      source: sourceInput(),
+      name: nameOverride.trim() || null,
+    })
+  );
+
   async function runPreview() {
-    const requestVersion = ++previewRequestVersion.current;
-    setLoadingPreview(true);
-    try {
-      const result = await previewSkillImport({
-        source: sourceInput(),
-        name: nameOverride.trim() || null,
-      });
-      if (requestVersion !== previewRequestVersion.current) return;
-      setPreview(result);
-      if (!result.nameAvailable) {
-        toast.warning(`A skill named ${result.name} already exists. Choose a different name.`);
-      }
-    } catch (error) {
-      if (requestVersion !== previewRequestVersion.current) return;
-      setPreview(null);
-      toast.error(errorMessage(error));
-    } finally {
-      if (requestVersion === previewRequestVersion.current) setLoadingPreview(false);
+    const result = await loadPreview();
+    if (result && !result.nameAvailable) {
+      toast.warning(`A skill named ${result.name} already exists. Choose a different name.`);
     }
   }
 
@@ -110,10 +102,8 @@ export function SkillImport({
 
   /** Any source edit invalidates the reviewed result. */
   function editSource(apply: () => void) {
-    previewRequestVersion.current += 1;
     apply();
-    setLoadingPreview(false);
-    setPreview(null);
+    invalidatePreview();
   }
 
   return (

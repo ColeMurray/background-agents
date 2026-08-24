@@ -1337,6 +1337,47 @@ describe("managed-skill repository reads", () => {
     ]);
   });
 
+  it("scopes recursive tree reads to a repository-relative path", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse([
+        {
+          path: "skills/deploy/SKILL.md",
+          type: "blob",
+          mode: "100644",
+          id: "file",
+        },
+      ])
+    );
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const tree = await provider.listTree({
+      owner: "acme",
+      name: "skills",
+      commitSha: "abc",
+      path: "skills/deploy",
+    });
+
+    expect(tree.entries[0]?.path).toBe("skills/deploy/SKILL.md");
+    const requestUrl = String(mockFetch.mock.calls[0]?.[0]);
+    expect(requestUrl).toContain("path=skills%2Fdeploy");
+    expect(requestUrl).toContain("recursive=true");
+    expect(requestUrl).toContain("pagination=none");
+  });
+
+  it("returns an empty scoped tree when GitLab reports a missing path", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ message: "404 Tree Not Found" }, 404));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    await expect(
+      provider.listTree({
+        owner: "acme",
+        name: "skills",
+        commitSha: "abc",
+        path: "missing",
+      })
+    ).resolves.toEqual({ entries: [], truncated: false });
+  });
+
   it("cancels an undeclared oversized blob while streaming it", async () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({

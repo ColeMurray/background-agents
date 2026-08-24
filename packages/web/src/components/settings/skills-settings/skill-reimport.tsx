@@ -1,14 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import type { Skill, SkillImportPreviewResponse } from "@open-inspect/shared/types/skills";
+import type { Skill } from "@open-inspect/shared/types/skills";
 import { previewSkillReimport, reimportSkill } from "@/hooks/use-managed-skills";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SkillImportReview, SkillImportSourceSummary } from "./skill-import-review";
 import { errorMessage, previewedSourceConfirmation } from "./utils";
+import { useImportPreview } from "./use-import-preview";
 
 /**
  * Pull the recorded source again as a new revision. Only the ref moves: the
@@ -27,28 +28,16 @@ export function SkillReimport({
 }) {
   const source = skill.source;
   const [ref, setRef] = useState("");
-  const [preview, setPreview] = useState<SkillImportPreviewResponse | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState(false);
   const [saving, setSaving] = useState(false);
-  const previewRequestVersion = useRef(0);
+  const {
+    preview,
+    loading: loadingPreview,
+    run: runPreview,
+    invalidate: invalidatePreview,
+  } = useImportPreview(() => previewSkillReimport(skill.id, ref.trim() || null));
 
   if (!source) return null;
   const unchanged = preview !== null && preview.revisionSha256 === skill.revisionSha256;
-
-  async function runPreview() {
-    const requestVersion = ++previewRequestVersion.current;
-    setLoadingPreview(true);
-    try {
-      const result = await previewSkillReimport(skill.id, ref.trim() || null);
-      if (requestVersion === previewRequestVersion.current) setPreview(result);
-    } catch (error) {
-      if (requestVersion !== previewRequestVersion.current) return;
-      setPreview(null);
-      toast.error(errorMessage(error));
-    } finally {
-      if (requestVersion === previewRequestVersion.current) setLoadingPreview(false);
-    }
-  }
 
   async function confirm() {
     if (!preview) return;
@@ -71,7 +60,7 @@ export function SkillReimport({
           ? `Saved revision ${result.skill.revisionNumber} from ${preview.source.commitSha.slice(0, 7)}`
           : "Source content is unchanged; no revision added"
       );
-      setPreview(null);
+      invalidatePreview();
       onReimported();
     } catch (error) {
       toast.error(errorMessage(error));
@@ -99,10 +88,8 @@ export function SkillReimport({
             id="reimport-ref"
             value={ref}
             onChange={(event) => {
-              previewRequestVersion.current += 1;
               setRef(event.target.value);
-              setLoadingPreview(false);
-              setPreview(null);
+              invalidatePreview();
             }}
             placeholder={source.requestedRef ?? "default branch"}
             className="mt-1 font-mono"

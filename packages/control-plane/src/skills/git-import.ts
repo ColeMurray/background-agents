@@ -21,7 +21,7 @@ import {
   type SkillImportSourceInput,
   type SkillImportWarning,
 } from "@open-inspect/shared/types/skills";
-import type { RepositoryTreeEntry, SourceControlProvider } from "../source-control";
+import type { RepositoryReader, RepositoryTreeEntry } from "../source-control";
 import { SourceControlProviderError } from "../source-control";
 import { buildValidatedSkillRevision, hashImportedSourceTree } from "./content-addressing";
 import { parseSkillMarkdown, SkillMarkdownError, type ParsedSkillMarkdown } from "./skill-markdown";
@@ -60,8 +60,6 @@ export interface SkillImportResult {
   content: SkillContentInput;
   source: SkillImportSource;
   warnings: SkillImportWarning[];
-  /** SKILL.md as it would be stored, regenerated from the mapped fields. */
-  skillMarkdown: string;
   revisionSha256: string;
   totalBytes: number;
   files: { path: string; content: string; sizeBytes: number; executable: boolean }[];
@@ -113,7 +111,7 @@ function skillDirectoriesUnder(entries: RepositoryTreeEntry[], prefix: string): 
 
 /** Read blobs with bounded concurrency, preserving input order. */
 async function readBlobs(
-  provider: SourceControlProvider,
+  provider: RepositoryReader,
   repository: { owner: string; name: string },
   entries: RepositoryTreeEntry[],
   prefix: string
@@ -274,13 +272,13 @@ function resolveName(
  * @throws SkillImportError with the status the caller should return.
  */
 export async function fetchSkillImport(
-  provider: SourceControlProvider,
+  provider: RepositoryReader,
   source: SkillImportSourceInput,
   nameOverride?: string | null
 ): Promise<SkillImportResult> {
   const repository = { owner: source.repository.repoOwner, name: source.repository.repoName };
   const label = `${repository.owner}/${repository.name}`;
-  let access: Awaited<ReturnType<SourceControlProvider["checkRepositoryAccess"]>>;
+  let access: Awaited<ReturnType<RepositoryReader["checkRepositoryAccess"]>>;
   try {
     access = await provider.checkRepositoryAccess(repository);
   } catch (error) {
@@ -295,7 +293,7 @@ export async function fetchSkillImport(
 
   const requestedRef = source.ref ?? null;
   const resolvedRef = requestedRef ?? access.defaultBranch;
-  let commit: Awaited<ReturnType<SourceControlProvider["resolveCommit"]>>;
+  let commit: Awaited<ReturnType<RepositoryReader["resolveCommit"]>>;
   try {
     commit = await provider.resolveCommit({ ...repository, ref: resolvedRef });
   } catch (error) {
@@ -305,9 +303,13 @@ export async function fetchSkillImport(
     throw new SkillImportError(`${label} has no branch, tag, or commit "${resolvedRef}"`, 404);
   }
 
-  let tree: Awaited<ReturnType<SourceControlProvider["listTree"]>>;
+  let tree: Awaited<ReturnType<RepositoryReader["listTree"]>>;
   try {
-    tree = await provider.listTree({ ...repository, commitSha: commit.sha });
+    tree = await provider.listTree({
+      ...repository,
+      commitSha: commit.sha,
+      path: source.subdirectory,
+    });
   } catch (error) {
     throw providerFailure(error, `Failed to list ${label} at ${commit.sha}`);
   }
@@ -398,7 +400,6 @@ export async function fetchSkillImport(
     name,
     content: mapped.content,
     warnings,
-    skillMarkdown: revision.files.find((file) => file.path === "SKILL.md")?.content ?? "",
     revisionSha256: revision.revisionSha256,
     totalBytes: revision.totalBytes,
     files: revision.files.map((file) => ({

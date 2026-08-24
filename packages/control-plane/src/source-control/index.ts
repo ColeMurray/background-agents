@@ -23,6 +23,7 @@ export type {
   ResolvedCommit,
   RepositoryTree,
   RepositoryTreeEntry,
+  RepositoryReader,
 } from "./types";
 
 // Errors

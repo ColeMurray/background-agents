@@ -4,7 +4,7 @@ import {
   MAX_SKILL_REVISION_BYTES,
   skillImportSourceInputSchema,
 } from "@open-inspect/shared/types/skills";
-import type { GetRepositoryConfig, RepositoryTree, SourceControlProvider } from "../source-control";
+import type { GetRepositoryConfig, RepositoryReader, RepositoryTree } from "../source-control";
 import { SourceControlProviderError } from "../source-control";
 import { fetchSkillImport, SkillImportError } from "./git-import";
 
@@ -31,8 +31,9 @@ function fakeProvider(
     sizelessTree?: boolean;
     normalizedIdentity?: { repoOwner: string; repoName: string };
     blobLimits?: number[];
+    listedPaths?: (string | null | undefined)[];
   } = {}
-): SourceControlProvider {
+): RepositoryReader {
   const encoder = new TextEncoder();
   const blobs = new Map<string, Uint8Array>();
   const entries: RepositoryTree["entries"] = [];
@@ -57,10 +58,7 @@ function fakeProvider(
       executable: false,
     });
   }
-  const importSurface: Pick<
-    SourceControlProvider,
-    "name" | "checkRepositoryAccess" | "resolveCommit" | "listTree" | "readBlob"
-  > = {
+  const importSurface: RepositoryReader = {
     name: "github",
     checkRepositoryAccess: async (config: GetRepositoryConfig) =>
       overrides.accessible === false
@@ -73,7 +71,10 @@ function fakeProvider(
           },
     resolveCommit: async () =>
       overrides.commit === null ? null : { sha: overrides.commit ?? COMMIT },
-    listTree: async () => ({ entries, truncated: overrides.truncated ?? false }),
+    listTree: async ({ path }) => {
+      overrides.listedPaths?.push(path);
+      return { entries, truncated: overrides.truncated ?? false };
+    },
     readBlob: async ({ blobId, maxBytes }) => {
       overrides.blobLimits?.push(maxBytes);
       const bytes = blobs.get(blobId);
@@ -81,7 +82,7 @@ function fakeProvider(
       return bytes;
     },
   };
-  return importSurface as SourceControlProvider;
+  return importSurface;
 }
 
 function source(input: { subdirectory?: string; ref?: string } = {}) {
@@ -140,16 +141,21 @@ describe("fetchSkillImport", () => {
     const result = await fetchSkillImport(provider, source());
 
     expect(result.source.sourceSha256).not.toBe(result.revisionSha256);
-    expect(result.skillMarkdown).not.toBe(SKILL_MD);
-    expect(result.skillMarkdown).toContain("name: deploy-service");
+    const storedMarkdown = result.files.find((file) => file.path === "SKILL.md")?.content;
+    expect(storedMarkdown).not.toBe(SKILL_MD);
+    expect(storedMarkdown).toContain("name: deploy-service");
   });
 
   it("reads a skill from a subdirectory and strips the prefix from paths", async () => {
-    const provider = fakeProvider({
-      "README.md": { content: "repo readme\n" },
-      "skills/deploy-service/SKILL.md": { content: SKILL_MD },
-      "skills/deploy-service/references/runbook.md": { content: "steps\n" },
-    });
+    const listedPaths: (string | null | undefined)[] = [];
+    const provider = fakeProvider(
+      {
+        "README.md": { content: "repo readme\n" },
+        "skills/deploy-service/SKILL.md": { content: SKILL_MD },
+        "skills/deploy-service/references/runbook.md": { content: "steps\n" },
+      },
+      { listedPaths }
+    );
 
     const result = await fetchSkillImport(
       provider,
@@ -158,6 +164,7 @@ describe("fetchSkillImport", () => {
 
     expect(result.files.map((file) => file.path)).toEqual(["SKILL.md", "references/runbook.md"]);
     expect(result.source.subdirectory).toBe("skills/deploy-service");
+    expect(listedPaths).toEqual(["skills/deploy-service"]);
   });
 
   it("names the skill directories it found when the target has no SKILL.md", async () => {

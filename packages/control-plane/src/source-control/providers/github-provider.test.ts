@@ -1101,6 +1101,30 @@ describe("managed-skill repository reads", () => {
     mockGetCachedInstallationToken.mockResolvedValue("installation-token");
   });
 
+  it("resolves commits with GitHub's SHA representation", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response("abc123\n"));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.resolveCommit({ owner: "acme", name: "skills", ref: "feature/test" })
+    ).resolves.toEqual({ sha: "abc123" });
+    expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+      expect.stringContaining("commits/feature%2Ftest"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/vnd.github.sha" }),
+      })
+    );
+  });
+
+  it("returns null for a missing commit ref", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response("", { status: 404 }));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.resolveCommit({ owner: "acme", name: "skills", ref: "missing" })
+    ).resolves.toBeNull();
+  });
+
   it("classifies symlinks and submodules as unsupported tree entries", async () => {
     mockFetchWithTimeout.mockResolvedValueOnce(
       makeJsonResponse({

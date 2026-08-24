@@ -1,4 +1,6 @@
 import {
+  skillImportProvenanceSchema,
+  skillImportSourceSchema,
   skillMetadataSchema,
   type CreateSkillInput,
   type ReplaceSkillContentAndAssignmentsInput,
@@ -84,7 +86,14 @@ interface ImportSourceRow {
 
 export class SkillConflictError extends Error {}
 export class SkillValidationError extends Error {}
-interface ApplicableSkill extends SkillSummary {
+interface ApplicableSkill {
+  id: string;
+  name: string;
+  description: string;
+  currentRevisionId: string;
+  revisionNumber: number;
+  revisionSha256: string;
+  assignments: SkillAssignment[];
   totalBytes: number;
 }
 
@@ -452,10 +461,7 @@ export class SkillStore {
       )
     );
     const applicableIds = (rows.results ?? []).map((row) => row.id);
-    const [assignmentsBySkill, sourcesBySkill] = await Promise.all([
-      this.assignmentsForSkills(applicableIds),
-      this.sourcesForSkills(applicableIds),
-    ]);
+    const assignmentsBySkill = await this.assignmentsForSkills(applicableIds);
     const applicable: ApplicableSkill[] = [];
     for (const row of rows.results ?? []) {
       const assignments = assignmentsBySkill.get(row.id) ?? [];
@@ -470,7 +476,13 @@ export class SkillStore {
       });
       if (matching.length === 0) continue;
       applicable.push({
-        ...(await this.toSummary(row, matching, sourcesBySkill.get(row.id) ?? null)),
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        currentRevisionId: row.current_revision_id,
+        revisionNumber: row.revision_number,
+        revisionSha256: row.revision_sha256,
+        assignments: matching,
         totalBytes: row.total_bytes,
       });
     }
@@ -613,18 +625,21 @@ export class SkillStore {
       rows.push(...(result.results ?? []));
     }
     for (const row of rows) {
-      sources.set(row.skill_id, {
-        provider: row.provider,
-        repoOwner: row.repo_owner,
-        repoName: row.repo_name,
-        requestedRef: row.requested_ref,
-        resolvedRef: row.resolved_ref,
-        commitSha: row.commit_sha,
-        subdirectory: row.subdirectory,
-        sourceSha256: row.source_sha256,
-        importedAt: row.imported_at,
-        revisionId: row.revision_id,
-      });
+      sources.set(
+        row.skill_id,
+        skillImportProvenanceSchema.parse({
+          provider: row.provider,
+          repoOwner: row.repo_owner,
+          repoName: row.repo_name,
+          requestedRef: row.requested_ref,
+          resolvedRef: row.resolved_ref,
+          commitSha: row.commit_sha,
+          subdirectory: row.subdirectory,
+          sourceSha256: row.source_sha256,
+          importedAt: row.imported_at,
+          revisionId: row.revision_id,
+        })
+      );
     }
     return sources;
   }
@@ -636,6 +651,7 @@ export class SkillStore {
     source: SkillImportSource,
     now: number
   ): SqlStatement {
+    const validatedSource = skillImportSourceSchema.parse(source);
     return this.db
       .prepare(
         `INSERT INTO skill_import_sources
@@ -647,14 +663,14 @@ export class SkillStore {
       .bind(
         revisionId,
         skillId,
-        source.provider,
-        source.repoOwner,
-        source.repoName,
-        source.requestedRef,
-        source.resolvedRef,
-        source.commitSha,
-        source.subdirectory,
-        source.sourceSha256,
+        validatedSource.provider,
+        validatedSource.repoOwner,
+        validatedSource.repoName,
+        validatedSource.requestedRef,
+        validatedSource.resolvedRef,
+        validatedSource.commitSha,
+        validatedSource.subdirectory,
+        validatedSource.sourceSha256,
         now,
         revisionId,
         skillId

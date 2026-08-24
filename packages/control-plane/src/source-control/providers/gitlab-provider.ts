@@ -629,9 +629,42 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     return { sha: data.id };
   }
 
-  async listTree(config: GetRepositoryConfig & { commitSha: string }): Promise<RepositoryTree> {
+  async listTree(
+    config: GetRepositoryConfig & { commitSha: string; path?: string | null }
+  ): Promise<RepositoryTree> {
     const projectPath = encodeProjectPath(config.owner, config.name);
     const entries: RepositoryTreeEntry[] = [];
+    const scopedPath = config.path?.trim() || null;
+    if (scopedPath) {
+      const query = new URLSearchParams({
+        ref: config.commitSha,
+        path: scopedPath,
+        recursive: "true",
+        pagination: "none",
+      });
+      const response = await this.patFetch(
+        `/projects/${projectPath}/repository/tree?${query.toString()}`,
+        "list repository tree"
+      );
+      // GitLab 17.7+ returns 404 for a path that is not present in the tree.
+      if (response.status === 404) return { entries: [], truncated: false };
+      if (!response.ok) throw await gitlabResponseError(response, "list repository tree");
+      const data = await parseProviderResponse(
+        response,
+        gitlabTreeSchema,
+        "Failed to list repository tree"
+      );
+      return {
+        entries: data.slice(0, MAX_TREE_PAGES * PER_PAGE).map((entry) => ({
+          path: entry.path,
+          type: classifyGitTreeEntry(entry.type, entry.mode),
+          blobId: entry.id,
+          sizeBytes: null,
+          executable: entry.mode === "100755",
+        })),
+        truncated: data.length > MAX_TREE_PAGES * PER_PAGE,
+      };
+    }
     for (let page = 1; page <= MAX_TREE_PAGES; page++) {
       const response = await this.patFetch(
         `/projects/${projectPath}/repository/tree?ref=${encodeURIComponent(
