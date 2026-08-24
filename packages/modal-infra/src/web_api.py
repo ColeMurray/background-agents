@@ -374,6 +374,12 @@ async def api_terminate_sandbox(
 
     A sandbox that no longer exists is success: the caller's goal is that the
     sandbox stop existing.
+
+    Errors are reported in-band like every other endpoint in this module: the
+    response stays HTTP 200 and carries ``success: false``, which the
+    control-plane client parses from the body. The request log therefore
+    records the 200 that actually shipped, with ``outcome`` carrying the
+    error signal.
     """
     start_time = time.time()
     http_status = 200
@@ -411,8 +417,9 @@ async def api_terminate_sandbox(
         http_status = e.status_code
         raise
     except Exception as e:
+        # http_status stays 200: the response above is the in-band error
+        # envelope, and outcome is the error signal in the log.
         outcome = "error"
-        http_status = 500
         log.error("api.error", exc=e, endpoint_name="api_terminate_sandbox")
         return {"success": False, "error": str(e)}
     finally:

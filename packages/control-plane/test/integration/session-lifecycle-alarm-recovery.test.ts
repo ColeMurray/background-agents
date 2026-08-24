@@ -8,6 +8,9 @@ import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpe
 const CONNECTING_TIMEOUT_BUFFER_MS = 1_000;
 const RESPAWN_POLL_INTERVAL_MS = 100;
 const RESPAWN_TIMEOUT_MS = 5_000;
+// Long enough that a background spawn submitted by the alarm would have
+// stamped a fresh sandbox row, without slowing the suite meaningfully.
+const SPAWN_QUIET_WINDOW_MS = 750;
 
 /**
  * Park the session's sandbox past the connecting timeout, so the next alarm
@@ -101,12 +104,35 @@ describe("SessionDO lifecycle alarm recovery", () => {
     expect(respawned).toBe(true);
 
     // The queued prompt survived the sandbox failure and stays pending for
-    // the replacement sandbox instead of being silently dropped.
+    // the replacement sandbox instead of being silently dropped. It only
+    // reaches a terminal state once a sandbox connects and dispatches it.
     const [message] = await queryDO<{ status: string }>(
       stub,
       "SELECT status FROM messages WHERE id = ?",
       "msg-stranded"
     );
     expect(message?.status).toBe("pending");
+  });
+
+  it("does not respawn a sandbox when no prompt is queued", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    await parkSandboxPastConnectingTimeout(stub);
+
+    const [parked] = await queryDO<{ created_at: number }>(stub, "SELECT created_at FROM sandbox");
+    if (!parked) throw new Error("Expected parked sandbox row");
+
+    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+
+    // Control for the respawn above: the connecting-timeout alarm itself
+    // must not spawn — only a queued prompt re-driving the queue does. A
+    // fresh created_at here would mean some other path moved the respawn,
+    // and the queue-recovery test would stop proving anything about the queue.
+    await new Promise((resolve) => setTimeout(resolve, SPAWN_QUIET_WINDOW_MS));
+    const [after] = await queryDO<{ created_at: number; status: string }>(
+      stub,
+      "SELECT created_at, status FROM sandbox"
+    );
+    expect(after?.created_at).toBe(parked.created_at);
+    expect(after?.status).toBe("failed");
   });
 });

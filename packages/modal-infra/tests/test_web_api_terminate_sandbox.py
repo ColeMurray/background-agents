@@ -62,11 +62,25 @@ async def test_terminate_reports_lookup_errors_as_failure(monkeypatch):
         get_sandbox_by_id=AsyncMock(side_effect=RuntimeError("modal unavailable"))
     )
     monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+    requests: list[tuple[str, str, dict]] = []
+    monkeypatch.setattr(
+        web_api,
+        "log",
+        SimpleNamespace(
+            error=lambda *a, **k: requests.append(("error", a[0], k)),
+            info=lambda *a, **k: requests.append(("info", a[0], k)),
+        ),
+    )
 
     result = await _call_terminate({"sandbox_id": "mo-1", "session_id": "session-1"})
 
     assert result["success"] is False
     assert "modal unavailable" in result["error"]
+    # In-band error contract: the response ships HTTP 200 and the request log
+    # records that 200 with outcome carrying the error signal.
+    http_logs = [kw for name, _, kw in requests if name == "info" and _ == "modal.http_request"]
+    assert http_logs and http_logs[0]["http_status"] == 200
+    assert http_logs[0]["outcome"] == "error"
 
 
 @pytest.mark.asyncio
