@@ -531,6 +531,27 @@ export class SessionMessageQueue {
     await this.sessionStatus.reconcileAfterExecution(false);
   }
 
+  /**
+   * Settle every in-flight prompt because the sandbox reported it cannot continue.
+   *
+   * A boot failure fails the prompt before it is ever dispatched, so it is still
+   * `pending` — `failStuckProcessingMessage` only ever sees `processing` — and
+   * only `execution_complete` otherwise notifies the originating client. Without
+   * this the caller that asked for the work is told nothing at all.
+   */
+  failUnfinishedMessages(error: string, completedAt: number): number {
+    let failed = 0;
+    for (const message of this.messageRepository.listUnfinishedMessages()) {
+      const expectedStatus = message.status === "processing" ? "processing" : "pending";
+      if (this.failMessage(message, error, completedAt, expectedStatus)) failed++;
+    }
+    if (failed > 0) {
+      this.messenger.broadcast({ type: "processing_status", isProcessing: false });
+      this.broadcastPromptQueue();
+    }
+    return failed;
+  }
+
   private failMessage(
     message: { id: string; created_at: number },
     error: string,

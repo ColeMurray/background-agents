@@ -869,6 +869,7 @@ export class SessionDO extends DurableObject<Env> {
             messageCreatedAt,
             terminalMessageCompletedAt: completedAt,
           }),
+        (error, completedAt) => this.messageQueue.failUnfinishedMessages(error, completedAt),
         this.statusService,
         (timestamp) => this.lifecycleManager.updateLastActivity(timestamp),
         () => this.lifecycleManager.scheduleInactivityCheck(),

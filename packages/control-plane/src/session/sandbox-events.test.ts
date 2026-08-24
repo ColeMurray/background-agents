@@ -70,7 +70,11 @@ function createProcessor() {
   const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
   const projectTerminalMessage = vi.fn(async () => {});
-  const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
+  const failUnfinishedMessages = vi.fn((_error: string, _completedAt: number) => 0);
+  const statusService = {
+    reconcileAfterExecution: vi.fn(async (_success: boolean) => {}),
+    transition: vi.fn(async (_status: string) => true),
+  };
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const broadcastPromptQueue = vi.fn();
@@ -100,6 +104,7 @@ function createProcessor() {
     applySessionTitleUpdate,
     triggerSnapshot,
     projectTerminalMessage,
+    failUnfinishedMessages,
     statusService as unknown as SessionStatusService,
     updateLastActivity,
     scheduleInactivityCheck,
@@ -118,6 +123,7 @@ function createProcessor() {
     diffService,
     triggerSnapshot,
     projectTerminalMessage,
+    failUnfinishedMessages,
     statusService,
     scheduleInactivityCheck,
     processMessageQueue,
@@ -938,5 +944,40 @@ describe("SessionSandboxEventProcessor", () => {
       // Token events return early before ACK logic
       expect(h.wsManager.send).not.toHaveBeenCalled();
     });
+  });
+
+  it("settles in-flight prompts and drives the session to failed on a fatal error", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent({
+      type: "error",
+      error: "git sync failed for owner/repo",
+      sandboxId: "sandbox-1",
+      timestamp: 4000,
+      fatal: true,
+    } as never);
+
+    // Settling is what notifies whoever asked for the work; before this a boot
+    // failure reached them as silence and the session sat "active" forever.
+    expect(h.failUnfinishedMessages).toHaveBeenCalledWith(
+      "git sync failed for owner/repo",
+      expect.any(Number)
+    );
+    expect(h.statusService.transition).toHaveBeenCalledWith("failed");
+  });
+
+  it("leaves in-flight prompts and status alone for a non-fatal error event", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent({
+      type: "error",
+      error: "tool blew up",
+      sandboxId: "sandbox-1",
+      timestamp: 4000,
+      messageId: "msg-1",
+    } as never);
+
+    expect(h.failUnfinishedMessages).not.toHaveBeenCalled();
+    expect(h.statusService.transition).not.toHaveBeenCalled();
   });
 });

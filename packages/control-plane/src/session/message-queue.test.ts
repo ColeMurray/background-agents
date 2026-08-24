@@ -1346,4 +1346,56 @@ describe("SessionMessageQueue", () => {
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
   });
+
+  describe("failUnfinishedMessages", () => {
+    it("settles a prompt that never left pending and tells its caller why", () => {
+      const h = buildQueue();
+      // A boot failure fails the prompt before it is ever dispatched, so it is
+      // still "pending" — failStuckProcessingMessage only ever sees "processing".
+      h.repository.listUnfinishedMessages.mockReturnValue([
+        createMessage({ id: "msg-boot", status: "pending" }),
+      ]);
+
+      const failed = h.queue.failUnfinishedMessages("git sync failed for owner/repo", 5000);
+
+      expect(failed).toBe(1);
+      expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: "msg-boot",
+          success: false,
+          error: "git sync failed for owner/repo",
+        }),
+        5000,
+        "pending"
+      );
+      expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+        "msg-boot",
+        false,
+        "git sync failed for owner/repo"
+      );
+    });
+
+    it("settles a processing prompt against its own status", () => {
+      const h = buildQueue();
+      h.repository.listUnfinishedMessages.mockReturnValue([
+        createMessage({ id: "msg-running", status: "processing" }),
+      ]);
+
+      h.queue.failUnfinishedMessages("sandbox died", 5000);
+
+      expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+        expect.anything(),
+        5000,
+        "processing"
+      );
+    });
+
+    it("stays quiet when there is nothing in flight to settle", () => {
+      const h = buildQueue();
+      h.repository.listUnfinishedMessages.mockReturnValue([]);
+
+      expect(h.queue.failUnfinishedMessages("sandbox died", 5000)).toBe(0);
+      expect(h.callbackService.notifyComplete).not.toHaveBeenCalled();
+    });
+  });
 });
