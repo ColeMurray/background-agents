@@ -115,7 +115,7 @@ describe("buildSessionTargetSecretSources", () => {
       "acme/backend": { B: "backend" },
     };
 
-    const sources = await buildSessionTargetSecretSources({
+    const { sources, brokerSources } = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: { G: "g" },
       members: [member("acme", "web", 0, true), member("acme", "backend", 1, false)],
@@ -125,12 +125,13 @@ describe("buildSessionTargetSecretSources", () => {
 
     // Primary (acme/web) is appended last so mergeSecretSources lets it win.
     expect(sources.map((s) => s.label)).toEqual(["global", "acme/backend", "acme/web"]);
+    expect(brokerSources.map((s) => s.label)).toEqual(["global", "acme/web"]);
   });
 
   it("folds global + environment for an environment-launched session — member repos never inherit", async () => {
     const loadMemberSecrets = vi.fn();
 
-    const sources = await buildSessionTargetSecretSources({
+    const { sources, brokerSources } = await buildSessionTargetSecretSources({
       environmentId: "env_flagship",
       globalSecrets: { G: "g" },
       members: [member("acme", "web", 0, true)],
@@ -140,12 +141,13 @@ describe("buildSessionTargetSecretSources", () => {
     });
 
     expect(sources.map((s) => s.label)).toEqual(["global", "environment"]);
+    expect(brokerSources.map((s) => s.label)).toEqual(["global", "environment"]);
     // Member repo secrets are never sourced for an environment session.
     expect(loadMemberSecrets).not.toHaveBeenCalled();
   });
 
   it("returns only global for an environment session with no environment secrets", async () => {
-    const sources = await buildSessionTargetSecretSources({
+    const { sources, brokerSources } = await buildSessionTargetSecretSources({
       environmentId: "env_empty",
       globalSecrets: { G: "g" },
       members: [member("acme", "web", 0, true)],
@@ -154,10 +156,11 @@ describe("buildSessionTargetSecretSources", () => {
     });
 
     expect(sources.map((s) => s.label)).toEqual(["global"]);
+    expect(brokerSources.map((s) => s.label)).toEqual(["global"]);
   });
 
   it("omits members that contribute no secrets", async () => {
-    const sources = await buildSessionTargetSecretSources({
+    const { sources, brokerSources } = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: {},
       members: [member("acme", "web", 0, true), member("acme", "empty", 1, false)],
@@ -167,10 +170,11 @@ describe("buildSessionTargetSecretSources", () => {
     });
 
     expect(sources.map((s) => s.label)).toEqual(["global", "acme/web"]);
+    expect(brokerSources.map((s) => s.label)).toEqual(["global", "acme/web"]);
   });
 
   it("returns only global when there are no members", async () => {
-    const sources = await buildSessionTargetSecretSources({
+    const { sources, brokerSources } = await buildSessionTargetSecretSources({
       environmentId: null,
       globalSecrets: { G: "g" },
       members: [],
@@ -179,5 +183,6 @@ describe("buildSessionTargetSecretSources", () => {
     });
 
     expect(sources).toEqual([{ label: "global", secrets: { G: "g" } }]);
+    expect(brokerSources).toEqual(sources);
   });
 });

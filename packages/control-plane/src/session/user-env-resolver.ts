@@ -147,7 +147,7 @@ export class UserEnvResolver {
     const repoStore = new RepoSecretsStore(db, encryptionKey);
     const environmentSecretsStore = new EnvironmentSecretsStore(db, encryptionKey);
     const members = this.sessionCoreRepository.getSessionRepositories();
-    const sources = await buildSessionTargetSecretSources({
+    const { sources, brokerSources } = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
       globalSecrets,
       members,
@@ -174,15 +174,7 @@ export class UserEnvResolver {
       });
     }
 
-    const primary = members.find((member) => member.isPrimary);
-    const managedSources = session.environment_id
-      ? sources
-      : sources.filter(
-          (source) =>
-            source.label === "global" ||
-            (primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
-        );
-    const managedSecrets = mergeSecretSources(managedSources).merged;
+    const managedSecrets = mergeSecretSources(brokerSources).merged;
     const sandboxEnv = prepareManagedProviderEnv({
       exposedSecrets: merge.merged,
       brokerSecrets: managedSecrets,

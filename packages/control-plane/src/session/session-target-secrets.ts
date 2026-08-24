@@ -51,6 +51,13 @@ export interface SessionTargetSecretSourcesInput {
   loadEnvironmentSecrets: (environmentId: string) => Promise<Record<string, string>>;
 }
 
+export interface SessionTargetSecretSources {
+  /** All sources exposed to the sandbox. */
+  sources: SecretSource[];
+  /** Sources permitted to feed managed-provider broker credentials. */
+  brokerSources: SecretSource[];
+}
+
 /**
  * Build the ordered secret sources for a session target, lowest
  * precedence first (design §6.4). Global is always the base; environment-
@@ -64,23 +71,27 @@ export interface SessionTargetSecretSourcesInput {
  */
 export async function buildSessionTargetSecretSources(
   input: SessionTargetSecretSourcesInput
-): Promise<SecretSource[]> {
-  const sources: SecretSource[] = [{ label: "global", secrets: input.globalSecrets }];
+): Promise<SessionTargetSecretSources> {
+  const globalSource: SecretSource = { label: "global", secrets: input.globalSecrets };
+  const sources: SecretSource[] = [globalSource];
 
   if (input.environmentId !== null) {
     const environmentSecrets = await input.loadEnvironmentSecrets(input.environmentId);
     if (Object.keys(environmentSecrets).length > 0) {
       sources.push({ label: "environment", secrets: environmentSecrets });
     }
-    return sources;
+    return { sources, brokerSources: sources };
   }
 
+  const brokerSources = [globalSource];
   // Reverse position order: the primary (position 0) merges last and wins.
   for (const member of [...input.members].reverse()) {
     const secrets = await input.loadMemberSecrets(member);
     if (Object.keys(secrets).length > 0) {
-      sources.push({ label: `${member.repoOwner}/${member.repoName}`, secrets });
+      const source = { label: `${member.repoOwner}/${member.repoName}`, secrets };
+      sources.push(source);
+      if (member.isPrimary) brokerSources.push(source);
     }
   }
-  return sources;
+  return { sources, brokerSources };
 }
