@@ -424,6 +424,13 @@ export class SessionMessageQueue {
     });
   }
 
+  /**
+   * Stop the current execution.
+   *
+   * Marks the processing message as failed, upserts a synthetic
+   * execution_complete, broadcasts that synthetic event so every client flushes
+   * its buffered tokens, and forwards the stop to the sandbox.
+   */
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();

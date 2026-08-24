@@ -298,6 +298,14 @@ export class SessionSandboxEventProcessor {
     }
   }
 
+  /**
+   * Push a branch to its remote via the sandbox.
+   *
+   * Sends the push command over the sandbox socket and waits for the sandbox to
+   * report completion or an error.
+   *
+   * @returns Success result or error message
+   */
   async pushBranchToRemote(
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveScmSettings } from "./scm-settings-resolution";
 import type { SqlDatabase } from "../db/sql-database";
 
@@ -29,16 +29,6 @@ describe("resolveScmSettings", () => {
     await expect(resolveScmSettings(null, { repoOwner: "acme", repoName: "web" })).resolves.toEqual(
       {}
     );
-  });
-
-  it("never touches storage when the deployment has no database", async () => {
-    const prepare = vi.fn();
-    const db = { prepare } as unknown as SqlDatabase;
-
-    await resolveScmSettings(null, { repoOwner: "acme", repoName: "web" });
-
-    expect(prepare).not.toHaveBeenCalled();
-    expect(db).toBeDefined();
   });
 
   it("keys the per-repo lookup by owner/name", async () => {

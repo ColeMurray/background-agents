@@ -711,7 +711,13 @@ export class SessionDO extends DurableObject<Env> {
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
         scheduleWarmSandbox: () =>
-          this.backgroundTasks.submit(this.lifecycleManager.warmSandbox(), {
+          // Read `lifecycleManager` inside the promise, not in argument
+          // position. The getter builds the sandbox provider and throws on a
+          // misconfigured deployment; keeping that throw inside the submitted
+          // task leaves it a logged background failure, whereas a synchronous
+          // throw here would escape session creation and 500 the init request
+          // after its rows are already committed.
+          this.backgroundTasks.submit((async () => this.lifecycleManager.warmSandbox())(), {
             name: "sandbox.warm",
           }),
         getSession: () => this.sessionCoreRepository.getSession(),
@@ -984,7 +990,7 @@ export class SessionDO extends DurableObject<Env> {
 
     // Resolve sessionId for lifecycle manager logging context
     const session = this.sessionCoreRepository.getSession();
-    const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
+    const sessionId = resolvePublicSessionId(session, this.ctx.id.toString());
 
     // Create D1-backed lookups if database is available
     let mcpServerLookup: McpServerLookup | undefined;
@@ -1064,7 +1070,7 @@ export class SessionDO extends DurableObject<Env> {
     initSchema(this.sql);
     this.initialized = true;
     const session = this.sessionCoreRepository.getSession();
-    const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
+    const sessionId = resolvePublicSessionId(session, this.ctx.id.toString());
     this.log = createLogger(
       "session-do",
       { session_id: sessionId },
