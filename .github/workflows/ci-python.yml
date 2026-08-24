@@ -5,21 +5,29 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ci-python.yml"
+      - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/shared/src/types/integrations.ts"
       - "ruff.toml"
+      - "terraform/environments/production/modal.tf"
+      - "terraform/modules/modal-app/scripts/deploy.sh"
       - "!**/*.md"
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/ci-python.yml"
+      - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/shared/src/types/integrations.ts"
       - "ruff.toml"
+      - "terraform/environments/production/modal.tf"
+      - "terraform/modules/modal-app/scripts/deploy.sh"
       - "!**/*.md"
 
 concurrency:
