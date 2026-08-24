@@ -52,6 +52,7 @@ export interface SandboxHandlerDeps {
   messenger: SessionMessenger;
   generateId: () => string;
   now: () => number;
+  recordBootProgress: (sandboxId: string, timestamp: number) => Promise<boolean>;
 }
 
 export interface SandboxHandler {
@@ -59,6 +60,7 @@ export interface SandboxHandler {
   createMediaArtifact: (request: Request) => Promise<Response>;
   addParticipant: (request: Request) => Promise<Response>;
   verifySandboxToken: (request: Request, log: Logger) => Promise<Response>;
+  bootProgress: (request: Request) => Promise<Response>;
   openaiTokenRefresh: (log: Logger) => Promise<Response>;
   xaiTokenRefresh: (log: Logger) => Promise<Response>;
   scmCredentials: (log: Logger) => Promise<Response>;
@@ -229,6 +231,24 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
 
       log.info("Sandbox token verified successfully");
       return Response.json({ valid: true }, { status: 200 });
+    },
+
+    async bootProgress(request: Request): Promise<Response> {
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+      const sandboxId =
+        raw && typeof raw === "object" && "sandboxId" in raw ? raw.sandboxId : undefined;
+      if (typeof sandboxId !== "string" || !sandboxId) {
+        return Response.json({ error: "sandboxId is required" }, { status: 400 });
+      }
+      const accepted = await deps.recordBootProgress(sandboxId, deps.now());
+      return accepted
+        ? Response.json({ status: "ok" })
+        : Response.json({ error: "Sandbox is not booting" }, { status: 409 });
     },
 
     async openaiTokenRefresh(log: Logger): Promise<Response> {

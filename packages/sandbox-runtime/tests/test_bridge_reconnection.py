@@ -162,6 +162,36 @@ class TestIsFatalConnectionError:
         bridge._connect_and_run.assert_awaited_once()
         sleep.assert_awaited_once_with(bridge.RECONNECT_BACKOFF_BASE)
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403, 404, 410])
+    async def test_run_exits_on_terminal_signing_configuration_status(
+        self, bridge, monkeypatch, status
+    ):
+        bridge.log = MagicMock()
+        bridge.git_signing.initialize = AsyncMock(
+            side_effect=GitSigningError(
+                "Commit signing configuration unavailable", status_code=status
+            )
+        )
+        bridge._load_session_id = AsyncMock()
+        bridge._connect_and_run = AsyncMock()
+        sleep = AsyncMock()
+        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
+
+        await bridge.run()
+
+        bridge._connect_and_run.assert_not_awaited()
+        sleep.assert_not_awaited()
+        assert bridge.shutdown_event.is_set()
+        bridge.log.info.assert_any_call(
+            "bridge.run_complete",
+            outcome="fatal_error",
+            connection_count=0,
+            reconnect_count=0,
+            reconnect_attempt_count=0,
+            total_connected_duration_seconds=0.0,
+        )
+
 
 class TestSessionTerminatedError:
     """Tests for SessionTerminatedError exception."""

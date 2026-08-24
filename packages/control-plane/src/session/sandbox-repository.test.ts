@@ -22,6 +22,7 @@ function createMockSql() {
       return {
         toArray: () => data.get(query) ?? [],
         one: () => null,
+        rowsWritten: 1,
       };
     },
   };
@@ -124,6 +125,7 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
       // A replacement sandbox must not inherit the predecessor's runtime.
       expect(mock.calls[0].query).toContain("runtime_version = NULL");
+      expect(mock.calls[0].query).toContain("boot_progress_at = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
 
@@ -138,6 +140,13 @@ describe("SandboxRepository", () => {
 
       expect(mock.calls[0].query).toContain("modal_object_id = modal_object_id");
     });
+  });
+
+  it("clears stale boot progress when resuming", () => {
+    repository.updateSandboxForResume({ status: "connecting", createdAt: 2000 });
+
+    expect(mock.calls[0].query).toContain("boot_progress_at = NULL");
+    expect(mock.calls[0].params).toEqual(["connecting", 2000]);
   });
 
   describe("updateSandboxModalObjectId", () => {
@@ -203,6 +212,26 @@ describe("SandboxRepository", () => {
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_heartbeat");
       expect(mock.calls[0].params).toEqual([5000]);
+    });
+  });
+
+  describe("recordBootProgress", () => {
+    it("fences progress by logical sandbox identity and boot status", () => {
+      expect(repository.recordBootProgress("sandbox-current", 5000)).toBe(true);
+
+      expect(mock.calls[0].query).toContain("modal_sandbox_id = ?");
+      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
+      expect(mock.calls[0].params).toEqual([5000, "sandbox-current"]);
+    });
+  });
+
+  describe("failBootIfUnchanged", () => {
+    it("fences timeout failure by identity, status, and observed liveness", () => {
+      expect(repository.failBootIfUnchanged("sandbox-current", 5000)).toBe(true);
+
+      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
+      expect(mock.calls[0].query).toContain("MAX(created_at, COALESCE(boot_progress_at, 0)) = ?");
+      expect(mock.calls[0].params).toEqual(["sandbox-current", 5000]);
     });
   });
 

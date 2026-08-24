@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'ready', 'stale', 'snapshotting', 'stopped', 'failed'
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
+  boot_progress_at INTEGER,                         -- Last authenticated boot liveness report
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot
   last_spawn_error TEXT,                            -- Last sandbox spawn error (if any)
   last_spawn_error_at INTEGER,                      -- Timestamp of last spawn error
@@ -585,6 +586,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN runtime_version TEXT`);
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_runtime_version TEXT`);
     },
+  },
+  {
+    id: 45,
+    description: "Record sandbox boot progress",
+    run: `ALTER TABLE sandbox ADD COLUMN boot_progress_at INTEGER`,
   },
 ];
 

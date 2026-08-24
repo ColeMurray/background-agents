@@ -283,6 +283,7 @@ export class SessionDO extends DurableObject<Env> {
     expireDraft: () => this.sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, log) =>
       this.sandboxHandler.verifySandboxToken(request, log),
+    bootProgress: (request) => this.sandboxHandler.bootProgress(request),
     openaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.openaiTokenRefresh(log),
     xaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.xaiTokenRefresh(log),
     scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
@@ -663,6 +664,8 @@ export class SessionDO extends DurableObject<Env> {
         messenger: this.messenger,
         generateId: () => generateId(),
         now: () => Date.now(),
+        recordBootProgress: (sandboxId, timestamp) =>
+          this.lifecycleManager.recordBootProgress(sandboxId, timestamp),
       });
     }
 
@@ -928,6 +931,10 @@ export class SessionDO extends DurableObject<Env> {
         this.sandboxRepository.updateSandboxSnapshotImageId(sandboxId, imageId, runtimeVersion),
       updateSandboxLastActivity: (timestamp) =>
         this.sandboxRepository.updateSandboxLastActivity(timestamp),
+      recordBootProgress: (sandboxId, timestamp) =>
+        this.sandboxRepository.recordBootProgress(sandboxId, timestamp),
+      failBootIfUnchanged: (sandboxId, livenessAt) =>
+        this.sandboxRepository.failBootIfUnchanged(sandboxId, livenessAt),
       incrementCircuitBreakerFailure: (timestamp) =>
         this.sandboxRepository.incrementCircuitBreakerFailure(timestamp),
       resetCircuitBreaker: () => this.sandboxRepository.resetCircuitBreaker(),

@@ -146,6 +146,8 @@ export interface SandboxState {
   status: SandboxStatus;
   /** When the sandbox was created/spawned */
   createdAt: number;
+  /** Last authenticated boot liveness report */
+  bootProgressAt?: number | null;
   /** Provider object ID if the sandbox exists remotely */
   providerObjectId?: string | null;
   /** Snapshot image ID if available for restore */
@@ -267,7 +269,7 @@ export function evaluateSpawnDecision(
   isSpawningInMemory: boolean,
   supportsPersistentResume = false
 ): SpawnAction {
-  const timeSinceLastSpawn = now - state.createdAt;
+  const timeSinceLastSpawn = now - Math.max(state.createdAt, state.bootProgressAt ?? 0);
 
   // In-memory flag first: it is set synchronously when a spawn/restore starts,
   // but the persisted "spawning" status lands only after the first await. A
@@ -563,6 +565,8 @@ export interface ConnectingTimeoutResult {
   isTimedOut: boolean;
   /** Time elapsed since sandbox was created (ms) */
   elapsedMs: number;
+  /** Timestamp from which the current liveness window is measured */
+  livenessAt: number;
 }
 
 /**
@@ -590,16 +594,19 @@ export function evaluateConnectingTimeout(
   status: SandboxStatus,
   createdAt: number,
   config: ConnectingTimeoutConfig,
-  now: number
+  now: number,
+  bootProgressAt: number | null = null
 ): ConnectingTimeoutResult {
   if (status !== "connecting" && status !== "spawning") {
-    return { isTimedOut: false, elapsedMs: 0 };
+    return { isTimedOut: false, elapsedMs: 0, livenessAt: createdAt };
   }
 
-  const elapsedMs = now - createdAt;
+  const livenessAt = Math.max(createdAt, bootProgressAt ?? 0);
+  const elapsedMs = now - livenessAt;
   return {
     isTimedOut: elapsedMs >= config.timeoutMs,
     elapsedMs,
+    livenessAt,
   };
 }
 

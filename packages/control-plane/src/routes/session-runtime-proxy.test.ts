@@ -44,6 +44,34 @@ function getHandler(method: string, path: string) {
 }
 
 describe("session runtime proxy routes", () => {
+  it("forwards boot progress only through the sandbox-authenticated route", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "ok" });
+    });
+    const path = "/sessions/session-1/boot-progress";
+    const { handler, match } = getHandler("POST", path);
+    const route = sessionRuntimeProxyRoutes.find(
+      (candidate) => candidate.method === "POST" && path.match(candidate.pattern)
+    );
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "POST",
+        body: JSON.stringify({ sandboxId: "sandbox-1" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(route?.authentication.kind).toBe("sandbox");
+    expect(response.status).toBe(200);
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.bootProgress);
+    await expect(requests[0].json()).resolves.toEqual({ sandboxId: "sandbox-1" });
+  });
+
   it.each([
     ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
     ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],

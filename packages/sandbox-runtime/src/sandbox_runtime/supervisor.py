@@ -7,6 +7,7 @@ import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
 
 import httpx
 
@@ -39,6 +40,8 @@ class SandboxSupervisor:
     MAX_RESTARTS = 5
     BACKOFF_BASE = 2.0
     BACKOFF_MAX = 60.0
+    BOOT_PROGRESS_INTERVAL_SECONDS = 30.0
+    BOOT_PROGRESS_TIMEOUT_SECONDS = 5.0
 
     def __init__(
         self,
@@ -66,6 +69,42 @@ class SandboxSupervisor:
         self.boot_mode = BootMode.FRESH
         self._desktop_restart_task: asyncio.Task[bool] | None = None
         self._repository_boot_result: RepositoryBootResult | None = None
+        self._boot_progress_task: asyncio.Task[None] | None = None
+
+    async def _report_boot_progress(self) -> None:
+        session_id = str(self.config.session_config.get("session_id") or "")
+        if not self.config.control_plane_url or not session_id or not self.config.sandbox_token:
+            return
+        url = (
+            f"{self.config.control_plane_url.rstrip('/')}/sessions/"
+            f"{quote(session_id, safe='')}/boot-progress"
+        )
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    json={"sandboxId": self.config.sandbox_id},
+                    headers={"Authorization": f"Bearer {self.config.sandbox_token}"},
+                    timeout=self.BOOT_PROGRESS_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as error:
+            self.log.warn("supervisor.boot_progress_failed", error=type(error).__name__)
+
+    async def _boot_progress_loop(self) -> None:
+        while True:
+            await self._report_boot_progress()
+            await asyncio.sleep(self.BOOT_PROGRESS_INTERVAL_SECONDS)
+
+    def _start_boot_progress(self) -> None:
+        self._boot_progress_task = asyncio.create_task(self._boot_progress_loop())
+
+    async def _stop_boot_progress(self) -> None:
+        if self._boot_progress_task is None:
+            return
+        self._boot_progress_task.cancel()
+        await asyncio.gather(self._boot_progress_task, return_exceptions=True)
+        self._boot_progress_task = None
 
     async def _report_fatal_error(self, message: str) -> None:
         self.log.error("supervisor.fatal", error_message=message)
@@ -378,6 +417,8 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return True
 
+            self._start_boot_progress()
+
             try:
                 await self.browser_desktop.start()
             except Exception as error:
@@ -405,6 +446,7 @@ class SandboxSupervisor:
 
             await self.opencode_server.start(boot_result.repositories, boot_result.workdir)
             opencode_ready = True
+            await self._stop_boot_progress()
             await self.agent_bridge.start()
             self.log.info(
                 "sandbox.startup",
@@ -441,6 +483,7 @@ class SandboxSupervisor:
             await self._report_fatal_error(str(error))
             return False
         finally:
+            await self._stop_boot_progress()
             await self.shutdown()
         return True
 

@@ -318,6 +318,20 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("spawn");
   });
 
+  it('keeps waiting for an old "connecting" sandbox with recent boot progress', () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "connecting",
+      createdAt: now - (config.spawningTimeoutMs + 1000),
+      bootProgressAt: now - 1000,
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    expect(evaluateSpawnDecision(state, config, now, false).action).toBe("skip");
+  });
+
   it('still skips a stale "spawning" when a spawn is in progress in-memory', () => {
     const now = Date.now();
     const state: SandboxState = {
@@ -871,6 +885,37 @@ describe("evaluateConnectingTimeout", () => {
 
     expect(result.isTimedOut).toBe(true);
     expect(result.elapsedMs).toBe(130_000);
+  });
+
+  it("uses recent boot progress instead of total wall-clock boot time", () => {
+    const now = Date.now();
+    const result = evaluateConnectingTimeout(
+      "connecting",
+      now - 300_000,
+      config,
+      now,
+      now - 20_000
+    );
+
+    expect(result).toEqual({
+      isTimedOut: false,
+      elapsedMs: 20_000,
+      livenessAt: now - 20_000,
+    });
+  });
+
+  it("times out when boot progress is stale", () => {
+    const now = Date.now();
+    const result = evaluateConnectingTimeout(
+      "connecting",
+      now - 300_000,
+      config,
+      now,
+      now - config.timeoutMs
+    );
+
+    expect(result.isTimedOut).toBe(true);
+    expect(result.elapsedMs).toBe(config.timeoutMs);
   });
 
   it("returns timed out at exact boundary (>=)", () => {

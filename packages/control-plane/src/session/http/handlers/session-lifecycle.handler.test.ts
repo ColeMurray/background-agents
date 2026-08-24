@@ -53,6 +53,7 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     status: "ready",
     git_sync_status: "pending",
     last_heartbeat: 999,
+    boot_progress_at: null,
     last_activity: null,
     last_spawn_error: null,
     last_spawn_error_at: null,

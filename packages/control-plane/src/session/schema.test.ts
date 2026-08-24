@@ -313,6 +313,13 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("adds persisted boot progress for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("boot_progress_at INTEGER");
+    expect(MIGRATIONS.find((migration) => migration.id === 45)?.run).toBe(
+      "ALTER TABLE sandbox ADD COLUMN boot_progress_at INTEGER"
+    );
+  });
+
   it("creates the final attachments schema in its single unshipped migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 35);
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");
