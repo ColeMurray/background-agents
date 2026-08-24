@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import type { Env } from "../../src/types";
-import { createSessionComponents } from "../../src/session/components";
+import { createSessionRuntime } from "../../src/session/components";
 import { componentsOf } from "./session-do-access";
 
-describe("createSessionComponents", () => {
+describe("createSessionRuntime", () => {
   it("builds the whole graph eagerly without constructing either provider", async () => {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-eager-${crypto.randomUUID()}`));
 
@@ -25,10 +25,16 @@ describe("createSessionComponents", () => {
 
       // Eager construction of either provider would throw right here and fail
       // every request on such a deployment; the graph must still assemble.
-      const components = createSessionComponents(
-        { ctx: instance.ctx, sql: instance.ctx.storage.sql, db: null },
+      const runtime = createSessionRuntime(
+        {
+          ctx: instance.ctx,
+          sql: instance.ctx.storage.sql,
+          db: null,
+          ensureInitialized: () => {},
+        },
         misconfigured
       );
+      const components = runtime.internals;
 
       let scmError: string | null = null;
       try {
@@ -39,6 +45,7 @@ describe("createSessionComponents", () => {
 
       return {
         built: Boolean(
+          runtime.server &&
           components.lifecycleManager &&
           components.messageQueue &&
           components.sessionLifecycleHandler &&

@@ -1,11 +1,15 @@
 /**
  * Composition root for one session runtime.
  *
- * `createSessionComponents` builds the entire collaborator graph eagerly, in
+ * `createSessionRuntime` builds the entire collaborator graph eagerly, in
  * topological order, with exactly one session-scoped logger created before
- * anything can capture it. `SessionDO.ensureInitialized()` is the single call
- * site; the schema must already be applied when this runs, because the factory
- * reads the session row to derive the logger's `session_id`.
+ * anything can capture it — and returns only the narrow surface the platform
+ * adapter needs: the server entry points, the log, and alarm rehydration.
+ * Repositories, services, and handlers stay local to this factory;
+ * `SessionRuntime.internals` exposes them for integration-test introspection
+ * only. `SessionDO.ensureInitialized()` is the single call site; the schema
+ * must already be applied when this runs, because the factory reads the
+ * session row to derive the logger's `session_id`.
  *
  * The only deferred constructions left are the two provider factories, both of
  * which throw on reachable configurations (`createSandboxProviderFromEnv` on
@@ -49,7 +53,7 @@ import {
   resolveScmProviderFromEnv,
   type SourceControlProvider,
 } from "../source-control";
-import type { Env } from "../types";
+import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { SessionCoreRepository } from "./session-core-repository";
 import { SandboxRepository } from "./sandbox-repository";
@@ -112,9 +116,20 @@ import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 import {
   createEarliestAlarmScheduler,
+  handleAlarmDelivery,
   PersistedAlarmDeadlineStore,
   type RehydratableAlarmScheduler,
 } from "./alarm/scheduler";
+import { createSessionInternalRoutes } from "./http/routes";
+import { SessionServer } from "./server";
+import { SessionHttpDispatcher } from "./http/dispatcher";
+import { SessionMessageRouter, type SessionClientCommands } from "./message-router";
+import { SessionDisconnectHandler } from "./disconnect-handler";
+import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
+import { SessionConnectionAuthenticator } from "./connection-authenticator";
+import { SessionSnapshotReader } from "./snapshot-reader";
+import { SessionAccessReader } from "./sandbox-access-reader";
+import { createSessionScopedLogger } from "./session-logger";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
@@ -136,6 +151,29 @@ export interface SessionPlatform {
   ctx: DurableObjectState;
   sql: SqlStorage;
   db: SqlDatabase | null;
+  /**
+   * The adapter's idempotent initializer, threaded into the server stack so
+   * hibernation-restored callbacks self-heal exactly as before. Within this
+   * factory's own activation it is always a no-op (the adapter initializes
+   * before touching the runtime).
+   */
+  ensureInitialized: (rehydrateAlarm?: boolean) => void;
+}
+
+/**
+ * What the platform adapter (SessionDO) is allowed to touch. Everything else
+ * stays inside the factory; `internals` exists for integration tests that
+ * spy on or substitute live collaborators, and production code must not
+ * reach through it.
+ */
+export interface SessionRuntime {
+  readonly log: Logger;
+  readonly server: SessionServer<WebSocket, ClientInfo>;
+  readonly alarms: {
+    /** Re-arm any persisted alarm deadline after a cold start. */
+    rehydrate(): void;
+  };
+  readonly internals: SessionComponents;
 }
 
 export interface SessionComponents {
@@ -277,8 +315,8 @@ function resolveExecutionTimeoutMs(
   return parseInt(env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000), 10);
 }
 
-export function createSessionComponents(platform: SessionPlatform, env: Env): SessionComponents {
-  const { ctx, sql, db } = platform;
+export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
+  const { ctx, sql, db, ensureInitialized } = platform;
   const durableObjectId = ctx.id.toString();
   const transaction = <T>(closure: () => T): T => ctx.storage.transactionSync(closure);
 
@@ -297,15 +335,18 @@ export function createSessionComponents(platform: SessionPlatform, env: Env): Se
   const sessionCoreRepository = new SessionCoreRepository(sql, transaction);
   const alarmDeadlines = new PersistedAlarmDeadlineStore(sql);
 
-  // The session-scoped logger, created before anything can capture a logger at
-  // all. Before `init` writes the session row this resolves to the Durable
-  // Object id; the lifecycle manager re-derives its log context per use, so it
-  // picks up the public session id once the row exists.
-  const session = sessionCoreRepository.getSession();
-  const log = createLogger(
-    "session-do",
-    { session_id: resolvePublicSessionId(session, durableObjectId) },
-    parseLogLevel(env.LOG_LEVEL)
+  // The session-scoped logger, created before anything can capture a logger
+  // at all. Its `session_id` is injected per emit through the latched
+  // resolver: before `init` writes the session row it is the Durable Object
+  // id, and it upgrades to the public id the moment the row exists — for
+  // every component in the graph, however early it captured the logger.
+  const getPublicSessionId = createLatchedPublicSessionIdResolver(
+    () => sessionCoreRepository.getSession(),
+    durableObjectId
+  );
+  const log = createSessionScopedLogger(
+    createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)),
+    getPublicSessionId
   );
   const backgroundTasks = createCloudflareBackgroundTasks(ctx, () => log);
   // The sandbox repository validates the status it reads and warns on anything
@@ -326,12 +367,16 @@ export function createSessionComponents(platform: SessionPlatform, env: Env): Se
   const connections = new DurableObjectSessionConnections(ctx, wsManager);
   const messenger: SessionMessenger = new SessionMessengerImpl(connections);
 
-  // Deferred: `createSourceControlProviderFromEnv` throws on reachable configs.
-  // Consumers read it through the returned record rather than capturing the
-  // memo directly, so the collaborator-wiring suite can substitute a stub by
-  // replacing `components.sourceControlProvider`.
-  const scmProviderOnce = once(() => createSourceControlProviderFromEnv(env));
-  const sourceControlProvider = () => components.sourceControlProvider();
+  // Deferred: `createSourceControlProviderFromEnv` throws on reachable
+  // configs. The cell is a local `let`, so consumer closures read a binding
+  // that exists before any of them (no temporal dead zone and no read through
+  // the returned record); `internals.sourceControlProvider` exposes it as an
+  // accessor pair because live-DO integration tests can only substitute a
+  // stub after the init request has already built this graph.
+  let scmProvider: () => SourceControlProvider = once(() =>
+    createSourceControlProviderFromEnv(env)
+  );
+  const sourceControlProvider = () => scmProvider();
 
   const sandboxDashboardSettings: SandboxDashboardSettings = {
     sandboxProvider: env.SANDBOX_PROVIDER,
@@ -417,7 +462,7 @@ export function createSessionComponents(platform: SessionPlatform, env: Env): Se
   const lifecycleManager = createLifecycleManager({
     env,
     db,
-    durableObjectId,
+    getSessionId: getPublicSessionId,
     sessionCoreRepository,
     sandboxRepository,
     userEnvResolver,
@@ -675,6 +720,161 @@ export function createSessionComponents(platform: SessionPlatform, env: Env): Se
     repository: participantRepository,
   });
 
+  // Tier 9 — the read models, connection admission, and the server stack.
+  const snapshotReader = new SessionSnapshotReader({
+    sessionCoreRepository,
+    sandboxRepository,
+    messageRepository,
+    artifactRepository,
+    messageService,
+    eventStream,
+    sandboxDashboardSettings,
+    db,
+    durableObjectId,
+    transaction,
+    log,
+  });
+
+  const accessReader = new SessionAccessReader({
+    sessionCoreRepository,
+    sandboxRepository,
+    repoSecretsEncryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
+    log,
+  });
+
+  const connectionAuthenticator = new SessionConnectionAuthenticator({
+    connections,
+    wsManager,
+    sessionCoreRepository,
+    sandboxRepository,
+    lifecycleManager,
+    messenger,
+    backgroundTasks,
+    messageQueue,
+    participantService,
+    presenceService,
+    snapshotReader,
+    schedulePullRequestRefresh,
+    getScmProviderName: () => resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    log,
+  });
+
+  // Internal HTTP route table (transport wiring only).
+  const routes = createSessionInternalRoutes({
+    init: (request, _url, requestLog) => sessionLifecycleHandler.init(request, requestLog),
+    state: () => sessionLifecycleHandler.getState(),
+    snapshot: () => snapshotReader.handleSnapshot(),
+    sandboxAccess: () => accessReader.handleSandboxAccess(),
+    prompt: (request, _url, requestLog) => messagesHandler.enqueuePrompt(request, requestLog),
+    stop: () => messagesHandler.stop(),
+    sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
+    createMediaArtifact: (request) => sandboxHandler.createMediaArtifact(request),
+    recordAttachment: (request) => {
+      const session = sessionCoreRepository.getSession();
+      return attachmentsHandler.recordAttachment(
+        request,
+        session ? resolvePublicSessionId(session, durableObjectId) : null
+      );
+    },
+    listParticipants: () => participantsHandler.listParticipants(),
+    addParticipant: (request) => sandboxHandler.addParticipant(request),
+    listEvents: (_request, url) => messagesHandler.listEvents(url),
+    listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
+    listMessages: (_request, url) => messagesHandler.listMessages(url),
+    createPr: (request, _url, requestLog) => pullRequestHandler.createPr(request, requestLog),
+    pullRequestArtifactSnapshot: (request, url) =>
+      pullRequestHandler.pullRequestArtifactSnapshot(request, url),
+    pullRequestsRefresh: () => pullRequestHandler.refreshPullRequests(),
+    wsToken: (request, _url, requestLog) => wsTokenHandler.generateWsToken(request, requestLog),
+    updateTitle: (request) => sessionLifecycleHandler.updateTitle(request),
+    archive: (request) => sessionLifecycleHandler.archive(request),
+    unarchive: (request) => sessionLifecycleHandler.unarchive(request),
+    expireDraft: () => sessionLifecycleHandler.expireDraft(),
+    verifySandboxToken: (request, _url, requestLog) =>
+      sandboxHandler.verifySandboxToken(request, requestLog),
+    openaiTokenRefresh: (_request, _url, requestLog) =>
+      sandboxHandler.openaiTokenRefresh(requestLog),
+    xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
+    scmCredentials: (_request, _url, requestLog) => sandboxHandler.scmCredentials(requestLog),
+    tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),
+    spawnContext: () => childSessionsHandler.getSpawnContext(),
+    activePromptAuthor: () => childSessionsHandler.getActivePromptAuthor(),
+    childSummary: (_request, url) => childSessionsHandler.getChildSummary(url),
+    parentPrompt: (request) => childSessionsHandler.parentPrompt(request),
+    cancel: () => sessionLifecycleHandler.cancel(),
+    childSessionUpdate: (request) => childSessionsHandler.childSessionUpdate(request),
+    diffState: () => diffsHandler.state(),
+    diffStore: (request) => diffsHandler.storeBundle(request),
+    diffFailure: (request) => diffsHandler.recordFailure(request),
+    diffResolveFile: (_request, url) => diffsHandler.resolveFile(url),
+    diffRetry: () => diffsHandler.retry(),
+  });
+
+  const clock: Clock = {
+    nowMs: () => Date.now(),
+    monotonicNowMs: () => performance.now(),
+  };
+  const sockets: SocketRegistry<WebSocket, ClientInfo> = {
+    classify: (ws) => wsManager.classify(ws),
+    send: (ws, message) => wsManager.send(ws, message),
+    getClient: (ws) => connectionAuthenticator.getClientInfo(ws),
+    close: (ws, code, reason) => wsManager.close(ws, code, reason),
+    clearSandboxIfMatch: (ws) => wsManager.clearSandboxSocketIfMatch(ws),
+    removeClient: (ws) => wsManager.removeClient(ws),
+    hasParticipant: (participantId) =>
+      Array.from(wsManager.getAuthenticatedClients()).some(
+        (client) => client.participantId === participantId
+      ),
+  };
+  const clientCommands: SessionClientCommands<WebSocket, ClientInfo> = {
+    subscribe: (ws, message) => connectionAuthenticator.handleSubscribe(ws, message),
+    submitPrompt: (ws, client, message) => messageQueue.handlePromptMessage(ws, client, message),
+    cancelPrompt: (ws, message) => messageQueue.cancelQueuedPrompt(ws, message),
+    stopExecution: () => messageQueue.stopExecution(),
+    notifyTyping: () => presenceService.handleTyping(),
+    updatePresence: (client, message) => presenceService.updatePresence(client, message),
+    getHistoryPage: (message) => eventStream.getHistoryPage(message),
+  };
+  const sandboxDisconnects: SandboxDisconnectMonitor = {
+    getStatus: () => sandboxRepository.getSandbox()?.status,
+    scheduleCheck: () => lifecycleManager.scheduleDisconnectCheck(),
+  };
+  const disconnectBroadcaster: SessionBroadcaster = {
+    broadcastPresence: () => presenceService.broadcastPresence(),
+    broadcast: (message) => messenger.broadcast(message),
+  };
+
+  const server = new SessionServer<WebSocket, ClientInfo>({
+    ensureInitialized,
+    http: new SessionHttpDispatcher({
+      ensureInitialized,
+      getLogger: () => log,
+      routes,
+      handleWebSocketUpgrade: (request, url, requestLog) =>
+        connectionAuthenticator.handleWebSocketUpgrade(request, url, requestLog),
+      clock,
+    }),
+    messages: new SessionMessageRouter({
+      getLogger: () => log,
+      sockets,
+      clientCommands,
+      processSandboxEvent: (event) => sandboxEventProcessor.processSandboxEvent(event),
+      clock,
+    }),
+    disconnects: new SessionDisconnectHandler({
+      getLogger: () => log,
+      sockets,
+      sandbox: sandboxDisconnects,
+      broadcaster: disconnectBroadcaster,
+    }),
+    handleScheduledDeadline: () =>
+      handleAlarmDelivery(
+        alarmDeadlines,
+        () => alarmHandler.handle(),
+        () => alarmScheduler.rearmPending()
+      ),
+  });
+
   const components: SessionComponents = {
     log,
     backgroundTasks,
@@ -693,7 +893,14 @@ export function createSessionComponents(platform: SessionPlatform, env: Env): Se
     connections,
     messenger,
     sandboxDashboardSettings,
-    sourceControlProvider: scmProviderOnce,
+    // Accessor pair over the local cell: production reads never go through
+    // this property; the setter is the live-DO integration seam.
+    get sourceControlProvider() {
+      return scmProvider;
+    },
+    set sourceControlProvider(next: () => SourceControlProvider) {
+      scmProvider = next;
+    },
     userEnvResolver,
     participantService,
     callbackService,
@@ -718,13 +925,25 @@ export function createSessionComponents(platform: SessionPlatform, env: Env): Se
     participantsHandler,
     diffsHandler,
   };
-  return components;
+
+  return {
+    log,
+    server,
+    alarms: {
+      rehydrate: () =>
+        backgroundTasks.submit(() => alarmScheduler.rehydrate(), {
+          name: "alarm.rehydrate",
+        }),
+    },
+    internals: components,
+  };
 }
 
 interface LifecycleManagerDeps {
   env: Env;
   db: SqlDatabase | null;
-  durableObjectId: string;
+  /** The latched public-session-id resolver shared with the session logger. */
+  getSessionId: () => string;
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
   userEnvResolver: UserEnvResolver;
@@ -739,7 +958,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const {
     env,
     db,
-    durableObjectId,
+    getSessionId,
     sessionCoreRepository,
     sandboxRepository,
     userEnvResolver,
@@ -881,10 +1100,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     // activation the manager is built during the init request, before the row
     // is written. Latched afterwards — the manager derives log context from
     // this on every log line, and the id is immutable once row-backed.
-    getSessionId: createLatchedPublicSessionIdResolver(
-      () => sessionCoreRepository.getSession(),
-      durableObjectId
-    ),
+    getSessionId,
     inactivity: {
       ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
       timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
