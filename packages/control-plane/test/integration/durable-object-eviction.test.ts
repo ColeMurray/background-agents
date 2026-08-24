@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
+import { cleanD1Tables } from "./cleanup";
 import {
   INTEGRATION_WEBSOCKET_TIMEOUT_MS,
   initNamedSession,
@@ -84,6 +85,8 @@ async function persistedClientMapping(stub: DurableObjectStub) {
 }
 
 describe("SessionDO eviction and hibernation restore", () => {
+  beforeEach(cleanD1Tables);
+
   it("handles a client prompt delivered to a reconstructed instance", async () => {
     const sessionName = `do-evict-prompt-${Date.now()}`;
     await initNamedSession(sessionName);

@@ -376,8 +376,8 @@ export function collectMessages(
 ): Promise<Record<string, unknown>[]> {
   return new Promise((resolve) => {
     const messages: Record<string, unknown>[] = [];
-    const timeout = opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS;
-    const timer = setTimeout(() => resolve(messages), timeout);
+    const timeoutMs = opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS;
+    const timer = setTimeout(() => resolve(messages), timeoutMs);
 
     ws.addEventListener("message", (event) => {
       const msg = JSON.parse(typeof event.data === "string" ? event.data : "{}");
