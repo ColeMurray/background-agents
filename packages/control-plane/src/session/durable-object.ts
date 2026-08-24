@@ -711,15 +711,7 @@ export class SessionDO extends DurableObject<Env> {
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
         scheduleWarmSandbox: () =>
-          // Read `lifecycleManager` inside the promise, not in argument
-          // position. The getter builds the sandbox provider and throws on a
-          // misconfigured deployment; keeping that throw inside the submitted
-          // task leaves it a logged background failure, whereas a synchronous
-          // throw here would escape session creation and 500 the init request
-          // after its rows are already committed.
-          this.backgroundTasks.submit((async () => this.lifecycleManager.warmSandbox())(), {
-            name: "sandbox.warm",
-          }),
+          this.backgroundTasks.submit(this.warmSandbox(), { name: "sandbox.warm" }),
         getSession: () => this.sessionCoreRepository.getSession(),
         getSandbox: () => this.sandboxRepository.getSandbox(),
         getPublicSessionId: (session) => resolvePublicSessionId(session, this.ctx.id.toString()),
@@ -1060,6 +1052,21 @@ export class SessionDO extends DurableObject<Env> {
       config,
       imageBuildLookup
     );
+  }
+
+  /**
+   * Warm the sandbox proactively.
+   *
+   * This is an async boundary, not a forwarder, and deleting it is a
+   * regression. `lifecycleManager` is a lazy getter that builds the sandbox
+   * provider, and that construction throws on a deployment missing provider
+   * credentials. Reading it inside an `async` method turns the synchronous
+   * throw into a rejected promise, which `backgroundTasks.submit` absorbs and
+   * logs. Inlined into the submit argument, the same throw escapes session
+   * creation and 500s `/internal/init` after its rows are already committed.
+   */
+  private async warmSandbox(): Promise<void> {
+    await this.lifecycleManager.warmSandbox();
   }
 
   /**

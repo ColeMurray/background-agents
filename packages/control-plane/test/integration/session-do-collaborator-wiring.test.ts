@@ -20,29 +20,58 @@ import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpe
  * everywhere else, so these tests pin them.
  */
 
-/** The getters are private to the DO; tests read them to assert how it wires. */
-function lifecycleManagerOf(instance: SessionDO): SandboxLifecycleManager {
-  return (instance as unknown as { lifecycleManager: SandboxLifecycleManager }).lifecycleManager;
+/**
+ * SEAM — the single place this suite reaches past `SessionDO`'s encapsulation.
+ *
+ * The edges below have success-shaped fallbacks: without a connected sandbox
+ * the real `pushBranchToRemote` returns `{ success: true }`, and a dropped
+ * snapshot trigger is silent. Spying is the only way to tell "wired correctly"
+ * from "dropped entirely" from outside the DO.
+ *
+ * This does pin the DO's current private composition topology, which is a real
+ * cost. It is deliberately confined to this one function so the cost is one
+ * edit, not one per test: when the composition-root refactor replaces these
+ * lazy getters with an explicit `SessionComponents` seam, repoint THIS function
+ * at it and every test below should keep passing unchanged.
+ */
+function collaboratorsOf(instance: SessionDO): {
+  lifecycleManager: SandboxLifecycleManager;
+  presenceService: PresenceService;
+  sandboxEventProcessor: SessionSandboxEventProcessor;
+} {
+  return instance as unknown as {
+    lifecycleManager: SandboxLifecycleManager;
+    presenceService: PresenceService;
+    sandboxEventProcessor: SessionSandboxEventProcessor;
+  };
 }
 
-function presenceServiceOf(instance: SessionDO): PresenceService {
-  return (instance as unknown as { presenceService: PresenceService }).presenceService;
+/** The repository this suite's stubbed provider pushes to. */
+const PUSH_REPO = { repoOwner: "acme", repoName: "web-app" } as const;
+
+/** Own-property key used to count reads of a shadowed lazy getter. */
+const GETTER_READS = "__wiringLifecycleManagerReads";
+
+function notUsedHere(member: string): never {
+  throw new Error(`${member} is not exercised by the collaborator-wiring suite`);
 }
 
-function sandboxEventProcessorOf(instance: SessionDO): SessionSandboxEventProcessor {
-  return (instance as unknown as { sandboxEventProcessor: SessionSandboxEventProcessor })
-    .sandboxEventProcessor;
-}
-
-/** Enough of a provider for PR creation to reach the branch-push step. */
+/**
+ * Enough of a provider for PR creation to reach the branch-push step.
+ *
+ * Typed as a full `SourceControlProvider` rather than cast through `unknown`:
+ * `buildGitPushSpec` must return a complete `GitPushSpec`, and `repoOwner` /
+ * `repoName` are the fields that select the checkout in multi-repo sandboxes.
+ * A double cast would let this stub silently drop them.
+ */
 function stubSourceControlProvider(): SourceControlProvider {
   return {
     name: "github",
     generatePushAuth: async () => ({ authType: "app", token: "push-token" as const }),
     getRepository: async () => ({
-      owner: "acme",
-      name: "web-app",
-      fullName: "acme/web-app",
+      owner: PUSH_REPO.repoOwner,
+      name: PUSH_REPO.repoName,
+      fullName: `${PUSH_REPO.repoOwner}/${PUSH_REPO.repoName}`,
       defaultBranch: "main",
       isPrivate: true,
       providerRepoId: 12345,
@@ -56,21 +85,23 @@ function stubSourceControlProvider(): SourceControlProvider {
       sourceBranch: "open-inspect/test-session",
       targetBranch: "main",
     }),
-    buildManualPullRequestUrl: (config: {
-      owner: string;
-      name: string;
-      sourceBranch: string;
-      targetBranch: string;
-    }) =>
+    buildManualPullRequestUrl: (config) =>
       `https://github.com/${config.owner}/${config.name}/pull/new/${config.targetBranch}...${config.sourceBranch}`,
-    buildGitPushSpec: (config: { targetBranch: string }) => ({
+    buildGitPushSpec: (config) => ({
       remoteUrl: "https://example.invalid/repo.git",
       redactedRemoteUrl: "https://example.invalid/<redacted>.git",
-      refspec: `HEAD:refs/heads/${config.targetBranch}`,
+      refspec: `${config.sourceRef}:refs/heads/${config.targetBranch}`,
       targetBranch: config.targetBranch,
-      force: true,
+      repoOwner: config.owner,
+      repoName: config.name,
     }),
-  } as unknown as SourceControlProvider;
+    checkRepositoryAccess: () => notUsedHere("checkRepositoryAccess"),
+    listRepositories: () => notUsedHere("listRepositories"),
+    listBranches: () => notUsedHere("listBranches"),
+    getBranchHead: () => notUsedHere("getBranchHead"),
+    getPullRequest: () => notUsedHere("getPullRequest"),
+    generateCredentialHelperAuth: () => notUsedHere("generateCredentialHelperAuth"),
+  };
 }
 
 describe("SessionDO collaborator wiring", () => {
@@ -86,11 +117,11 @@ describe("SessionDO collaborator wiring", () => {
     await waitForSandboxStatus(stub, "failed");
 
     const spawned = await runInDurableObject(stub, async (instance: SessionDO) => {
-      const manager = lifecycleManagerOf(instance);
+      const collaborators = collaboratorsOf(instance);
       const spawnSandbox = vi.fn(async () => {});
-      manager.spawnSandbox = spawnSandbox;
+      collaborators.lifecycleManager.spawnSandbox = spawnSandbox;
 
-      await presenceServiceOf(instance).handleTyping();
+      await collaborators.presenceService.handleTyping();
 
       return spawnSandbox.mock.calls.length;
     });
@@ -103,7 +134,9 @@ describe("SessionDO collaborator wiring", () => {
     await waitForSandboxStatus(stub, "failed");
 
     await runInDurableObject(stub, (instance: SessionDO) => {
-      lifecycleManagerOf(instance).triggerSnapshot = vi.fn(async (_reason: string) => {});
+      collaboratorsOf(instance).lifecycleManager.triggerSnapshot = vi.fn(
+        async (_reason: string) => {}
+      );
     });
 
     const response = await stub.fetch("http://internal/internal/sandbox-event", {
@@ -120,7 +153,7 @@ describe("SessionDO collaborator wiring", () => {
     expect(response.status).toBe(200);
 
     const reasons = await runInDurableObject(stub, (instance: SessionDO) => {
-      const spy = lifecycleManagerOf(instance).triggerSnapshot as unknown as Mock<
+      const spy = collaboratorsOf(instance).lifecycleManager.triggerSnapshot as unknown as Mock<
         (reason: string) => Promise<void>
       >;
       return spy.mock.calls.map((call) => call[0]);
@@ -156,7 +189,7 @@ describe("SessionDO collaborator wiring", () => {
       // Without a connected sandbox the real implementation short-circuits to
       // `{ success: true }`, which is exactly what a dropped edge would return.
       // Spying is the only way to tell the two apart from out here.
-      sandboxEventProcessorOf(instance).pushBranchToRemote = vi.fn(
+      collaboratorsOf(instance).sandboxEventProcessor.pushBranchToRemote = vi.fn(
         async (_pushSpec: GitPushSpec) => ({ success: true as const })
       );
     });
@@ -168,14 +201,28 @@ describe("SessionDO collaborator wiring", () => {
     });
     expect(response.status).toBe(200);
 
-    const remoteUrls = await runInDurableObject(stub, (instance: SessionDO) => {
-      const spy = sandboxEventProcessorOf(instance).pushBranchToRemote as unknown as Mock<
+    const pushSpecs = await runInDurableObject(stub, (instance: SessionDO) => {
+      const spy = collaboratorsOf(instance).sandboxEventProcessor
+        .pushBranchToRemote as unknown as Mock<
         (pushSpec: GitPushSpec) => Promise<{ success: true }>
       >;
-      return spy.mock.calls.map((call) => call[0].remoteUrl);
+      return spy.mock.calls.map((call) => ({
+        remoteUrl: call[0].remoteUrl,
+        repoOwner: call[0].repoOwner,
+        repoName: call[0].repoName,
+      }));
     });
 
-    expect(remoteUrls).toEqual(["https://example.invalid/repo.git"]);
+    // Repository identity travels with the push spec — it selects the checkout
+    // in multi-repo sandboxes, so a spec that carried only the remote URL would
+    // push against the wrong working tree.
+    expect(pushSpecs).toEqual([
+      {
+        remoteUrl: "https://example.invalid/repo.git",
+        repoOwner: PUSH_REPO.repoOwner,
+        repoName: PUSH_REPO.repoName,
+      },
+    ]);
   });
 
   it("keeps session init succeeding when the sandbox provider cannot be built", async () => {
@@ -188,9 +235,12 @@ describe("SessionDO collaborator wiring", () => {
     // failure; init must still succeed, because its session rows are already
     // committed by the time the warm spawn is scheduled.
     await runInDurableObject(stub, (instance: SessionDO) => {
+      const probe = instance as unknown as Record<string, unknown>;
+      probe[GETTER_READS] = 0;
       Object.defineProperty(instance, "lifecycleManager", {
         configurable: true,
         get() {
+          probe[GETTER_READS] = (probe[GETTER_READS] as number) + 1;
           throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required");
         },
       });
@@ -210,9 +260,23 @@ describe("SessionDO collaborator wiring", () => {
       });
 
       expect(response.status).toBe(200);
+
+      // Asserting only the 200 would be a false positive: removing warm-spawn
+      // scheduling from init altogether also returns 200. The read count is
+      // what pins that init still reaches the warm-spawn edge, so the 200 is
+      // evidence the throw was absorbed rather than evidence it never happened.
+      // `warmSandbox()` is async, but an async body runs synchronously up to
+      // its first await, so the getter read lands before init responds.
+      const getterReads = await runInDurableObject(
+        stub,
+        (instance: SessionDO) => (instance as unknown as Record<string, number>)[GETTER_READS] ?? 0
+      );
+      expect(getterReads).toBeGreaterThan(0);
     } finally {
       await runInDurableObject(stub, (instance: SessionDO) => {
-        delete (instance as unknown as Record<string, unknown>).lifecycleManager;
+        const probe = instance as unknown as Record<string, unknown>;
+        delete probe.lifecycleManager;
+        delete probe[GETTER_READS];
       });
     }
   });
