@@ -176,7 +176,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
 
-      if (expectedSandboxId && parsed.sandboxId && parsed.sandboxId !== expectedSandboxId) {
+      if (expectedSandboxId && parsed.sandboxId !== expectedSandboxId) {
         this.log.debug("Skipping WS with wrong sandbox ID", {
           tag_sandbox_id: parsed.sandboxId,
           expected_sandbox_id: expectedSandboxId,
