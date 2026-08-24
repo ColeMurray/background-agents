@@ -181,6 +181,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
           tag_sandbox_id: parsed.sandboxId,
           expected_sandbox_id: expectedSandboxId,
         });
+        this.close(ws, 1000, "Sandbox identity changed");
         continue;
       }
 

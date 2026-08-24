@@ -1128,22 +1128,6 @@ export class SessionDO extends DurableObject<Env> {
       const sandbox = this.sandboxRepository.getSandbox();
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
-      // Reject connection if sandbox should be stopped (prevents reconnection after inactivity timeout).
-      // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
-      // still connect — a slow boot that outlived the connecting watchdog
-      // self-heals here by flipping the status back to ready.
-      if (sandbox && isSandboxReconnectBlockedStatus(sandbox.status)) {
-        log.warn("ws.connect", {
-          event: "ws.connect",
-          ws_type: "sandbox",
-          outcome: "rejected",
-          reject_reason: "sandbox_stopped",
-          sandbox_status: sandbox.status,
-          duration_ms: Date.now() - wsStartTime,
-        });
-        return new Response("Sandbox is stopped", { status: 410 });
-      }
-
       // Validate sandbox ID first (catches stale sandboxes reconnecting after restore)
       if (expectedSandboxId && sandboxId !== expectedSandboxId) {
         log.warn("ws.connect", {
@@ -1190,6 +1174,28 @@ export class SessionDO extends DurableObject<Env> {
           duration_ms: Date.now() - wsStartTime,
         });
         return new Response("Session is terminal", { status: 410 });
+      }
+
+      const currentSandbox = this.sandboxRepository.getSandbox();
+      // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
+      // still connect after a slow boot and self-heal by becoming ready.
+      if (currentSandbox && isSandboxReconnectBlockedStatus(currentSandbox.status)) {
+        log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "rejected",
+          reject_reason: "sandbox_stopped",
+          sandbox_status: currentSandbox.status,
+          duration_ms: Date.now() - wsStartTime,
+        });
+        return new Response("Sandbox is stopped", { status: 410 });
+      }
+      if (
+        currentSandbox?.modal_sandbox_id !== expectedSandboxId ||
+        currentSandbox?.auth_token_hash !== sandbox?.auth_token_hash ||
+        currentSandbox?.auth_token !== sandbox?.auth_token
+      ) {
+        return new Response("Forbidden: Sandbox credentials changed", { status: 403 });
       }
 
       // Auth passed — continue to WebSocket accept below

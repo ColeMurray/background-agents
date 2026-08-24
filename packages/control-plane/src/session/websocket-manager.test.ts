@@ -345,6 +345,7 @@ describe("SessionWebSocketManagerImpl", () => {
       mockRepo.setSandbox(createSandboxRow("correct-id"));
 
       expect(manager.getSandboxSocket()).toBeNull();
+      expect(wrongWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
     });
 
     it("returns null when cached socket is closed", () => {

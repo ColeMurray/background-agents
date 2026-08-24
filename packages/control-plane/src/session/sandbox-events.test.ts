@@ -894,7 +894,7 @@ describe("SessionSandboxEventProcessor", () => {
       expect(h.wsManager.send).not.toHaveBeenCalled();
     });
 
-    it("sends ACK on already_stopped path for execution_complete", async () => {
+    it("ACKs duplicate completions while safely repeating lifecycle reconciliation", async () => {
       const h = createProcessor();
       const sandboxWs = {} as WebSocket;
       h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
@@ -917,6 +917,10 @@ describe("SessionSandboxEventProcessor", () => {
         ackId: "execution_complete:msg-1",
       });
       expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+      expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
+      expect(h.updateLastActivity).toHaveBeenCalledOnce();
+      expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
+      expect(h.processMessageQueue).toHaveBeenCalledOnce();
     });
 
     it("does not send ACK for non-critical events even with ackId", async () => {
