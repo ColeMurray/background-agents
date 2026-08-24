@@ -948,6 +948,7 @@ export class SessionDO extends DurableObject<Env> {
         ]);
         return this.sandboxRepository.commitProviderStartup({
           expectedSandboxId: data.expectedSandboxId,
+          expectedCreatedAt: data.expectedCreatedAt,
           providerObjectId: data.providerObjectId,
           codeServerUrl: data.codeServer?.url ?? null,
           codeServerPassword,

@@ -254,6 +254,7 @@ describe("SandboxRepository", () => {
       expect(
         repository.commitProviderStartup({
           expectedSandboxId: "sandbox-current",
+          expectedCreatedAt: 1000,
           providerObjectId: "provider-1",
           codeServerUrl: "https://code.example",
           codeServerPassword: "encrypted-code",
@@ -268,7 +269,8 @@ describe("SandboxRepository", () => {
 
       expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting', 'ready')");
       expect(mock.calls[0].query).toContain("modal_object_id = COALESCE(?, modal_object_id)");
-      expect(mock.calls[0].params.at(-1)).toBe("sandbox-current");
+      expect(mock.calls[0].query).toContain("created_at = ?");
+      expect(mock.calls[0].params.slice(-2)).toEqual(["sandbox-current", 1000]);
     });
 
     it("returns false when the fenced update matches no sandbox", () => {
@@ -278,6 +280,7 @@ describe("SandboxRepository", () => {
       expect(
         rejectedRepository.commitProviderStartup({
           expectedSandboxId: "sandbox-stale",
+          expectedCreatedAt: 1000,
           providerObjectId: "provider-1",
           codeServerUrl: null,
           codeServerPassword: null,
@@ -294,6 +297,7 @@ describe("SandboxRepository", () => {
     it("preserves missing access fields during resume", () => {
       repository.commitProviderStartup({
         expectedSandboxId: "sandbox-current",
+        expectedCreatedAt: 1000,
         providerObjectId: "provider-1",
         codeServerUrl: null,
         codeServerPassword: null,

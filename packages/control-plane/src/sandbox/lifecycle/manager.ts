@@ -80,6 +80,7 @@ interface SandboxCircuitBreakerInfo {
 
 export interface ProviderStartupData {
   expectedSandboxId: string;
+  expectedCreatedAt: number;
   providerObjectId: string | null;
   codeServer: { url: string; password: string } | null;
   vnc: { url: string; password: string } | null;
@@ -463,6 +464,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       let sandboxAuthToken = this.idGenerator.generateId();
       const hasRepository = sessionHasRepository(session);
       let expectedSandboxId = buildSandboxIdForSession(session, now);
+      let expectedCreatedAt = now;
       const authTokenHash = await hashToken(sandboxAuthToken);
 
       // Store expected sandbox ID and auth token BEFORE calling provider
@@ -562,6 +564,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         const retryAuthTokenHash = await hashToken(sandboxAuthToken);
         const retryNow = Math.max(Date.now(), now + 1);
         expectedSandboxId = buildSandboxIdForSession(session, retryNow);
+        expectedCreatedAt = retryNow;
         await this.enterProviderStartup("spawning", retryNow, () =>
           this.storage.updateSandboxForSpawn({
             status: "spawning",
@@ -582,6 +585,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       if (
         !(await this.commitProviderStartup(result, {
           expectedSandboxId,
+          expectedCreatedAt,
           sandboxAuthToken,
           sessionId,
           preserveMissing: false,
@@ -865,6 +869,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         if (
           !(await this.commitProviderStartup(result, {
             expectedSandboxId,
+            expectedCreatedAt: now,
             sandboxAuthToken,
             sessionId: session.session_name || session.id,
             preserveMissing: false,
@@ -984,6 +989,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           { ...result, providerObjectId: changedProviderObjectId },
           {
             expectedSandboxId: sandbox.modal_sandbox_id,
+            expectedCreatedAt: now,
             preserveMissing: true,
             dashboardProviderObjectId: finalProviderObjectId,
             cleanupProviderObjectId: finalProviderObjectId,
@@ -1560,6 +1566,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     },
     options: {
       expectedSandboxId: string;
+      expectedCreatedAt: number;
       preserveMissing: boolean;
       sandboxAuthToken?: string;
       sessionId?: string;
@@ -1584,6 +1591,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           : null;
       committed = await this.storage.commitProviderStartup({
         expectedSandboxId: options.expectedSandboxId,
+        expectedCreatedAt: options.expectedCreatedAt,
         providerObjectId: result.providerObjectId ?? null,
         codeServer:
           result.codeServerUrl && result.codeServerPassword

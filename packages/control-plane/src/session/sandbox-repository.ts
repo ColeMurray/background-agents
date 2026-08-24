@@ -45,6 +45,7 @@ export interface ResumeSandboxData {
 
 export interface ProviderStartupPersistenceData {
   expectedSandboxId: string;
+  expectedCreatedAt: number;
   providerObjectId: string | null;
   codeServerUrl: string | null;
   codeServerPassword: string | null;
@@ -246,7 +247,9 @@ export class SandboxRepository {
          tunnel_urls = ${value("tunnel_urls")},
          ttyd_url = ${value("ttyd_url")},
          ttyd_token = ${value("ttyd_token")}
-       WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting', 'ready')`,
+       WHERE modal_sandbox_id = ?
+         AND created_at = ?
+         AND status IN ('spawning', 'connecting', 'ready')`,
       data.providerObjectId,
       data.codeServerUrl,
       data.codeServerPassword,
@@ -255,7 +258,8 @@ export class SandboxRepository {
       data.tunnelUrls,
       data.ttydUrl,
       data.ttydToken,
-      data.expectedSandboxId
+      data.expectedSandboxId,
+      data.expectedCreatedAt
     );
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;

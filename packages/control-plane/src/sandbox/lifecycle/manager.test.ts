@@ -212,6 +212,7 @@ function createMockStorage(
       if (
         !sandbox ||
         sandbox.modal_sandbox_id !== data.expectedSandboxId ||
+        sandbox.created_at !== data.expectedCreatedAt ||
         !["spawning", "connecting", "ready"].includes(sandbox.status)
       )
         return false;
@@ -1768,6 +1769,57 @@ describe("SandboxLifecycleManager", () => {
           reason: "late_startup_result",
         })
       );
+    });
+
+    it("rejects a late result from an earlier resume attempt", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+        const resumeResolvers: Array<(result: ResumeResult) => void> = [];
+        const sandbox = createMockSandbox({
+          status: "stopped",
+          modal_object_id: "provider-original",
+          snapshot_image_id: null,
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+          resumeSandbox: vi.fn(
+            () => new Promise<ResumeResult>((resolve) => resumeResolvers.push(resolve))
+          ),
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        });
+        const createManager = () =>
+          new SandboxLifecycleManager(
+            provider,
+            storage,
+            createMockBroadcaster(),
+            createMockWebSocketManager(false),
+            createMockAlarmScheduler(),
+            createMockIdGenerator(),
+            createTestConfig()
+          );
+
+        const firstResume = createManager().spawnSandbox();
+        await vi.waitFor(() => expect(provider.resumeSandbox).toHaveBeenCalledTimes(1));
+        sandbox.status = "stopped";
+        await vi.advanceTimersByTimeAsync(1);
+        const secondResume = createManager().spawnSandbox();
+        await vi.waitFor(() => expect(provider.resumeSandbox).toHaveBeenCalledTimes(2));
+
+        resumeResolvers[0]({ success: true, providerObjectId: "provider-late" });
+        await firstResume;
+        expect(sandbox.modal_object_id).toBe("provider-original");
+        expect(provider.stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ providerObjectId: "provider-late" })
+        );
+
+        resumeResolvers[1]({ success: true, providerObjectId: "provider-current" });
+        await secondResume;
+        expect(sandbox.modal_object_id).toBe("provider-current");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
