@@ -101,9 +101,18 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     status: gitSyncStatusSchema,
     sha: z.string().optional(),
   }),
-  messageSandboxEventBaseSchema.extend({
+  sandboxEventBaseSchema.extend({
     type: z.literal("error"),
     error: z.string(),
+    // Message-scoped when the bridge reports a failure mid-execution, absent
+    // for a fatal boot error — that happens before any message exists, which
+    // is why requiring messageId here hard-rejected exactly the case the
+    // event most needs to carry. processSandboxEvent already falls back to the
+    // processing message when it is absent.
+    messageId: z.string().optional(),
+    // The sandbox cannot continue. Drives the session to "failed" and settles
+    // in-flight prompts; a plain error stays advisory and leaves status alone.
+    fatal: z.boolean().optional(),
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),

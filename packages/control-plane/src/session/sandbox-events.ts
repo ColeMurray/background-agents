@@ -61,6 +61,8 @@ export class SessionSandboxEventProcessor {
       messageCreatedAt: number,
       completedAt: number
     ) => Promise<void>,
+    /** Settles in-flight prompts and notifies their caller; owned by the message queue. */
+    private readonly failUnfinishedMessages: (error: string, completedAt: number) => number,
     private readonly statusService: SessionStatusService,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
@@ -292,6 +294,18 @@ export class SessionSandboxEventProcessor {
     }
 
     this.messenger.broadcast({ type: "sandbox_event", event });
+
+    // A fatal error is the sandbox saying it cannot continue. Only
+    // execution_complete otherwise moves status or notifies the caller, so
+    // without this a boot failure — a repository that will not clone, an image
+    // that will not start — left the session sitting "active" with no messages
+    // forever, and whoever asked for the work hearing nothing at all. Settle
+    // in-flight prompts so the reason reaches them, and transition after persist
+    // and broadcast so it is on record first.
+    if (event.type === "error" && event.fatal) {
+      this.failUnfinishedMessages(event.error, now);
+      await this.statusService.transition("failed");
+    }
 
     if (CRITICAL_EVENT_TYPES.has(event.type)) {
       this.sendAck(ackId);

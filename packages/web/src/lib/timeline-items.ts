@@ -119,6 +119,10 @@ export function buildTimelineItems(events: SandboxEvent[]): TimelineItem[] {
   for (const event of deduped) {
     if (!("isSubtask" in event) || !event.isSubtask || !("taskCallId" in event)) continue;
     if (!event.taskCallId) continue;
+    // An `error` event carries an optional messageId — a fatal boot error
+    // happens before any message exists — so it cannot be keyed to a parent
+    // Task call. Leave it at the top level rather than mis-nesting it.
+    if (!event.messageId) continue;
 
     const key = taskKey(event.messageId, event.taskCallId);
     if (!tasks.has(key)) continue;
