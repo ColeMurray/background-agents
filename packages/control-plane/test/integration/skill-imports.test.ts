@@ -82,6 +82,53 @@ describe("managed skill import provenance", () => {
     expect(applied?.skill.assignments).toHaveLength(1);
   });
 
+  it("selects the most recently inserted source when import timestamps tie", async () => {
+    const skills = new SkillStore(env.DB);
+    const skill = await importedSkill(skills);
+    const next = await skills.applyImportedRevision(
+      skill.id,
+      { ...content, body: "# Deployment v2\n" },
+      { ...source, commitSha: "c".repeat(40), sourceSha256: "d".repeat(64) },
+      "user_2",
+      skill.currentRevisionId
+    );
+    await env.DB.prepare("UPDATE skill_import_sources SET imported_at = 1 WHERE skill_id = ?")
+      .bind(skill.id)
+      .run();
+
+    expect((await skills.latestImportSource(skill.id))?.revisionId).toBe(
+      next?.skill.currentRevisionId
+    );
+  });
+
+  it("uses indexed point lookups for each skill's latest source", async () => {
+    const plan = await env.DB.prepare(
+      `EXPLAIN QUERY PLAN
+       SELECT source.*
+       FROM skills skill
+       JOIN skill_import_sources source ON source.rowid = (
+         SELECT latest.rowid
+         FROM skill_import_sources latest
+         WHERE latest.skill_id = skill.id
+         ORDER BY latest.imported_at DESC, latest.rowid DESC
+         LIMIT 1
+       )
+       WHERE skill.id IN (?)`
+    )
+      .bind("skill_1")
+      .all<{ detail: string }>();
+    const details = plan.results.map((row) => row.detail);
+
+    expect(details.some((detail) => detail.includes("idx_skill_import_sources_skill"))).toBe(true);
+    expect(details.some((detail) => detail.includes("INTEGER PRIMARY KEY"))).toBe(true);
+    expect(
+      details.some(
+        (detail) =>
+          detail.startsWith("SCAN skill_import_sources") || detail.startsWith("SCAN latest")
+      )
+    ).toBe(false);
+  });
+
   it("is a no-op when the re-imported content is unchanged", async () => {
     const skills = new SkillStore(env.DB);
     const skill = await importedSkill(skills);
@@ -108,6 +155,33 @@ describe("managed skill import provenance", () => {
     ).rejects.toThrow(SkillConflictError);
   });
 
+  it("rejects a stale no-op after another import stored the same content", async () => {
+    const skills = new SkillStore(env.DB);
+    const skill = await importedSkill(skills);
+    const nextContent = { ...content, body: "# Deployment v2\n" };
+    await skills.applyImportedRevision(
+      skill.id,
+      nextContent,
+      { ...source, commitSha: "c".repeat(40), sourceSha256: "d".repeat(64) },
+      "user_2",
+      skill.currentRevisionId
+    );
+
+    await expect(
+      skills.applyImportedRevision(skill.id, nextContent, source, "user_3", skill.currentRevisionId)
+    ).rejects.toThrow(SkillConflictError);
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM skill_revisions WHERE skill_id = ?")
+        .bind(skill.id)
+        .first<{ count: number }>()
+    ).resolves.toEqual({ count: 2 });
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM skill_import_sources WHERE skill_id = ?")
+        .bind(skill.id)
+        .first<{ count: number }>()
+    ).resolves.toEqual({ count: 2 });
+  });
+
   it("keeps reporting the source after the skill is edited by hand", async () => {
     const skills = new SkillStore(env.DB);
     const skill = await importedSkill(skills);
@@ -132,6 +206,7 @@ describe("managed skill import provenance", () => {
     await skills.delete(skill.id, "user_1");
 
     expect(await skills.nameAvailable("acme-deploy")).toBe(false);
+    expect((await skills.latestImportSource(skill.id))?.commitSha).toBe(source.commitSha);
     expect(await skills.nameAvailable("agent-browser")).toBe(false);
     expect(await skills.nameAvailable("free-name")).toBe(true);
   });
@@ -230,6 +305,25 @@ describe("managed skill import routes", () => {
     });
 
     expect(response.status).toBe(428);
+  });
+
+  it("rejects a stale revision before fetching the source", async () => {
+    const skill = await importedSkill(new SkillStore(env.DB));
+
+    const response = await serviceFetch(`https://test.local/skills/${skill.id}/reimport`, {
+      method: "POST",
+      headers: { "If-Match": "skillrev_stale" },
+      body: JSON.stringify({
+        expectedCommitSha: source.commitSha,
+        expectedSourceSha256: source.sourceSha256,
+        expectedRevisionSha256: skill.revisionSha256,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: `Current revision is ${skill.currentRevisionId}`,
+    });
   });
 
   it("reports the source on the skill returned over HTTP", async () => {

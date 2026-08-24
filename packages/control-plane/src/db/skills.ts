@@ -84,6 +84,13 @@ interface ImportSourceRow {
   imported_at: number;
 }
 
+interface CurrentSkillRevisionRow {
+  name: string;
+  current_revision_id: string;
+  revision_number: number;
+  revision_sha256: string;
+}
+
 export class SkillConflictError extends Error {}
 export class SkillValidationError extends Error {}
 interface ApplicableSkill {
@@ -126,8 +133,8 @@ export class SkillStore {
       this.assignmentsForSkills(ids),
       this.sourcesForSkills(ids),
     ]);
-    const skills = await Promise.all(
-      rows.map((row) => this.toSummary(row, assignments.get(row.id) ?? [], sources.get(row.id)))
+    const skills = rows.map((row) =>
+      this.toSummary(row, assignments.get(row.id) ?? [], sources.get(row.id) ?? null)
     );
     return {
       skills,
@@ -145,12 +152,13 @@ export class SkillStore {
       .bind(id)
       .first<SkillRow>();
     if (!row) return null;
-    const [summary, files] = await Promise.all([
-      this.toSummary(row),
+    const [assignments, source, files] = await Promise.all([
+      this.assignmentsForSkill(row.id),
+      this.latestImportSource(row.id),
       this.filesForRevision(row.current_revision_id),
     ]);
     return {
-      ...summary,
+      ...this.toSummary(row, assignments, source),
       body: row.body,
       license: row.license,
       compatibility: row.compatibility,
@@ -332,14 +340,19 @@ export class SkillStore {
     actorUserId: string,
     expectedRevisionId: string
   ): Promise<{ skill: Skill; revisionCreated: boolean } | null> {
-    const current = await this.get(id);
+    const current = await this.currentRevision(id);
     if (!current) return null;
-    if (expectedRevisionId !== current.currentRevisionId) {
-      throw new SkillConflictError(`Current revision is ${current.currentRevisionId}`);
+    if (expectedRevisionId !== current.current_revision_id) {
+      throw new SkillConflictError(`Current revision is ${current.current_revision_id}`);
     }
     const revision = await buildValidatedSkillRevision(current.name, content);
-    if (revision.revisionSha256 === current.revisionSha256) {
-      return { skill: current, revisionCreated: false };
+    if (revision.revisionSha256 === current.revision_sha256) {
+      const skill = await this.get(id);
+      if (!skill) return null;
+      if (skill.currentRevisionId !== expectedRevisionId) {
+        throw new SkillConflictError("Skill changed concurrently");
+      }
+      return { skill, revisionCreated: false };
     }
     const now = Date.now();
     const revisionId = `skillrev_${generateId()}`;
@@ -347,7 +360,7 @@ export class SkillStore {
       this.revisionInsert(
         revisionId,
         id,
-        current.revisionNumber + 1,
+        current.revision_number + 1,
         content,
         revision,
         actorUserId,
@@ -562,11 +575,11 @@ export class SkillStore {
             LEFT JOIN users revision_author ON revision_author.id = r.created_by`;
   }
 
-  private async toSummary(
+  private toSummary(
     row: SkillRow,
-    assignments?: SkillAssignment[],
-    source?: SkillImportProvenance | null
-  ): Promise<SkillSummary> {
+    assignments: SkillAssignment[],
+    source: SkillImportProvenance | null
+  ): SkillSummary {
     return {
       id: row.id,
       name: row.name,
@@ -579,10 +592,8 @@ export class SkillStore {
       creatorDisplayName: row.creator_display_name,
       lastEditorDisplayName: row.last_editor_display_name,
       revisionAuthorDisplayName: row.revision_author_display_name,
-      assignments: assignments ?? (await this.assignmentsForSkill(row.id)),
-      // Callers that summarize more than one row pass both of these in, batched.
-      // Leaving either out costs a query per row.
-      source: source === undefined ? await this.latestImportSource(row.id) : source,
+      assignments,
+      source,
       createdBy: row.created_by,
       updatedBy: row.updated_by,
       createdAt: row.created_at,
@@ -613,12 +624,16 @@ export class SkillStore {
       const placeholders = chunk.map(() => "?").join(", ");
       const result = await this.db
         .prepare(
-          `SELECT * FROM (
-             SELECT *, ROW_NUMBER() OVER (
-               PARTITION BY skill_id ORDER BY imported_at DESC, rowid DESC
-             ) AS recency
-             FROM skill_import_sources WHERE skill_id IN (${placeholders})
-           ) WHERE recency = 1`
+          `SELECT source.*
+           FROM skills skill
+           JOIN skill_import_sources source ON source.rowid = (
+             SELECT latest.rowid
+             FROM skill_import_sources latest
+             WHERE latest.skill_id = skill.id
+             ORDER BY latest.imported_at DESC, latest.rowid DESC
+             LIMIT 1
+           )
+           WHERE skill.id IN (${placeholders})`
         )
         .bind(...chunk)
         .all<ImportSourceRow>();
@@ -642,6 +657,19 @@ export class SkillStore {
       );
     }
     return sources;
+  }
+
+  /** Load only the mutable revision state needed for a re-import CAS decision. */
+  private async currentRevision(id: string): Promise<CurrentSkillRevisionRow | null> {
+    return this.db
+      .prepare(
+        `SELECT s.name, s.current_revision_id, r.revision_number, r.revision_sha256
+         FROM skills s
+         JOIN skill_revisions r ON r.id = s.current_revision_id AND r.skill_id = s.id
+         WHERE s.id = ? AND s.deleted_at IS NULL`
+      )
+      .bind(id)
+      .first<CurrentSkillRevisionRow>();
   }
 
   /** Record where a revision's content was imported from. */
