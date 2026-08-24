@@ -66,7 +66,20 @@ import {
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
-const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
+const LEGACY_LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
+const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections:v1";
+
+function readStoredProviderSelections(): string | null {
+  const stored = localStorage.getItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY);
+  if (stored !== null) return stored;
+
+  const legacy = localStorage.getItem(LEGACY_LAST_PROVIDER_SELECTIONS_STORAGE_KEY);
+  if (legacy === null) return null;
+
+  localStorage.setItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY, legacy);
+  localStorage.removeItem(LEGACY_LAST_PROVIDER_SELECTIONS_STORAGE_KEY);
+  return legacy;
+}
 
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
@@ -120,9 +133,7 @@ export default function Home() {
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
-    const storedProviderSelections = parseStoredProviderSelections(
-      localStorage.getItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY)
-    );
+    const storedProviderSelections = parseStoredProviderSelections(readStoredProviderSelections());
     setStoredPreference({
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,

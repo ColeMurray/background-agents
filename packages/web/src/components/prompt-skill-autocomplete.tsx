@@ -173,6 +173,7 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
         <textarea
           {...textareaProps}
           ref={setInputRef}
+          role="combobox"
           value={value}
           disabled={disabled}
           maxLength={maxLength}
