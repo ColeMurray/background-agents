@@ -94,6 +94,9 @@ function stubSourceControlProvider(): SourceControlProvider {
       targetBranch: config.targetBranch,
       repoOwner: config.owner,
       repoName: config.name,
+      // Both real providers derive this the same way; mirroring them keeps the
+      // stub honest about the contract rather than pinning a literal.
+      force: config.force ?? false,
     }),
     checkRepositoryAccess: () => notUsedHere("checkRepositoryAccess"),
     listRepositories: () => notUsedHere("listRepositories"),
