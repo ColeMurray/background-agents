@@ -24,8 +24,20 @@ import {
   operatorArchiveRequestSchema,
   type OperatorArchiveOutcome,
 } from "../../operator-archive";
+import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
 
-const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
+/**
+ * There is nothing to cancel once a session is no longer live work.
+ *
+ * Expressed as the negation of the shared predicate rather than its own member
+ * list: this site and the two others that asked this question kept separate
+ * copies of an identical set, which bought nothing and could only drift. If
+ * cancellability ever genuinely diverges from liveness, change it here — the
+ * name already says which question is being answered.
+ */
+function isCancellable(status: SessionStatus): boolean {
+  return !isSessionInactive(status);
+}
 
 export interface SessionLifecycleHandlerDeps {
   sessionCoreRepository: SessionCoreRepository;
@@ -571,9 +583,14 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session is not archived" }, { status: 409 });
       }
 
-      await deps.statusService.transition("active");
+      // Restoring, not starting: unarchive returns the session to whatever its
+      // messages already imply. Asserting "active" here claimed work that does
+      // not exist, and no settle path would ever correct it — they all run off
+      // execution events, so an idle session sat in the in-progress group until
+      // someone prompted it again.
+      const settled = await deps.statusService.settleFromMessageState();
 
-      return Response.json({ status: "active" });
+      return Response.json({ status: settled });
     },
 
     async cancel(): Promise<Response> {
@@ -582,7 +599,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      if (TERMINAL_STATUSES.has(session.status)) {
+      if (!isCancellable(session.status)) {
         return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
       }
 

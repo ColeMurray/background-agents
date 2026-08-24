@@ -9,7 +9,9 @@ export interface AlarmHandlerDeps {
   repository: MessageRepository;
   messageQueue: Pick<
     SessionMessageQueue,
-    "failStuckProcessingMessage" | "recoverStopConfirmationTimeout"
+    | "failStuckProcessingMessage"
+    | "recoverStopConfirmationTimeout"
+    | "resumeAfterSandboxTermination"
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   alarmScheduler: AlarmScheduler;
@@ -35,7 +37,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       await deps.messageQueue.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
-      // already failed (by onSandboxTerminating or a prior alarm),
+      // already failed (by lifecycle recovery or a prior alarm),
       // getProcessingMessageWithStartedAt() returns null.
       const processing = deps.repository.getProcessingMessageWithStartedAt();
       if (processing?.started_at) {
@@ -61,7 +63,13 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         }
       }
 
-      await deps.lifecycleManager.handleAlarm();
+      const lifecycleResult = await deps.lifecycleManager.handleAlarm();
+      if (lifecycleResult !== "no_action") {
+        await deps.messageQueue.failStuckProcessingMessage();
+      }
+      if (lifecycleResult === "sandbox_terminated") {
+        await deps.messageQueue.resumeAfterSandboxTermination();
+      }
     },
   };
 }

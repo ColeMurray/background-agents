@@ -54,6 +54,18 @@ describe("provider account management routes", () => {
     expect(JSON.stringify(createdBody)).not.toContain("refresh");
     expect(JSON.stringify(createdBody)).not.toContain("access-token");
 
+    await expect(
+      managementFetch("/model-provider-account-defaults").then((response) => response.json())
+    ).resolves.toMatchObject({
+      defaults: [
+        {
+          provider: "openai",
+          providerAccountId: createdBody.account.id,
+          unattendedMode: "provider_account",
+        },
+      ],
+    });
+
     const list = await managementFetch("/model-provider-accounts?provider=openai");
     expect(list.status).toBe(200);
     expectPrivateNoStore(list);
@@ -91,6 +103,7 @@ describe("provider account management routes", () => {
     expectPrivateNoStore(reconnected);
     expect(JSON.stringify(await reconnected.json())).not.toContain("refresh");
 
+    await managementFetch("/model-provider-account-defaults/openai", { method: "DELETE" });
     for (const action of ["disable", "enable", "verify"] as const) {
       const response = await managementFetch(
         `/model-provider-accounts/${createdBody.account.id}/${action}`,
@@ -106,6 +119,41 @@ describe("provider account management routes", () => {
     });
     expect(archived.status).toBe(204);
     expectPrivateNoStore(archived);
+  });
+
+  it("does not replace the default when an existing account reconnects", async () => {
+    const first = await managementFetch("/model-provider-accounts", {
+      method: "POST",
+      body: {
+        provider: "openai",
+        displayName: "First",
+        refreshToken: "integration-openai-refresh",
+        accountId: "acct-integration",
+      },
+    });
+    const firstBody = await first.json<{ account: { id: string } }>();
+
+    const second = await managementFetch("/model-provider-accounts", {
+      method: "POST",
+      body: {
+        provider: "openai",
+        displayName: "Must not replace name",
+        refreshToken: "integration-openai-duplicate-reconnect",
+        accountId: "acct-integration",
+      },
+    });
+    expect(second.ok).toBe(true);
+    const secondBody = await second.json<{ account: { id: string; displayName: string } }>();
+    expect(secondBody.account).toMatchObject({
+      id: firstBody.account.id,
+      displayName: "First",
+    });
+
+    await expect(
+      managementFetch("/model-provider-account-defaults").then((response) => response.json())
+    ).resolves.toMatchObject({
+      defaults: [{ providerAccountId: firstBody.account.id }],
+    });
   });
 
   it("creates, updates, lists, and deletes provider defaults", async () => {
@@ -136,6 +184,36 @@ describe("provider account management routes", () => {
     });
     expect(removed.status).toBe(204);
     expectPrivateNoStore(removed);
+  });
+
+  it("returns a retryable gateway error for an unexpected default write failure", async () => {
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+        (id, provider, display_name, status, created_at, updated_at)
+        VALUES (?, 'openai', 'Default OpenAI', 'active', ?, ?)`
+    )
+      .bind(OPENAI_ACCOUNT_ID, now, now)
+      .run();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_provider_default_write
+       BEFORE INSERT ON model_provider_account_defaults
+       BEGIN
+         SELECT RAISE(FAIL, 'simulated storage failure');
+       END`
+    ).run();
+
+    try {
+      const response = await managementFetch("/model-provider-account-defaults/openai", {
+        method: "PUT",
+        body: { providerAccountId: OPENAI_ACCOUNT_ID, unattendedMode: "provider_account" },
+      });
+
+      expect(response.status).toBe(502);
+      expectPrivateNoStore(response);
+    } finally {
+      await env.DB.exec("DROP TRIGGER IF EXISTS reject_provider_default_write");
+    }
   });
 
   it("preflights a duplicate identity through an atomic reconnect", async () => {

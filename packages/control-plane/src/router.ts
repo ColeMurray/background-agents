@@ -43,6 +43,7 @@ import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
 import { skillRoutes } from "./routes/skills";
+import { keyboardShortcutRoutes } from "./routes/keyboard-shortcuts";
 import { sessionRoutes } from "./routes/sessions";
 import { githubReviewRoutes } from "./routes/github-reviews";
 import { modelProviderAccountRoutes } from "./routes/model-provider-accounts";
@@ -358,6 +359,9 @@ export const routes: Route[] = [
 
   // Installation-wide managed skills and personal profiles
   ...skillRoutes,
+
+  // Personal keyboard shortcuts
+  ...keyboardShortcutRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,

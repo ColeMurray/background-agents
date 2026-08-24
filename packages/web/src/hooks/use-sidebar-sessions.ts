@@ -386,16 +386,20 @@ export function useSidebarSessions() {
 
   return {
     needsAttention: attentionItems.map((item) => item.rootSession),
-    running: inProgressItems.map((item) => item.rootSession),
-    recent: finishedItems.map((item) => item.rootSession),
+    inProgress: inProgressItems.map((item) => item.rootSession),
+    finished: finishedItems.map((item) => item.rootSession),
     childrenMap,
     loading: sessionCreatorFilter === null || isLoading,
     sessionsError: snapshotError ?? categoryResults.find((result) => result.error)?.error,
     refreshSnapshot,
+    // Keyed by SessionInboxCategory, in camelCase. These used to be `running`
+    // and `recent` here and `in_progress`/`finished` everywhere else, so the
+    // render site had to translate between the two -- the same session and
+    // sandbox vocabularies getting mixed that this module now keeps apart.
     sectionPagination: {
       needsAttention: attention,
-      running: inProgress,
-      recent: finished,
+      inProgress,
+      finished,
     },
     sessionCreatorFilter,
     setSessionCreatorFilter,

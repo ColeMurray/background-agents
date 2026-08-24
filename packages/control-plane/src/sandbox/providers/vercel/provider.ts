@@ -145,7 +145,6 @@ export class VercelSandboxProvider implements SandboxProvider {
       return {
         sandboxId: config.sandboxId,
         providerObjectId: created.session.id,
-        status: "warming",
         createdAt: created.session.createdAt || Date.now(),
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,

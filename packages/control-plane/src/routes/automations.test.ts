@@ -42,6 +42,7 @@ const mockStore = {
   bindEnvironmentInserts: vi.fn(),
   bindReplaceEnvironments: vi.fn(),
   listInvocations: vi.fn(),
+  listRecentExecutionsForAutomationIds: vi.fn(),
 };
 
 const mockProviderAuthStore = {
@@ -241,6 +242,7 @@ describe("automation route handlers", () => {
     mockStore.getRepositoriesForAutomationIds.mockResolvedValue(new Map());
     mockStore.getEnvironmentsForAutomation.mockResolvedValue([]);
     mockStore.getEnvironmentsForAutomationIds.mockResolvedValue(new Map());
+    mockStore.listRecentExecutionsForAutomationIds.mockResolvedValue(new Map());
     mockProviderAuthStore.list.mockResolvedValue([]);
     mockProviderAuthStore.listForAutomationIds.mockResolvedValue(new Map());
     mockStore.bindAutomationInsert.mockReturnValue({ sql: "insert-automation" });
@@ -291,6 +293,8 @@ describe("automation route handlers", () => {
       expect(body.hasMore).toBe(false);
       expect(body.nextCursor).toBeNull();
       expect(mockStore.list).toHaveBeenCalledWith({ limit: 25, cursor: null });
+      expect(mockStore.listRecentExecutionsForAutomationIds).toHaveBeenCalledWith(["auto-1"], 10);
+      expect(body.automations[0]).toMatchObject({ recentExecutions: [] });
     });
 
     it("passes name search and pagination params to the store", async () => {

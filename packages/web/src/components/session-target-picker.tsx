@@ -2,7 +2,7 @@
 
 import { RepositoryMultiSelect } from "@/components/repository-multi-select";
 import { Combobox } from "@/components/ui/combobox";
-import { BranchIcon, ChevronDownIcon, RepoIcon } from "@/components/ui/icons";
+import { ChevronDownIcon } from "@/components/ui/icons";
 import type { SessionTargetPickerProps } from "@/hooks/use-session-target-picker";
 
 /**
@@ -39,12 +39,11 @@ export function SessionTargetPicker({
           (option.description?.toLowerCase().includes(query) ?? false) ||
           String(option.value).toLowerCase().includes(query)
         }
-        direction="up"
+        direction="down"
         dropdownWidth="w-72"
         disabled={disabled || loadingRepos}
         triggerClassName="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
       >
-        <RepoIcon className="w-4 h-4" />
         <span className="truncate max-w-[12rem] sm:max-w-none">
           {loadingRepos ? "Loading..." : displayTargetName}
         </span>
@@ -80,12 +79,11 @@ export function SessionTargetPicker({
           searchable
           searchPlaceholder="Search branches..."
           filterFn={(option, query) => option.label.toLowerCase().includes(query)}
-          direction="up"
+          direction="down"
           dropdownWidth="w-56"
           disabled={disabled || loadingBranches}
           triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
         >
-          <BranchIcon className="w-3.5 h-3.5" />
           <span className="max-w-[9rem] truncate">
             {loadingBranches ? "Loading..." : selectedBranch || "branch"}
           </span>

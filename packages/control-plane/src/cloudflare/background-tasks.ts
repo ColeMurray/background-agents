@@ -11,15 +11,21 @@ export function createCloudflareBackgroundTasks(
 ): BackgroundTasks {
   return {
     submit(task, metadata): void {
-      context.waitUntil(
-        task.catch((error) => {
-          getLogger().error("background_task.failed", {
-            task_name: metadata.name,
-            ...metadata.context,
-            error: error instanceof Error ? error : String(error),
-          });
-        })
-      );
+      const logFailure = (error: unknown): void => {
+        getLogger().error("background_task.failed", {
+          task_name: metadata.name,
+          ...metadata.context,
+          error: error instanceof Error ? error : String(error),
+        });
+      };
+      let pending: Promise<unknown>;
+      try {
+        pending = task();
+      } catch (error) {
+        logFailure(error);
+        return; // Nothing started, so there is no lifetime to extend.
+      }
+      context.waitUntil(pending.catch(logFailure));
     },
   };
 }

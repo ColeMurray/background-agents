@@ -1,13 +1,10 @@
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
+import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import { z } from "zod";
 import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
-import {
-  isPromptableSessionStatus,
-  PromptQueueFullError,
-  SessionNotPromptableError,
-} from "../../message-queue";
+import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
 import type { MessageRepository } from "../../message-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
@@ -215,7 +212,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       if (!session || session.parent_session_id !== parsed.data.parentSessionId) {
         return Response.json({ error: "Child session not found" }, { status: 404 });
       }
-      if (!isPromptableSessionStatus(session.status)) {
+      if (!isSessionPromptable(session.status)) {
         return Response.json(
           { error: `Cannot prompt a ${session.status} session` },
           { status: 409 }

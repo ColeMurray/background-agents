@@ -21,6 +21,7 @@ import {
   type ModelProviderId,
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
+import { bulkInsertStatements } from "./bulk-insert";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import {
   SessionInboxStore,
@@ -28,6 +29,7 @@ import {
   type ListSessionInboxResult,
   type ListSessionInboxSnapshotResult,
 } from "./session-inbox-store";
+import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -36,14 +38,6 @@ export type {
   ListSessionInboxResult,
   ListSessionInboxSnapshotResult,
 } from "./session-inbox-store";
-
-const TERMINAL_STATUSES = [
-  "completed",
-  "failed",
-  "archived",
-  "cancelled",
-] satisfies SessionStatus[];
-const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -377,6 +371,10 @@ export class SessionIndexStore {
    * Build manifest statements for the session-creation batch. The caller owns
    * execution so the session, repository snapshot, and pinned skills commit
    * atomically rather than leaving a partially initialized session.
+   *
+   * Revisions are packed into multi-row INSERTs: the pinned set is as wide as
+   * the applicable catalog, and a statement per skill would spend the
+   * invocation's whole query budget on one session create.
    */
   private bindManifestInserts(
     sessionId: string,
@@ -399,26 +397,21 @@ export class SessionIndexStore {
           manifest.manifestSha256,
           manifest.resolvedAt
         ),
-      ...manifest.skills.map((skill, position) =>
-        this.db
-          .prepare(
-            `INSERT INTO session_skill_revisions
-             (session_id, position, skill_id, revision_id, skill_name, description,
-              revision_number, revision_sha256, total_bytes, assignment_sources)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            sessionId,
-            position,
-            skill.skillId,
-            skill.revisionId,
-            skill.name,
-            skill.description,
-            skill.revisionNumber,
-            skill.revisionSha256,
-            skill.totalBytes,
-            JSON.stringify(skill.assignmentSources)
-          )
+      ...bulkInsertStatements(
+        this.db,
+        "session_skill_revisions",
+        manifest.skills.map((skill, position) => ({
+          session_id: sessionId,
+          position,
+          skill_id: skill.skillId,
+          revision_id: skill.revisionId,
+          skill_name: skill.name,
+          description: skill.description,
+          revision_number: skill.revisionNumber,
+          revision_sha256: skill.revisionSha256,
+          total_bytes: skill.totalBytes,
+          assignment_sources: JSON.stringify(skill.assignmentSources),
+        }))
       ),
     ];
   }
@@ -953,7 +946,7 @@ export class SessionIndexStore {
            WHERE descendants.depth < ${MAX_DESCENDANT_DEPTH}
          )
          SELECT id FROM descendants
-         WHERE status NOT IN (${TERMINAL_STATUS_SQL})
+         WHERE status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
          ORDER BY depth DESC`
       )
       .bind(parentSessionId)
@@ -985,7 +978,7 @@ export class SessionIndexStore {
          WHERE (
            SELECT COUNT(*) FROM (
              SELECT id AS child_session_id FROM sessions
-             WHERE parent_session_id = ? AND status NOT IN (${TERMINAL_STATUS_SQL})
+             WHERE parent_session_id = ? AND status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
              UNION
              SELECT child_session_id FROM child_admission_leases
              WHERE parent_session_id = ? AND expires_at > ?

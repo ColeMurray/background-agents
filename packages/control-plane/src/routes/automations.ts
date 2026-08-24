@@ -79,6 +79,8 @@ const MAX_NAME_LENGTH = 200;
 /** Maximum instructions length. Keep in sync with INSTRUCTIONS_MAX_LENGTH in packages/web/src/components/automations/automation-form.tsx. */
 const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
+const RECENT_EXECUTION_COUNT = 10;
+
 type ParseTriggerConfigResult =
   | { ok: true; triggerConfig: TriggerConfig }
   | { ok: false; error: string };
@@ -408,21 +410,27 @@ async function handleListAutomations(
   const providerAuthStore = new AutomationModelProviderAuthStore(ctx.db);
   const result = await store.list(parsed.options);
   const automationIds = result.automations.map((row) => row.id);
-  const [repositoriesByAutomation, environmentsByAutomation, providerAuthByAutomation] =
-    await Promise.all([
-      store.getRepositoriesForAutomationIds(automationIds),
-      store.getEnvironmentsForAutomationIds(automationIds),
-      providerAuthStore.listForAutomationIds(automationIds),
-    ]);
+  const [
+    repositoriesByAutomation,
+    environmentsByAutomation,
+    providerAuthByAutomation,
+    recentExecutionsByAutomation,
+  ] = await Promise.all([
+    store.getRepositoriesForAutomationIds(automationIds),
+    store.getEnvironmentsForAutomationIds(automationIds),
+    providerAuthStore.listForAutomationIds(automationIds),
+    store.listRecentExecutionsForAutomationIds(automationIds, RECENT_EXECUTION_COUNT),
+  ]);
 
-  const automations = result.automations.map((row) =>
-    toAutomation(
+  const automations = result.automations.map((row) => ({
+    ...toAutomation(
       row,
       repositoriesByAutomation.get(row.id) ?? [],
       environmentsByAutomation.get(row.id) ?? [],
       providerAuthByAutomation.get(row.id) ?? []
-    )
-  );
+    ),
+    recentExecutions: recentExecutionsByAutomation.get(row.id) ?? [],
+  }));
   return json({
     automations,
     hasMore: result.hasMore,

@@ -77,43 +77,92 @@ export function cronIntervalMinutes(expression: string): number | null {
 
 interface CronPreset {
   pattern: RegExp;
-  describe: (match: RegExpMatchArray, tz: string) => string;
+  describe: (match: RegExpMatchArray, options: CronDescriptionOptions) => string;
+}
+
+interface CronDescriptionOptions {
+  timezone: string;
+  compact: boolean;
+}
+
+function withTimezone(description: string, { timezone, compact }: CronDescriptionOptions): string {
+  if (!compact) return `${description} (${timezone})`;
+  if (timezone === "UTC") return `${description} (UTC)`;
+
+  try {
+    const timeZoneName = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      timeZoneName: "shortGeneric",
+    })
+      .formatToParts(new Date("2025-01-01T00:00:00Z"))
+      .find((part) => part.type === "timeZoneName")?.value;
+    return `${description} (${timeZoneName ?? timezone})`;
+  } catch {
+    return `${description} (${timezone})`;
+  }
 }
 
 const PRESETS: CronPreset[] = [
   {
     // Every N minutes: */N * * * *
     pattern: /^\*\/(\d+) \* \* \* \*$/,
-    describe: (m, tz) => `Every ${m[1]} minutes (${tz})`,
+    describe: (m, options) => withTimezone(`Every ${m[1]} minutes`, options),
   },
   {
     // Every hour at minute M: M * * * *
     pattern: /^(\d+) \* \* \* \*$/,
-    describe: (m, tz) => `Every hour at :${m[1].padStart(2, "0")} (${tz})`,
+    describe: (m, options) =>
+      withTimezone(
+        `${options.compact ? "Hourly" : "Every hour"} at :${m[1].padStart(2, "0")}`,
+        options
+      ),
   },
   {
     // Every day at H:M: M H * * *
     pattern: /^(\d+) (\d+) \* \* \*$/,
-    describe: (m, tz) => `Every day at ${formatTime(parseInt(m[2]), parseInt(m[1]))} (${tz})`,
+    describe: (m, options) =>
+      withTimezone(
+        `${options.compact ? "Daily" : "Every day"} at ${formatTime(
+          parseInt(m[2]),
+          parseInt(m[1]),
+          options.compact
+        )}`,
+        options
+      ),
   },
   {
     // Every weekday at H:M: M H * * 1-5
     pattern: /^(\d+) (\d+) \* \* 1-5$/,
-    describe: (m, tz) => `Every weekday at ${formatTime(parseInt(m[2]), parseInt(m[1]))} (${tz})`,
+    describe: (m, options) =>
+      withTimezone(
+        `${options.compact ? "Weekdays" : "Every weekday"} at ${formatTime(
+          parseInt(m[2]),
+          parseInt(m[1]),
+          options.compact
+        )}`,
+        options
+      ),
   },
   {
     // Every specific day at H:M: M H * * D
     pattern: /^(\d+) (\d+) \* \* (\d)$/,
-    describe: (m, tz) =>
-      `Every ${DAY_NAMES[parseInt(m[3])]} at ${formatTime(parseInt(m[2]), parseInt(m[1]))} (${tz})`,
+    describe: (m, options) => {
+      const day = DAY_NAMES[parseInt(m[3])];
+      const frequency = options.compact ? `${day}s` : `Every ${day}`;
+      return withTimezone(
+        `${frequency} at ${formatTime(parseInt(m[2]), parseInt(m[1]), options.compact)}`,
+        options
+      );
+    },
   },
 ];
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-function formatTime(hour: number, minute: number): string {
+function formatTime(hour: number, minute: number, compact = false): string {
   const suffix = hour >= 12 ? "PM" : "AM";
   const h = hour % 12 || 12;
+  if (compact && minute === 0) return `${h} ${suffix}`;
   return `${h}:${minute.toString().padStart(2, "0")} ${suffix}`;
 }
 
@@ -121,11 +170,16 @@ function formatTime(hour: number, minute: number): string {
  * Produce a human-readable description of a cron expression.
  * Uses preset detection with fallback to the raw expression.
  */
-export function describeCron(expression: string, timezone: string): string {
+export function describeCron(
+  expression: string,
+  timezone: string,
+  options: { compact?: boolean } = {}
+): string {
   const trimmed = expression.trim();
+  const descriptionOptions = { timezone, compact: options.compact ?? false };
   for (const preset of PRESETS) {
     const match = trimmed.match(preset.pattern);
-    if (match) return preset.describe(match, timezone);
+    if (match) return preset.describe(match, descriptionOptions);
   }
-  return `${trimmed} (${timezone})`;
+  return withTimezone(trimmed, descriptionOptions);
 }

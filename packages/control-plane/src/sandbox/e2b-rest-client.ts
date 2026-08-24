@@ -22,7 +22,6 @@ const TIMEOUT_PAUSE_MS = 30_000;
 const TIMEOUT_KILL_MS = 30_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_SETTTL_MS = 15_000;
-const TIMEOUT_WRITE_FILE_MS = 30_000;
 // A snapshot bakes the build sandbox's filesystem into a reusable template;
 // larger than the other calls because it copies the whole prebuilt filesystem.
 const TIMEOUT_SNAPSHOT_MS = 180_000;
@@ -67,11 +66,12 @@ const e2bErrorBodySchema = z.object({
 export type E2BErrorBody = z.infer<typeof e2bErrorBodySchema>;
 
 /**
- * Response of `POST /sandboxes/{id}/snapshots`. E2B bakes the sandbox's current
- * filesystem and live process state into a reusable "snapshot template" whose
- * id doubles as a `templateID`. The E2B launcher is deliberately snapshotted
- * while waiting for fresh session env, so many sandboxes can spawn from one
- * snapshot. `snapshotID` includes the build tag (e.g. `abc123:default`).
+ * Response of `POST /sandboxes/{id}/snapshots`. E2B captures the running
+ * sandbox as-is — memory included, which is why the bake quiesces first — into
+ * a reusable "snapshot template" whose id doubles as a `templateID`. The
+ * image's *contract* is its filesystem only: every spawn from it starts the
+ * runtime entrypoint anew. `snapshotID` includes the build tag
+ * (e.g. `abc123:default`).
  */
 const e2bSnapshotInfoSchema = z.object({
   snapshotID: z.string(),
@@ -84,16 +84,15 @@ export type E2BSnapshotInfo = z.infer<typeof e2bSnapshotInfoSchema>;
 const ENVD_PORT = 49983;
 /** Default sandbox host suffix (overridden by the create response `domain`). */
 const DEFAULT_SANDBOX_DOMAIN = "e2b.app";
-/**
- * Path the per-session env file is written to. The template launcher
- * (packages/e2b-infra/oi-launch.py) polls this exact path — keep them in sync.
- * Exported because the E2B provider's launcher start command waits on this
- * file's consumption as its readiness handshake.
- */
-export const SESSION_ENV_PATH = "/tmp/oi-session.env";
 
 export interface E2BCreateSandboxParams {
   templateID: string;
+  /**
+   * Per-sandbox env, applied by envd to every process it starts. The sole
+   * delivery channel for session env (secrets included): never pass secrets
+   * per-command — envd logs Process/Start requests, values included, into
+   * E2B's team-visible platform logs.
+   */
   envVars?: Record<string, string>;
   metadata?: Record<string, string>;
   timeoutSeconds?: number;
@@ -103,7 +102,7 @@ export interface E2BCreateSandboxParams {
   autoResume?: boolean;
   /**
    * Require an access token to reach envd (returned as `envdAccessToken`). Without it,
-   * envd accepts unauthenticated reads/writes of the uploaded session env.
+   * envd would accept anonymous process starts over the public sandbox host.
    */
   secure?: boolean;
 }
@@ -206,6 +205,48 @@ function assertProcessStarted(buffer: Uint8Array): void {
   }
 }
 
+/**
+ * Strip every create-env value from provider error text before it can escape
+ * into a persisted/broadcast failure reason. The create request carries
+ * secrets (SANDBOX_AUTH_TOKEN, user secrets, build callback tokens); if E2B
+ * ever echoes request values in an error body, the echo must die here. Each
+ * value is matched raw and through two levels of JSON escaping — the shapes an
+ * echo can take in a parsed message or in raw body text that itself quotes the
+ * encoded request. Every non-empty value is scrubbed: user secrets are
+ * arbitrary-length, so there is no "too short to matter" — the cost is that
+ * incidental text matching a config value ("true", a port) is redacted too,
+ * which is the right failure direction for an error path.
+ */
+function scrubEnvValues(text: string, envVars: Record<string, string>): string {
+  const needles = new Set<string>();
+  for (const value of Object.values(envVars)) {
+    if (!value) continue;
+    let form = value;
+    for (let i = 0; i < 3; i++) {
+      needles.add(form);
+      form = JSON.stringify(form).slice(1, -1);
+    }
+  }
+  let scrubbed = text;
+  // Longest first, so a short needle cannot split a longer one mid-replacement.
+  for (const needle of [...needles].sort((a, b) => b.length - a.length)) {
+    scrubbed = scrubbed.split(needle).join("[redacted]");
+  }
+  return scrubbed;
+}
+
+function scrubbedCreateError(error: E2BApiError, envVars: Record<string, string>): E2BApiError {
+  const scrub = (text: string) => scrubEnvValues(text, envVars);
+  const body =
+    typeof error.body === "string"
+      ? scrub(error.body)
+      : error.body && {
+          ...error.body,
+          ...(error.body.message === undefined ? {} : { message: scrub(error.body.message) }),
+        };
+  return new E2BApiError(scrub(error.message), error.status, body);
+}
+
 export class E2BRestClient {
   private readonly baseUrl: string;
 
@@ -236,78 +277,17 @@ export class E2BRestClient {
           },
         }
       );
+    } catch (error) {
+      // This request body carries secrets (envVars): make sure a provider
+      // error echoing request values cannot reach failure reasons verbatim.
+      if (error instanceof E2BApiError && params.envVars) {
+        throw scrubbedCreateError(error, params.envVars);
+      }
+      throw error;
     } finally {
       log.info("e2b.create_sandbox", {
         duration_ms: Date.now() - startMs,
         template_id: params.templateID,
-      });
-    }
-  }
-
-  /**
-   * Write the per-session env file into a sandbox via envd's filesystem API.
-   *
-   * E2B's template start command runs at build (not per create) and can't see
-   * create-time env vars, so the supervisor is launched by oi-launch.py, which
-   * reads this file. Writing it (rather than passing env to POST /sandboxes) is
-   * what delivers per-session config to the supervisor. The launcher polls
-   * SESSION_ENV_PATH, so this must target the same path.
-   */
-  async writeSessionEnv(
-    sandboxId: string,
-    env: Record<string, string>,
-    opts: { domain?: string | null; envdAccessToken: string }
-  ): Promise<void> {
-    const domain = opts.domain || DEFAULT_SANDBOX_DOMAIN;
-    // envd requires the in-sandbox user to write the file as. "user" is E2B's
-    // fixed non-root runtime user — the launcher that reads this file runs as it.
-    const url =
-      `https://${ENVD_PORT}-${sandboxId}.${domain}/files` +
-      `?path=${encodeURIComponent(SESSION_ENV_PATH)}&username=user`;
-
-    const form = new FormData();
-    form.append(
-      "file",
-      new Blob([JSON.stringify(env)], { type: "application/json" }),
-      SESSION_ENV_PATH
-    );
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_WRITE_FILE_MS);
-    const startMs = Date.now();
-    try {
-      // Do NOT set Content-Type — fetch derives the multipart boundary itself.
-      // envd requires the access token from create (secure:true); never write anonymously.
-      const headers: Record<string, string> = { "X-Access-Token": opts.envdAccessToken };
-
-      const response = await fetch(url, {
-        method: "POST",
-        body: form,
-        headers,
-        signal: controller.signal,
-      });
-      if (response.status === 404) {
-        throw new E2BNotFoundError(`Sandbox ${sandboxId} envd not reachable`);
-      }
-      if (!response.ok) {
-        const text = await response.text();
-        throw new E2BApiError(
-          text || `Failed to write session env (${response.status})`,
-          response.status,
-          text
-        );
-      }
-    } catch (error) {
-      // Surface a write timeout as a transient error (see request()).
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(`E2B writeSessionEnv timeout after ${TIMEOUT_WRITE_FILE_MS}ms`);
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeoutId);
-      log.info("e2b.write_session_env", {
-        duration_ms: Date.now() - startMs,
-        var_count: Object.keys(env).length,
       });
     }
   }
@@ -334,15 +314,23 @@ export class E2BRestClient {
    * Resume a paused sandbox (or extend a running one).
    *
    * Connect answers with the create-style `Sandbox` shape — `sandboxID`/`templateID`,
-   * no `state`, which only `GET /sandboxes/{id}` returns. Callers re-read state
-   * through getSandbox when they need it, so this is a command: the success body
-   * carries nothing we act on and is discarded.
+   * no `state`, which only `GET /sandboxes/{id}` returns — including a fresh
+   * `envdAccessToken` for secure sandboxes. Most callers resume-and-forget;
+   * the image bake uses the returned token to scrub the build's supervisor
+   * log before snapshotting (takePrebuiltImageSnapshot).
    */
-  async connectSandbox(id: string, timeoutSeconds: number, signal?: AbortSignal): Promise<void> {
-    await this.requestVoid("POST", `/sandboxes/${id}/connect`, TIMEOUT_CONNECT_MS, {
-      body: { timeout: timeoutSeconds },
-      signal,
-    });
+  async connectSandbox(
+    id: string,
+    timeoutSeconds: number,
+    signal?: AbortSignal
+  ): Promise<E2BSandboxCreated> {
+    return this.requestJson(
+      "POST",
+      `/sandboxes/${id}/connect`,
+      TIMEOUT_CONNECT_MS,
+      e2bSandboxCreatedSchema,
+      { body: { timeout: timeoutSeconds }, signal }
+    );
   }
 
   /**

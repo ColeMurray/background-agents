@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import { SessionStatusService } from "./session-status-service";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import type { Logger } from "../logger";
@@ -83,10 +84,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     error: vi.fn(),
     child: vi.fn(),
   };
-  const waitUntil = vi.fn((task: Promise<unknown>) =>
-    task.catch((error) => log.error("background_task.failed", { error }))
-  );
-  const backgroundTasks = { submit: waitUntil };
+  const backgroundTasks = createTestBackgroundTasks();
 
   const service = new SessionStatusService(
     backgroundTasks,
@@ -105,7 +103,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     artifactRepository,
     broadcast,
     sessionIndex,
-    waitUntil,
+    backgroundTasks,
     parentSessions,
     parentFetch,
     log,
@@ -166,7 +164,7 @@ describe("SessionStatusService.transition", () => {
       messageCount: 3,
       prCount: 2,
     });
-    expect(h.waitUntil).toHaveBeenCalled();
+    expect(h.backgroundTasks.submissions).not.toHaveLength(0);
   });
 
   it("syncs metrics even when already in the terminal status", async () => {
@@ -211,7 +209,7 @@ describe("SessionStatusService.transition", () => {
     expect(await h.service.transition("completed")).toBe(true);
 
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "completed" });
-    expect(h.waitUntil).not.toHaveBeenCalled();
+    expect(h.backgroundTasks.submissions).toHaveLength(0);
   });
 
   it("submits the parent notification as a background job", async () => {
@@ -231,7 +229,7 @@ describe("SessionStatusService.transition", () => {
       status: "completed",
       title: "Session title",
     });
-    expect(h.waitUntil).toHaveBeenCalled();
+    expect(h.backgroundTasks.submissions).not.toHaveLength(0);
   });
 
   it("does not notify a parent when the session has none", async () => {
@@ -407,7 +405,7 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
       status: "active",
       title: "New title",
     });
-    expect(h.waitUntil).toHaveBeenCalledTimes(1);
+    expect(h.backgroundTasks.submissions).toHaveLength(1);
   });
 
   it("logs (and does not throw) when the parent notification fails", async () => {
@@ -420,12 +418,11 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
       { status: "failed", title: null }
     );
 
-    // Drain the fire-and-forget promise handed to waitUntil.
-    await h.waitUntil.mock.results[0]!.value;
+    // Drain the fire-and-forget notification; its failure is absorbed by the
+    // boundary rather than thrown at the caller.
+    await h.backgroundTasks.settle();
 
-    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
-      error: expect.any(Error),
-    });
+    expect(h.backgroundTasks.failures).toEqual([expect.any(Error)]);
   });
 
   it("is a no-op without a parent session id", () => {
@@ -437,6 +434,6 @@ describe("SessionStatusService.notifyParentOfChildUpdate", () => {
     });
 
     expect(h.parentSessions.idFromName).not.toHaveBeenCalled();
-    expect(h.waitUntil).not.toHaveBeenCalled();
+    expect(h.backgroundTasks.submissions).toHaveLength(0);
   });
 });

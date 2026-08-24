@@ -50,6 +50,7 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # it, so bump every provider's label together.
 # v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
 # v60: generic provider-account token broker plugin
+# v61: account/init helpers and /usr/sbin on PATH
 CACHE_BUSTER = RUNTIME_VERSION
 
 # Base image with all development tools
@@ -65,6 +66,13 @@ base_image = (
         "openssh-client",
         "jq",
         "unzip",  # Required for Bun installation
+        # Account and init helpers. debian_slim ships without them, so nothing in
+        # a sandbox can create a system user, and services that refuse to run as
+        # root (Elasticsearch, Postgres, nginx) have no account to drop to.
+        "passwd",
+        "adduser",
+        "sysvinit-utils",
+        "procps",
         "ffmpeg",
         "xvfb",
         "fluxbox",
@@ -215,7 +223,11 @@ base_image = (
             "HOME": "/root",
             "NODE_ENV": "development",
             "PNPM_HOME": "/root/.local/share/pnpm",
-            "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
+            # /usr/sbin and /sbin carry useradd, service, and daemons like nginx.
+            # Sandbox commands run in non-interactive, non-login shells that never
+            # source /etc/profile, so without them on PATH those commands fail with
+            # "command not found" rather than anything that names the real problem.
+            "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "PYTHONPATH": "/app",
             "SANDBOX_VERSION": CACHE_BUSTER,
             # NODE_PATH for globally installed modules (used by custom tools)

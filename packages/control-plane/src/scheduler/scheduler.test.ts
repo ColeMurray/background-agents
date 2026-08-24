@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
@@ -86,6 +87,7 @@ function createMockStore() {
     getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),
     getStaleFailureResetCandidates: vi.fn().mockResolvedValue([]),
     updateRun: vi.fn().mockResolvedValue(true),
+    claimRunSession: vi.fn().mockResolvedValue(true),
     getById: vi.fn().mockResolvedValue(null),
     getRunById: vi.fn().mockResolvedValue(null),
     countOverdue: vi.fn().mockResolvedValue(0),
@@ -96,7 +98,8 @@ function createMockStore() {
     autoPause: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),
     advanceNextRunAt: vi.fn().mockResolvedValue(true),
-    bulkFailRuns: vi.fn().mockResolvedValue(undefined),
+    bulkFailStartingRuns: vi.fn().mockResolvedValue(undefined),
+    bulkFailRunningRuns: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -321,7 +324,7 @@ function createEnv(overrides?: Partial<Env>): Env {
 }
 
 function createSchedulerDO(env = createEnv()) {
-  const scheduler = new Scheduler(env.DB, env, { submit: vi.fn() });
+  const scheduler = new Scheduler(env.DB, env, createTestBackgroundTasks());
   return Object.assign(scheduler, { fetch: (request: Request) => scheduler.dispatch(request) });
 }
 
@@ -537,16 +540,17 @@ describe("Scheduler", () => {
       });
       expect(params.children).toHaveLength(1);
 
-      expect(mockStore.updateRun).toHaveBeenCalledWith(
+      expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ status: "running" })
+        expect.any(String),
+        expect.any(Number)
       );
     });
 
     it("does not enqueue a prompt when recovery wins the launch transition", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
-      mockStore.updateRun.mockResolvedValue(false);
+      mockStore.claimRunSession.mockResolvedValue(false);
 
       const env = createEnv();
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
@@ -559,13 +563,12 @@ describe("Scheduler", () => {
 
       expect(await response.json()).toMatchObject({ processed: 0, failed: 1 });
       expect(promptCallCount(fetchMock)).toBe(0);
-      expect(mockStore.updateRun).toHaveBeenNthCalledWith(
-        1,
+      expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ status: "running" })
+        expect.any(String),
+        expect.any(Number)
       );
-      expect(mockStore.updateRun).toHaveBeenNthCalledWith(
-        2,
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ status: "failed" })
       );
@@ -611,7 +614,7 @@ describe("Scheduler", () => {
       // Both children share the invocation id.
       expect(children[0].invocation_id).toBe(children[1].invocation_id);
       // Both launched.
-      expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
+      expect(mockStore.claimRunSession).toHaveBeenCalledTimes(2);
     });
 
     it("resolves one provider auth snapshot for every child in a fan-out invocation", async () => {
@@ -759,7 +762,7 @@ describe("Scheduler", () => {
       }
 
       expect(initCalls).toBe(2);
-      expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
+      expect(mockStore.claimRunSession).toHaveBeenCalledTimes(2);
     });
 
     it("passes automation reasoning effort into created sessions", async () => {
@@ -1120,9 +1123,10 @@ describe("Scheduler", () => {
       expect(children[0]).toMatchObject({ repo_name: "broken", status: "failed" });
       expect(children[1]).toMatchObject({ repo_name: "web-app", status: "starting" });
       // The healthy sibling launched.
-      expect(mockStore.updateRun).toHaveBeenCalledWith(
+      expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         children[1].id,
-        expect.objectContaining({ status: "running" })
+        expect.any(String),
+        expect.any(Number)
       );
       // One strike for the invocation, not per failed child.
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
@@ -1329,6 +1333,37 @@ describe("Scheduler", () => {
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
     });
 
+    it("claims the run session before initializing it", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockStore.claimRunSession).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(Number)
+      );
+      expect(mockStore.claimRunSession.mock.invocationCallOrder[0]).toBeLessThan(
+        mockSessionStoreCreate.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("does not initialize a session after recovery wins the launch claim", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockStore.claimRunSession.mockResolvedValue(false);
+      mockStore.getInvocationRunAggregate.mockResolvedValue(
+        aggregate({ active: 0, failed: 1, completed: 0 })
+      );
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+    });
+
     it("auto-pauses after 3 consecutive failures", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
@@ -1434,7 +1469,7 @@ describe("Scheduler", () => {
     it("swallows launch-failure tracking errors and logs scheduler.fail_track_error", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
-      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
+      mockStore.updateRun.mockRejectedValueOnce(new Error("D1 timeout"));
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ active: 0, failed: 1, completed: 0 })
       );
@@ -1508,7 +1543,7 @@ describe("Scheduler", () => {
       const scheduler = createSchedulerDO();
       await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+      expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-a", "orphan-b"],
         "session_creation_timeout",
         expect.any(Number)
@@ -1534,7 +1569,7 @@ describe("Scheduler", () => {
       const scheduler = createSchedulerDO();
       await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+      expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
         expect.any(Number)
@@ -1565,7 +1600,7 @@ describe("Scheduler", () => {
       );
 
       expect(res.status).toBe(200);
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+      expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
         expect.any(Number)
@@ -1584,7 +1619,7 @@ describe("Scheduler", () => {
       });
     });
 
-    it("batches multiple orphaned runs into a single bulkFailRuns call", async () => {
+    it("batches multiple orphaned runs into a single recovery write", async () => {
       const orphanedRuns = [
         {
           id: "orphan-a",
@@ -1616,8 +1651,8 @@ describe("Scheduler", () => {
       const scheduler = createSchedulerDO();
       await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledTimes(1);
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+      expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledTimes(1);
+      expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-a", "orphan-b", "orphan-c"],
         "session_creation_timeout",
         expect.any(Number)
@@ -1724,7 +1759,7 @@ describe("Scheduler", () => {
       expect(autoPauseSuccessCall).toBeDefined();
     });
 
-    it("swallows bulkFailRuns errors and logs scheduler.recovery.bulk_fail_error", async () => {
+    it("swallows orphan recovery write errors and logs scheduler.recovery.bulk_fail_error", async () => {
       const orphanedRun = {
         id: "orphan-1",
         automation_id: "auto-1",
@@ -1733,7 +1768,7 @@ describe("Scheduler", () => {
         created_at: now - 10 * 60 * 1000,
       };
       mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
-      mockStore.bulkFailRuns.mockRejectedValue(new Error("D1 timeout"));
+      mockStore.bulkFailStartingRuns.mockRejectedValue(new Error("D1 timeout"));
 
       const scheduler = createSchedulerDO();
       const errorSpy = vi
@@ -1777,11 +1812,7 @@ describe("Scheduler", () => {
       };
       mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
       mockStore.getTimedOutRunningRuns.mockResolvedValue([timedOutRun]);
-      mockStore.bulkFailRuns.mockImplementation(async (runIds: string[]) => {
-        if (runIds.includes("timeout-1")) {
-          throw new Error("D1 timeout");
-        }
-      });
+      mockStore.bulkFailRunningRuns.mockRejectedValue(new Error("D1 timeout"));
       mockStore.getInvocationRunAggregate.mockResolvedValue(
         aggregate({ total: 1, active: 0, failed: 1 })
       );
@@ -1797,12 +1828,12 @@ describe("Scheduler", () => {
 
       expect(res.status).toBe(200);
 
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+      expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
         "session_creation_timeout",
         expect.any(Number)
       );
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+      expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
         expect.any(Number)
@@ -1845,7 +1876,7 @@ describe("Scheduler", () => {
       );
 
       expect(res.status).toBe(200);
-      expect(mockStore.bulkFailRuns).toHaveBeenCalledWith(
+      expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
         "session_creation_timeout",
         expect.any(Number)
@@ -2340,9 +2371,10 @@ describe("Scheduler", () => {
         scheduled_at: null,
       });
       expect(params.advanceSchedule).toBeUndefined();
-      expect(mockStore.updateRun).toHaveBeenCalledWith(
+      expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ status: "running" })
+        expect.any(String),
+        expect.any(Number)
       );
 
       const body = await res.json<{
@@ -2584,9 +2616,10 @@ describe("Scheduler", () => {
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
         expect(String(prompt.content)).not.toContain("<thread_context>");
-        expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect(mockStore.claimRunSession).toHaveBeenCalledWith(
           expect.any(String),
-          expect.objectContaining({ status: "running" })
+          expect.any(String),
+          expect.any(Number)
         );
       });
 
