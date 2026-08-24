@@ -289,6 +289,17 @@ export type UnresponsiveSandboxTrigger =
 
 export type SandboxAlarmResult = "no_action" | "sandbox_failed" | "sandbox_terminated";
 
+/** Session state the alarm needs that the lifecycle manager cannot read itself. */
+export interface SandboxAlarmOptions {
+  /**
+   * Whether a message is still being executed. The caller owns message state
+   * (the lifecycle manager deliberately does not depend on the message queue),
+   * so it has to be passed in. Defaults to `false` for callers with no message
+   * queue at all.
+   */
+  hasInFlightExecution?: boolean;
+}
+
 /**
  * Manages sandbox lifecycle operations.
  *
@@ -1201,7 +1212,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Handle alarm for inactivity and heartbeat monitoring.
    */
-  async handleAlarm(): Promise<SandboxAlarmResult> {
+  async handleAlarm(options: SandboxAlarmOptions = {}): Promise<SandboxAlarmResult> {
     const sandbox = this.storage.getSandbox();
     if (!sandbox) {
       this.log.debug("Alarm fired: no sandbox found");
@@ -1312,6 +1323,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       lastActivity: sandbox.last_activity,
       status: sandbox.status,
       connectedClientCount: connectedClients,
+      hasInFlightExecution: options.hasInFlightExecution ?? false,
     };
 
     const inactivityDecision = evaluateInactivityTimeout(

@@ -624,6 +624,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - config.timeoutMs - 60000, // Well past timeout
       status: "stopped",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -640,6 +641,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - config.timeoutMs - 60000,
       status: "failed",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -653,6 +655,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - config.timeoutMs - 60000,
       status: "stale",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -666,6 +669,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: null,
       status: "ready",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -682,6 +686,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - config.timeoutMs - 1000, // Just past timeout
       status: "ready",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -698,6 +703,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - config.timeoutMs - 1000,
       status: "ready",
       connectedClientCount: 2,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -716,6 +722,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - inactiveTime,
       status: "ready",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -734,6 +741,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - inactiveTime,
       status: "ready",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -751,6 +759,7 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - config.timeoutMs - 60000,
       status: "spawning", // Not ready
       connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);
@@ -764,6 +773,56 @@ describe("evaluateInactivityTimeout", () => {
       lastActivity: now - config.timeoutMs - 1000,
       status: "ready",
       connectedClientCount: 0,
+      hasInFlightExecution: false,
+    };
+
+    const decision = evaluateInactivityTimeout(state, config, now);
+
+    expect(decision.action).toBe("timeout");
+  });
+
+  it('returns "schedule" while an execution is in flight, however long it has been quiet', () => {
+    const now = Date.now();
+    // A single long tool call emits no events, so activity is arbitrarily stale
+    // while the sandbox is still working.
+    const state: InactivityState = {
+      lastActivity: now - config.timeoutMs * 3,
+      status: "ready",
+      connectedClientCount: 0,
+      hasInFlightExecution: true,
+    };
+
+    const decision = evaluateInactivityTimeout(state, config, now);
+
+    expect(decision.action).toBe("schedule");
+    if (decision.action === "schedule") {
+      expect(decision.nextCheckMs).toBe(config.minCheckIntervalMs);
+    }
+  });
+
+  it("prefers the in-flight check over the connected-client extension", () => {
+    const now = Date.now();
+    const state: InactivityState = {
+      lastActivity: now - config.timeoutMs - 1000,
+      status: "ready",
+      connectedClientCount: 2,
+      hasInFlightExecution: true,
+    };
+
+    const decision = evaluateInactivityTimeout(state, config, now);
+
+    // "extend" warns the user the sandbox is about to stop, which is wrong
+    // while it is mid-execution.
+    expect(decision.action).toBe("schedule");
+  });
+
+  it('returns "timeout" once the execution finishes and the sandbox goes idle', () => {
+    const now = Date.now();
+    const state: InactivityState = {
+      lastActivity: now - config.timeoutMs - 1000,
+      status: "ready",
+      connectedClientCount: 0,
+      hasInFlightExecution: false,
     };
 
     const decision = evaluateInactivityTimeout(state, config, now);

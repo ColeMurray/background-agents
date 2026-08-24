@@ -362,6 +362,15 @@ export interface InactivityState {
   status: SandboxStatus;
   /** Number of connected client WebSockets */
   connectedClientCount: number;
+  /**
+   * Whether a message is still being executed.
+   *
+   * Activity is derived from sandbox events, and a single long tool call (a
+   * build, a test suite, a poll loop) emits none while it runs — so an
+   * executing sandbox can look idle. Required rather than optional so a new
+   * caller has to answer the question instead of silently inheriting `false`.
+   */
+  hasInFlightExecution: boolean;
 }
 
 /**
@@ -409,7 +418,12 @@ export type InactivityAction =
  * @example
  * ```typescript
  * const decision = evaluateInactivityTimeout(
- *   { lastActivity: now - 600001, status: "ready", connectedClientCount: 1 },
+ *   {
+ *     lastActivity: now - 600001,
+ *     status: "ready",
+ *     connectedClientCount: 1,
+ *     hasInFlightExecution: false,
+ *   },
  *   DEFAULT_INACTIVITY_CONFIG,
  *   now
  * );
@@ -443,6 +457,15 @@ export function evaluateInactivityTimeout(
 
   // Check if inactivity threshold exceeded
   if (inactiveTime >= config.timeoutMs) {
+    // A sandbox that is still executing a message is busy, not abandoned.
+    // Stopping it here kills the running tool call and fails the message, so
+    // keep checking back until the execution finishes and the ordinary idle
+    // countdown can start. The execution timeout alarm remains the backstop
+    // for a run that never finishes.
+    if (state.hasInFlightExecution) {
+      return { action: "schedule", nextCheckMs: config.minCheckIntervalMs };
+    }
+
     // If clients are still connected, they may be actively reviewing
     // Grant an extension and warn them
     if (state.connectedClientCount > 0) {

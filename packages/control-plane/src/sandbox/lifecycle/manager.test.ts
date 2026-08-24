@@ -1919,6 +1919,36 @@ describe("SandboxLifecycleManager", () => {
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     });
 
+    it("does not stop the sandbox while an execution is in flight", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000, // Still heartbeating
+        last_activity: now - 30 * 60 * 1000, // A long, event-free tool call
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const wsManager = createMockWebSocketManager(false, 0); // No clients
+      const provider = createMockProvider();
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const result = await manager.handleAlarm({ hasInFlightExecution: true });
+
+      expect(result).toBe("no_action");
+      expect(storage.calls).not.toContain("updateSandboxStatus:stopped");
+      expect(wsManager.sendToSandbox).not.toHaveBeenCalled();
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    });
+
     it("extends timeout when clients connected", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({

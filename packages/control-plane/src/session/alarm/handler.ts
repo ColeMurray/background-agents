@@ -63,7 +63,11 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         }
       }
 
-      const lifecycleResult = await deps.lifecycleManager.handleAlarm();
+      // `processing` is this session's in-flight execution: while it is set the
+      // sandbox is working, however long it has gone without emitting an event.
+      const lifecycleResult = await deps.lifecycleManager.handleAlarm({
+        hasInFlightExecution: processing !== null,
+      });
       if (lifecycleResult !== "no_action") {
         await deps.messageQueue.failStuckProcessingMessage();
       }

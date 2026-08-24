@@ -3,7 +3,7 @@ import type { Logger } from "../../logger";
 import { createAlarmHandler } from "./handler";
 import type { MessageRepository } from "../message-repository";
 import { createEarliestAlarmScheduler } from "./scheduler";
-import type { SandboxAlarmResult } from "../../sandbox/lifecycle/manager";
+import type { SandboxAlarmOptions, SandboxAlarmResult } from "../../sandbox/lifecycle/manager";
 
 function createHandler() {
   const repository = {
@@ -15,7 +15,9 @@ function createHandler() {
     resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const lifecycleManager = {
-    handleAlarm: vi.fn<() => Promise<SandboxAlarmResult>>().mockResolvedValue("no_action"),
+    handleAlarm: vi
+      .fn<(options?: SandboxAlarmOptions) => Promise<SandboxAlarmResult>>()
+      .mockResolvedValue("no_action"),
   };
   const alarmScheduler = {
     schedule: vi.fn<(timestamp: number) => Promise<void>>().mockResolvedValue(),
@@ -65,6 +67,23 @@ describe("createAlarmHandler", () => {
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
     expect(messageQueue.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
+    expect(lifecycleManager.handleAlarm).toHaveBeenCalledWith({ hasInFlightExecution: false });
+  });
+
+  it("tells the lifecycle manager an execution is in flight", async () => {
+    const { handler, repository, messageQueue, lifecycleManager, now } = createHandler();
+    // Processing, but nowhere near the execution timeout: the sandbox is busy,
+    // and the inactivity check must not stop it out from under the run.
+    now.mockReturnValue(1000);
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 900,
+    });
+
+    await handler.handle();
+
+    expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
+    expect(lifecycleManager.handleAlarm).toHaveBeenCalledWith({ hasInFlightExecution: true });
   });
 
   it("does not fail processing message when execution timeout is not reached", async () => {
