@@ -84,6 +84,7 @@ import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
+import { resolveSessionRepoId } from "./repo-id-resolution";
 import { Scheduler } from "../scheduler/scheduler";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import type { BackgroundTasks } from "../platform-ports";
@@ -412,7 +413,12 @@ export class SessionDO extends DurableObject<Env> {
       this._userEnvResolver = new UserEnvResolver({
         db: this.db,
         sessionCoreRepository: this.sessionCoreRepository,
-        getSourceControlProvider: () => this.sourceControlProvider,
+        resolveRepoId: (session) =>
+          resolveSessionRepoId(
+            session,
+            this.sessionCoreRepository,
+            () => this.sourceControlProvider
+          ),
         durableObjectId: this.ctx.id.toString(),
         repoSecretsEncryptionKey: this.env.REPO_SECRETS_ENCRYPTION_KEY,
         secretsCapEnforcement: this.env.SECRETS_CAP_ENFORCEMENT,
@@ -647,7 +653,12 @@ export class SessionDO extends DurableObject<Env> {
           const service = new OpenAITokenRefreshService(
             this.db!,
             this.env.REPO_SECRETS_ENCRYPTION_KEY!,
-            (sessionRow) => this.userEnvResolver.ensureRepoId(sessionRow),
+            (sessionRow) =>
+              resolveSessionRepoId(
+                sessionRow,
+                this.sessionCoreRepository,
+                () => this.sourceControlProvider
+              ),
             log
           );
           return service.refresh(session);
@@ -656,7 +667,12 @@ export class SessionDO extends DurableObject<Env> {
           const service = new XaiTokenRefreshService(
             this.db!,
             this.env.REPO_SECRETS_ENCRYPTION_KEY!,
-            (sessionRow) => this.userEnvResolver.ensureRepoId(sessionRow),
+            (sessionRow) =>
+              resolveSessionRepoId(
+                sessionRow,
+                this.sessionCoreRepository,
+                () => this.sourceControlProvider
+              ),
             log
           );
           return service.refresh(session);

@@ -9,13 +9,18 @@
 
 import { describe, it, expect } from "vitest";
 import { UserEnvResolver } from "./user-env-resolver";
-import { SecretsCapExceededError } from "../db/secrets-validation";
+import { resolveSessionRepoId } from "./repo-id-resolution";
+import {
+  MAX_COMBINED_SECRETS_BYTES,
+  MAX_TOTAL_VALUE_SIZE,
+  MAX_VALUE_SIZE,
+  SecretsCapExceededError,
+} from "../db/secrets-validation";
 import { SessionCoreRepository } from "./session-core-repository";
 import { encryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
 import type { SqlResult as StorageSqlResult, SqlStorage } from "./sql-storage";
-import type { SourceControlProvider, RepositoryAccessResult } from "../source-control";
 import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provider-accounts";
 import type { SessionRepositoryRow, SessionRow } from "./types";
 
@@ -46,29 +51,6 @@ function recordingLogger(entries: LogEntry[]): Logger {
 
 function notUsedHere(member: string): never {
   throw new Error(`${member} is not exercised by the user-env-resolver suite`);
-}
-
-/** Full-interface stub so no test needs an unsafe cast. */
-function stubProvider(
-  checkRepositoryAccess: SourceControlProvider["checkRepositoryAccess"]
-): SourceControlProvider {
-  return {
-    name: "github",
-    getRepository: () => notUsedHere("getRepository"),
-    createPullRequest: () => notUsedHere("createPullRequest"),
-    checkRepositoryAccess,
-    listRepositories: () => notUsedHere("listRepositories"),
-    listBranches: () => notUsedHere("listBranches"),
-    getBranchHead: () => notUsedHere("getBranchHead"),
-    resolveCommit: () => notUsedHere("resolveCommit"),
-    listTree: () => notUsedHere("listTree"),
-    readBlob: () => notUsedHere("readBlob"),
-    getPullRequest: () => notUsedHere("getPullRequest"),
-    generatePushAuth: () => notUsedHere("generatePushAuth"),
-    generateCredentialHelperAuth: () => notUsedHere("generateCredentialHelperAuth"),
-    buildManualPullRequestUrl: () => notUsedHere("buildManualPullRequestUrl"),
-    buildGitPushSpec: () => notUsedHere("buildGitPushSpec"),
-  };
 }
 
 /** DO-embedded SQLite fake backing a real SessionCoreRepository. */
@@ -237,7 +219,7 @@ function makeHarness(
     encryptionKey?: string;
     /** Omit to model an unset SECRETS_CAP_ENFORCEMENT (fail-closed enforce). */
     capEnforcement?: string;
-    checkRepositoryAccess?: SourceControlProvider["checkRepositoryAccess"];
+    resolveRepoId?: (session: SessionRow) => Promise<number>;
   } = {}
 ) {
   const session = options.session === undefined ? sessionRow() : options.session;
@@ -245,17 +227,24 @@ function makeHarness(
   const db = new FakeSqlDatabase();
   const logs: LogEntry[] = [];
   let currentLogger = recordingLogger(logs);
-  let providerThunkCalls = 0;
-  const provider = stubProvider(
-    options.checkRepositoryAccess ?? (() => notUsedHere("checkRepositoryAccess"))
-  );
+  const sessionCoreRepository = new SessionCoreRepository(storage.sql, (closure) => closure());
+  let resolveRepoIdCalls = 0;
+  // Default mirrors production wiring: the real resolution function over a
+  // provider thunk that throws, so short-circuits work and any path that
+  // would construct the SCM provider fails the test loudly.
+  const resolveRepoId =
+    options.resolveRepoId ??
+    ((sessionForRepoId: SessionRow) =>
+      resolveSessionRepoId(sessionForRepoId, sessionCoreRepository, () =>
+        notUsedHere("sourceControlProvider")
+      ));
 
   const resolver = new UserEnvResolver({
     db: options.withoutDb ? null : db,
-    sessionCoreRepository: new SessionCoreRepository(storage.sql, (closure) => closure()),
-    getSourceControlProvider: () => {
-      providerThunkCalls += 1;
-      return provider;
+    sessionCoreRepository,
+    resolveRepoId: (sessionForRepoId) => {
+      resolveRepoIdCalls += 1;
+      return resolveRepoId(sessionForRepoId);
     },
     durableObjectId: "do-id-fallback",
     repoSecretsEncryptionKey: options.encryptionKey,
@@ -268,7 +257,7 @@ function makeHarness(
     db,
     logs,
     sqlCalls: storage.calls,
-    providerThunkCalls: () => providerThunkCalls,
+    resolveRepoIdCalls: () => resolveRepoIdCalls,
     setLogger(logger: Logger) {
       currentLogger = logger;
     },
@@ -421,12 +410,28 @@ describe("UserEnvResolver", () => {
       });
 
       // The id-less secondary contributes nothing: exactly one repo_secrets read
-      // (the primary's) and no lazy ensureRepoId resolution via the provider.
+      // (the primary's) and no lazy repo-id resolution.
       expect(h.db.queries.filter((query) => query.includes("repo_secrets"))).toHaveLength(1);
-      expect(h.providerThunkCalls()).toBe(0);
+      expect(h.resolveRepoIdCalls()).toBe(0);
     });
 
-    it("never constructs the source control provider on a secrets-only load", async () => {
+    it("resolves the repo id lazily for a legacy primary member row", async () => {
+      const h = makeHarness({
+        memberRows: [memberRow(0, "acme", "web", null)],
+        encryptionKey: ENCRYPTION_KEY,
+        resolveRepoId: async () => 90101,
+      });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      h.db.repoSecretRowsByRepoId.set(90101, await secretRows({ ONLY_WEB: "w" }));
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({ ONLY_WEB: "w" });
+
+      // The primary's null row id routes through the injected capability, and
+      // the id it returns keys the repo-secrets read.
+      expect(h.resolveRepoIdCalls()).toBe(1);
+    });
+
+    it("resolves repo secrets without constructing the source control provider", async () => {
       const h = makeHarness({ encryptionKey: ENCRYPTION_KEY });
       h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
       h.db.globalSecretRows = await secretRows({ FOO: "bar" });
@@ -434,19 +439,41 @@ describe("UserEnvResolver", () => {
 
       await expect(h.resolver.getUserEnvVars()).resolves.toEqual({ FOO: "bar", BAZ: "qux" });
 
-      expect(h.providerThunkCalls()).toBe(0);
+      // The synthesized primary (no member rows) routes through the capability
+      // once, which short-circuits on the session's repo_id; the harness
+      // default throws if the provider thunk is ever invoked.
+      expect(h.resolveRepoIdCalls()).toBe(1);
     });
   });
 
   describe("secrets cap", () => {
+    // Every scope must be reachable through the production write path: each
+    // value within MAX_VALUE_SIZE and each scope within MAX_TOTAL_VALUE_SIZE.
+    // Three individually valid scopes together exceed the combined cap.
+    const CAP_VALUE = "x".repeat(MAX_VALUE_SIZE / 2);
+    const PER_SCOPE_COUNT = 6;
+    const SCOPE_COUNT = 3;
+    const TOTAL_KEYS = PER_SCOPE_COUNT * SCOPE_COUNT;
+
+    function bulkScope(prefix: string): Record<string, string> {
+      return Object.fromEntries(
+        Array.from({ length: PER_SCOPE_COUNT }, (_, i) => [`${prefix}_${i}`, CAP_VALUE])
+      );
+    }
+
     async function overCapHarness(capEnforcement?: string) {
-      const h = makeHarness({ encryptionKey: ENCRYPTION_KEY, capEnforcement });
+      expect(PER_SCOPE_COUNT * CAP_VALUE.length).toBeLessThanOrEqual(MAX_TOTAL_VALUE_SIZE);
+      expect(TOTAL_KEYS * CAP_VALUE.length).toBeGreaterThan(MAX_COMBINED_SECRETS_BYTES);
+
+      const h = makeHarness({
+        memberRows: [memberRow(0, "acme", "web", 90101), memberRow(1, "acme", "backend", 90102)],
+        encryptionKey: ENCRYPTION_KEY,
+        capEnforcement,
+      });
       h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
-      const bulk: Record<string, string> = {};
-      for (let i = 0; i < 9; i += 1) {
-        bulk[`BULK_${i}`] = "x".repeat(16384);
-      }
-      h.db.globalSecretRows = await secretRows(bulk);
+      h.db.globalSecretRows = await secretRows(bulkScope("BULK_G"));
+      h.db.repoSecretRowsByRepoId.set(90101, await secretRows(bulkScope("BULK_A")));
+      h.db.repoSecretRowsByRepoId.set(90102, await secretRows(bulkScope("BULK_B")));
       return h;
     }
 
@@ -465,7 +492,7 @@ describe("UserEnvResolver", () => {
 
       const env = await h.resolver.getUserEnvVars();
 
-      expect(Object.keys(env ?? {})).toHaveLength(9);
+      expect(Object.keys(env ?? {})).toHaveLength(TOTAL_KEYS);
       expect(h.logs).toContainEqual(
         expect.objectContaining({ level: "warn", msg: "secrets.cap_exceeded" })
       );
@@ -502,57 +529,6 @@ describe("UserEnvResolver", () => {
       await expect(
         h.resolver.getProviderAuthenticationError("anthropic/claude-sonnet-4-5")
       ).resolves.toBeNull();
-    });
-  });
-
-  describe("ensureRepoId", () => {
-    it("short-circuits on an existing repo_id without touching the provider or persisting", async () => {
-      const h = makeHarness();
-
-      await expect(h.resolver.ensureRepoId(sessionRow())).resolves.toBe(90101);
-
-      expect(h.providerThunkCalls()).toBe(0);
-      expect(h.sqlCalls.filter((call) => call.query.startsWith("UPDATE"))).toEqual([]);
-    });
-
-    it("throws when the session has no repository context", async () => {
-      const h = makeHarness();
-
-      await expect(
-        h.resolver.ensureRepoId(sessionRow({ repo_id: null, repo_owner: null, repo_name: null }))
-      ).rejects.toThrow("Session has no repository context");
-    });
-
-    it("throws when the repository is not accessible", async () => {
-      const h = makeHarness({ checkRepositoryAccess: async () => null });
-
-      await expect(h.resolver.ensureRepoId(sessionRow({ repo_id: null }))).rejects.toThrow(
-        "Repository is not accessible for the configured SCM provider"
-      );
-      expect(h.sqlCalls.filter((call) => call.query.startsWith("UPDATE"))).toEqual([]);
-    });
-
-    it("resolves via the provider and persists the repo id for legacy rows", async () => {
-      const checked: Array<{ owner: string; name: string }> = [];
-      const access: RepositoryAccessResult = {
-        repoId: 777,
-        repoOwner: "acme",
-        repoName: "web",
-        defaultBranch: "main",
-      };
-      const h = makeHarness({
-        checkRepositoryAccess: async ({ owner, name }) => {
-          checked.push({ owner, name });
-          return access;
-        },
-      });
-
-      await expect(h.resolver.ensureRepoId(sessionRow({ repo_id: null }))).resolves.toBe(777);
-
-      expect(checked).toEqual([{ owner: "acme", name: "web" }]);
-      const updates = h.sqlCalls.filter((call) => call.query.startsWith("UPDATE"));
-      expect(updates).toHaveLength(1);
-      expect(updates[0]?.params).toEqual([777]);
     });
   });
 

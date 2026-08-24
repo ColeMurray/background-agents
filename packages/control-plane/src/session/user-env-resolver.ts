@@ -2,9 +2,9 @@
  * Resolves the user-defined environment a session's sandbox receives: decrypts
  * and folds global/repo/environment secrets, derives the managed-provider env
  * from the session's provider auth modes, and answers whether a model's
- * provider has usable authentication in that environment. Also resolves (and
- * persists) the primary repo id for legacy session rows, which the repo-scoped
- * secrets lookup needs.
+ * provider has usable authentication in that environment. Legacy session rows
+ * that predate `repo_id` resolve it through the injected `resolveRepoId`
+ * capability when the repo-scoped secrets lookup needs it.
  */
 
 import { SessionIndexStore } from "../db/session-index";
@@ -26,7 +26,6 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import type { SourceControlProvider } from "../source-control";
 import { resolvePublicSessionId } from "./public-session-id";
 import { buildSessionTargetSecretSources } from "./session-target-secrets";
 import type { SessionRepositoryEntry } from "./repository-target";
@@ -40,12 +39,11 @@ export interface UserEnvResolverDeps {
   db: SqlDatabase | null;
   sessionCoreRepository: SessionCoreRepository;
   /**
-   * Thunk, deliberately: the provider is only needed when a legacy session
-   * row lacks `repo_id`. Taking a constructed provider would force provider
-   * construction on every secrets load, changing the throw surface for
-   * deployments with broken SCM env.
+   * Resolves (and persists) the session's primary repo id for legacy rows
+   * that predate `repo_id` — see `resolveSessionRepoId`. Injected as a
+   * capability so this class carries no SCM-provider dependency.
    */
-  getSourceControlProvider: () => SourceControlProvider;
+  resolveRepoId: (session: SessionRow) => Promise<number>;
   /** The owning Durable Object's id; the resolvePublicSessionId fallback. */
   durableObjectId: string;
   repoSecretsEncryptionKey: string | undefined;
@@ -66,7 +64,7 @@ interface UserEnvContext {
 export class UserEnvResolver {
   private readonly db: SqlDatabase | null;
   private readonly sessionCoreRepository: SessionCoreRepository;
-  private readonly getSourceControlProvider: () => SourceControlProvider;
+  private readonly resolveRepoId: (session: SessionRow) => Promise<number>;
   private readonly durableObjectId: string;
   private readonly repoSecretsEncryptionKey: string | undefined;
   private readonly secretsCapEnforcement: string | undefined;
@@ -75,35 +73,11 @@ export class UserEnvResolver {
   constructor(deps: UserEnvResolverDeps) {
     this.db = deps.db;
     this.sessionCoreRepository = deps.sessionCoreRepository;
-    this.getSourceControlProvider = deps.getSourceControlProvider;
+    this.resolveRepoId = deps.resolveRepoId;
     this.durableObjectId = deps.durableObjectId;
     this.repoSecretsEncryptionKey = deps.repoSecretsEncryptionKey;
     this.secretsCapEnforcement = deps.secretsCapEnforcement;
     this.log = deps.log;
-  }
-
-  /**
-   * Resolve the session's primary repo id, looking it up via the SCM
-   * provider and persisting it for legacy rows that predate `repo_id`.
-   */
-  async ensureRepoId(session: SessionRow): Promise<number> {
-    if (session.repo_id) {
-      return session.repo_id;
-    }
-    if (!session.repo_owner || !session.repo_name) {
-      throw new Error("Session has no repository context");
-    }
-
-    const result = await this.getSourceControlProvider().checkRepositoryAccess({
-      owner: session.repo_owner,
-      name: session.repo_name,
-    });
-    if (!result) {
-      throw new Error("Repository is not accessible for the configured SCM provider");
-    }
-
-    this.sessionCoreRepository.updateSessionRepoId(result.repoId);
-    return result.repoId;
   }
 
   /**
@@ -220,9 +194,9 @@ export class UserEnvResolver {
   /**
    * Decrypt one member repo's secrets — the injected leaf loader for
    * buildSessionTargetSecretSources. The member row carries the repo id; a
-   * synthesized primary (legacy scalar row) resolves it lazily via ensureRepoId.
-   * A member without a resolvable id (a secondary with a null row id) can't be
-   * keyed, so it contributes nothing.
+   * synthesized primary (legacy scalar row) resolves it lazily via the
+   * injected resolveRepoId. A member without a resolvable id (a secondary
+   * with a null row id) can't be keyed, so it contributes nothing.
    */
   private async loadMemberRepoSecrets(
     session: SessionRow,
@@ -230,7 +204,7 @@ export class UserEnvResolver {
     repoStore: RepoSecretsStore
   ): Promise<Record<string, string>> {
     const repoId =
-      member.row?.repo_id ?? (member.isPrimary ? await this.ensureRepoId(session) : null);
+      member.row?.repo_id ?? (member.isPrimary ? await this.resolveRepoId(session) : null);
     if (repoId === null) {
       return {};
     }

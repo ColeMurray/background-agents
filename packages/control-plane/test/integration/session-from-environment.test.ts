@@ -20,6 +20,7 @@ import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { resolveEnvironmentTarget } from "../../src/repos/resolve";
 import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO } from "./helpers";
+import { getUserEnvVars } from "./session-do-access";
 
 const KEY = () => env.REPO_SECRETS_ENCRYPTION_KEY as string;
 
@@ -49,19 +50,6 @@ async function seedEnvironment(id: string, name: string, repos: RepoSpec[]): Pro
       repo_id: repo.repoId,
       base_branch: repo.baseBranch,
     }))
-  );
-}
-
-/** Invoke the DO's real (private) sandbox env resolver, exercising the session secret fold. */
-function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
-  return runInDurableObject(stub, (instance: SessionDO) =>
-    (
-      instance as unknown as {
-        userEnvResolver: {
-          getUserEnvVars(): Promise<Record<string, string> | undefined>;
-        };
-      }
-    ).userEnvResolver.getUserEnvVars()
   );
 }
 

@@ -6,22 +6,10 @@ import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, initSession } from "./helpers";
+import { getUserEnvVars } from "./session-do-access";
 import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provider-accounts";
 
 const KEY = () => env.REPO_SECRETS_ENCRYPTION_KEY as string;
-
-/** Invoke the DO's real (private) sandbox env resolver, exercising the session-target fold. */
-function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
-  return runInDurableObject(stub, (instance: SessionDO) =>
-    (
-      instance as unknown as {
-        userEnvResolver: {
-          getUserEnvVars(): Promise<Record<string, string> | undefined>;
-        };
-      }
-    ).userEnvResolver.getUserEnvVars()
-  );
-}
 
 async function initSessionWithProviderAuth(
   overrides: Parameters<typeof initNamedSession>[1] = {},
