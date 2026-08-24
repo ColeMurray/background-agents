@@ -50,3 +50,20 @@ async def test_get_sandbox_by_id_awaits_async_lookup(monkeypatch):
     assert handle.modal_sandbox is modal_sandbox
     from_id.assert_not_called()
     from_id.aio.assert_awaited_once_with("sandbox-1")
+
+
+@pytest.mark.asyncio
+async def test_terminate_awaits_async_terminate():
+    """Handle termination must run the provider terminate RPC."""
+    terminate = _async_method()
+    handle = SandboxHandle(
+        sandbox_id="sandbox-1",
+        modal_sandbox=SimpleNamespace(terminate=terminate),
+        status=SandboxStatus.READY,
+        created_at=0,
+    )
+
+    await handle.terminate()
+
+    terminate.assert_not_called()
+    terminate.aio.assert_awaited_once()

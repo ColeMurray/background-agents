@@ -352,6 +352,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         failure_count: circuitBreakerState.failureCount,
         wait_time_ms: cbDecision.waitTimeMs || 0,
       });
+      // Bot-triggered prompts have no "next message" to retry on; without a
+      // scheduled retry the open breaker strands them for good.
+      await this.alarmScheduler.schedule(now + (cbDecision.waitTimeMs || 0));
       this.reportSandboxError(
         `Sandbox spawning temporarily disabled after ${circuitBreakerState.failureCount} failures. Try again in ${Math.ceil((cbDecision.waitTimeMs || 0) / 1000)} seconds.`
       );
@@ -576,9 +579,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
 
       await this.finishProviderStartup();
-
-      // Reset circuit breaker on successful spawn initiation
-      this.storage.resetCircuitBreaker();
 
       this.log.info("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -988,7 +988,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       await this.finishProviderStartup();
-      this.storage.resetCircuitBreaker();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.storage.updateSandboxStatus("failed");
@@ -1240,6 +1239,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
       this.storage.updateSandboxStatus("failed");
       this.clearSandboxAccessState();
+      // Count toward the circuit breaker: the queued prompt is re-driven
+      // after this failure, and a repository whose boot always exceeds the
+      // timeout would otherwise respawn in a loop.
+      this.storage.incrementCircuitBreakerFailure(now);
       if (this.canStopProviderSandbox()) {
         try {
           await this.stopProviderSandbox("connecting_timeout");
@@ -1251,7 +1254,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(
-        "Sandbox failed to connect within the allowed time. It will be retried on your next message."
+        "Sandbox failed to connect within the allowed time. Retrying with a fresh sandbox."
       );
       return "sandbox_failed";
     }
@@ -1606,12 +1609,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   /**
    * Notify the manager that a sandbox has connected.
-   * Resets the in-memory spawning flag and clears any stale spawn error.
+   * Resets the in-memory spawning flag, clears any stale spawn error, and
+   * closes the spawn circuit breaker: connection is the first point where a
+   * spawn actually succeeded, so failures counted before it (connecting
+   * timeouts) stay counted until a sandbox genuinely comes up.
    *
    * Called by SessionDO when sandbox WebSocket connects successfully.
    */
   onSandboxConnected(): void {
     this.isSpawningSandbox = false;
     this.storage.setLastSpawnError(null, null);
+    this.storage.resetCircuitBreaker();
   }
 }

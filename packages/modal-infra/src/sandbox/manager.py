@@ -136,7 +136,7 @@ class SandboxHandle:
 
     async def terminate(self) -> None:
         """Terminate the sandbox."""
-        self.modal_sandbox.terminate()
+        await self.modal_sandbox.terminate.aio()
 
 
 @dataclass(frozen=True)

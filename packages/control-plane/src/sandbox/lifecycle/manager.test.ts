@@ -1027,6 +1027,37 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_error).toContain("temporarily disabled");
     });
 
+    it("schedules a retry alarm when the circuit breaker is open", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "pending",
+        spawn_failure_count: 3,
+        last_spawn_failure: now - 60000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        alarmScheduler,
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      // Bot-triggered prompts have no next message to retry on: without a
+      // scheduled retry the open breaker strands them for good.
+      expect(alarmScheduler.alarms.length).toBeGreaterThan(0);
+      const last = alarmScheduler.alarms[alarmScheduler.alarms.length - 1];
+      expect(last).toBeGreaterThan(now);
+      // The retry lands when the breaker window has passed: 3 failures at
+      // 60s ago leaves the full 5-minute window still to run.
+      expect(last).toBeGreaterThanOrEqual(now + 4 * 60 * 1000);
+    });
+
     it("still broadcasts the reason when persisting it throws", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -2203,6 +2234,59 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_error).toContain("failed to connect");
       // Should NOT trigger snapshot (nothing to snapshot)
       expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("counts a connecting timeout toward the circuit breaker", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting" as SandboxStatus,
+        created_at: now - 130_000,
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      // The queued prompt is re-driven after this failure, so a repository
+      // whose boot always exceeds the timeout must eventually stop respawning.
+      expect(storage.calls).toContain("incrementCircuitBreakerFailure");
+    });
+
+    it("does not reset the circuit breaker until the sandbox connects", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "pending" as SandboxStatus,
+        created_at: now - 60_000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+      // Spawn initiation is not success: the sandbox has not connected yet,
+      // and connecting timeouts counted before it must stay counted.
+      expect(storage.calls).not.toContain("resetCircuitBreaker");
+
+      manager.onSandboxConnected();
+      expect(storage.calls).toContain("resetCircuitBreaker");
     });
 
     it("does not timeout connecting sandbox within timeout window", async () => {

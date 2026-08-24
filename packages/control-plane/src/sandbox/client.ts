@@ -240,6 +240,18 @@ export interface SnapshotSandboxResponse {
   error?: string;
 }
 
+export interface TerminateSandboxRequest {
+  providerObjectId: string;
+  sessionId: string;
+  reason: string;
+  signal?: AbortSignal;
+}
+
+export interface TerminateSandboxResponse {
+  success: boolean;
+  error?: string;
+}
+
 export interface SnapshotBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
@@ -316,6 +328,7 @@ export class ModalApiError extends Error {
 export class ModalClient {
   private createSandboxUrl: string;
   private snapshotSandboxUrl: string;
+  private terminateSandboxUrl: string;
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
   private createImageBuildSandboxUrl: string;
@@ -362,6 +375,7 @@ export class ModalClient {
     const baseUrl = getModalBaseUrl(workspace, environmentWebSuffix);
     this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
+    this.terminateSandboxUrl = `${baseUrl}-api-terminate-sandbox.modal.run`;
     this.snapshotBuildSandboxUrl = `${baseUrl}-api-snapshot-build-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
     this.createImageBuildSandboxUrl = `${baseUrl}-api-create-build-sandbox.modal.run`;
@@ -535,7 +549,55 @@ export class ModalClient {
   }
 
   /**
-   * Trigger a filesystem snapshot for a sandbox object.
+   * Terminate a sandbox by its Modal object id.
+   */
+  async terminateSandbox(
+    request: TerminateSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<TerminateSandboxResponse> {
+    const startTime = Date.now();
+    const endpoint = "terminateSandbox";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const result = await this.postJson(
+        this.terminateSandboxUrl,
+        endpoint,
+        MODAL_CLEANUP_REQUEST_DEADLINE_MS,
+        {
+          sandbox_id: request.providerObjectId,
+          session_id: request.sessionId,
+          reason: request.reason,
+        },
+        imageBuildOperationModalResponseSchema,
+        correlation,
+        request.signal,
+        (status) => (httpStatus = status)
+      );
+      if (!result.success) {
+        return { success: false, error: result.error || "Unknown terminate error" };
+      }
+
+      outcome = "success";
+      return { success: true };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        session_id: request.sessionId,
+        sandbox_id: request.providerObjectId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  /**
+   * Take a filesystem snapshot of a running sandbox.
    */
   async snapshotSandbox(
     request: SnapshotSandboxRequest,

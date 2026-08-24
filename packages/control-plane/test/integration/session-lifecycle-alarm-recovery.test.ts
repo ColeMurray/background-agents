@@ -64,4 +64,47 @@ describe("SessionDO lifecycle alarm recovery", () => {
     expect(message?.status).toBe("failed");
     expect(message?.error_message).toContain("stuck processing");
   });
+
+  it("re-drives a pending prompt after a connecting timeout instead of stranding it", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    await parkSandboxPastConnectingTimeout(stub);
+    await seedMessage(stub, {
+      id: "msg-stranded",
+      authorId: await ownerParticipantId(stub),
+      content: "Review the PR",
+      // Bot-triggered prompts arrive once and never send a follow-up message.
+      source: "github",
+      status: "pending",
+      createdAt: Date.now() - 1000,
+    });
+
+    const [parked] = await queryDO<{ created_at: number }>(stub, "SELECT created_at FROM sandbox");
+    if (!parked) throw new Error("Expected parked sandbox row");
+
+    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+
+    // The alarm re-drove the queue: the pending prompt found no sandbox and
+    // spawned a replacement, which stamps a fresh created_at even though
+    // Modal is unavailable here and the attempt settles failed.
+    const deadline = Date.now() + 5000;
+    let respawned = false;
+    while (Date.now() < deadline) {
+      const [row] = await queryDO<{ created_at: number }>(stub, "SELECT created_at FROM sandbox");
+      if (row && row.created_at > parked.created_at) {
+        respawned = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(respawned).toBe(true);
+
+    // The queued prompt survived the sandbox failure and stays pending for
+    // the replacement sandbox instead of being silently dropped.
+    const [message] = await queryDO<{ status: string }>(
+      stub,
+      "SELECT status FROM messages WHERE id = ?",
+      "msg-stranded"
+    );
+    expect(message?.status).toBe("pending");
+  });
 });

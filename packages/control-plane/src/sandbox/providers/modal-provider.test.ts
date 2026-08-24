@@ -18,6 +18,8 @@ import type {
   SnapshotSandboxRequest,
   SnapshotBuildSandboxRequest,
   SnapshotSandboxResponse,
+  TerminateSandboxRequest,
+  TerminateSandboxResponse,
   CreateImageBuildSandboxRequest,
   CreateImageBuildSandboxResponse,
   StartImageBuildSandboxRequest,
@@ -33,6 +35,7 @@ function createMockModalClient(
     createSandbox: (req: CreateSandboxRequest) => Promise<CreateSandboxResponse>;
     restoreSandbox: (req: RestoreSandboxRequest) => Promise<RestoreSandboxResponse>;
     snapshotSandbox: (req: SnapshotSandboxRequest) => Promise<SnapshotSandboxResponse>;
+    terminateSandbox: (req: TerminateSandboxRequest) => Promise<TerminateSandboxResponse>;
     snapshotBuildSandbox: (req: SnapshotBuildSandboxRequest) => Promise<SnapshotSandboxResponse>;
     createImageBuildSandbox: (
       req: CreateImageBuildSandboxRequest
@@ -63,6 +66,7 @@ function createMockModalClient(
         imageId: "image-123",
       })
     ),
+    terminateSandbox: vi.fn(async (): Promise<TerminateSandboxResponse> => ({ success: true })),
     snapshotBuildSandbox: vi.fn(
       async (): Promise<SnapshotSandboxResponse> => ({
         success: true,
@@ -108,6 +112,7 @@ describe("ModalSandboxProvider", () => {
       expect(provider.name).toBe("modal");
       expect(provider.capabilities.supportsSnapshots).toBe(true);
       expect(provider.capabilities.supportsRestore).toBe(true);
+      expect(provider.capabilities.supportsExplicitStop).toBe(true);
     });
   });
 
@@ -502,6 +507,62 @@ describe("ModalSandboxProvider", () => {
         expect.objectContaining({ vncEnabled: true }),
         undefined
       );
+    });
+  });
+
+  describe("stopSandbox", () => {
+    it("terminates the provider sandbox by object id", async () => {
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client);
+
+      const result = await provider.stopSandbox({
+        providerObjectId: "mo-1",
+        sessionId: "session-1",
+        reason: "connecting_timeout",
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(client.terminateSandbox).toHaveBeenCalledWith(
+        {
+          providerObjectId: "mo-1",
+          sessionId: "session-1",
+          reason: "connecting_timeout",
+          signal: undefined,
+        },
+        undefined
+      );
+    });
+
+    it("returns the failure message when terminate reports one", async () => {
+      const client = createMockModalClient({
+        terminateSandbox: vi.fn(async () => ({ success: false, error: "sandbox lookup failed" })),
+      });
+      const provider = new ModalSandboxProvider(client);
+
+      const result = await provider.stopSandbox({
+        providerObjectId: "mo-1",
+        sessionId: "session-1",
+        reason: "connecting_timeout",
+      });
+
+      expect(result).toEqual({ success: false, error: "sandbox lookup failed" });
+    });
+
+    it("classifies HTTP 503 from terminate as transient", async () => {
+      const client = createMockModalClient({
+        terminateSandbox: vi.fn(async () => {
+          throw new ModalApiError("stop failed", 503);
+        }),
+      });
+      const provider = new ModalSandboxProvider(client);
+
+      await expect(
+        provider.stopSandbox({
+          providerObjectId: "mo-1",
+          sessionId: "session-1",
+          reason: "connecting_timeout",
+        })
+      ).rejects.toMatchObject({ errorType: "transient" });
     });
   });
 

@@ -12,6 +12,7 @@ export interface AlarmHandlerDeps {
     | "failStuckProcessingMessage"
     | "recoverStopConfirmationTimeout"
     | "resumeAfterSandboxTermination"
+    | "processMessageQueue"
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   alarmScheduler: AlarmScheduler;
@@ -67,8 +68,19 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       if (lifecycleResult !== "no_action") {
         await deps.messageQueue.failStuckProcessingMessage();
       }
-      if (lifecycleResult === "sandbox_terminated") {
+      // A connecting timeout strands bot-triggered prompts: nothing re-drives
+      // the queue after the sandbox is failed, and automated sessions never
+      // send the "next message" the recovery assumed. Resume here re-drives
+      // the pending prompt through the same path an inbound message takes.
+      if (lifecycleResult === "sandbox_terminated" || lifecycleResult === "sandbox_failed") {
         await deps.messageQueue.resumeAfterSandboxTermination();
+      }
+      // no_action is the circuit-breaker retry alarm: the sandbox row is
+      // already dead and only the queue can move a pending prompt. Unlike
+      // resumeAfterSandboxTermination, processMessageQueue leaves any
+      // stop-confirmation wait intact — the sandbox may still be alive.
+      if (lifecycleResult === "no_action") {
+        await deps.messageQueue.processMessageQueue();
       }
     },
   };
