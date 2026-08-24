@@ -146,6 +146,7 @@ function createMockStorage(
       if (sandbox) {
         sandbox.status = data.status;
         sandbox.created_at = data.createdAt;
+        sandbox.boot_progress_at = null;
         sandbox.auth_token_hash = data.authTokenHash;
         sandbox.auth_token = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
@@ -158,6 +159,7 @@ function createMockStorage(
       if (sandbox) {
         sandbox.status = data.status;
         sandbox.created_at = data.createdAt;
+        sandbox.boot_progress_at = null;
       }
     }),
     updateSandboxModalObjectId: vi.fn((id: string | null) => {
@@ -1035,6 +1037,72 @@ describe("SandboxLifecycleManager", () => {
       }
     });
 
+    it("bounds cleanup when stopping a discarded provider result hangs", async () => {
+      vi.useFakeTimers();
+      try {
+        const sandbox = createMockSandbox({
+          status: "pending",
+          modal_object_id: null,
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        storage.commitProviderStartup = vi.fn(async () => false);
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox: vi.fn(() => new Promise<StopResult>(() => {})),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        const spawning = manager.spawnSandbox();
+        await vi.waitFor(() => expect(provider.stopSandbox).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(10_000);
+        await spawning;
+
+        expect(manager.isSpawning()).toBe(false);
+        expect(manager.isProviderStartupPending()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cleans up a provider result when its atomic commit throws", async () => {
+      const sandbox = createMockSandbox({ status: "pending", modal_object_id: null });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      storage.commitProviderStartup = vi.fn(async () => {
+        throw new Error("storage unavailable");
+      });
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true },
+        stopSandbox: vi.fn(async () => ({ success: true })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "provider-obj-123",
+          reason: "late_startup_result",
+        })
+      );
+      expect(sandbox.status).toBe("failed");
+    });
+
     it("passes user env vars to provider", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const userEnvVars = { DATABASE_URL: "postgres://example" };
@@ -1626,6 +1694,39 @@ describe("SandboxLifecycleManager", () => {
           url: "https://provider.example/same-provider-obj",
         },
       ]);
+    });
+
+    it("stops the known provider when a resume result is discarded without a replacement ID", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "same-provider-obj",
+        snapshot_image_id: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      storage.commitProviderStartup = vi.fn(async () => false);
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({ success: true })),
+        stopSandbox: vi.fn(async () => ({ success: true })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "same-provider-obj",
+          reason: "late_startup_result",
+        })
+      );
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {

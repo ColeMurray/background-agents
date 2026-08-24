@@ -60,7 +60,7 @@ const log = createLogger("lifecycle-manager");
 
 /** TTL for terminal auth JWTs (24 hours, matching typical sandbox lifetime). */
 const TERMINAL_TOKEN_TTL_SECONDS = 86400;
-const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
+const PROVIDER_STOP_TIMEOUT_MS = 10_000;
 
 // ==================== Dependency Interfaces ====================
 
@@ -986,6 +986,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
             expectedSandboxId: sandbox.modal_sandbox_id,
             preserveMissing: true,
             dashboardProviderObjectId: finalProviderObjectId,
+            cleanupProviderObjectId: finalProviderObjectId,
           }
         ))
       )
@@ -1117,27 +1118,18 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       return;
     }
 
-    const controller = new AbortController();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const stopTimeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          reject(new Error("Provider stop timed out before sandbox replacement"));
-        }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
-      });
-      await Promise.race([
-        this.stopProviderSandbox("respawn", controller.signal, providerObjectId),
-        stopTimeoutPromise,
-      ]);
+      await this.stopProviderSandboxWithTimeout(
+        "respawn",
+        providerObjectId,
+        "Provider stop timed out before sandbox replacement"
+      );
       this.storage.updateSandboxModalObjectId(null);
     } catch (error) {
       this.log.warn("Provider stop failed before sandbox replacement", {
         provider_object_id: providerObjectId,
         error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
 
@@ -1572,6 +1564,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       sandboxAuthToken?: string;
       sessionId?: string;
       dashboardProviderObjectId?: string;
+      cleanupProviderObjectId?: string;
     }
   ): Promise<boolean> {
     const ttydToken =
@@ -1586,21 +1579,28 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
             options.sandboxAuthToken
           )
         : null;
-    const committed = await this.storage.commitProviderStartup({
-      expectedSandboxId: options.expectedSandboxId,
-      providerObjectId: result.providerObjectId ?? null,
-      codeServer:
-        result.codeServerUrl && result.codeServerPassword
-          ? { url: result.codeServerUrl, password: result.codeServerPassword }
-          : null,
-      vnc: result.vncAccess ?? null,
-      tunnelUrls:
-        result.tunnelUrls && Object.keys(result.tunnelUrls).length > 0 ? result.tunnelUrls : null,
-      ttyd: result.ttydUrl && ttydToken ? { url: result.ttydUrl, token: ttydToken } : null,
-      preserveMissing: options.preserveMissing,
-    });
+    const cleanupProviderObjectId = options.cleanupProviderObjectId ?? result.providerObjectId;
+    let committed: boolean;
+    try {
+      committed = await this.storage.commitProviderStartup({
+        expectedSandboxId: options.expectedSandboxId,
+        providerObjectId: result.providerObjectId ?? null,
+        codeServer:
+          result.codeServerUrl && result.codeServerPassword
+            ? { url: result.codeServerUrl, password: result.codeServerPassword }
+            : null,
+        vnc: result.vncAccess ?? null,
+        tunnelUrls:
+          result.tunnelUrls && Object.keys(result.tunnelUrls).length > 0 ? result.tunnelUrls : null,
+        ttyd: result.ttydUrl && ttydToken ? { url: result.ttydUrl, token: ttydToken } : null,
+        preserveMissing: options.preserveMissing,
+      });
+    } catch (error) {
+      await this.discardLateProviderResult(options.expectedSandboxId, cleanupProviderObjectId);
+      throw error;
+    }
     if (!committed) {
-      await this.discardLateProviderResult(options.expectedSandboxId, result.providerObjectId);
+      await this.discardLateProviderResult(options.expectedSandboxId, cleanupProviderObjectId);
       return false;
     }
     const dashboardProviderObjectId = options.dashboardProviderObjectId ?? result.providerObjectId;
@@ -1622,12 +1622,39 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     });
     if (!providerObjectId || !this.canStopProviderSandbox()) return;
     try {
-      await this.stopProviderSandbox("late_startup_result", undefined, providerObjectId);
+      await this.stopProviderSandboxWithTimeout(
+        "late_startup_result",
+        providerObjectId,
+        "Provider stop timed out for late sandbox result"
+      );
     } catch (error) {
       this.log.warn("Provider stop failed for late sandbox result", {
         provider_object_id: providerObjectId,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  private async stopProviderSandboxWithTimeout(
+    reason: string,
+    providerObjectId: string,
+    timeoutMessage: string
+  ): Promise<void> {
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          controller.abort();
+          reject(new Error(timeoutMessage));
+        }, PROVIDER_STOP_TIMEOUT_MS);
+      });
+      await Promise.race([
+        this.stopProviderSandbox(reason, controller.signal, providerObjectId),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
 
