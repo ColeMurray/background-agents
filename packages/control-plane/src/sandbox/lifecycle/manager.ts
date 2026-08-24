@@ -1567,21 +1567,21 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       cleanupProviderObjectId?: string;
     }
   ): Promise<boolean> {
-    const ttydToken =
-      result.ttydUrl && options.sandboxAuthToken && options.sessionId
-        ? await mintJwt(
-            {
-              sub: options.sessionId,
-              sid: options.expectedSandboxId,
-              iat: Math.floor(Date.now() / 1000),
-              exp: Math.floor(Date.now() / 1000) + TERMINAL_TOKEN_TTL_SECONDS,
-            },
-            options.sandboxAuthToken
-          )
-        : null;
     const cleanupProviderObjectId = options.cleanupProviderObjectId ?? result.providerObjectId;
     let committed: boolean;
     try {
+      const ttydToken =
+        result.ttydUrl && options.sandboxAuthToken && options.sessionId
+          ? await mintJwt(
+              {
+                sub: options.sessionId,
+                sid: options.expectedSandboxId,
+                iat: Math.floor(Date.now() / 1000),
+                exp: Math.floor(Date.now() / 1000) + TERMINAL_TOKEN_TTL_SECONDS,
+              },
+              options.sandboxAuthToken
+            )
+          : null;
       committed = await this.storage.commitProviderStartup({
         expectedSandboxId: options.expectedSandboxId,
         providerObjectId: result.providerObjectId ?? null,

@@ -38,6 +38,7 @@ import {
 } from "../provider";
 import type { SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import * as jwt from "../../auth/jwt";
 
 // ==================== Mock Factories ====================
 
@@ -1101,6 +1102,46 @@ describe("SandboxLifecycleManager", () => {
         })
       );
       expect(sandbox.status).toBe("failed");
+    });
+
+    it("cleans up a provider result when terminal-token creation fails", async () => {
+      const mintJwt = vi.spyOn(jwt, "mintJwt").mockRejectedValueOnce(new Error("JWT failed"));
+      try {
+        const sandbox = createMockSandbox({ status: "pending", modal_object_id: null });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          createSandbox: vi.fn(async (config) => ({
+            sandboxId: config.sandboxId,
+            providerObjectId: "provider-with-terminal",
+            ttydUrl: "https://terminal.example.com",
+            createdAt: Date.now(),
+          })),
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        expect(storage.commitProviderStartup).not.toHaveBeenCalled();
+        expect(provider.stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerObjectId: "provider-with-terminal",
+            reason: "late_startup_result",
+          })
+        );
+        expect(sandbox.status).toBe("failed");
+      } finally {
+        mintJwt.mockRestore();
+      }
     });
 
     it("passes user env vars to provider", async () => {
