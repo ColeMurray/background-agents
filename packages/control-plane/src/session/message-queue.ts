@@ -403,6 +403,7 @@ export class SessionMessageQueue {
     if (!sent) {
       this.messageRepository.updateMessageToPending(message.id);
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
+      await this.resumeAfterSandboxTermination();
     } else {
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
@@ -466,6 +467,7 @@ export class SessionMessageQueue {
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (stoppedMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
+      await this.resumeAfterSandboxTermination();
     }
   }
 
@@ -477,6 +479,7 @@ export class SessionMessageQueue {
       message_id: awaitingStop.id,
     });
     await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_confirmation_timeout");
+    await this.resumeAfterSandboxTermination();
   }
 
   async resumeAfterSandboxTermination(): Promise<void> {

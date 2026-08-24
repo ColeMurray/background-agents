@@ -981,7 +981,6 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const onSandboxTerminated = vi.fn(async () => {});
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -991,15 +990,12 @@ describe("SandboxLifecycleManager", () => {
         createMockIdGenerator(),
         createTestConfig()
       );
-      manager.setCallbacks({ onSandboxTerminated });
-
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).not.toHaveBeenCalled();
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_error")
       ).toBe(true);
-      expect(onSandboxTerminated).not.toHaveBeenCalled();
     });
 
     it("persists the circuit-breaker reason, not just the broadcast", async () => {
@@ -1883,8 +1879,9 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      const result = await manager.handleAlarm();
 
+      expect(result).toBe("sandbox_terminated");
       expect(storage.calls).toContain("updateSandboxStatus:stale");
       expect(broadcaster.messages.some((m) => (m as { status?: string }).status === "stale")).toBe(
         true
@@ -1915,8 +1912,9 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      const result = await manager.handleAlarm();
 
+      expect(result).toBe("sandbox_terminated");
       expect(storage.calls).toContain("updateSandboxStatus:stopped");
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     });
@@ -2168,80 +2166,6 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.vnc_password).toBeNull();
     });
 
-    it("calls onSandboxTerminating callback on heartbeat stale", async () => {
-      const now = Date.now();
-      const sandbox = createMockSandbox({
-        status: "ready",
-        last_heartbeat: now - 100000, // Past 90s timeout
-      });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const onSandboxTerminating = vi.fn().mockResolvedValue(undefined);
-
-      const manager = new SandboxLifecycleManager(
-        createMockProvider(),
-        storage,
-        createMockBroadcaster(),
-        createMockWebSocketManager(),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-      manager.setCallbacks({ onSandboxTerminating });
-
-      await manager.handleAlarm();
-
-      expect(onSandboxTerminating).toHaveBeenCalledOnce();
-    });
-
-    it("calls onSandboxTerminating callback on inactivity timeout", async () => {
-      const now = Date.now();
-      const sandbox = createMockSandbox({
-        status: "ready",
-        last_heartbeat: now - 10000, // Recent heartbeat
-        last_activity: now - 11 * 60 * 1000, // Past 10 min timeout
-      });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const onSandboxTerminating = vi.fn().mockResolvedValue(undefined);
-
-      const manager = new SandboxLifecycleManager(
-        createMockProvider(),
-        storage,
-        createMockBroadcaster(),
-        createMockWebSocketManager(false, 0), // No clients
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-      manager.setCallbacks({ onSandboxTerminating });
-
-      await manager.handleAlarm();
-
-      expect(onSandboxTerminating).toHaveBeenCalledOnce();
-    });
-
-    it("does not call onSandboxTerminating when no callback provided", async () => {
-      const now = Date.now();
-      const sandbox = createMockSandbox({
-        status: "ready",
-        last_heartbeat: now - 100000, // Past timeout
-      });
-      const storage = createMockStorage(createMockSession(), sandbox);
-
-      // No callbacks - should not throw
-      const manager = new SandboxLifecycleManager(
-        createMockProvider(),
-        storage,
-        createMockBroadcaster(),
-        createMockWebSocketManager(),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-
-      await manager.handleAlarm();
-      expect(storage.calls).toContain("updateSandboxStatus:stale");
-    });
-
     it("detects connecting timeout and sets failed", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -2263,8 +2187,9 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      const result = await manager.handleAlarm();
 
+      expect(result).toBe("sandbox_failed");
       expect(storage.calls).toContain("updateSandboxStatus:failed");
       expect(storage.calls).toContain("clearSandboxCodeServer");
       expect(broadcaster.messages.some((m) => (m as { status?: string }).status === "failed")).toBe(
@@ -2306,32 +2231,6 @@ describe("SandboxLifecycleManager", () => {
       // Should schedule a follow-up alarm
       expect(alarmScheduler.alarms.length).toBe(1);
     });
-
-    it("calls onSandboxTerminating callback on connecting timeout", async () => {
-      const now = Date.now();
-      const sandbox = createMockSandbox({
-        status: "connecting" as SandboxStatus,
-        created_at: now - 130_000,
-        last_heartbeat: null,
-      });
-      const storage = createMockStorage(createMockSession(), sandbox);
-      const onSandboxTerminating = vi.fn().mockResolvedValue(undefined);
-
-      const manager = new SandboxLifecycleManager(
-        createMockProvider(),
-        storage,
-        createMockBroadcaster(),
-        createMockWebSocketManager(),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-      manager.setCallbacks({ onSandboxTerminating });
-
-      await manager.handleAlarm();
-
-      expect(onSandboxTerminating).toHaveBeenCalledOnce();
-    });
   });
 
   describe("terminateUnresponsiveSandbox", () => {
@@ -2372,7 +2271,6 @@ describe("SandboxLifecycleManager", () => {
         resolveStop = resolve;
       });
       const wsManager = createMockWebSocketManager(true);
-      const onSandboxTerminated = vi.fn(async () => {});
       const manager = new SandboxLifecycleManager(
         createMockProvider({
           capabilities: { supportsExplicitStop: true },
@@ -2385,109 +2283,20 @@ describe("SandboxLifecycleManager", () => {
         createMockIdGenerator(),
         createTestConfig()
       );
-      manager.setCallbacks({ onSandboxTerminated });
-
       const terminating = manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
+      let completed = false;
+      void terminating.then(() => {
+        completed = true;
+      });
 
       expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(
         1011,
         "Stop confirmation timed out"
       );
-      expect(onSandboxTerminated).not.toHaveBeenCalled();
+      expect(completed).toBe(false);
       resolveStop({ success: true });
       await terminating;
-      expect(onSandboxTerminated).toHaveBeenCalledOnce();
-    });
-  });
-
-  describe("setCallbacks", () => {
-    function staleHeartbeatManager() {
-      const sandbox = createMockSandbox({
-        status: "ready",
-        last_heartbeat: Date.now() - 100_000, // Past the 90s heartbeat timeout
-      });
-      return new SandboxLifecycleManager(
-        createMockProvider(),
-        createMockStorage(createMockSession(), sandbox),
-        createMockBroadcaster(),
-        createMockWebSocketManager(),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-    }
-
-    // The terminating path with no callbacks set is already covered by
-    // "does not call onSandboxTerminating when no callback provided" in the
-    // "handleAlarm" block above; only the terminated path needs a new case.
-    it("does not throw on a terminated path when no callbacks were ever set", async () => {
-      const manager = new SandboxLifecycleManager(
-        createMockProvider(),
-        createMockStorage(),
-        createMockBroadcaster(),
-        createMockWebSocketManager(true),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-
-      await expect(
-        manager.terminateUnresponsiveSandbox("stop_confirmation_timeout")
-      ).resolves.toBeUndefined();
-    });
-
-    it("fires both callbacks on the heartbeat-stale path once wired after construction", async () => {
-      const manager = staleHeartbeatManager();
-      const onSandboxTerminating = vi.fn(async () => {});
-      const onSandboxTerminated = vi.fn(async () => {});
-
-      manager.setCallbacks({ onSandboxTerminating, onSandboxTerminated });
-      await manager.handleAlarm();
-
-      expect(onSandboxTerminating).toHaveBeenCalledOnce();
-      expect(onSandboxTerminated).toHaveBeenCalledOnce();
-    });
-
-    it("fires onSandboxTerminated on terminateUnresponsiveSandbox once wired after construction", async () => {
-      const onSandboxTerminated = vi.fn(async () => {});
-      const manager = new SandboxLifecycleManager(
-        createMockProvider(),
-        createMockStorage(),
-        createMockBroadcaster(),
-        createMockWebSocketManager(true),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-
-      manager.setCallbacks({ onSandboxTerminated });
-      await manager.terminateUnresponsiveSandbox("stop_send_failed");
-
-      expect(onSandboxTerminated).toHaveBeenCalledOnce();
-    });
-
-    it("rejects a second wiring so a duplicate composition root cannot silently win", () => {
-      const manager = staleHeartbeatManager();
-
-      manager.setCallbacks({ onSandboxTerminating: vi.fn(async () => {}) });
-
-      expect(() => manager.setCallbacks({ onSandboxTerminating: vi.fn(async () => {}) })).toThrow(
-        /already wired/i
-      );
-    });
-
-    it("keeps the first wiring intact after a rejected second wiring", async () => {
-      const manager = staleHeartbeatManager();
-      const first = vi.fn(async () => {});
-      const second = vi.fn(async () => {});
-
-      manager.setCallbacks({ onSandboxTerminating: first });
-      expect(() => manager.setCallbacks({ onSandboxTerminating: second })).toThrow();
-
-      await manager.handleAlarm();
-
-      expect(first).toHaveBeenCalledOnce();
-      expect(second).not.toHaveBeenCalled();
+      expect(completed).toBe(true);
     });
   });
 
