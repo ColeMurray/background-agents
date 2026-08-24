@@ -1,0 +1,579 @@
+/**
+ * Unit tests for UserEnvResolver.
+ *
+ * The resolver is exercised against a real SessionCoreRepository over a fake
+ * DO SqlStorage and real secret stores over a fake SqlDatabase (real AES-GCM
+ * round-trips via encryptToken), so these tests pin the observable throw and
+ * return surface rather than the fakes.
+ */
+
+import { describe, it, expect } from "vitest";
+import { UserEnvResolver } from "./user-env-resolver";
+import { SecretsCapExceededError } from "../db/secrets-validation";
+import { SessionCoreRepository } from "./session-core-repository";
+import { encryptToken, generateEncryptionKey } from "../auth/crypto";
+import type { Logger } from "../logger";
+import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
+import type { SqlResult as StorageSqlResult, SqlStorage } from "./sql-storage";
+import type { SourceControlProvider, RepositoryAccessResult } from "../source-control";
+import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provider-accounts";
+import type { SessionRepositoryRow, SessionRow } from "./types";
+
+const ENCRYPTION_KEY = generateEncryptionKey();
+
+// ---------------------------------------------------------------------------
+// Fakes
+// ---------------------------------------------------------------------------
+
+interface LogEntry {
+  level: "debug" | "info" | "warn" | "error";
+  msg: string;
+  data?: Record<string, unknown>;
+}
+
+function recordingLogger(entries: LogEntry[]): Logger {
+  const push = (level: LogEntry["level"]) => (msg: string, data?: Record<string, unknown>) => {
+    entries.push({ level, msg, data });
+  };
+  return {
+    debug: push("debug"),
+    info: push("info"),
+    warn: push("warn"),
+    error: push("error"),
+    child: () => recordingLogger(entries),
+  };
+}
+
+function notUsedHere(member: string): never {
+  throw new Error(`${member} is not exercised by the user-env-resolver suite`);
+}
+
+/** Full-interface stub so no test needs an unsafe cast. */
+function stubProvider(
+  checkRepositoryAccess: SourceControlProvider["checkRepositoryAccess"]
+): SourceControlProvider {
+  return {
+    name: "github",
+    getRepository: () => notUsedHere("getRepository"),
+    createPullRequest: () => notUsedHere("createPullRequest"),
+    checkRepositoryAccess,
+    listRepositories: () => notUsedHere("listRepositories"),
+    listBranches: () => notUsedHere("listBranches"),
+    getBranchHead: () => notUsedHere("getBranchHead"),
+    resolveCommit: () => notUsedHere("resolveCommit"),
+    listTree: () => notUsedHere("listTree"),
+    readBlob: () => notUsedHere("readBlob"),
+    getPullRequest: () => notUsedHere("getPullRequest"),
+    generatePushAuth: () => notUsedHere("generatePushAuth"),
+    generateCredentialHelperAuth: () => notUsedHere("generateCredentialHelperAuth"),
+    buildManualPullRequestUrl: () => notUsedHere("buildManualPullRequestUrl"),
+    buildGitPushSpec: () => notUsedHere("buildGitPushSpec"),
+  };
+}
+
+/** DO-embedded SQLite fake backing a real SessionCoreRepository. */
+function fakeSqlStorage(state: { session: SessionRow | null; memberRows: SessionRepositoryRow[] }) {
+  const calls: Array<{ query: string; params: unknown[] }> = [];
+  const sql: SqlStorage = {
+    exec(query: string, ...params: unknown[]): StorageSqlResult {
+      calls.push({ query, params });
+      let rows: unknown[] = [];
+      if (query === "SELECT * FROM session LIMIT 1") {
+        rows = state.session ? [state.session] : [];
+      } else if (query === "SELECT * FROM session_repositories ORDER BY position") {
+        rows = state.memberRows;
+      } else if (!query.startsWith("UPDATE session SET repo_id")) {
+        throw new Error(`Unexpected DO storage query: ${query}`);
+      }
+      return { toArray: () => rows, one: () => rows[0] ?? null, rowsWritten: 1 };
+    },
+  };
+  return { sql, calls };
+}
+
+type D1Row = Record<string, unknown>;
+
+class FakeStatement implements SqlStatement {
+  private bound: unknown[] = [];
+
+  constructor(
+    private readonly db: FakeSqlDatabase,
+    private readonly query: string
+  ) {}
+
+  bind(...values: unknown[]): SqlStatement {
+    this.bound = values;
+    return this;
+  }
+
+  first<T = Record<string, unknown>>(): Promise<T | null> {
+    return Promise.reject(new Error(`first() is not used by the resolver: ${this.query}`));
+  }
+
+  run<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
+    return Promise.reject(new Error(`run() is not used by the resolver: ${this.query}`));
+  }
+
+  async all<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
+    const rows: unknown[] = this.db.rowsFor(this.query, this.bound);
+    return { results: rows as T[], meta: { changes: 0 } };
+  }
+}
+
+/** Read-only D1 fake covering exactly the queries the resolver's stores run. */
+class FakeSqlDatabase implements SqlDatabase {
+  readonly queries: string[] = [];
+  readonly providerAuthBinds: unknown[] = [];
+  providerAuthRows: D1Row[] = [];
+  globalSecretRows: D1Row[] = [];
+  readonly repoSecretRowsByRepoId = new Map<number, D1Row[]>();
+  readonly environmentSecretRowsById = new Map<string, D1Row[]>();
+
+  prepare(query: string): SqlStatement {
+    return new FakeStatement(this, query.replace(/\s+/g, " ").trim());
+  }
+
+  batch<T = unknown>(): Promise<SqlResult<T>[]> {
+    return Promise.reject(new Error("batch() is not used by the resolver"));
+  }
+
+  rowsFor(query: string, bound: unknown[]): D1Row[] {
+    this.queries.push(query);
+    if (query.startsWith("SELECT provider, auth_mode")) {
+      this.providerAuthBinds.push(bound[0]);
+      return this.providerAuthRows;
+    }
+    if (query === "SELECT key, encrypted_value FROM global_secrets") {
+      return this.globalSecretRows;
+    }
+    if (query === "SELECT key, encrypted_value FROM repo_secrets WHERE repo_id = ?") {
+      return this.repoSecretRowsByRepoId.get(bound[0] as number) ?? [];
+    }
+    if (query === "SELECT key, encrypted_value FROM environment_secrets WHERE environment_id = ?") {
+      return this.environmentSecretRowsById.get(bound[0] as string) ?? [];
+    }
+    throw new Error(`Unexpected D1 query: ${query}`);
+  }
+}
+
+async function secretRows(secrets: Record<string, string>): Promise<D1Row[]> {
+  const rows: D1Row[] = [];
+  for (const [key, value] of Object.entries(secrets)) {
+    rows.push({ key, encrypted_value: await encryptToken(value, ENCRYPTION_KEY) });
+  }
+  return rows;
+}
+
+function providerAuthRows(modes: {
+  openai: SessionProviderAuthMode;
+  xai: SessionProviderAuthMode;
+}): D1Row[] {
+  return (["openai", "xai"] as const).map((provider) => ({
+    provider,
+    auth_mode: modes[provider],
+    provider_account_id: modes[provider] === "provider_account" ? "1".repeat(32) : null,
+    selection_source: "explicit",
+    inherited_from_session_id: null,
+  }));
+}
+
+const API_KEY_MODES = { openai: "api_key", xai: "api_key" } as const;
+
+function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
+  return {
+    id: "sess-1",
+    session_name: "sess-public-1",
+    title: null,
+    repo_owner: "acme",
+    repo_name: "web",
+    repo_id: 90101,
+    base_branch: "main",
+    branch_name: null,
+    base_sha: null,
+    current_sha: null,
+    opencode_session_id: null,
+    model: "anthropic/claude-sonnet-4-5",
+    reasoning_effort: null,
+    status: "active",
+    parent_session_id: null,
+    spawn_source: "user",
+    spawn_depth: 0,
+    code_server_enabled: 0,
+    vnc_enabled: 0,
+    total_cost: 0,
+    sandbox_settings: null,
+    environment_id: null,
+    created_at: 1,
+    updated_at: 1,
+    ...overrides,
+  };
+}
+
+function memberRow(
+  position: number,
+  repoOwner: string,
+  repoName: string,
+  repoId: number | null
+): SessionRepositoryRow {
+  return {
+    position,
+    repo_owner: repoOwner,
+    repo_name: repoName,
+    repo_id: repoId,
+    base_branch: "main",
+    branch_name: null,
+    base_sha: null,
+    current_sha: null,
+  };
+}
+
+function makeHarness(
+  options: {
+    session?: SessionRow | null;
+    memberRows?: SessionRepositoryRow[];
+    /** Model a deployment where the DB binding is missing. */
+    withoutDb?: boolean;
+    /** Omit to model a deployment without REPO_SECRETS_ENCRYPTION_KEY. */
+    encryptionKey?: string;
+    /** Omit to model an unset SECRETS_CAP_ENFORCEMENT (fail-closed enforce). */
+    capEnforcement?: string;
+    checkRepositoryAccess?: SourceControlProvider["checkRepositoryAccess"];
+  } = {}
+) {
+  const session = options.session === undefined ? sessionRow() : options.session;
+  const storage = fakeSqlStorage({ session, memberRows: options.memberRows ?? [] });
+  const db = new FakeSqlDatabase();
+  const logs: LogEntry[] = [];
+  let currentLogger = recordingLogger(logs);
+  let providerThunkCalls = 0;
+  const provider = stubProvider(
+    options.checkRepositoryAccess ?? (() => notUsedHere("checkRepositoryAccess"))
+  );
+
+  const resolver = new UserEnvResolver({
+    db: options.withoutDb ? null : db,
+    sessionCoreRepository: new SessionCoreRepository(storage.sql, (closure) => closure()),
+    getSourceControlProvider: () => {
+      providerThunkCalls += 1;
+      return provider;
+    },
+    durableObjectId: "do-id-fallback",
+    repoSecretsEncryptionKey: options.encryptionKey,
+    secretsCapEnforcement: options.capEnforcement,
+    log: () => currentLogger,
+  });
+
+  return {
+    resolver,
+    db,
+    logs,
+    sqlCalls: storage.calls,
+    providerThunkCalls: () => providerThunkCalls,
+    setLogger(logger: Logger) {
+      currentLogger = logger;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("UserEnvResolver", () => {
+  describe("missing session row", () => {
+    it("returns undefined from getUserEnvVars after a warn, without touching D1", async () => {
+      const h = makeHarness({ session: null });
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toBeUndefined();
+
+      expect(h.logs).toContainEqual({
+        level: "warn",
+        msg: "Cannot load secrets: no session",
+        data: undefined,
+      });
+      expect(h.db.queries).toEqual([]);
+    });
+
+    it("returns null from getProviderAuthenticationError", async () => {
+      const h = makeHarness({ session: null });
+
+      await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5")).resolves.toBeNull();
+    });
+  });
+
+  it("throws when a session exists but D1 is unavailable", async () => {
+    const h = makeHarness({ withoutDb: true });
+
+    await expect(h.resolver.getUserEnvVars()).rejects.toThrow(
+      "D1 is required to load session provider auth"
+    );
+  });
+
+  describe("without REPO_SECRETS_ENCRYPTION_KEY", () => {
+    it("skips secret loading and derives env from provider auth modes only", async () => {
+      const h = makeHarness();
+      h.db.providerAuthRows = providerAuthRows({ openai: "provider_account", xai: "api_key" });
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({ OPENAI_OAUTH_MANAGED: "1" });
+
+      expect(h.logs.some((entry) => entry.level === "debug")).toBe(true);
+      // Provider auth is resolved by the session's public id; no secrets table is read.
+      expect(h.db.providerAuthBinds).toEqual(["sess-public-1"]);
+      expect(h.db.queries).toHaveLength(1);
+    });
+
+    it("returns undefined (not {}) when no provider is managed", async () => {
+      const h = makeHarness();
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toBeUndefined();
+    });
+  });
+
+  describe("session-target secret fold", () => {
+    async function foldHarness(
+      secondarySecrets: Record<string, string>,
+      primarySecrets: Record<string, string>
+    ) {
+      const h = makeHarness({
+        memberRows: [memberRow(0, "acme", "web", 90101), memberRow(1, "acme", "backend", 90102)],
+        encryptionKey: ENCRYPTION_KEY,
+      });
+      h.db.providerAuthRows = providerAuthRows({ openai: "api_key", xai: "legacy_scoped_oauth" });
+      h.db.globalSecretRows = await secretRows({ SHARED: "global", ONLY_GLOBAL: "g" });
+      h.db.repoSecretRowsByRepoId.set(90101, await secretRows(primarySecrets));
+      h.db.repoSecretRowsByRepoId.set(90102, await secretRows(secondarySecrets));
+      return h;
+    }
+
+    it("folds members with the primary winning, and excludes secondary repos from the managed broker env", async () => {
+      const h = await foldHarness(
+        { SHARED: "backend", ONLY_BACKEND: "b", XAI_OAUTH_REFRESH_TOKEN: "legacy-xai" },
+        { SHARED: "web", ONLY_WEB: "w" }
+      );
+
+      // The secondary's legacy OAuth token is stripped from the exposed env and,
+      // because only global + primary feed broker secrets, does NOT mark xai managed.
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({
+        SHARED: "web",
+        ONLY_GLOBAL: "g",
+        ONLY_WEB: "w",
+        ONLY_BACKEND: "b",
+      });
+    });
+
+    it("marks a provider managed when the legacy token comes from the primary repo", async () => {
+      const h = await foldHarness(
+        { SHARED: "backend", ONLY_BACKEND: "b" },
+        { SHARED: "web", ONLY_WEB: "w", XAI_OAUTH_REFRESH_TOKEN: "legacy-xai" }
+      );
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({
+        SHARED: "web",
+        ONLY_GLOBAL: "g",
+        ONLY_WEB: "w",
+        ONLY_BACKEND: "b",
+        XAI_OAUTH_MANAGED: "1",
+      });
+    });
+
+    it("returns undefined (not {}) when every source is empty", async () => {
+      const h = makeHarness({ encryptionKey: ENCRYPTION_KEY });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toBeUndefined();
+    });
+
+    it("sources environment secrets without the member filter and never reads repo secrets", async () => {
+      const h = makeHarness({
+        session: sessionRow({ environment_id: "env-1" }),
+        encryptionKey: ENCRYPTION_KEY,
+      });
+      h.db.providerAuthRows = providerAuthRows({ openai: "api_key", xai: "legacy_scoped_oauth" });
+      h.db.globalSecretRows = await secretRows({ SHARED: "global", ONLY_GLOBAL: "g" });
+      h.db.environmentSecretRowsById.set(
+        "env-1",
+        await secretRows({ SHARED: "env", FROM_ENV: "e", XAI_OAUTH_REFRESH_TOKEN: "legacy-xai" })
+      );
+
+      // Environment sources also feed the broker env, so the legacy token marks xai managed.
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({
+        SHARED: "env",
+        ONLY_GLOBAL: "g",
+        FROM_ENV: "e",
+        XAI_OAUTH_MANAGED: "1",
+      });
+      expect(h.db.queries.some((query) => query.includes("repo_secrets"))).toBe(false);
+    });
+
+    it("skips a secondary member with no resolvable repo id without touching the provider", async () => {
+      const h = makeHarness({
+        memberRows: [memberRow(0, "acme", "web", 90101), memberRow(1, "acme", "backend", null)],
+        encryptionKey: ENCRYPTION_KEY,
+      });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      h.db.globalSecretRows = await secretRows({ ONLY_GLOBAL: "g" });
+      h.db.repoSecretRowsByRepoId.set(90101, await secretRows({ ONLY_WEB: "w" }));
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({
+        ONLY_GLOBAL: "g",
+        ONLY_WEB: "w",
+      });
+
+      // The id-less secondary contributes nothing: exactly one repo_secrets read
+      // (the primary's) and no lazy ensureRepoId resolution via the provider.
+      expect(h.db.queries.filter((query) => query.includes("repo_secrets"))).toHaveLength(1);
+      expect(h.providerThunkCalls()).toBe(0);
+    });
+
+    it("never constructs the source control provider on a secrets-only load", async () => {
+      const h = makeHarness({ encryptionKey: ENCRYPTION_KEY });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      h.db.globalSecretRows = await secretRows({ FOO: "bar" });
+      h.db.repoSecretRowsByRepoId.set(90101, await secretRows({ BAZ: "qux" }));
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({ FOO: "bar", BAZ: "qux" });
+
+      expect(h.providerThunkCalls()).toBe(0);
+    });
+  });
+
+  describe("secrets cap", () => {
+    async function overCapHarness(capEnforcement?: string) {
+      const h = makeHarness({ encryptionKey: ENCRYPTION_KEY, capEnforcement });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      const bulk: Record<string, string> = {};
+      for (let i = 0; i < 9; i += 1) {
+        bulk[`BULK_${i}`] = "x".repeat(16384);
+      }
+      h.db.globalSecretRows = await secretRows(bulk);
+      return h;
+    }
+
+    it("rejects an over-cap payload when enforcement is unset (fail closed)", async () => {
+      const h = await overCapHarness();
+
+      await expect(h.resolver.getUserEnvVars()).rejects.toThrow(SecretsCapExceededError);
+
+      expect(h.logs).toContainEqual(
+        expect.objectContaining({ level: "error", msg: "secrets.cap_exceeded" })
+      );
+    });
+
+    it("resolves the oversized payload in warn mode and logs the breach", async () => {
+      const h = await overCapHarness("warn");
+
+      const env = await h.resolver.getUserEnvVars();
+
+      expect(Object.keys(env ?? {})).toHaveLength(9);
+      expect(h.logs).toContainEqual(
+        expect.objectContaining({ level: "warn", msg: "secrets.cap_exceeded" })
+      );
+    });
+  });
+
+  describe("getProviderAuthenticationError", () => {
+    it("returns the provider message and logs when authentication is unavailable", async () => {
+      const h = makeHarness();
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(
+        h.resolver.getProviderAuthenticationError("openai/gpt-5-codex")
+      ).resolves.toMatch(/No OpenAI authentication is configured/);
+
+      expect(h.logs).toContainEqual({
+        level: "error",
+        msg: "provider_auth.unavailable",
+        data: { event: "provider_auth.unavailable", provider: "openai", auth_mode: "api_key" },
+      });
+    });
+
+    it("returns null when the provider is authenticated", async () => {
+      const h = makeHarness();
+      h.db.providerAuthRows = providerAuthRows({ openai: "provider_account", xai: "api_key" });
+
+      await expect(h.resolver.getProviderAuthenticationError("openai/gpt-5")).resolves.toBeNull();
+    });
+
+    it("returns null for non-subscription providers", async () => {
+      const h = makeHarness();
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+
+      await expect(
+        h.resolver.getProviderAuthenticationError("anthropic/claude-sonnet-4-5")
+      ).resolves.toBeNull();
+    });
+  });
+
+  describe("ensureRepoId", () => {
+    it("short-circuits on an existing repo_id without touching the provider or persisting", async () => {
+      const h = makeHarness();
+
+      await expect(h.resolver.ensureRepoId(sessionRow())).resolves.toBe(90101);
+
+      expect(h.providerThunkCalls()).toBe(0);
+      expect(h.sqlCalls.filter((call) => call.query.startsWith("UPDATE"))).toEqual([]);
+    });
+
+    it("throws when the session has no repository context", async () => {
+      const h = makeHarness();
+
+      await expect(
+        h.resolver.ensureRepoId(sessionRow({ repo_id: null, repo_owner: null, repo_name: null }))
+      ).rejects.toThrow("Session has no repository context");
+    });
+
+    it("throws when the repository is not accessible", async () => {
+      const h = makeHarness({ checkRepositoryAccess: async () => null });
+
+      await expect(h.resolver.ensureRepoId(sessionRow({ repo_id: null }))).rejects.toThrow(
+        "Repository is not accessible for the configured SCM provider"
+      );
+      expect(h.sqlCalls.filter((call) => call.query.startsWith("UPDATE"))).toEqual([]);
+    });
+
+    it("resolves via the provider and persists the repo id for legacy rows", async () => {
+      const checked: Array<{ owner: string; name: string }> = [];
+      const access: RepositoryAccessResult = {
+        repoId: 777,
+        repoOwner: "acme",
+        repoName: "web",
+        defaultBranch: "main",
+      };
+      const h = makeHarness({
+        checkRepositoryAccess: async ({ owner, name }) => {
+          checked.push({ owner, name });
+          return access;
+        },
+      });
+
+      await expect(h.resolver.ensureRepoId(sessionRow({ repo_id: null }))).resolves.toBe(777);
+
+      expect(checked).toEqual([{ owner: "acme", name: "web" }]);
+      const updates = h.sqlCalls.filter((call) => call.query.startsWith("UPDATE"));
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.params).toEqual([777]);
+    });
+  });
+
+  describe("thunk contracts", () => {
+    it("logs through the logger current at call time, not construction time", async () => {
+      const h = makeHarness({ session: null });
+      const swappedEntries: LogEntry[] = [];
+
+      await h.resolver.getUserEnvVars();
+      expect(h.logs).toHaveLength(1);
+
+      h.setLogger(recordingLogger(swappedEntries));
+      await h.resolver.getUserEnvVars();
+
+      // The swapped-in logger received the second warn; the original saw only the first.
+      expect(swappedEntries).toContainEqual({
+        level: "warn",
+        msg: "Cannot load secrets: no session",
+        data: undefined,
+      });
+      expect(h.logs).toHaveLength(1);
+    });
+  });
+});

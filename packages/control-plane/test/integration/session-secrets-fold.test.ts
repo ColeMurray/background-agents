@@ -10,14 +10,16 @@ import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provide
 
 const KEY = () => env.REPO_SECRETS_ENCRYPTION_KEY as string;
 
-/** Invoke the DO's real (private) getUserEnvVars, exercising the session-target fold. */
+/** Invoke the DO's real (private) sandbox env resolver, exercising the session-target fold. */
 function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
   return runInDurableObject(stub, (instance: SessionDO) =>
     (
       instance as unknown as {
-        getUserEnvVars(): Promise<Record<string, string> | undefined>;
+        userEnvResolver: {
+          getUserEnvVars(): Promise<Record<string, string> | undefined>;
+        };
       }
-    ).getUserEnvVars()
+    ).userEnvResolver.getUserEnvVars()
   );
 }
 

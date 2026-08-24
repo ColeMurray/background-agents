@@ -47,10 +47,6 @@ import {
   type SourceControlProvider,
 } from "../source-control";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
-import type {
-  SessionProviderAuthMode,
-  SubscriptionProviderId,
-} from "@open-inspect/shared/types/provider-accounts";
 import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, SandboxRow } from "./types";
@@ -80,27 +76,14 @@ import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
 import { findPrArtifactForRepo } from "./pr-artifacts";
-import { RepoSecretsStore } from "../db/repo-secrets";
-import { GlobalSecretsStore } from "../db/global-secrets";
-import { EnvironmentSecretsStore } from "../db/environment-secrets";
 import { EnvironmentStore } from "../db/environments";
-import {
-  auditSecretsMerge,
-  mergeSecretSources,
-  parseSecretsCapMode,
-} from "../db/secrets-validation";
-import { buildSessionTargetSecretSources } from "./session-target-secrets";
-import type { SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
-import {
-  getProviderAuthenticationError as resolveProviderAuthenticationError,
-  prepareManagedProviderEnv,
-} from "../sandbox/managed-provider-env";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import { CallbackNotificationService } from "./callback-notification-service";
+import { UserEnvResolver } from "./user-env-resolver";
 import { Scheduler } from "../scheduler/scheduler";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import type { BackgroundTasks } from "../platform-ports";
@@ -249,6 +232,7 @@ export class SessionDO extends DurableObject<Env> {
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
   private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
+  private _userEnvResolver: UserEnvResolver | null = null;
   private readonly server: SessionServer<WebSocket, ClientInfo>;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
@@ -423,6 +407,21 @@ export class SessionDO extends DurableObject<Env> {
     return this._sourceControlProvider;
   }
 
+  private get userEnvResolver(): UserEnvResolver {
+    if (!this._userEnvResolver) {
+      this._userEnvResolver = new UserEnvResolver({
+        db: this.db,
+        sessionCoreRepository: this.sessionCoreRepository,
+        getSourceControlProvider: () => this.sourceControlProvider,
+        durableObjectId: this.ctx.id.toString(),
+        repoSecretsEncryptionKey: this.env.REPO_SECRETS_ENCRYPTION_KEY,
+        secretsCapEnforcement: this.env.SECRETS_CAP_ENFORCEMENT,
+        log: () => this.log,
+      });
+    }
+    return this._userEnvResolver;
+  }
+
   /**
    * Get the participant service, creating it lazily if needed.
    */
@@ -549,7 +548,7 @@ export class SessionDO extends DurableObject<Env> {
         this.participantService,
         this.callbackService,
         this.statusService,
-        (model) => this.getProviderAuthenticationError(model),
+        (model) => this.userEnvResolver.getProviderAuthenticationError(model),
         (messageId, messageCreatedAt, completedAt) =>
           this.terminalMessageProjection.recordTerminalMessage({
             messageId,
@@ -648,7 +647,7 @@ export class SessionDO extends DurableObject<Env> {
           const service = new OpenAITokenRefreshService(
             this.db!,
             this.env.REPO_SECRETS_ENCRYPTION_KEY!,
-            (sessionRow) => this.ensureRepoId(sessionRow),
+            (sessionRow) => this.userEnvResolver.ensureRepoId(sessionRow),
             log
           );
           return service.refresh(session);
@@ -657,7 +656,7 @@ export class SessionDO extends DurableObject<Env> {
           const service = new XaiTokenRefreshService(
             this.db!,
             this.env.REPO_SECRETS_ENCRYPTION_KEY!,
-            (sessionRow) => this.ensureRepoId(sessionRow),
+            (sessionRow) => this.userEnvResolver.ensureRepoId(sessionRow),
             log
           );
           return service.refresh(session);
@@ -911,7 +910,7 @@ export class SessionDO extends DurableObject<Env> {
           baseBranch: entry.baseBranch ?? "main",
           baseSha: entry.row?.base_sha ?? null,
         })),
-      getUserEnvVars: () => this.getUserEnvVars(),
+      getUserEnvVars: () => this.userEnvResolver.getUserEnvVars(),
       updateSandboxStatus: (status) => this.sandboxRepository.updateSandboxStatus(status),
       updateSandboxForSpawn: (data) => this.sandboxRepository.updateSandboxForSpawn(data),
       updateSandboxForResume: (data) => this.sandboxRepository.updateSandboxForResume(data),
@@ -1700,151 +1699,5 @@ export class SessionDO extends DurableObject<Env> {
    */
   private getIsProcessing(): boolean {
     return this.messageRepository.getProcessingMessage() !== null;
-  }
-
-  private async ensureRepoId(session: SessionRow): Promise<number> {
-    if (session.repo_id) {
-      return session.repo_id;
-    }
-    if (!session.repo_owner || !session.repo_name) {
-      throw new Error("Session has no repository context");
-    }
-
-    const result = await this.sourceControlProvider.checkRepositoryAccess({
-      owner: session.repo_owner,
-      name: session.repo_name,
-    });
-    if (!result) {
-      throw new Error("Repository is not accessible for the configured SCM provider");
-    }
-
-    this.sessionCoreRepository.updateSessionRepoId(result.repoId);
-    return result.repoId;
-  }
-
-  private async getUserEnvVars(): Promise<Record<string, string> | undefined> {
-    const context = await this.loadUserEnvContext();
-    if (!context) return undefined;
-    return Object.keys(context.sandboxEnv).length === 0 ? undefined : context.sandboxEnv;
-  }
-
-  private async getProviderAuthenticationError(model: string): Promise<string | null> {
-    const context = await this.loadUserEnvContext();
-    if (!context) return null;
-    const issue = resolveProviderAuthenticationError(
-      model,
-      context.sandboxEnv,
-      context.providerAuthModes
-    );
-    if (!issue) return null;
-    this.log.error("provider_auth.unavailable", {
-      event: "provider_auth.unavailable",
-      provider: issue.provider,
-      auth_mode: context.providerAuthModes[issue.provider],
-    });
-    return issue.message;
-  }
-
-  private async loadUserEnvContext(): Promise<{
-    sandboxEnv: Record<string, string>;
-    providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>;
-  } | null> {
-    const session = this.sessionCoreRepository.getSession();
-    if (!session) {
-      this.log.warn("Cannot load secrets: no session");
-      return null;
-    }
-
-    const db = this.db;
-    if (!db) throw new Error("D1 is required to load session provider auth");
-    const providerAuth = await new SessionIndexStore(db).getCompleteProviderAuth(
-      resolvePublicSessionId(session, this.ctx.id.toString())
-    );
-    const providerAuthModes = Object.fromEntries(
-      providerAuth.map(({ provider, authMode }) => [provider, authMode])
-    ) as Record<SubscriptionProviderId, SessionProviderAuthMode>;
-
-    if (!this.env.REPO_SECRETS_ENCRYPTION_KEY) {
-      this.log.debug("Ordinary secrets not configured, skipping secret loading", {
-        has_encryption_key: !!this.env.REPO_SECRETS_ENCRYPTION_KEY,
-      });
-      const sandboxEnv = prepareManagedProviderEnv({
-        exposedSecrets: {},
-        brokerSecrets: {},
-        providerAuthModes,
-      });
-      return { sandboxEnv, providerAuthModes };
-    }
-
-    // Fail hard on secret loading — sandboxes must not silently lose secrets
-    const encryptionKey = this.env.REPO_SECRETS_ENCRYPTION_KEY;
-    const globalStore = new GlobalSecretsStore(db, encryptionKey);
-    const globalSecrets = await globalStore.getDecryptedSecrets();
-
-    const repoStore = new RepoSecretsStore(db, encryptionKey);
-    const environmentSecretsStore = new EnvironmentSecretsStore(db, encryptionKey);
-    const members = this.sessionCoreRepository.getSessionRepositories();
-    const sources = await buildSessionTargetSecretSources({
-      environmentId: session.environment_id,
-      globalSecrets,
-      members,
-      loadMemberSecrets: (member) => this.loadMemberRepoSecrets(session, member, repoStore),
-      loadEnvironmentSecrets: (environmentId) =>
-        environmentSecretsStore.getDecryptedSecrets(environmentId),
-    });
-
-    const merge = mergeSecretSources(sources);
-    auditSecretsMerge({
-      merge,
-      mode: parseSecretsCapMode(this.env.SECRETS_CAP_ENFORCEMENT),
-      log: this.log,
-      context: { session_id: session.id },
-    });
-
-    const mergedCount = Object.keys(merge.merged).length;
-    if (mergedCount > 0) {
-      this.log.info("Secrets merged for sandbox", {
-        source_count: sources.length,
-        merged_count: mergedCount,
-        payload_bytes: merge.totalBytes,
-        exceeds_limit: merge.exceedsLimit,
-      });
-    }
-
-    const primary = members.find((member) => member.isPrimary);
-    const managedSources = session.environment_id
-      ? sources
-      : sources.filter(
-          (source) =>
-            source.label === "global" ||
-            (primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
-        );
-    const managedSecrets = mergeSecretSources(managedSources).merged;
-    const sandboxEnv = prepareManagedProviderEnv({
-      exposedSecrets: merge.merged,
-      brokerSecrets: managedSecrets,
-      providerAuthModes,
-    });
-    return { sandboxEnv, providerAuthModes };
-  }
-
-  /**
-   * Decrypt one member repo's secrets — the injected leaf loader for
-   * buildSessionTargetSecretSources. The member row carries the repo id; a
-   * synthesized primary (legacy scalar row) resolves it lazily via ensureRepoId.
-   * A member without a resolvable id (a secondary with a null row id) can't be
-   * keyed, so it contributes nothing.
-   */
-  private async loadMemberRepoSecrets(
-    session: SessionRow,
-    member: SessionRepositoryEntry,
-    repoStore: RepoSecretsStore
-  ): Promise<Record<string, string>> {
-    const repoId =
-      member.row?.repo_id ?? (member.isPrimary ? await this.ensureRepoId(session) : null);
-    if (repoId === null) {
-      return {};
-    }
-    return repoStore.getDecryptedSecrets(repoId);
   }
 }

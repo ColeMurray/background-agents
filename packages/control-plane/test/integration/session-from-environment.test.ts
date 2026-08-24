@@ -52,14 +52,16 @@ async function seedEnvironment(id: string, name: string, repos: RepoSpec[]): Pro
   );
 }
 
-/** Invoke the DO's real (private) getUserEnvVars, exercising the session secret fold. */
+/** Invoke the DO's real (private) sandbox env resolver, exercising the session secret fold. */
 function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
   return runInDurableObject(stub, (instance: SessionDO) =>
     (
       instance as unknown as {
-        getUserEnvVars(): Promise<Record<string, string> | undefined>;
+        userEnvResolver: {
+          getUserEnvVars(): Promise<Record<string, string> | undefined>;
+        };
       }
-    ).getUserEnvVars()
+    ).userEnvResolver.getUserEnvVars()
   );
 }
 
