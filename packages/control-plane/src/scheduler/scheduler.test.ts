@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
@@ -323,9 +324,7 @@ function createEnv(overrides?: Partial<Env>): Env {
 }
 
 function createSchedulerDO(env = createEnv()) {
-  const scheduler = new Scheduler(env.DB, env, {
-    submit: vi.fn((task: () => Promise<unknown>) => void task().catch(() => {})),
-  });
+  const scheduler = new Scheduler(env.DB, env, createTestBackgroundTasks());
   return Object.assign(scheduler, { fetch: (request: Request) => scheduler.dispatch(request) });
 }
 

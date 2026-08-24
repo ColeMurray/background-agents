@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import { fingerprintWebPrompt, SessionMessageQueue } from "./message-queue";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
@@ -194,10 +195,7 @@ function buildQueue() {
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
-  const waitUntil = vi.fn((task: () => Promise<unknown>) =>
-    task().catch((error) => log.error("background_task.failed", { error }))
-  );
-  const backgroundTasks = { submit: waitUntil };
+  const backgroundTasks = createTestBackgroundTasks();
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
@@ -245,7 +243,7 @@ function buildQueue() {
     broadcast,
     sessionStatus,
     sandboxLifecycle,
-    waitUntil,
+    backgroundTasks,
     getAlarm,
     setAlarm,
     callbackService,
@@ -345,12 +343,12 @@ describe("SessionMessageQueue", () => {
     );
 
     // Resolves immediately even though the spawn is still in flight; the
-    // spawn is handed to waitUntil so the prompt response is not held open.
+    // spawn is handed to backgroundTasks so the prompt response is not held open.
     await h.queue.processMessageQueue();
 
-    expect(h.waitUntil).toHaveBeenCalledTimes(1);
+    expect(h.backgroundTasks.submissions).toHaveLength(1);
     resolveSpawn();
-    await h.waitUntil.mock.results[0]!.value;
+    await h.backgroundTasks.settle();
   });
 
   it("reports sandbox_error when the background spawn throws", async () => {
@@ -359,7 +357,7 @@ describe("SessionMessageQueue", () => {
     h.sandboxLifecycle.spawnSandbox.mockRejectedValue(new Error("modal exploded"));
 
     await h.queue.processMessageQueue();
-    await h.waitUntil.mock.results[0]!.value;
+    await h.backgroundTasks.settle();
 
     // Routed through the lifecycle manager rather than broadcast directly, so
     // the reason is persisted too and survives the reload someone does to read it.
@@ -367,9 +365,8 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "sandbox_error" })
     );
-    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
-      error: expect.any(Error),
-    });
+    // The spawn failure is absorbed by the boundary, not thrown at the caller.
+    expect(h.backgroundTasks.failures).toEqual([expect.any(Error)]);
   });
 
   it("marks session active when a prompt is enqueued", async () => {
@@ -933,7 +930,7 @@ describe("SessionMessageQueue", () => {
     await h.queue.processMessageQueue();
 
     expect(h.callbackService.notifyStarted).toHaveBeenCalledWith("msg-linear");
-    expect(h.waitUntil).toHaveBeenCalledOnce();
+    expect(h.backgroundTasks.submissions).toHaveLength(1);
   });
 
   it("does not notify the integration when sandbox dispatch fails", async () => {
@@ -945,7 +942,7 @@ describe("SessionMessageQueue", () => {
     await h.queue.processMessageQueue();
 
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
-    expect(h.waitUntil).not.toHaveBeenCalled();
+    expect(h.backgroundTasks.submissions).toHaveLength(0);
   });
 
   describe("execution timeout scheduling", () => {
@@ -1055,7 +1052,7 @@ describe("SessionMessageQueue", () => {
     });
 
     resolveProjection();
-    await h.waitUntil.mock.results[0]!.value;
+    await h.backgroundTasks.settle();
     expect(h.broadcast).toHaveBeenCalledWith({
       type: "sandbox_event",
       event: expect.objectContaining({ type: "execution_complete" }),
