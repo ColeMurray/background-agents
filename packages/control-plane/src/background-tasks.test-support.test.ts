@@ -9,9 +9,12 @@ describe("createTestBackgroundTasks", () => {
     const boom = new Error("sync boom");
 
     expect(() =>
-      background.submit(() => {
-        throw boom;
-      }, { name: "test.sync_throw" })
+      background.submit(
+        () => {
+          throw boom;
+        },
+        { name: "test.sync_throw" }
+      )
     ).not.toThrow();
 
     expect(background.failures).toEqual([boom]);
@@ -22,9 +25,12 @@ describe("createTestBackgroundTasks", () => {
     const background = createTestBackgroundTasks();
     let ran = false;
 
-    background.submit(async () => {
-      ran = true;
-    }, { name: "test.task" });
+    background.submit(
+      async () => {
+        ran = true;
+      },
+      { name: "test.task" }
+    );
 
     expect(ran).toBe(true);
     expect(background.submissions).toHaveLength(1);
