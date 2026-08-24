@@ -56,6 +56,20 @@ async def test_terminate_treats_missing_sandbox_as_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_terminate_reports_lookup_errors_as_failure(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    manager = SimpleNamespace(
+        get_sandbox_by_id=AsyncMock(side_effect=RuntimeError("modal unavailable"))
+    )
+    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+
+    result = await _call_terminate({"sandbox_id": "mo-1", "session_id": "session-1"})
+
+    assert result["success"] is False
+    assert "modal unavailable" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_terminate_requires_a_sandbox_id(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
 

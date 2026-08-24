@@ -6,6 +6,8 @@ import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpers";
 
 const CONNECTING_TIMEOUT_BUFFER_MS = 1_000;
+const RESPAWN_POLL_INTERVAL_MS = 100;
+const RESPAWN_TIMEOUT_MS = 5_000;
 
 /**
  * Park the session's sandbox past the connecting timeout, so the next alarm
@@ -86,7 +88,7 @@ describe("SessionDO lifecycle alarm recovery", () => {
     // The alarm re-drove the queue: the pending prompt found no sandbox and
     // spawned a replacement, which stamps a fresh created_at even though
     // Modal is unavailable here and the attempt settles failed.
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + RESPAWN_TIMEOUT_MS;
     let respawned = false;
     while (Date.now() < deadline) {
       const [row] = await queryDO<{ created_at: number }>(stub, "SELECT created_at FROM sandbox");
@@ -94,7 +96,7 @@ describe("SessionDO lifecycle alarm recovery", () => {
         respawned = true;
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, RESPAWN_POLL_INTERVAL_MS));
     }
     expect(respawned).toBe(true);
 

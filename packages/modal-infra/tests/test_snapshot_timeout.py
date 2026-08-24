@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import modal
 import pytest
 
 from sandbox_runtime.types import SandboxStatus
@@ -50,6 +51,27 @@ async def test_get_sandbox_by_id_awaits_async_lookup(monkeypatch):
     assert handle.modal_sandbox is modal_sandbox
     from_id.assert_not_called()
     from_id.aio.assert_awaited_once_with("sandbox-1")
+
+
+@pytest.mark.asyncio
+async def test_get_sandbox_by_id_maps_not_found_to_none(monkeypatch):
+    from_id = _async_method()
+    from_id.aio = AsyncMock(side_effect=modal.exception.NotFoundError("sandbox gone"))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    handle = await SandboxManager().get_sandbox_by_id("sandbox-gone")
+
+    assert handle is None
+
+
+@pytest.mark.asyncio
+async def test_get_sandbox_by_id_raises_other_lookup_errors(monkeypatch):
+    from_id = _async_method()
+    from_id.aio = AsyncMock(side_effect=modal.exception.ServiceError("modal unavailable"))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    with pytest.raises(modal.exception.ServiceError):
+        await SandboxManager().get_sandbox_by_id("sandbox-1")
 
 
 @pytest.mark.asyncio

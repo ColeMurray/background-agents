@@ -605,7 +605,11 @@ class SandboxManager:
             sandbox_id: The Modal sandbox ID
 
         Returns:
-            SandboxHandle if found, None otherwise
+            SandboxHandle if found, None if the sandbox does not exist
+
+        Raises:
+            modal.exception.Error: any lookup failure other than NotFoundError,
+                so callers do not mistake a provider error for absence.
         """
         try:
             modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
@@ -615,9 +619,11 @@ class SandboxManager:
                 status=SandboxStatus.READY,  # Assume ready if we can retrieve it
                 created_at=time.time(),
             )
+        except modal.exception.NotFoundError:
+            return None
         except Exception as e:
             log.warn("sandbox.lookup_error", sandbox_id=sandbox_id, exc=e)
-            return None
+            raise
 
     async def restore_from_snapshot(
         self,

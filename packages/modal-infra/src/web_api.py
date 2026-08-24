@@ -35,6 +35,7 @@ from .log_config import configure_logging, get_logger
 configure_logging()
 log = get_logger("web_api")
 IMAGE_BUILD_FINALIZATION_GRACE_SECONDS = 10 * 60
+DEFAULT_TERMINATION_REASON = "manual"
 
 
 class _ModalRequestModel(BaseModel):
@@ -388,7 +389,7 @@ async def api_terminate_sandbox(
         from .sandbox.manager import SandboxManager
 
         session_id = request.get("session_id")
-        reason = request.get("reason", "manual")
+        reason = request.get("reason", DEFAULT_TERMINATION_REASON)
 
         manager = SandboxManager()
 
@@ -482,7 +483,7 @@ async def api_snapshot_sandbox(
         from .sandbox.manager import SandboxManager
 
         session_id = request.get("session_id")
-        reason = request.get("reason", "manual")
+        reason = request.get("reason", DEFAULT_TERMINATION_REASON)
 
         manager = SandboxManager()
 

@@ -1029,10 +1029,11 @@ describe("SandboxLifecycleManager", () => {
 
     it("schedules a retry alarm when the circuit breaker is open", async () => {
       const now = Date.now();
+      const failureAgeMs = 60_000;
       const sandbox = createMockSandbox({
         status: "pending",
         spawn_failure_count: 3,
-        last_spawn_failure: now - 60000,
+        last_spawn_failure: now - failureAgeMs,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const alarmScheduler = createMockAlarmScheduler();
@@ -1053,9 +1054,11 @@ describe("SandboxLifecycleManager", () => {
       expect(alarmScheduler.alarms.length).toBeGreaterThan(0);
       const last = alarmScheduler.alarms[alarmScheduler.alarms.length - 1];
       expect(last).toBeGreaterThan(now);
-      // The retry lands when the breaker window has passed: 3 failures at
-      // 60s ago leaves the full 5-minute window still to run.
-      expect(last).toBeGreaterThanOrEqual(now + 4 * 60 * 1000);
+      // The retry lands once the breaker window has fully passed the oldest
+      // counted failure.
+      expect(last).toBeGreaterThanOrEqual(
+        now + DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.windowMs - failureAgeMs
+      );
     });
 
     it("still broadcasts the reason when persisting it throws", async () => {
