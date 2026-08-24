@@ -1639,7 +1639,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     persist();
     this.broadcaster.broadcast({ type: "sandbox_status", status });
     // The bridge replaces this with its inactivity alarm when it connects.
-    await this.alarmScheduler.schedule(createdAt + this.config.connectingTimeout.timeoutMs);
+    await this.alarmScheduler.schedule(
+      createdAt +
+        Math.min(
+          this.config.connectingTimeout.timeoutMs,
+          this.config.connectingTimeout.maxBootDurationMs
+        )
+    );
   }
 
   /**

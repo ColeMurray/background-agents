@@ -956,6 +956,32 @@ describe("SandboxLifecycleManager", () => {
       ]);
     });
 
+    it("schedules a shorter absolute boot deadline when startup begins", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60_000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      const config = createTestConfig();
+      config.connectingTimeout = {
+        ...config.connectingTimeout,
+        maxBootDurationMs: config.connectingTimeout.timeoutMs / 2,
+      };
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        alarmScheduler,
+        createMockIdGenerator(),
+        config
+      );
+
+      await manager.spawnSandbox();
+
+      expect(alarmScheduler.alarms).toEqual([
+        sandbox.created_at + config.connectingTimeout.maxBootDurationMs,
+      ]);
+    });
+
     it("does not revive a timed-out sandbox when provider creation returns late", async () => {
       vi.useFakeTimers();
       try {
