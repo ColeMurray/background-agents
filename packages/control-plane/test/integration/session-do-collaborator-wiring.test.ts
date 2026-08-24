@@ -268,8 +268,9 @@ describe("SessionDO collaborator wiring", () => {
       // scheduling from init altogether also returns 200. The read count is
       // what pins that init still reaches the warm-spawn edge, so the 200 is
       // evidence the throw was absorbed rather than evidence it never happened.
-      // `warmSandbox()` is async, but an async body runs synchronously up to
-      // its first await, so the getter read lands before init responds.
+      // `submit` invokes the warm-spawn task factory synchronously inside its
+      // own try/catch, so the getter read still lands before init responds and
+      // the throw is logged as background_task.failed instead of escaping.
       const getterReads = await runInDurableObject(
         stub,
         (instance: SessionDO) => (instance as unknown as Record<string, number>)[GETTER_READS] ?? 0

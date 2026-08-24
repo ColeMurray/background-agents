@@ -132,8 +132,9 @@ function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
     db: {} as SqlDatabase,
     metrics: createRequestMetrics(),
     executionCtx: {
-      submit: (task: Promise<unknown>) => {
-        waitUntilTasks?.push(task);
+      submit: (task: () => Promise<unknown>) => {
+        const pending = task();
+        waitUntilTasks?.push(pending);
       },
     },
   };

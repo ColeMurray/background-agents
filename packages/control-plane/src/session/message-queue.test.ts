@@ -194,8 +194,8 @@ function buildQueue() {
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
-  const waitUntil = vi.fn((task: Promise<unknown>) =>
-    task.catch((error) => log.error("background_task.failed", { error }))
+  const waitUntil = vi.fn((task: () => Promise<unknown>) =>
+    task().catch((error) => log.error("background_task.failed", { error }))
   );
   const backgroundTasks = { submit: waitUntil };
   const getAlarm = vi.fn(async () => null as number | null);
@@ -1055,7 +1055,7 @@ describe("SessionMessageQueue", () => {
     });
 
     resolveProjection();
-    await h.waitUntil.mock.calls[0][0];
+    await h.waitUntil.mock.results[0]!.value;
     expect(h.broadcast).toHaveBeenCalledWith({
       type: "sandbox_event",
       event: expect.objectContaining({ type: "execution_complete" }),

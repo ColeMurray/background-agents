@@ -323,7 +323,9 @@ function createEnv(overrides?: Partial<Env>): Env {
 }
 
 function createSchedulerDO(env = createEnv()) {
-  const scheduler = new Scheduler(env.DB, env, { submit: vi.fn() });
+  const scheduler = new Scheduler(env.DB, env, {
+    submit: vi.fn((task: () => Promise<unknown>) => void task().catch(() => {})),
+  });
   return Object.assign(scheduler, { fetch: (request: Request) => scheduler.dispatch(request) });
 }
 

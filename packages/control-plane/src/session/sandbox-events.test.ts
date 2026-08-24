@@ -82,8 +82,8 @@ function createProcessor() {
     error: vi.fn(),
     child: vi.fn(),
   };
-  const waitUntil = vi.fn((task: Promise<unknown>) =>
-    task.catch((error) => log.error("background_task.failed", { error }))
+  const waitUntil = vi.fn((task: () => Promise<unknown>) =>
+    task().catch((error) => log.error("background_task.failed", { error }))
   );
   const backgroundTasks = { submit: waitUntil };
 

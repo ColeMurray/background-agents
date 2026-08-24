@@ -312,19 +312,20 @@ async function handleSpawnChild(
   }
 
   ctx.executionCtx.submit(
-    ctx.sessionRuntime
-      .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          childSessionId: childId,
-          status: "created",
-          title: body.title,
+    () =>
+      ctx.sessionRuntime
+        .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            childSessionId: childId,
+            status: "created",
+            title: body.title,
+          }),
+        })
+        .catch((err: unknown) => {
+          logger.error("session.notify_parent_spawn.failed", { error: err });
         }),
-      })
-      .catch((err: unknown) => {
-        logger.error("session.notify_parent_spawn.failed", { error: err });
-      }),
     {
       name: "session.notify_parent_spawn",
       context: { parent_id: parentId, child_id: childId, trace_id: ctx.trace_id },

@@ -222,7 +222,7 @@ export class SessionMessageQueue {
       const session = this.repository.getSession();
       const sessionId = session?.session_name || session?.id;
       if (sessionId) {
-        this.backgroundTasks.submit(sessionIndex.touchUpdatedAt(sessionId), {
+        this.backgroundTasks.submit(() => sessionIndex.touchUpdatedAt(sessionId), {
           name: "session_index.touch_updated_at",
           context: { session_id: sessionId },
         });
@@ -322,16 +322,17 @@ export class SessionMessageQueue {
       // callers' request timeouts. The message is already persisted as
       // pending and dispatches when the sandbox WebSocket connects.
       this.backgroundTasks.submit(
-        this.sandboxLifecycle.spawnSandbox().catch((error) => {
-          // Expected provider failures report themselves inside the lifecycle
-          // manager; this catch only sees throws from before those handlers.
-          // Route it through the same call so the reason is persisted as well
-          // as broadcast — otherwise it survives only until the tab reloads.
-          this.sandboxLifecycle.reportSandboxError(
-            error instanceof Error ? error.message : "Failed to spawn sandbox"
-          );
-          throw error;
-        }),
+        () =>
+          this.sandboxLifecycle.spawnSandbox().catch((error) => {
+            // Expected provider failures report themselves inside the lifecycle
+            // manager; this catch only sees throws from before those handlers.
+            // Route it through the same call so the reason is persisted as well
+            // as broadcast — otherwise it survives only until the tab reloads.
+            this.sandboxLifecycle.reportSandboxError(
+              error instanceof Error ? error.message : "Failed to spawn sandbox"
+            );
+            throw error;
+          }),
         {
           name: "sandbox.spawn",
           context: { message_id: message.id },
@@ -402,7 +403,7 @@ export class SessionMessageQueue {
       const deadline = now + this.executionTimeoutMs;
       await this.alarmScheduler.schedule(deadline);
 
-      this.backgroundTasks.submit(this.callbackService.notifyStarted(message.id), {
+      this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
         name: "callback.notify_started",
         context: { message_id: message.id },
       });
@@ -551,26 +552,32 @@ export class SessionMessageQueue {
     );
     if (!completion) return false;
 
-    const projection = this.projectTerminalMessage(
-      completion.messageId,
-      completion.messageCreatedAt,
-      completion.completedAt
-    )
-      .catch((projectionError) => {
-        this.log.error("terminal_message.projection_failed", {
-          message_id: message.id,
-          error: projectionError,
-        });
-      })
-      .then(() => this.messenger.broadcast({ type: "sandbox_event", event }));
-    this.backgroundTasks.submit(projection, {
-      name: "terminal_message.project",
-      context: { message_id: message.id },
-    });
-    this.backgroundTasks.submit(this.callbackService.notifyComplete(message.id, false, error), {
-      name: "callback.notify_complete",
-      context: { message_id: message.id },
-    });
+    this.backgroundTasks.submit(
+      () =>
+        this.projectTerminalMessage(
+          completion.messageId,
+          completion.messageCreatedAt,
+          completion.completedAt
+        )
+          .catch((projectionError) => {
+            this.log.error("terminal_message.projection_failed", {
+              message_id: message.id,
+              error: projectionError,
+            });
+          })
+          .then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
+      {
+        name: "terminal_message.project",
+        context: { message_id: message.id },
+      }
+    );
+    this.backgroundTasks.submit(
+      () => this.callbackService.notifyComplete(message.id, false, error),
+      {
+        name: "callback.notify_complete",
+        context: { message_id: message.id },
+      }
+    );
     return true;
   }
 

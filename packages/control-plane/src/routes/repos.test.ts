@@ -116,7 +116,7 @@ describe("repository list route", () => {
     // CONTROL_PLANE_FETCH_TIMEOUT_MS, which cancels the worker — so unless the
     // refresh is registered with waitUntil, the KV write never lands and every
     // later request repeats the same slow path against an empty cache.
-    const waitUntil = vi.fn();
+    const waitUntil = vi.fn((task: () => Promise<unknown>) => task());
     const { handler, match } = getListHandler();
     const ctx = createContext();
 
@@ -133,7 +133,7 @@ describe("repository list route", () => {
     expect(response.status).toBe(200);
     expect(mockCachePut).toHaveBeenCalledTimes(1);
     expect(waitUntil).toHaveBeenCalledTimes(1);
-    await expect(waitUntil.mock.calls[0][0]).resolves.not.toThrow();
+    await expect(waitUntil.mock.results[0]!.value).resolves.not.toThrow();
   });
 });
 

@@ -190,17 +190,18 @@ export class SessionStatusService {
     const parentStub = this.parentSessions.get(parentDoId);
 
     this.backgroundTasks.submit(
-      parentStub.fetch(
-        new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            childSessionId,
-            status: update.status,
-            title: update.title,
-          }),
-        })
-      ),
+      () =>
+        parentStub.fetch(
+          new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              childSessionId,
+              status: update.status,
+              title: update.title,
+            }),
+          })
+        ),
       {
         name: "session.notify_parent",
         context: {
@@ -254,7 +255,8 @@ export class SessionStatusService {
   }
 
   private syncSessionMetrics(sessionId: string): void {
-    if (!this.sessionIndex) return;
+    const sessionIndex = this.sessionIndex;
+    if (!sessionIndex) return;
 
     const session = this.repository.getSession();
     if (!session) return;
@@ -265,12 +267,13 @@ export class SessionStatusService {
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
     this.backgroundTasks.submit(
-      this.sessionIndex.updateMetrics(sessionId, {
-        totalCost: session.total_cost ?? 0,
-        activeDurationMs,
-        messageCount,
-        prCount,
-      }),
+      () =>
+        sessionIndex.updateMetrics(sessionId, {
+          totalCost: session.total_cost ?? 0,
+          activeDurationMs,
+          messageCount,
+          prCount,
+        }),
       {
         name: "session_index.update_metrics",
         context: { session_id: sessionId },

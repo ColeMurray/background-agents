@@ -711,7 +711,9 @@ export class SessionDO extends DurableObject<Env> {
         generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
         scheduleWarmSandbox: () =>
-          this.backgroundTasks.submit(this.warmSandbox(), { name: "sandbox.warm" }),
+          this.backgroundTasks.submit(() => this.lifecycleManager.warmSandbox(), {
+            name: "sandbox.warm",
+          }),
         getSession: () => this.sessionCoreRepository.getSession(),
         getSandbox: () => this.sandboxRepository.getSandbox(),
         getPublicSessionId: (session) => resolvePublicSessionId(session, this.ctx.id.toString()),
@@ -775,27 +777,28 @@ export class SessionDO extends DurableObject<Env> {
   /** Fire a background read-through refresh. */
   private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
     this.backgroundTasks.submit(
-      refreshSessionPullRequests(
-        this.sessionCoreRepository,
-        this.artifactRepository,
-        this.sourceControlProvider,
-        this.db ? new SessionPullRequestStore(this.db) : null
-      ).then(({ updated, failures }) => {
-        for (const artifact of updated) {
-          this.messenger.broadcast({ type: "artifact_updated", artifact });
-        }
-        for (const failure of failures) {
-          this.log.error("Pull request refresh failed for artifact", {
-            trigger,
-            reason: failure.reason,
-            artifact_id: failure.artifactId,
-            pr_number: failure.prNumber,
-            repo_owner: failure.repoOwner,
-            repo_name: failure.repoName,
-            error: failure.error instanceof Error ? failure.error : String(failure.error),
-          });
-        }
-      }),
+      () =>
+        refreshSessionPullRequests(
+          this.sessionCoreRepository,
+          this.artifactRepository,
+          this.sourceControlProvider,
+          this.db ? new SessionPullRequestStore(this.db) : null
+        ).then(({ updated, failures }) => {
+          for (const artifact of updated) {
+            this.messenger.broadcast({ type: "artifact_updated", artifact });
+          }
+          for (const failure of failures) {
+            this.log.error("Pull request refresh failed for artifact", {
+              trigger,
+              reason: failure.reason,
+              artifact_id: failure.artifactId,
+              pr_number: failure.prNumber,
+              repo_owner: failure.repoOwner,
+              repo_name: failure.repoName,
+              error: failure.error instanceof Error ? failure.error : String(failure.error),
+            });
+          }
+        }),
       {
         name: "pull_request.refresh",
         context: { trigger },
@@ -1055,21 +1058,6 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Warm the sandbox proactively.
-   *
-   * This is an async boundary, not a forwarder, and deleting it is a
-   * regression. `lifecycleManager` is a lazy getter that builds the sandbox
-   * provider, and that construction throws on a deployment missing provider
-   * credentials. Reading it inside an `async` method turns the synchronous
-   * throw into a rejected promise, which `backgroundTasks.submit` absorbs and
-   * logs. Inlined into the submit argument, the same throw escapes session
-   * creation and 500s `/internal/init` after its rows are already committed.
-   */
-  private async warmSandbox(): Promise<void> {
-    await this.lifecycleManager.warmSandbox();
-  }
-
-  /**
    * Initialize the session with required data.
    */
   private ensureInitialized(rehydrateAlarm = true): void {
@@ -1095,7 +1083,7 @@ export class SessionDO extends DurableObject<Env> {
     );
     this.diffsHandler = new SessionDiffsHandler(this.diffService);
     if (rehydrateAlarm) {
-      this.backgroundTasks.submit(this.alarmScheduler.rehydrate(), {
+      this.backgroundTasks.submit(() => this.alarmScheduler.rehydrate(), {
         name: "alarm.rehydrate",
       });
     }
@@ -1234,13 +1222,13 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.backgroundTasks.submit(this.messageQueue.processMessageQueue(), {
+        this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
           name: "message_queue.process",
         });
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);
-        this.backgroundTasks.submit(this.wsManager.enforceAuthTimeout(server, wsId), {
+        this.backgroundTasks.submit(() => this.wsManager.enforceAuthTimeout(server, wsId), {
           name: "websocket.enforce_auth_timeout",
           context: { ws_id: wsId },
         });
@@ -1470,10 +1458,13 @@ export class SessionDO extends DurableObject<Env> {
   private syncSessionIndexTitle(sessionId: string, title: string, updatedAt: number): void {
     if (!this.db) return;
     const sessionStore = new SessionIndexStore(this.db);
-    this.backgroundTasks.submit(sessionStore.updateTitleIfNewer(sessionId, title, updatedAt), {
-      name: "session_index.update_title",
-      context: { session_id: sessionId, updated_at: updatedAt },
-    });
+    this.backgroundTasks.submit(
+      () => sessionStore.updateTitleIfNewer(sessionId, title, updatedAt),
+      {
+        name: "session_index.update_title",
+        context: { session_id: sessionId, updated_at: updatedAt },
+      }
+    );
   }
 
   private applySessionTitleUpdate(

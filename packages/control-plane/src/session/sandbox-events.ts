@@ -190,7 +190,7 @@ export class SessionSandboxEventProcessor {
       this.messenger.broadcast({ type: "sandbox_event", event });
 
       if (messageId) {
-        this.backgroundTasks.submit(this.callbackService.notifyToolCall(messageId, event), {
+        this.backgroundTasks.submit(() => this.callbackService.notifyToolCall(messageId, event), {
           name: "callback.notify_tool_call",
           context: { message_id: messageId },
         });
@@ -244,7 +244,7 @@ export class SessionSandboxEventProcessor {
         });
         this.broadcastPromptQueue();
         this.backgroundTasks.submit(
-          this.callbackService.notifyComplete(event.messageId, event.success, event.error),
+          () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
           {
             name: "callback.notify_complete",
             context: { message_id: event.messageId },
@@ -260,7 +260,7 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.backgroundTasks.submit(this.triggerSnapshot("execution_complete"), {
+      this.backgroundTasks.submit(() => this.triggerSnapshot("execution_complete"), {
         name: "snapshot.trigger",
         context: { reason: "execution_complete", message_id: event.messageId },
       });

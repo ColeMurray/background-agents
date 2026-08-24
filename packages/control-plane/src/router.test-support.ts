@@ -10,7 +10,15 @@ import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/
 import type { BackgroundTasks } from "./platform-ports";
 
 export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTasks = {
-  submit: () => {},
+  // Match the real implementation: the factory runs synchronously and both a
+  // synchronous throw and a rejection are absorbed.
+  submit: (task) => {
+    try {
+      void task().catch(() => {});
+    } catch {
+      // Absorbed like background_task.failed.
+    }
+  },
 };
 
 /** Per-service secrets for unit-test env fixtures, mirrored by signedServiceRequest. */
