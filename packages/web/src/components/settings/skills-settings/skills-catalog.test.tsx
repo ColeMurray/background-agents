@@ -89,6 +89,27 @@ describe("SkillsCatalog", () => {
     expect(useSkillCatalogPageMock).toHaveBeenLastCalledWith(null);
   });
 
+  it("shows the skill creator with an ID fallback", () => {
+    const withDisplayName = skill("1", "first-skill");
+    const withIdFallback = {
+      ...skill("2", "second-skill"),
+      creatorDisplayName: null,
+      createdBy: "user-2",
+    };
+    useSkillCatalogPageMock.mockReturnValue({
+      skills: [withDisplayName, withIdFallback],
+      hasMore: false,
+      nextCursor: null,
+      loading: false,
+      error: undefined,
+    });
+
+    render(<SkillsCatalog />);
+
+    expect(screen.getByText("· Created by User One")).toBeInTheDocument();
+    expect(screen.getByText("· Created by user-2")).toBeInTheDocument();
+  });
+
   it.each([
     [
       "empty",

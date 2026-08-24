@@ -136,8 +136,11 @@ export function SkillsCatalog() {
                 <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                   {item.description}
                 </p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
+                <p className="mt-2 flex flex-wrap gap-x-1.5 text-xs text-muted-foreground">
+                  <span>
+                    {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
+                  </span>
+                  <span>· Created by {item.creatorDisplayName ?? item.createdBy}</span>
                 </p>
               </button>
               <Switch
