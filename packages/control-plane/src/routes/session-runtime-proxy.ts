@@ -12,6 +12,7 @@ import type { Env } from "../types";
 import {
   defineRoute,
   error,
+  getDecodedSessionId,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   parseJsonBody,
@@ -46,7 +47,7 @@ type SimpleProxyRouteConfig = {
 };
 
 function getSessionId(match: RegExpMatchArray): string | Response {
-  const sessionId = match.groups?.id;
+  const sessionId = getDecodedSessionId(match);
   return sessionId ? sessionId : error("Session ID required");
 }
 
@@ -274,6 +275,24 @@ function lifecycleProxyRoute(
 }
 
 export const sessionRuntimeProxyRoutes: Route[] = [
+  defineRoute(
+    SCM_AGNOSTIC_SANDBOX_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/boot-progress"),
+      handler: async (request, _env, match, ctx) => {
+        const sessionId = getSessionId(match);
+        if (sessionId instanceof Response) return sessionId;
+        const body = await parseJsonBody<unknown>(request);
+        if (body instanceof Response) return body;
+        return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.bootProgress, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      },
+    })
+  ),
   simpleProxyRoute({
     policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     method: "GET",

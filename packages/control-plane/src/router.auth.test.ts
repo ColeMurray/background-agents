@@ -33,7 +33,7 @@ function createEnv(verifyStatus: number) {
       dump: vi.fn(),
     },
     SESSION: {
-      idFromName: (name: string) => name,
+      idFromName: vi.fn((name: string) => name),
       get: () => ({ fetch }),
     },
   };
@@ -75,6 +75,32 @@ describe("router sandbox-token fallback", () => {
     expect(response.status).toBe(401);
   });
 
+  it.each([
+    [204, 202],
+    [401, 401],
+  ])(
+    "authenticates boot progress with the current sandbox token",
+    async (verifyStatus, expected) => {
+      const { env, doFetch } = createEnv(verifyStatus);
+
+      const response = await handleRequest(
+        new Request("https://test.local/sessions/session-1/boot-progress", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer sandbox-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ sandboxId: "sandbox-1" }),
+        }),
+        env as never,
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+
+      expect(response.status).toBe(expected);
+      expect(doFetch).toHaveBeenCalledTimes(verifyStatus === 204 ? 2 : 1);
+    }
+  );
+
   it("rejects unrecognized credentials on a non-sandbox route without trying sandbox auth", async () => {
     const { env, doFetch } = createEnv(401);
 
@@ -88,6 +114,22 @@ describe("router sandbox-token fallback", () => {
 
     expect(response.status).toBe(401);
     expect(doFetch).not.toHaveBeenCalled();
+  });
+
+  it("decodes boot-progress session IDs before sandbox authentication", async () => {
+    const { env } = createEnv(204);
+
+    await handleRequest(
+      new Request("https://test.local/sessions/session%2F1/boot-progress", {
+        method: "POST",
+        headers: { Authorization: "Bearer sandbox-token" },
+        body: JSON.stringify({ sandboxId: "sandbox-1" }),
+      }),
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(env.SESSION.idFromName).toHaveBeenCalledWith("session/1");
   });
 
   it("does not fall back after a failed service credential attempt", async () => {

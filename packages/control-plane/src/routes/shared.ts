@@ -99,8 +99,18 @@ export interface RoutePolicy {
 
 export interface Route extends RouteDefinition, RoutePolicy {}
 
+export function getDecodedSessionId(match: RegExpMatchArray): string | null {
+  const encoded = match.groups?.id;
+  if (!encoded) return null;
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+}
+
 const SESSION_ID_BINDING: SandboxSessionBinding = {
-  getSessionId: (match) => match.groups?.id ?? null,
+  getSessionId: getDecodedSessionId,
 };
 
 export const GITHUB_USER_OR_SERVICE_ROUTE = {

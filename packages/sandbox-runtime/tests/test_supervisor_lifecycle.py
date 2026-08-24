@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+
 from sandbox_runtime.repository_boot import RepositoryBootResult
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
@@ -80,6 +82,45 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
     ]
 
 
+async def test_boot_progress_runs_during_boot_and_is_awaited_before_bridge(tmp_path, monkeypatch):
+    supervisor, repository, _opencode, agent_bridge, *_ = _supervisor(tmp_path, [])
+    progress_started = asyncio.Event()
+    progress_cancelled = asyncio.Event()
+    release_boot = asyncio.Event()
+
+    async def report_progress():
+        progress_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            progress_cancelled.set()
+            raise
+
+    async def boot(_mode, _ports):
+        await progress_started.wait()
+        await release_boot.wait()
+        return RepositoryBootResult(True, [], True, True, (), tmp_path)
+
+    async def start_bridge():
+        assert supervisor._boot_progress_task is None
+
+    supervisor._report_boot_progress = AsyncMock(side_effect=report_progress)
+    repository.boot.side_effect = boot
+    agent_bridge.start.side_effect = start_bridge
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+
+    run_task = asyncio.create_task(supervisor.run())
+    await progress_started.wait()
+    assert not supervisor._boot_progress_task.done()
+    release_boot.set()
+    assert await run_task is True
+
+    supervisor._report_boot_progress.assert_awaited()
+    assert progress_cancelled.is_set()
+    agent_bridge.start.assert_awaited_once()
+    assert supervisor._boot_progress_task is None
+
+
 async def test_regular_boot_passes_repository_workspace_to_services(tmp_path, monkeypatch):
     supervisor, repository, opencode_server, _agent_bridge, code_server, terminal, _desktop = (
         _supervisor(tmp_path, [])
@@ -105,6 +146,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
         _supervisor(tmp_path, [])
     )
     monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    supervisor._report_boot_progress = AsyncMock()
     callback = MagicMock()
 
     async def report_success(**_kwargs):
@@ -120,6 +162,37 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
     supervisor.managed_skills.materialize.assert_not_awaited()
     opencode_server.start.assert_not_awaited()
     agent_bridge.start.assert_not_awaited()
+    supervisor._report_boot_progress.assert_not_awaited()
+    assert supervisor._boot_progress_task is None
+
+
+async def test_boot_progress_network_failure_is_nonfatal_and_redacted(tmp_path, monkeypatch):
+    supervisor, *_ = _supervisor(tmp_path, [])
+    supervisor.config = RuntimeConfig.from_env(
+        {
+            "SANDBOX_ID": "sandbox-1",
+            "REPO_OWNER": "acme",
+            "REPO_NAME": "repo",
+            "CONTROL_PLANE_URL": "https://control.example.com",
+            "SANDBOX_AUTH_TOKEN": "secret-token",
+            "SESSION_CONFIG": '{"session_id":"session/1"}',
+        },
+        workspace_path=tmp_path,
+    )
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.post = AsyncMock(side_effect=httpx.ConnectError("secret-token"))
+    monkeypatch.setattr("sandbox_runtime.supervisor.httpx.AsyncClient", lambda: client)
+
+    await supervisor._report_boot_progress()
+
+    request_url = client.post.await_args.args[0]
+    assert request_url.endswith("/sessions/session%2F1/boot-progress")
+    supervisor.log.warn.assert_called_once_with(
+        "supervisor.boot_progress_failed", error="ConnectError"
+    )
+    assert "secret-token" not in str(supervisor.log.warn.call_args)
 
 
 async def test_graceful_bridge_exit_requests_shutdown(tmp_path):

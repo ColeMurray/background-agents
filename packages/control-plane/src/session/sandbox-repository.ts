@@ -12,6 +12,7 @@ type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
 export interface SandboxCircuitBreakerState {
   status: SandboxStatus;
   created_at: number;
+  boot_progress_at: number | null;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
@@ -40,6 +41,19 @@ export interface SpawnSandboxData {
 export interface ResumeSandboxData {
   status: SandboxStatus;
   createdAt: number;
+}
+
+export interface ProviderStartupPersistenceData {
+  expectedSandboxId: string;
+  providerObjectId: string | null;
+  codeServerUrl: string | null;
+  codeServerPassword: string | null;
+  vncUrl: string | null;
+  vncPassword: string | null;
+  tunnelUrls: string | null;
+  ttydUrl: string | null;
+  ttydToken: string | null;
+  preserveMissing: boolean;
 }
 
 /** Persistence for the sandbox scoped to one session. */
@@ -72,7 +86,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, boot_progress_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
     const row = rows[0];
@@ -113,7 +127,8 @@ export class SandboxRepository {
          tunnel_urls = NULL,
          ttyd_url = NULL,
          ttyd_token = NULL,
-         runtime_version = NULL
+         runtime_version = NULL,
+         boot_progress_at = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -127,7 +142,8 @@ export class SandboxRepository {
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
-         last_heartbeat = NULL
+         last_heartbeat = NULL,
+         boot_progress_at = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt
@@ -191,6 +207,58 @@ export class SandboxRepository {
       `UPDATE sandbox SET last_heartbeat = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       timestamp
     );
+  }
+
+  recordBootProgress(sandboxId: string, timestamp: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET boot_progress_at = ?
+       WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting')`,
+      timestamp,
+      sandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  failBootIfUnchanged(sandboxId: string, livenessAt: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = 'failed'
+       WHERE modal_sandbox_id = ?
+         AND status IN ('spawning', 'connecting')
+         AND MAX(created_at, COALESCE(boot_progress_at, 0)) = ?`,
+      sandboxId,
+      livenessAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  commitProviderStartup(data: ProviderStartupPersistenceData): boolean {
+    const value = (column: string): string =>
+      data.preserveMissing ? `COALESCE(?, ${column})` : "?";
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         modal_object_id = COALESCE(?, modal_object_id),
+         code_server_url = ${value("code_server_url")},
+         code_server_password = ${value("code_server_password")},
+         vnc_url = ${value("vnc_url")},
+         vnc_password = ${value("vnc_password")},
+         tunnel_urls = ${value("tunnel_urls")},
+         ttyd_url = ${value("ttyd_url")},
+         ttyd_token = ${value("ttyd_token")}
+       WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting', 'ready')`,
+      data.providerObjectId,
+      data.codeServerUrl,
+      data.codeServerPassword,
+      data.vncUrl,
+      data.vncPassword,
+      data.tunnelUrls,
+      data.ttydUrl,
+      data.ttydToken,
+      data.expectedSandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSandboxLastActivity(timestamp: number): void {

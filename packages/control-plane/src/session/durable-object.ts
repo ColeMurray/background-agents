@@ -284,6 +284,7 @@ export class SessionDO extends DurableObject<Env> {
     expireDraft: () => this.sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, log) =>
       this.sandboxHandler.verifySandboxToken(request, log),
+    bootProgress: (request) => this.sandboxHandler.bootProgress(request),
     openaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.openaiTokenRefresh(log),
     xaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.xaiTokenRefresh(log),
     scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
@@ -664,6 +665,8 @@ export class SessionDO extends DurableObject<Env> {
         messenger: this.messenger,
         generateId: () => generateId(),
         now: () => Date.now(),
+        recordBootProgress: (sandboxId, timestamp) =>
+          this.lifecycleManager.recordBootProgress(sandboxId, timestamp),
       });
     }
 
@@ -929,6 +932,33 @@ export class SessionDO extends DurableObject<Env> {
         this.sandboxRepository.updateSandboxSnapshotImageId(sandboxId, imageId, runtimeVersion),
       updateSandboxLastActivity: (timestamp) =>
         this.sandboxRepository.updateSandboxLastActivity(timestamp),
+      recordBootProgress: (sandboxId, timestamp) =>
+        this.sandboxRepository.recordBootProgress(sandboxId, timestamp),
+      failBootIfUnchanged: (sandboxId, livenessAt) =>
+        this.sandboxRepository.failBootIfUnchanged(sandboxId, livenessAt),
+      commitProviderStartup: async (data) => {
+        const encrypt = async (value: string | null): Promise<string | null> =>
+          value && this.env.REPO_SECRETS_ENCRYPTION_KEY
+            ? encryptToken(value, this.env.REPO_SECRETS_ENCRYPTION_KEY)
+            : value;
+        const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
+          encrypt(data.codeServer?.password ?? null),
+          encrypt(data.vnc?.password ?? null),
+          encrypt(data.ttyd?.token ?? null),
+        ]);
+        return this.sandboxRepository.commitProviderStartup({
+          expectedSandboxId: data.expectedSandboxId,
+          providerObjectId: data.providerObjectId,
+          codeServerUrl: data.codeServer?.url ?? null,
+          codeServerPassword,
+          vncUrl: data.vnc?.url ?? null,
+          vncPassword,
+          tunnelUrls: data.tunnelUrls ? JSON.stringify(data.tunnelUrls) : null,
+          ttydUrl: data.ttyd?.url ?? null,
+          ttydToken,
+          preserveMissing: data.preserveMissing,
+        });
+      },
       incrementCircuitBreakerFailure: (timestamp) =>
         this.sandboxRepository.incrementCircuitBreakerFailure(timestamp),
       resetCircuitBreaker: () => this.sandboxRepository.resetCircuitBreaker(),

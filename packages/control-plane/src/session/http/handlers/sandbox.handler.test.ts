@@ -32,6 +32,7 @@ function createHandler() {
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
+  const recordBootProgress = vi.fn(async () => true);
 
   const log = {
     debug: vi.fn(),
@@ -57,6 +58,7 @@ function createHandler() {
     messenger,
     generateId,
     now,
+    recordBootProgress,
   });
 
   // Bind the request-scoped log so call sites exercise the threading without
@@ -85,11 +87,44 @@ function createHandler() {
     broadcast,
     generateId,
     now,
+    recordBootProgress,
     log,
   };
 }
 
 describe("createSandboxHandler", () => {
+  it("accepts well-formed boot progress and rejects stale sandbox identities", async () => {
+    const { handler, recordBootProgress, now } = createHandler();
+    recordBootProgress.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const request = () =>
+      new Request("http://internal/internal/boot-progress", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sandboxId: "sandbox-1" }),
+      });
+
+    const accepted = await handler.bootProgress(request());
+    const stale = await handler.bootProgress(request());
+
+    expect(accepted.status).toBe(200);
+    expect(stale.status).toBe(409);
+    expect(recordBootProgress).toHaveBeenNthCalledWith(1, "sandbox-1", 1234);
+    expect(now).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed boot progress", async () => {
+    const { handler, recordBootProgress } = createHandler();
+    const response = await handler.bootProgress(
+      new Request("http://internal/internal/boot-progress", {
+        method: "POST",
+        body: JSON.stringify({ sandboxId: 1 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(recordBootProgress).not.toHaveBeenCalled();
+  });
+
   it("processes sandbox event and returns ok response", async () => {
     const { handler, processSandboxEvent } = createHandler();
     const event = {
