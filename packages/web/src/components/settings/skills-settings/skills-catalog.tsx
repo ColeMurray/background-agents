@@ -136,7 +136,7 @@ export function SkillsCatalog() {
                 <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                   {item.description}
                 </p>
-                <p className="mt-2 flex flex-wrap gap-x-1.5 text-xs text-muted-foreground">
+                <p className="mt-2 flex flex-wrap gap-x-2.5 text-xs text-muted-foreground">
                   <span>
                     {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
                   </span>
