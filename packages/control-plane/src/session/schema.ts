@@ -240,6 +240,18 @@ export interface SchemaMigration {
   readonly run: string | ((sql: SqlStorage) => void);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseSqlColumnNames(rows: unknown[]): string[] {
+  return rows.flatMap((row) => {
+    if (!isRecord(row)) return [];
+    const name = row.name;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
 /**
  * Ordered list of all schema migrations.
  *
@@ -371,10 +383,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 20,
     description: "Rename github_* columns to scm_* in participants",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
-        name: string;
-      }>;
-      const columnNames = new Set(columns.map((c) => c.name));
+      const columnNames = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(participants)").toArray())
+      );
 
       const renames: [string, string][] = [
         ["github_user_id", "scm_user_id"],
@@ -407,10 +418,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Drop scm_provider from session and participants (now deployment-level)",
     run: (sql) => {
       for (const table of ["session", "participants"] as const) {
-        const columns = sql.exec(`PRAGMA table_info(${table})`).toArray() as Array<{
-          name: string;
-        }>;
-        if (columns.some((c) => c.name === "scm_provider")) {
+        if (
+          parseSqlColumnNames(sql.exec(`PRAGMA table_info(${table})`).toArray()).includes(
+            "scm_provider"
+          )
+        ) {
           sql.exec(`ALTER TABLE ${table} DROP COLUMN scm_provider`);
         }
       }
@@ -420,10 +432,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 24,
     description: "Rename repo_default_branch to base_branch in session",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(session)").toArray() as Array<{
-        name: string;
-      }>;
-      const columnNames = new Set(columns.map((c) => c.name));
+      const columnNames = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(session)").toArray())
+      );
       if (columnNames.has("repo_default_branch") && !columnNames.has("base_branch")) {
         sql.exec(`ALTER TABLE session RENAME COLUMN repo_default_branch TO base_branch`);
       }

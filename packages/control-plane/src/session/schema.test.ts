@@ -135,6 +135,25 @@ describe("applyMigrations", () => {
     expect(recordedIds).toEqual(expectedIds);
   });
 
+  it("does not trust malformed PRAGMA rows as column names", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 20);
+    expect(typeof migration?.run).toBe("function");
+    mock.setData("PRAGMA table_info(participants)", [
+      { name: "github_user_id" },
+      { name: 123 },
+      null,
+    ]);
+
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+
+    const alterCalls = mock.calls.filter((c) => c.query.includes("ALTER TABLE participants"));
+    expect(alterCalls).toEqual([
+      expect.objectContaining({
+        query: "ALTER TABLE participants RENAME COLUMN github_user_id TO scm_user_id",
+      }),
+    ]);
+  });
+
   it("rethrows non-duplicate-column errors from string migrations", () => {
     // Make the exec throw a non-duplicate-column error for ALTER statements
     const originalExec = mock.sql.exec.bind(mock.sql);
