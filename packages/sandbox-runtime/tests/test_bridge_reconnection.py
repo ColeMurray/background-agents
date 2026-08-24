@@ -149,7 +149,10 @@ class TestIsFatalConnectionError:
 
         bridge.log = MagicMock()
         bridge.git_signing.initialize = AsyncMock(
-            side_effect=[GitSigningError("Commit signing configuration unavailable"), None]
+            side_effect=[
+                GitSigningError("Commit signing configuration unavailable", retryable=True),
+                None,
+            ]
         )
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = AsyncMock(side_effect=connect_and_run)
@@ -191,6 +194,22 @@ class TestIsFatalConnectionError:
             reconnect_attempt_count=0,
             total_connected_duration_seconds=0.0,
         )
+
+    @pytest.mark.asyncio
+    async def test_run_exits_on_nonretryable_payload_failure(self, bridge, monkeypatch):
+        bridge.log = MagicMock()
+        bridge.git_signing.initialize = AsyncMock(
+            side_effect=GitSigningError("Invalid commit signing configuration")
+        )
+        bridge._load_session_id = AsyncMock()
+        bridge._connect_and_run = AsyncMock()
+        sleep = AsyncMock()
+        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
+
+        await bridge.run()
+
+        bridge._connect_and_run.assert_not_awaited()
+        sleep.assert_not_awaited()
 
 
 class TestSessionTerminatedError:

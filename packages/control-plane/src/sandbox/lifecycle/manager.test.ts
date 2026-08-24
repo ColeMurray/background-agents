@@ -204,6 +204,39 @@ function createMockStorage(
       }
       return false;
     }),
+    commitProviderStartup: vi.fn(async (data) => {
+      calls.push("commitProviderStartup");
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== data.expectedSandboxId ||
+        !["spawning", "connecting", "ready"].includes(sandbox.status)
+      )
+        return false;
+      if (data.providerObjectId) {
+        sandbox.modal_object_id = data.providerObjectId;
+        calls.push(`updateSandboxModalObjectId:${data.providerObjectId}`);
+      }
+      if (data.codeServer) {
+        sandbox.code_server_url = data.codeServer.url;
+        sandbox.code_server_password = data.codeServer.password;
+        calls.push(`updateSandboxCodeServer:${data.codeServer.url}`);
+      }
+      if (data.vnc) {
+        sandbox.vnc_url = data.vnc.url;
+        sandbox.vnc_password = data.vnc.password;
+        calls.push(`updateSandboxVnc:${data.vnc.url}`);
+      }
+      if (data.tunnelUrls) {
+        sandbox.tunnel_urls = JSON.stringify(data.tunnelUrls);
+        calls.push("updateSandboxTunnelUrls");
+      }
+      if (data.ttyd) {
+        sandbox.ttyd_url = data.ttyd.url;
+        sandbox.ttyd_token = data.ttyd.token;
+        calls.push("updateSandboxTtyd");
+      }
+      return true;
+    }),
     incrementCircuitBreakerFailure: vi.fn((timestamp: number) => {
       calls.push("incrementCircuitBreakerFailure");
       if (sandbox) {
@@ -724,7 +757,8 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ vncEnabled: true })
       );
-      expect(storage.updateSandboxVnc).toHaveBeenCalledWith("https://vnc.test", "secret");
+      expect(sandbox.vnc_url).toBe("https://vnc.test");
+      expect(sandbox.vnc_password).toBe("secret");
       expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_access_changed" });
       expect(JSON.stringify(broadcaster.messages)).not.toContain("secret");
     });

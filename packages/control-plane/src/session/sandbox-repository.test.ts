@@ -235,6 +235,47 @@ describe("SandboxRepository", () => {
     });
   });
 
+  describe("commitProviderStartup", () => {
+    it("atomically fences all provider access fields by sandbox identity and startup status", () => {
+      expect(
+        repository.commitProviderStartup({
+          expectedSandboxId: "sandbox-current",
+          providerObjectId: "provider-1",
+          codeServerUrl: "https://code.example",
+          codeServerPassword: "encrypted-code",
+          vncUrl: "https://vnc.example",
+          vncPassword: "encrypted-vnc",
+          tunnelUrls: '{"3000":"https://tunnel.example"}',
+          ttydUrl: "https://terminal.example",
+          ttydToken: "encrypted-terminal",
+          preserveMissing: false,
+        })
+      ).toBe(true);
+
+      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting', 'ready')");
+      expect(mock.calls[0].query).toContain("modal_object_id = COALESCE(?, modal_object_id)");
+      expect(mock.calls[0].params.at(-1)).toBe("sandbox-current");
+    });
+
+    it("preserves missing access fields during resume", () => {
+      repository.commitProviderStartup({
+        expectedSandboxId: "sandbox-current",
+        providerObjectId: "provider-1",
+        codeServerUrl: null,
+        codeServerPassword: null,
+        vncUrl: null,
+        vncPassword: null,
+        tunnelUrls: null,
+        ttydUrl: null,
+        ttydToken: null,
+        preserveMissing: true,
+      });
+
+      expect(mock.calls[0].query).toContain("code_server_url = COALESCE(?, code_server_url)");
+      expect(mock.calls[0].query).toContain("ttyd_token = COALESCE(?, ttyd_token)");
+    });
+  });
+
   describe("updateSandboxLastActivity", () => {
     it("updates activity timestamp", () => {
       repository.updateSandboxLastActivity(6000);

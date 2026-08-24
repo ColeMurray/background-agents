@@ -438,6 +438,7 @@ async def test_refresh_preserves_broker_http_status_without_response_details(
         await runtime.refresh(None)
 
     assert exc_info.value.status_code == status
+    assert exc_info.value.retryable is (status not in {401, 403, 404, 410})
     assert str(exc_info.value) == "Commit signing configuration unavailable"
     assert "secret upstream details" not in str(exc_info.value)
 
@@ -463,6 +464,7 @@ async def test_refresh_network_failure_has_no_http_status_or_secret_details(
         await runtime.refresh(None)
 
     assert exc_info.value.status_code is None
+    assert exc_info.value.retryable is True
     assert str(exc_info.value) == "Commit signing configuration unavailable"
     assert "sandbox-token" not in str(exc_info.value)
 

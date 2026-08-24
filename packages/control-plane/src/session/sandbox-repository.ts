@@ -43,6 +43,19 @@ export interface ResumeSandboxData {
   createdAt: number;
 }
 
+export interface ProviderStartupPersistenceData {
+  expectedSandboxId: string;
+  providerObjectId: string | null;
+  codeServerUrl: string | null;
+  codeServerPassword: string | null;
+  vncUrl: string | null;
+  vncPassword: string | null;
+  tunnelUrls: string | null;
+  ttydUrl: string | null;
+  ttydToken: string | null;
+  preserveMissing: boolean;
+}
+
 /** Persistence for the sandbox scoped to one session. */
 export class SandboxRepository {
   constructor(
@@ -215,6 +228,34 @@ export class SandboxRepository {
          AND MAX(created_at, COALESCE(boot_progress_at, 0)) = ?`,
       sandboxId,
       livenessAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  commitProviderStartup(data: ProviderStartupPersistenceData): boolean {
+    const value = (column: string): string =>
+      data.preserveMissing ? `COALESCE(?, ${column})` : "?";
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         modal_object_id = COALESCE(?, modal_object_id),
+         code_server_url = ${value("code_server_url")},
+         code_server_password = ${value("code_server_password")},
+         vnc_url = ${value("vnc_url")},
+         vnc_password = ${value("vnc_password")},
+         tunnel_urls = ${value("tunnel_urls")},
+         ttyd_url = ${value("ttyd_url")},
+         ttyd_token = ${value("ttyd_token")}
+       WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting', 'ready')`,
+      data.providerObjectId,
+      data.codeServerUrl,
+      data.codeServerPassword,
+      data.vncUrl,
+      data.vncPassword,
+      data.tunnelUrls,
+      data.ttydUrl,
+      data.ttydToken,
+      data.expectedSandboxId
     );
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
