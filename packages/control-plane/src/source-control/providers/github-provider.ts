@@ -466,8 +466,8 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       }
       return {
         repoId: repo.id,
-        repoOwner: config.owner.toLowerCase(),
-        repoName: config.name.toLowerCase(),
+        repoOwner: repo.owner.toLowerCase(),
+        repoName: repo.name.toLowerCase(),
         defaultBranch: repo.defaultBranch,
       };
     } catch (error) {
@@ -608,19 +608,36 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   async listTree(
     config: GetRepositoryConfig & { commitSha: string; path?: string | null }
   ): Promise<RepositoryTree> {
+    const scopedPath = config.path?.trim() || null;
+    let treeSha = config.commitSha;
+    if (scopedPath) {
+      for (const segment of scopedPath.split("/")) {
+        const parent = await this.appJsonRequired(
+          `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+            config.name
+          )}/git/trees/${encodeURIComponent(treeSha)}`,
+          githubTreeSchema,
+          "resolve repository subtree"
+        );
+        const child = parent.tree.find((entry) => entry.path === segment && entry.type === "tree");
+        if (!child) return { entries: [], truncated: false };
+        treeSha = child.sha;
+      }
+    }
     const data = await this.appJsonRequired(
       `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
         config.name
-      )}/git/trees/${encodeURIComponent(config.commitSha)}?recursive=1`,
+      )}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`,
       githubTreeSchema,
       "list repository tree"
     );
+    const prefix = scopedPath ? `${scopedPath}/` : "";
     return {
       truncated: data.truncated === true,
       // GitHub reports blob sizes in the tree, so callers get a usable
       // pre-download budget check from listTree alone.
       entries: data.tree.map((entry) => ({
-        path: entry.path,
+        path: `${prefix}${entry.path}`,
         type: classifyGitTreeEntry(entry.type, entry.mode),
         blobId: entry.sha,
         sizeBytes: entry.size ?? null,

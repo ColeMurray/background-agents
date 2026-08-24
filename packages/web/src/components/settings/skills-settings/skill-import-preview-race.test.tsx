@@ -11,16 +11,17 @@ import { SkillReimport } from "./skill-reimport";
 
 expect.extend(matchers);
 
-const { previewSkillImportMock, previewSkillReimportMock } = vi.hoisted(() => ({
+const { previewSkillImportMock, previewSkillReimportMock, reimportSkillMock } = vi.hoisted(() => ({
   previewSkillImportMock: vi.fn(),
   previewSkillReimportMock: vi.fn(),
+  reimportSkillMock: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-managed-skills", () => ({
   importSkill: vi.fn(),
   previewSkillImport: previewSkillImportMock,
   previewSkillReimport: previewSkillReimportMock,
-  reimportSkill: vi.fn(),
+  reimportSkill: reimportSkillMock,
 }));
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
@@ -108,6 +109,7 @@ const importedSkill: Skill = {
 beforeEach(() => {
   previewSkillImportMock.mockReset();
   previewSkillReimportMock.mockReset();
+  reimportSkillMock.mockReset();
 });
 
 afterEach(cleanup);
@@ -131,12 +133,45 @@ describe("repository skill preview races", () => {
     const pending = deferred<SkillImportPreviewResponse>();
     previewSkillReimportMock.mockReturnValueOnce(pending.promise);
     const user = userEvent.setup();
-    render(<SkillReimport skill={importedSkill} dirty={false} onReimported={vi.fn()} />);
+    render(
+      <SkillReimport
+        skill={importedSkill}
+        dirty={false}
+        onReimported={vi.fn(async () => undefined)}
+        onSavingChange={vi.fn()}
+      />
+    );
 
     await user.click(screen.getByRole("button", { name: "Check for updates" }));
     await user.type(screen.getByLabelText("Branch, tag, or commit (optional)"), "next");
     await act(async () => pending.resolve(preview));
 
     expect(screen.queryByText("preview:deploy-service")).not.toBeInTheDocument();
+  });
+
+  it("keeps the surrounding editor disabled until re-import finishes", async () => {
+    previewSkillReimportMock.mockResolvedValueOnce(preview);
+    const pending = deferred<{ skill: Skill; revisionCreated: boolean }>();
+    const refresh = deferred<void>();
+    reimportSkillMock.mockReturnValueOnce(pending.promise);
+    const onSavingChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SkillReimport
+        skill={importedSkill}
+        dirty={false}
+        onReimported={vi.fn(() => refresh.promise)}
+        onSavingChange={onSavingChange}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Check for updates" }));
+    await user.click(screen.getByRole("button", { name: "Save new revision from source" }));
+
+    expect(onSavingChange).toHaveBeenCalledWith(true);
+    await act(async () => pending.resolve({ skill: importedSkill, revisionCreated: true }));
+    expect(onSavingChange).toHaveBeenLastCalledWith(true);
+    await act(async () => refresh.resolve());
+    expect(onSavingChange).toHaveBeenLastCalledWith(false);
   });
 });

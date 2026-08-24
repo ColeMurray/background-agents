@@ -217,7 +217,7 @@ describe("fetchSkillImport", () => {
     const provider = fakeProvider({
       "SKILL.md": {
         content:
-          "---\nname: deploy-service\ndescription: Deploys\nallowed-tools: [read]\nversion: 2\n---\nbody\n",
+          "---\nname: deploy-service\ndescription: Deploys\nallowed-tools: [read]\nextension:\n  permissions:\n    - deploy\n---\nbody\n",
       },
     });
 
@@ -228,7 +228,7 @@ describe("fetchSkillImport", () => {
       "unmapped-frontmatter",
     ]);
     expect(result.warnings[0].message).toContain("allowed-tools");
-    expect(result.warnings[1].message).toContain("version");
+    expect(result.warnings[1].message).toContain("extension");
   });
 
   it("carries license, compatibility, and metadata across", async () => {
@@ -241,7 +241,7 @@ describe("fetchSkillImport", () => {
           "license: Apache-2.0",
           "compatibility: Requires kubectl",
           "metadata:",
-          "  team: platform",
+          "  team owner: platform",
           "---",
           "body",
           "",
@@ -253,7 +253,7 @@ describe("fetchSkillImport", () => {
 
     expect(result.content.license).toBe("Apache-2.0");
     expect(result.content.compatibility).toBe("Requires kubectl");
-    expect(result.content.metadata).toEqual({ team: "platform" });
+    expect(result.content.metadata).toEqual({ "team owner": "platform" });
   });
 
   it.each([

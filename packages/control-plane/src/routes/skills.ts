@@ -37,6 +37,7 @@ import {
   type RequestContext,
   type Route,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   defineRoutes,
 } from "./shared";
 
@@ -78,6 +79,7 @@ function audit(ctx: RequestContext, event: SkillAuditEvent): void {
 
 function canonicalUserId(ctx: RequestContext): string | null {
   if (ctx.principal?.kind === "user") return ctx.principal.userId;
+  if (ctx.principal?.kind === "service") return ctx.principal.actor?.canonicalUserId ?? null;
   return null;
 }
 
@@ -620,9 +622,8 @@ function profileWriteError(value: unknown): Response {
   throw value;
 }
 
-export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
+const skillReadRoutes = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
   { method: "GET", pattern: parsePattern("/skills"), handler: handleListSkills },
-  { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
   {
     method: "POST",
     pattern: parsePattern("/skills/preview"),
@@ -633,6 +634,11 @@ export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, 
     pattern: parsePattern("/skills/resolve-preview"),
     handler: handleResolvePreview,
   },
+  { method: "GET", pattern: parsePattern("/skills/:id"), handler: handleGetSkill },
+]);
+
+const skillAdministrationRoutes = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
+  { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
   {
     method: "POST",
     pattern: parsePattern("/skills/import/preview"),
@@ -649,7 +655,6 @@ export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, 
     pattern: parsePattern("/skills/:id/reimport"),
     handler: handleReimportSkill,
   },
-  { method: "GET", pattern: parsePattern("/skills/:id"), handler: handleGetSkill },
   {
     method: "PATCH",
     pattern: parsePattern("/skills/:id"),
@@ -678,3 +683,5 @@ export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, 
     handler: handleDeleteProfile,
   },
 ]);
+
+export const skillRoutes: Route[] = [...skillReadRoutes, ...skillAdministrationRoutes];

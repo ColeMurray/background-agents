@@ -339,6 +339,16 @@ export class SkillStore {
     }
     const revision = await buildValidatedSkillRevision(current.name, content);
     if (revision.revisionSha256 === current.revisionSha256) {
+      const result = await this.db
+        .prepare(
+          `UPDATE skills SET current_revision_id = current_revision_id
+           WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
+        )
+        .bind(id, expectedRevisionId)
+        .run();
+      if ((result.meta.changes ?? 0) === 0) {
+        throw new SkillConflictError("Skill changed concurrently");
+      }
       return { skill: current, revisionCreated: false };
     }
     const now = Date.now();

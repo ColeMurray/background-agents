@@ -108,6 +108,26 @@ describe("managed skill import provenance", () => {
     ).rejects.toThrow(SkillConflictError);
   });
 
+  it("rejects an unchanged re-import when its conditional update loses", async () => {
+    const skills = new SkillStore(env.DB);
+    const skill = await importedSkill(skills);
+    await env.DB.prepare(
+      `CREATE TRIGGER ignore_unchanged_reimport
+       BEFORE UPDATE OF current_revision_id ON skills
+       WHEN OLD.id = '${skill.id}' AND NEW.current_revision_id = OLD.current_revision_id
+       BEGIN
+         SELECT RAISE(IGNORE);
+       END`
+    ).run();
+    try {
+      await expect(
+        skills.applyImportedRevision(skill.id, content, source, "user_2", skill.currentRevisionId)
+      ).rejects.toThrow(SkillConflictError);
+    } finally {
+      await env.DB.prepare("DROP TRIGGER ignore_unchanged_reimport").run();
+    }
+  });
+
   it("keeps reporting the source after the skill is edited by hand", async () => {
     const skills = new SkillStore(env.DB);
     const skill = await importedSkill(skills);

@@ -20,11 +20,13 @@ export function SkillReimport({
   skill,
   dirty,
   onReimported,
+  onSavingChange,
 }: {
   skill: Skill;
   /** Whether the surrounding editor holds unsaved changes this would discard. */
   dirty: boolean;
-  onReimported: () => void;
+  onReimported: () => void | Promise<void>;
+  onSavingChange: (saving: boolean) => void;
 }) {
   const source = skill.source;
   const [ref, setRef] = useState("");
@@ -50,6 +52,7 @@ export function SkillReimport({
       return;
     }
     setSaving(true);
+    onSavingChange(true);
     try {
       const result = await reimportSkill(skill.id, skill.currentRevisionId, {
         ref: ref.trim() || null,
@@ -61,11 +64,12 @@ export function SkillReimport({
           : "Source content is unchanged; no revision added"
       );
       invalidatePreview();
-      onReimported();
+      await onReimported();
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
       setSaving(false);
+      onSavingChange(false);
     }
   }
 

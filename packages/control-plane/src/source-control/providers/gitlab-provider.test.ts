@@ -6,10 +6,11 @@ import { SourceControlProviderError } from "../errors";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-function makeResponse(body: unknown, status = 200): Response {
+function makeResponse(body: unknown, status = 200, headers: HeadersInit = {}): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(headers),
     json: () => Promise.resolve(body),
     text: () => Promise.resolve(JSON.stringify(body)),
   } as unknown as Response;
@@ -1361,7 +1362,37 @@ describe("managed-skill repository reads", () => {
     const requestUrl = String(mockFetch.mock.calls[0]?.[0]);
     expect(requestUrl).toContain("path=skills%2Fdeploy");
     expect(requestUrl).toContain("recursive=true");
-    expect(requestUrl).toContain("pagination=none");
+    expect(requestUrl).toContain("per_page=100");
+    expect(requestUrl).toContain("page=1");
+  });
+
+  it("bounds scoped recursive tree reads with pagination", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      path: `skills/deploy/file-${index}`,
+      type: "blob",
+      mode: "100644",
+      id: `file-${index}`,
+    }));
+    mockFetch
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(firstPage), {
+          headers: { "content-type": "application/json", "x-next-page": "2" },
+        })
+      )
+      .mockResolvedValueOnce(makeResponse([]));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const tree = await provider.listTree({
+      owner: "acme",
+      name: "skills",
+      commitSha: "abc",
+      path: "skills/deploy",
+    });
+
+    expect(tree).toMatchObject({ truncated: false });
+    expect(tree.entries).toHaveLength(100);
+    expect(String(mockFetch.mock.calls[1]?.[0])).toContain("page=2");
+    expect(String(mockFetch.mock.calls[1]?.[0])).toContain("path=skills%2Fdeploy");
   });
 
   it("returns an empty scoped tree when GitLab reports a missing path", async () => {

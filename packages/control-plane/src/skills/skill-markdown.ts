@@ -12,7 +12,8 @@ import { isAlias, isMap, isNode, isScalar, isSeq, parseDocument, type Node } fro
 export type SkillFrontmatterValue =
   | { kind: "scalar"; value: string }
   | { kind: "map"; value: Record<string, string> }
-  | { kind: "sequence"; value: string[] };
+  | { kind: "sequence"; value: string[] }
+  | { kind: "unsupported" };
 
 export interface ParsedSkillMarkdown {
   frontmatter: Map<string, SkillFrontmatterValue>;
@@ -21,7 +22,6 @@ export interface ParsedSkillMarkdown {
 
 export class SkillMarkdownError extends Error {}
 
-const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const FRONTMATTER_FENCE = /^(?:---|\.\.\.)\s*$/;
 
 function stripBom(text: string): string {
@@ -73,11 +73,30 @@ function stringScalar(value: unknown, path: string): string {
 }
 
 function keyScalar(node: unknown, path: string): string {
-  const value = stringScalar(node, path);
-  if (!KEY_PATTERN.test(value)) {
-    throw new SkillMarkdownError(`${nodeLabel(path)} has an unsupported key`);
+  return stringScalar(node, path);
+}
+
+/** Validate graph/tag and Unicode safety even for values the importer ignores. */
+function assertPlainTree(value: unknown, path: string): void {
+  if (!isNode(value)) return;
+  const node: Node = value;
+  assertPlainNode(node, path);
+  if (isScalar(node)) {
+    if (typeof node.value === "string" && !hasWellFormedUnicode(node.value)) {
+      throw new SkillMarkdownError(`${nodeLabel(path)} must contain valid Unicode`);
+    }
+    return;
   }
-  return value;
+  if (isSeq(node)) {
+    node.items.forEach((item, index) => assertPlainTree(item, `${path}[${index}]`));
+    return;
+  }
+  if (isMap(node)) {
+    node.items.forEach((pair) => {
+      const childKey = keyScalar(pair.key, path);
+      assertPlainTree(pair.value, path ? `${path}.${childKey}` : childKey);
+    });
+  }
 }
 
 function frontmatterValue(value: unknown, key: string): SkillFrontmatterValue {
@@ -86,19 +105,27 @@ function frontmatterValue(value: unknown, key: string): SkillFrontmatterValue {
   assertPlainNode(node, key);
   if (isScalar(node)) return { kind: "scalar", value: stringScalar(node, key) };
   if (isSeq(node)) {
+    if (!node.items.every((item) => isScalar(item) && typeof item.value === "string")) {
+      assertPlainTree(node, key);
+      return { kind: "unsupported" };
+    }
     return {
       kind: "sequence",
       value: node.items.map((item, index) => stringScalar(item, `${key}[${index}]`)),
     };
   }
   if (isMap(node)) {
+    if (!node.items.every((pair) => isScalar(pair.value) && typeof pair.value.value === "string")) {
+      assertPlainTree(node, key);
+      return { kind: "unsupported" };
+    }
     const entries = node.items.map((pair) => {
       const childKey = keyScalar(pair.key, key);
       return [childKey, stringScalar(pair.value, `${key}.${childKey}`)] as const;
     });
     return { kind: "map", value: Object.fromEntries(entries) };
   }
-  throw new SkillMarkdownError(`${nodeLabel(key)} has an unsupported value`);
+  return { kind: "unsupported" };
 }
 
 /** Split a `SKILL.md` into validated frontmatter entries and its Markdown body. */

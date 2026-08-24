@@ -250,6 +250,24 @@ describe("GitHubSourceControlProvider", () => {
 
       expect(result).toBeNull();
     });
+
+    it("returns the provider's canonical repository identity", async () => {
+      mockGetInstallationRepository.mockResolvedValueOnce({
+        id: 1,
+        owner: "New-Owner",
+        name: "Renamed-Repo",
+        fullName: "New-Owner/Renamed-Repo",
+        description: null,
+        private: true,
+        archived: false,
+        defaultBranch: "main",
+      });
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      const result = await provider.checkRepositoryAccess({ owner: "old-owner", name: "old-repo" });
+
+      expect(result).toMatchObject({ repoOwner: "new-owner", repoName: "renamed-repo" });
+    });
   });
 
   describe("listRepositories", () => {
@@ -1146,6 +1164,50 @@ describe("managed-skill repository reads", () => {
       { type: "other", executable: false },
       { type: "other", executable: false },
     ]);
+  });
+
+  it("resolves and recursively lists only the requested subtree", async () => {
+    mockFetchWithTimeout
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          tree: [{ path: "skills", type: "tree", mode: "040000", sha: "skills" }],
+        })
+      )
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          tree: [{ path: "deploy", type: "tree", mode: "040000", sha: "deploy" }],
+        })
+      )
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          tree: [{ path: "SKILL.md", type: "blob", mode: "100644", sha: "file", size: 10 }],
+        })
+      );
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    const tree = await provider.listTree({
+      owner: "acme",
+      name: "skills",
+      commitSha: "abc",
+      path: "skills/deploy",
+    });
+
+    expect(tree.entries[0]?.path).toBe("skills/deploy/SKILL.md");
+    expect(mockFetchWithTimeout.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/git/trees/abc"),
+      expect.stringContaining("/git/trees/skills"),
+      expect.stringContaining("/git/trees/deploy?recursive=1"),
+    ]);
+  });
+
+  it("returns an empty scoped tree when a path segment is missing", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ tree: [] }));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.listTree({ owner: "acme", name: "skills", commitSha: "abc", path: "missing" })
+    ).resolves.toEqual({ entries: [], truncated: false });
+    expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
   });
 
   it("cancels an undeclared oversized blob while streaming it", async () => {

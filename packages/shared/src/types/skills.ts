@@ -253,7 +253,7 @@ export const skillSummarySchema = z.strictObject({
    * Most recent recorded import, or null for an editor-authored skill. Survives
    * later hand edits so re-import always knows where the skill came from.
    */
-  source: skillImportProvenanceSchema.nullable(),
+  source: skillImportProvenanceSchema.nullable().optional().default(null),
   createdBy: z.string(),
   updatedBy: z.string(),
   createdAt: z.number(),

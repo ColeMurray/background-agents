@@ -86,12 +86,20 @@ describe("parseSkillMarkdown", () => {
   });
 
   it("reads a nested string map", () => {
-    const parsed = parseSkillMarkdown("---\nmetadata:\n  team: platform\n  tier: '1'\n---\n");
+    const parsed = parseSkillMarkdown("---\nmetadata:\n  team owner: platform\n  tier: '1'\n---\n");
 
     expect(parsed.frontmatter.get("metadata")).toEqual({
       kind: "map",
-      value: { team: "platform", tier: "1" },
+      value: { "team owner": "platform", tier: "1" },
     });
+  });
+
+  it("preserves unsupported nested extension values for importer warnings", () => {
+    const parsed = parseSkillMarkdown(
+      "---\ndescription: Deploys the API\nextension:\n  permissions:\n    - deploy\n---\n"
+    );
+
+    expect(parsed.frontmatter.get("extension")).toEqual({ kind: "unsupported" });
   });
 
   it("reads an inline string map", () => {
@@ -138,7 +146,6 @@ describe("parseSkillMarkdown", () => {
     ["custom tags", "---\nname: !custom deploy\n---\n"],
     ["a non-map root", "---\n- deploy\n---\n"],
     ["unterminated quotes", '---\nname: "deploy\n---\n'],
-    ["deeper nesting", "---\nmetadata:\n  team:\n    name: platform\n---\n"],
     ["mixed sequence and map", "---\ntools:\n  - read\n  write: yes\n---\n"],
     ["a code point above the Unicode range", '---\nname: "\\U0011FFFF"\n---\n'],
     ["a lone surrogate escape", '---\nname: "\\uD800"\n---\n'],
