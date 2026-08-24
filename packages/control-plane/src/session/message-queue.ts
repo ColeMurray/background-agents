@@ -12,6 +12,7 @@ import {
   isValidModel,
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
@@ -104,19 +105,6 @@ export async function fingerprintWebPrompt(
     attachmentIds: data.attachments?.map((attachment) => attachment.attachmentId) ?? [],
   });
   return hashToken(canonicalRequest);
-}
-
-export function isPromptableSessionStatus(status: SessionRow["status"]): boolean {
-  switch (status) {
-    case "created":
-    case "active":
-    case "completed":
-    case "failed":
-      return true;
-    case "archived":
-    case "cancelled":
-      return false;
-  }
 }
 
 function resolveParticipantGitIdentity(
@@ -281,7 +269,7 @@ export class SessionMessageQueue {
 
   async processMessageQueue(): Promise<void> {
     const currentSession = this.repository.getSession();
-    if (!currentSession || !isPromptableSessionStatus(currentSession.status)) {
+    if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
     }
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
@@ -769,7 +757,7 @@ export class SessionMessageQueue {
 
   private assertPromptableSession(): void {
     const session = this.repository.getSession();
-    if (session && !isPromptableSessionStatus(session.status)) {
+    if (session && !isSessionPromptable(session.status)) {
       throw new SessionNotPromptableError(session.status);
     }
   }

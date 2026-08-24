@@ -16,6 +16,7 @@ import {
 } from "@open-inspect/shared/types/server-messages";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import type { ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import { resolveAppName } from "@open-inspect/shared/app-name";
@@ -44,10 +45,7 @@ import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { ScmSettingsStore } from "../db/scm-settings";
 import { SessionIndexStore } from "../db/session-index";
-import {
-  isSandboxReconnectBlockedStatus,
-  isSessionSandboxReconnectBlocked,
-} from "../sandbox/lifecycle/decisions";
+import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
 import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import {
@@ -1184,7 +1182,7 @@ export class SessionDO extends DurableObject<Env> {
       // await, so the input gate lets a cancel or archive land while this
       // request is suspended. Admission needs a fresh, synchronous read.
       const currentSession = this.getSession();
-      if (currentSession && isSessionSandboxReconnectBlocked(currentSession.status)) {
+      if (currentSession && !isSessionPromptable(currentSession.status)) {
         log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",

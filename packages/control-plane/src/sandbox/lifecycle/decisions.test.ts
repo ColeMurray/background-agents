@@ -15,7 +15,6 @@ import {
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
-  isSessionSandboxReconnectBlocked,
   isSnapshotRuntimeCompatible,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -40,19 +39,6 @@ describe("isSandboxReconnectBlockedStatus", () => {
     "allows reconnects for %s sandboxes",
     (status) => {
       expect(isSandboxReconnectBlockedStatus(status)).toBe(false);
-    }
-  );
-});
-
-describe("isSessionSandboxReconnectBlocked", () => {
-  it.each(["archived", "cancelled"] as const)("blocks reconnects for %s sessions", (status) => {
-    expect(isSessionSandboxReconnectBlocked(status)).toBe(true);
-  });
-
-  it.each(["created", "active", "completed", "failed"] as const)(
-    "allows reconnects for %s sessions",
-    (status) => {
-      expect(isSessionSandboxReconnectBlocked(status)).toBe(false);
     }
   );
 });

@@ -10,6 +10,7 @@ import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-attachments";
 import type { Artifact } from "@/types/session";
+import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
@@ -63,7 +64,7 @@ export function SessionPromptComposer({
   const { labels } = useKeyboardShortcuts();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
-  const sessionPromptable = session.status !== "archived" && session.status !== "cancelled";
+  const sessionPromptable = isSessionPromptable(session.status);
   const sendDisabled =
     !hasContent || prompt.draftLocked || prompt.sendBlocked || !sessionPromptable;
   // Keep the complete draft stable while its attachments upload and until
