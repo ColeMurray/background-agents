@@ -47,11 +47,7 @@ import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
-import {
-  createSourceControlProviderFromEnv,
-  resolveScmProviderFromEnv,
-  type SourceControlProvider,
-} from "../source-control";
+import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { SessionCoreRepository } from "./session-core-repository";
@@ -266,7 +262,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // `internals.sourceControlProvider` exposes it as an accessor pair.
   let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
   const sourceControlProvider = () => scmProvider;
-  const scmProviderName = resolveScmProviderFromEnv(env.SCM_PROVIDER);
+  const scmProviderName = scmProvider.name;
 
   const sandboxDashboardSettings: SandboxDashboardSettings = {
     sandboxProvider: env.SANDBOX_PROVIDER,
