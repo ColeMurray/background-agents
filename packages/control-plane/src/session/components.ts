@@ -49,6 +49,7 @@ import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import type { Env, ClientInfo } from "../types";
+import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
 import { SessionCoreRepository } from "./session-core-repository";
 import { SandboxRepository } from "./sandbox-repository";
@@ -269,6 +270,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sourceControlProvider = () => scmProvider;
   const scmProviderName = scmProvider.name;
 
+  // Shared single instances/closures — every consumer below takes these
+  // rather than re-deriving its own copy.
+  const sessionIndexStore = db ? new SessionIndexStore(db) : null;
+  const sessionPullRequestStore = db ? new SessionPullRequestStore(db) : null;
+  const resolveRepoId = (sessionRow: SessionRow) =>
+    resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider);
+
   const sandboxDashboardSettings: SandboxDashboardSettings = {
     sandboxProvider: env.SANDBOX_PROVIDER,
     modalWorkspace: env.MODAL_WORKSPACE,
@@ -279,8 +287,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const userEnvResolver = new UserEnvResolver({
     db,
     sessionCoreRepository,
-    resolveRepoId: (sessionRow) =>
-      resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider),
+    resolveRepoId,
     durableObjectId,
     repoSecretsEncryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
     secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
@@ -288,13 +295,23 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   const terminalMessageProjection = new SessionTerminalMessageProjection(
-    db ? new SessionIndexStore(db) : null,
+    sessionIndexStore,
     () => {
       const current = sessionCoreRepository.getSession();
       return current ? resolvePublicSessionId(current, durableObjectId) : null;
     },
     log
   );
+  const recordTerminalMessage = (
+    messageId: string,
+    messageCreatedAt: number,
+    completedAt: number
+  ): Promise<void> =>
+    terminalMessageProjection.recordTerminalMessage({
+      messageId,
+      messageCreatedAt,
+      terminalMessageCompletedAt: completedAt,
+    });
 
   const userScmTokenStore =
     db && env.TOKEN_ENCRYPTION_KEY ? new UserScmTokenStore(db, env.TOKEN_ENCRYPTION_KEY) : null;
@@ -326,7 +343,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageRepository,
     artifactRepository,
     messenger,
-    db ? new SessionIndexStore(db) : null,
+    sessionIndexStore,
     env.SESSION ?? null
   );
 
@@ -335,7 +352,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     statusService,
     backgroundTasks,
-    sessionIndexStore: db ? new SessionIndexStore(db) : null,
+    sessionIndexStore,
     durableObjectId,
     now: () => Date.now(),
   });
@@ -378,14 +395,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     statusService,
     (model) => userEnvResolver.getProviderAuthenticationError(model),
-    (messageId, messageCreatedAt, completedAt) =>
-      terminalMessageProjection.recordTerminalMessage({
-        messageId,
-        messageCreatedAt,
-        terminalMessageCompletedAt: completedAt,
-      }),
+    recordTerminalMessage,
     lifecycleManager,
-    db ? new SessionIndexStore(db) : null,
+    sessionIndexStore,
     scmProviderName,
     alarmScheduler,
     getExecutionTimeoutMs
@@ -425,12 +437,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     diffService,
     (title, options) => titleService.applySessionTitleUpdate(title, options),
     (reason) => lifecycleManager.triggerSnapshot(reason),
-    (messageId, messageCreatedAt, completedAt) =>
-      terminalMessageProjection.recordTerminalMessage({
-        messageId,
-        messageCreatedAt,
-        terminalMessageCompletedAt: completedAt,
-      }),
+    recordTerminalMessage,
     statusService,
     (timestamp) => lifecycleManager.updateLastActivity(timestamp),
     () => lifecycleManager.scheduleInactivityCheck(),
@@ -455,7 +462,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           sessionCoreRepository,
           artifactRepository,
           sourceControlProvider(),
-          db ? new SessionPullRequestStore(db) : null
+          sessionPullRequestStore
         ).then(({ updated, failures }) => {
           for (const artifact of updated) {
             messenger.broadcast({ type: "artifact_updated", artifact });
@@ -510,7 +517,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       const service = new OpenAITokenRefreshService(
         db!,
         env.REPO_SECRETS_ENCRYPTION_KEY!,
-        (row) => resolveSessionRepoId(row, sessionCoreRepository, sourceControlProvider),
+        resolveRepoId,
         requestLog
       );
       return service.refresh(sessionRow);
@@ -519,7 +526,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       const service = new XaiTokenRefreshService(
         db!,
         env.REPO_SECRETS_ENCRYPTION_KEY!,
-        (row) => resolveSessionRepoId(row, sessionCoreRepository, sourceControlProvider),
+        resolveRepoId,
         requestLog
       );
       return service.refresh(sessionRow);
@@ -594,7 +601,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         pushBranchToRemote: (pushSpec) => sandboxEventProcessor.pushBranchToRemote(pushSpec),
         messenger,
         appName: resolveAppName(env),
-        sessionPullRequests: db ? new SessionPullRequestStore(db) : undefined,
+        sessionPullRequests: sessionPullRequestStore ?? undefined,
         resolveScmSettings: (repo) => resolveScmSettings(db, repo),
       });
 

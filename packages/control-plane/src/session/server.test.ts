@@ -25,7 +25,7 @@ function createHarness() {
   let currentClient: TestClient | null = client;
   let connectionKind: "client" | "sandbox" = "client";
   let now = 1000;
-  const monotonicTimes = [0, 2, 5, 8, 10];
+  const monotonicTimes = [0, 5, 8, 10];
   const ensureInitialized = vi.fn();
   const clock: Clock = {
     nowMs: () => now,
@@ -170,7 +170,6 @@ describe("SessionServer", () => {
       http_path: SessionInternalPaths.state,
       http_status: 200,
       duration_ms: 10,
-      init_ms: 2,
       handler_ms: 3,
       outcome: "success",
     });
