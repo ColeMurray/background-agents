@@ -5,59 +5,63 @@ import type { Env } from "../../src/types";
 import { createSessionRuntime } from "../../src/session/components";
 import { componentsOf } from "./session-do-access";
 
+/**
+ * The composition root is fail-fast: both provider factories construct at
+ * graph build, so a misconfigured deployment fails every session request at
+ * initialization — before any session state is written — instead of running
+ * degraded and surfacing the error at the first spawn or PR operation.
+ */
 describe("createSessionRuntime", () => {
-  it("builds the whole graph eagerly without constructing either provider", async () => {
+  async function buildWithEnv(overrides: Partial<Record<keyof Env, string | undefined>>) {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-eager-${crypto.randomUUID()}`));
 
-    const result = await runInDurableObject(stub, (instance: SessionDO) => {
-      // Apply the schema (idempotent init) — the factory reads the session row.
+    return runInDurableObject(stub, (instance: SessionDO) => {
+      // Apply the schema first (idempotent init), matching production order.
       componentsOf(instance);
 
-      // A deployment shape that works today only because both provider
-      // factories are deferred: no sandbox credentials, no valid SCM provider.
-      const misconfigured = {
+      const doctored = {
         ...(instance as unknown as { env: Env }).env,
-        SANDBOX_PROVIDER: "not-a-real-sandbox-provider",
-        MODAL_API_SECRET: undefined,
-        MODAL_WORKSPACE: undefined,
-        SCM_PROVIDER: "not-a-real-provider",
+        ...overrides,
       } as Env;
 
-      // Eager construction of either provider would throw right here and fail
-      // every request on such a deployment; the graph must still assemble.
-      const runtime = createSessionRuntime(
-        {
-          ctx: instance.ctx,
-          sql: instance.ctx.storage.sql,
-          db: null,
-          ensureInitialized: () => {},
-        },
-        misconfigured
-      );
-      const components = runtime.internals;
-
-      let scmError: string | null = null;
+      let error: string | null = null;
       try {
-        components.sourceControlProvider();
-      } catch (error) {
-        scmError = error instanceof Error ? error.message : String(error);
+        createSessionRuntime(
+          {
+            ctx: instance.ctx,
+            sql: instance.ctx.storage.sql,
+            db: null,
+            ensureInitialized: () => {},
+          },
+          doctored
+        );
+      } catch (caught) {
+        error = caught instanceof Error ? caught.message : String(caught);
       }
-
-      return {
-        built: Boolean(
-          runtime.server &&
-          components.lifecycleManager &&
-          components.messageQueue &&
-          components.sessionLifecycleHandler &&
-          components.sandboxEventProcessor
-        ),
-        scmError,
-      };
+      return error;
     });
+  }
 
-    expect(result.built).toBe(true);
-    // The deferred SCM factory still surfaces its configuration error at the
-    // first operation that needs it.
-    expect(result.scmError).toMatch(/SCM_PROVIDER/i);
+  it("builds the whole graph on a correctly configured deployment", async () => {
+    expect(await buildWithEnv({})).toBeNull();
+  });
+
+  it("fails at graph build on an unsupported SANDBOX_PROVIDER", async () => {
+    const error = await buildWithEnv({ SANDBOX_PROVIDER: "not-a-real-sandbox-provider" });
+    expect(error).toMatch(/SANDBOX_PROVIDER/);
+  });
+
+  it("fails at graph build when the selected sandbox provider's credentials are missing", async () => {
+    const error = await buildWithEnv({
+      SANDBOX_PROVIDER: "modal",
+      MODAL_API_SECRET: undefined,
+      MODAL_WORKSPACE: undefined,
+    });
+    expect(error).toMatch(/MODAL_API_SECRET/);
+  });
+
+  it("fails at graph build on an invalid SCM_PROVIDER", async () => {
+    const error = await buildWithEnv({ SCM_PROVIDER: "not-a-real-provider" });
+    expect(error).toMatch(/SCM_PROVIDER/i);
   });
 });

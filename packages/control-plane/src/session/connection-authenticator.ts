@@ -39,8 +39,7 @@ export interface SessionConnectionAuthenticatorDeps {
   presenceService: PresenceService;
   snapshotReader: SessionSnapshotReader;
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
-  /** Resolved per call — throws on an invalid `SCM_PROVIDER`, like today's sites. */
-  getScmProviderName: () => SourceControlProviderName;
+  scmProviderName: SourceControlProviderName;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
 }
@@ -290,7 +289,7 @@ export class SessionConnectionAuthenticator {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
-        avatar: getAvatarUrl(participant.scm_login, this.deps.getScmProviderName()),
+        avatar: getAvatarUrl(participant.scm_login, this.deps.scmProviderName),
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
@@ -376,7 +375,7 @@ export class SessionConnectionAuthenticator {
       participantId: mapping.participant_id,
       userId: mapping.canonical_user_id ?? mapping.user_id,
       name: resolveParticipantName(mapping),
-      avatar: getAvatarUrl(mapping.scm_login, this.deps.getScmProviderName()),
+      avatar: getAvatarUrl(mapping.scm_login, this.deps.scmProviderName),
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,

@@ -148,8 +148,7 @@ export class SessionMessageQueue {
     ) => Promise<void>,
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
-    /** Deferred: resolving the name throws on an invalid `SCM_PROVIDER`. */
-    private readonly getScmProvider: () => SourceControlProviderName,
+    private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number
@@ -356,7 +355,7 @@ export class SessionMessageQueue {
         this.log.error("prompt.invalid_stored_attachments")
       )
     );
-    const gitIdentity = resolveParticipantGitIdentity(author, this.getScmProvider());
+    const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const requestedEffort =
       message.reasoning_effort ??
       session?.reasoning_effort ??
@@ -599,7 +598,7 @@ export class SessionMessageQueue {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
-        avatar: getAvatarUrl(participant.scm_login, this.getScmProvider()),
+        avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };

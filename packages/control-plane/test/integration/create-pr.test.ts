@@ -158,7 +158,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      componentsOf(instance).sourceControlProvider = () => mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
 
     const res = await stub.fetch("http://internal/internal/create-pr", {
@@ -237,7 +237,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      componentsOf(instance).sourceControlProvider = () => mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
 
     const res = await stub.fetch("http://internal/internal/create-pr", {
@@ -329,7 +329,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      componentsOf(instance).sourceControlProvider = () => mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
   }
 
@@ -495,7 +495,7 @@ describe("POST /internal/create-pr", () => {
           }),
         } as unknown as SourceControlProvider;
 
-        componentsOf(instance).sourceControlProvider = () => mockProvider;
+        componentsOf(instance).sourceControlProvider = mockProvider;
       });
     }
 

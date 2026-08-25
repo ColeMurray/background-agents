@@ -221,7 +221,7 @@ function buildQueue() {
     projectTerminalMessage,
     sandboxLifecycle,
     null,
-    () => "github",
+    "github",
     createEarliestAlarmScheduler(
       { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
       {

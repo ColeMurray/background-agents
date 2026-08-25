@@ -179,7 +179,7 @@ describe("SessionDO collaborator wiring", () => {
       // SCM access reads through the components record, so replacing this
       // property substitutes the stub for every consumer.
       const provider = stubSourceControlProvider();
-      componentsOf(instance).sourceControlProvider = () => provider;
+      componentsOf(instance).sourceControlProvider = provider;
       // Without a connected sandbox the real implementation short-circuits to
       // `{ success: true }`, which is exactly what a dropped edge would return.
       // Spying is the only way to tell the two apart from out here.
@@ -219,20 +219,18 @@ describe("SessionDO collaborator wiring", () => {
     ]);
   });
 
-  it("keeps session init succeeding when the warm spawn cannot build its sandbox provider", async () => {
+  it("keeps session init succeeding when the warm spawn fails at runtime", async () => {
     const sessionName = `wiring-provider-throws-${crypto.randomUUID()}`;
     const stub = env.SESSION.get(env.SESSION.idFromName(sessionName));
 
-    // The sandbox provider is deferred: constructing it throws on a deployment
-    // missing provider credentials, and that construction now happens on first
-    // provider touch inside `warmSandbox` rather than at graph construction.
-    // Model that failure mode before init; init must still succeed, because
-    // its session rows are already committed by the time the warm spawn runs.
-    // (Init's own ensureInitialized() is idempotent, so pre-initializing here
-    // matches production order within the same activation.)
+    // A runtime spawn failure (provider API down, quota exhausted) rejects
+    // `warmSandbox`; init must still succeed, because its session rows are
+    // already committed by the time the warm spawn runs. (Init's own
+    // ensureInitialized() is idempotent, so pre-initializing here matches
+    // production order within the same activation.)
     await runInDurableObject(stub, (instance: SessionDO) => {
       componentsOf(instance).lifecycleManager.warmSandbox = vi.fn(() =>
-        Promise.reject(new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required"))
+        Promise.reject(new Error("modal API unavailable"))
       );
     });
 

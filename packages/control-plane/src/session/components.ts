@@ -11,23 +11,22 @@
  * must already be applied when this runs, because the factory reads the
  * session row to derive the logger's `session_id`.
  *
- * The only deferred constructions left are the two provider factories, both of
- * which throw on reachable configurations (`createSandboxProviderFromEnv` on
+ * Everything is constructed eagerly, including the two provider factories.
+ * Both throw on misconfigured deployments (`createSandboxProviderFromEnv` on
  * missing provider credentials, `createSourceControlProviderFromEnv` on an
- * invalid `SCM_PROVIDER`, GitLab without a token, or Bitbucket). Deferring
- * them — behind `once()` at this root, not behind lazy getters on the DO —
- * keeps `/internal/init` succeeding on such deployments: the failure surfaces
- * at the operation that needs the provider and is absorbed by the background
- * task boundary, instead of failing every request at initialization.
+ * invalid `SCM_PROVIDER`, GitLab without a token, or Bitbucket) — and that
+ * throw is deliberate: a misconfigured deployment fails every session request
+ * at initialization, before any session state is written, instead of running
+ * degraded and surfacing the error at the first spawn or PR operation.
+ * Deployment-time validation is the gate for configuration, not the runtime.
  */
 
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
-import { resolveSandboxBackendName, type SandboxBackendName } from "../sandbox/provider-name";
+import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import type { SandboxProvider } from "../sandbox/provider";
 import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
@@ -175,81 +174,14 @@ export interface SessionRuntime {
  */
 export interface SessionComponents {
   sandboxRepository: SandboxRepository;
-  /**
-   * Deferred: `createSourceControlProviderFromEnv` throws on reachable
-   * configs. Assignable — the setter swaps the underlying cell for tests.
-   */
-  sourceControlProvider: () => SourceControlProvider;
+  /** Assignable — the setter swaps the underlying cell for tests. */
+  sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
   lifecycleManager: SandboxLifecycleManager;
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
   sessionLifecycleHandler: SessionLifecycleHandler;
-}
-
-/** `resolveSandboxBackendName` throws on unsupported values; graph-time uses need null instead. */
-function tryResolveSandboxBackendName(value: string | undefined): SandboxBackendName | null {
-  try {
-    return resolveSandboxBackendName(value);
-  } catch {
-    return null;
-  }
-}
-
-/** Memoize a factory so its (possibly throwing) construction runs at most once. */
-function once<T>(create: () => T): () => T {
-  let value: T | undefined;
-  let created = false;
-  return () => {
-    if (!created) {
-      value = create();
-      created = true;
-    }
-    return value as T;
-  };
-}
-
-/**
- * Adapt a deferred provider factory to the `SandboxProvider` interface.
- *
- * The lifecycle manager takes a provider instance; constructing one throws on
- * deployments missing provider credentials. Every member defers to the real
- * provider on first touch, so the construction error surfaces inside the
- * spawn/snapshot operation that needed it (an absorbed background-task
- * rejection) rather than at graph construction.
- */
-export function createDeferredSandboxProvider(create: () => SandboxProvider): SandboxProvider {
-  const resolve = once(create);
-  return {
-    get name() {
-      return resolve().name;
-    },
-    get capabilities() {
-      return resolve().capabilities;
-    },
-    createSandbox: (config) => resolve().createSandbox(config),
-    get restoreFromSnapshot() {
-      const provider = resolve();
-      const restore = provider.restoreFromSnapshot;
-      return restore && restore.bind(provider);
-    },
-    get resumeSandbox() {
-      const provider = resolve();
-      const resume = provider.resumeSandbox;
-      return resume && resume.bind(provider);
-    },
-    get takeSnapshot() {
-      const provider = resolve();
-      const snapshot = provider.takeSnapshot;
-      return snapshot && snapshot.bind(provider);
-    },
-    get stopSandbox() {
-      const provider = resolve();
-      const stop = provider.stopSandbox;
-      return stop && stop.bind(provider);
-    },
-  };
 }
 
 /**
@@ -327,16 +259,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const connections = new DurableObjectSessionConnections(ctx, wsManager);
   const messenger: SessionMessenger = new SessionMessengerImpl(connections);
 
-  // Deferred: `createSourceControlProviderFromEnv` throws on reachable
-  // configs. The cell is a local `let`, so consumer closures read a binding
-  // that exists before any of them (no temporal dead zone and no read through
-  // the returned record); `internals.sourceControlProvider` exposes it as an
-  // accessor pair because live-DO integration tests can only substitute a
-  // stub after the init request has already built this graph.
-  let scmProvider: () => SourceControlProvider = once(() =>
-    createSourceControlProviderFromEnv(env)
-  );
-  const sourceControlProvider = () => scmProvider();
+  // Constructed eagerly — an invalid SCM configuration fails right here. The
+  // cell is a local `let` so live-DO integration tests can substitute a stub
+  // after the init request has already built this graph; consumer closures
+  // read the cell per call (never through the returned record), and
+  // `internals.sourceControlProvider` exposes it as an accessor pair.
+  let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
+  const sourceControlProvider = () => scmProvider;
+  const scmProviderName = resolveScmProviderFromEnv(env.SCM_PROVIDER);
 
   const sandboxDashboardSettings: SandboxDashboardSettings = {
     sandboxProvider: env.SANDBOX_PROVIDER,
@@ -455,7 +385,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       }),
     lifecycleManager,
     db ? new SessionIndexStore(db) : null,
-    once(() => resolveScmProviderFromEnv(env.SCM_PROVIDER)),
+    scmProviderName,
     alarmScheduler,
     getExecutionTimeoutMs
   );
@@ -715,7 +645,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     presenceService,
     snapshotReader,
     schedulePullRequestRefresh,
-    getScmProviderName: () => resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    scmProviderName,
     log,
   });
 
@@ -842,7 +772,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     get sourceControlProvider() {
       return scmProvider;
     },
-    set sourceControlProvider(next: () => SourceControlProvider) {
+    set sourceControlProvider(next: SourceControlProvider) {
       scmProvider = next;
     },
     userEnvResolver,
@@ -894,14 +824,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     alarmScheduler,
     sandboxDashboardSettings,
   } = deps;
-  // Resolved leniently at graph time: an unsupported SANDBOX_PROVIDER must
-  // fail at the spawn that needs it (via the deferred provider below), not at
-  // graph construction — the same reachable-throw rule as the provider factory.
-  const sandboxBackend = tryResolveSandboxBackendName(env.SANDBOX_PROVIDER);
-
-  const provider = createDeferredSandboxProvider(() =>
-    createSandboxProviderFromEnv(env, resolveSandboxBackendName(env.SANDBOX_PROVIDER))
-  );
+  // Both throw on a misconfigured deployment — deliberately at graph
+  // construction, so every session request fails at initialization instead of
+  // the error surfacing later at the first spawn.
+  const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
+  const provider = createSandboxProviderFromEnv(env, sandboxBackend);
 
   // Storage adapter
   const storage: SandboxStorage = {
@@ -1040,7 +967,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   // Create the image lookup if D1 is available and the provider supports
   // prebuilt images.
   let imageBuildLookup: ImageBuildLookup | undefined;
-  const imageBuildProvider = sandboxBackend ? resolveImageBuildProvider(sandboxBackend) : null;
+  const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
   if (db && imageBuildProvider) {
     imageBuildLookup = createImageBuildLookup(db, imageBuildProvider);
   }
