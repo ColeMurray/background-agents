@@ -139,6 +139,34 @@ export default tseslint.config(
     },
   },
 
+  // The session composition root is the platform adapter's private wiring:
+  // only durable-object.ts may import it. This is what keeps "composition
+  // root" a governed invariant rather than a convention — services take their
+  // dependencies as constructor inputs, never by reaching into the root.
+  // (Uses the base rule so it stacks with the repo-wide
+  // @typescript-eslint/no-restricted-imports paths above.)
+  {
+    files: ["packages/control-plane/src/**/*.ts"],
+    ignores: [
+      "packages/control-plane/src/session/durable-object.ts",
+      "packages/control-plane/src/**/*.test.ts",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/session/components", "./components"],
+              message:
+                "Only the platform adapter (session/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // React-specific configuration for web package
   {
     files: ["packages/web/**/*.{ts,tsx}"],

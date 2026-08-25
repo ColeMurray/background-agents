@@ -86,34 +86,24 @@ import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
 import { Scheduler } from "../scheduler/scheduler";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
-import type { BackgroundTasks } from "../platform-ports";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
-import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
-import {
-  createChildSessionsHandler,
-  type ChildSessionsHandler,
-} from "./http/handlers/child-sessions.handler";
-import { createSandboxHandler, type SandboxHandler } from "./http/handlers/sandbox.handler";
+import { createMessagesHandler } from "./http/handlers/messages.handler";
+import { createChildSessionsHandler } from "./http/handlers/child-sessions.handler";
+import { createSandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
-import { createWsTokenHandler, type WsTokenHandler } from "./http/handlers/ws-token.handler";
+import { createWsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
   type SessionLifecycleHandler,
 } from "./http/handlers/session-lifecycle.handler";
-import {
-  createPullRequestHandler,
-  type PullRequestHandler,
-} from "./http/handlers/pull-request.handler";
-import {
-  createParticipantsHandler,
-  type ParticipantsHandler,
-} from "./http/handlers/participants.handler";
+import { createPullRequestHandler } from "./http/handlers/pull-request.handler";
+import { createParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
-import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
+import { createAlarmHandler } from "./alarm/handler";
 import {
   createEarliestAlarmScheduler,
   handleAlarmDelivery,
@@ -176,56 +166,26 @@ export interface SessionRuntime {
   readonly internals: SessionComponents;
 }
 
+/**
+ * The live-DO integration seams. Every field here is reached by an
+ * integration test through `SessionRuntime.internals` (spying on a live
+ * collaborator or, for `sourceControlProvider`, substituting one); nothing in
+ * production reads this record. Add a field only together with the test that
+ * consumes it — everything else stays local to the factory.
+ */
 export interface SessionComponents {
-  log: Logger;
-  backgroundTasks: BackgroundTasks;
-  // Repositories over the DO-embedded SQLite.
-  sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
-  attachmentRepository: SessionAttachmentRepository;
-  artifactRepository: ArtifactRepository;
-  eventRepository: EventRepository;
-  messageRepository: MessageRepository;
-  participantRepository: ParticipantRepository;
-  wsClientMappingRepository: WsClientMappingRepository;
-  // Alarm persistence and scheduling.
-  alarmDeadlines: PersistedAlarmDeadlineStore;
-  alarmScheduler: RehydratableAlarmScheduler;
-  alarmHandler: AlarmHandler;
-  // Sockets and messaging.
-  wsManager: SessionWebSocketManager;
-  connections: DurableObjectSessionConnections;
-  messenger: SessionMessenger;
-  // Immutable env projection for the provider dashboard link.
-  sandboxDashboardSettings: SandboxDashboardSettings;
-  /** Deferred: `createSourceControlProviderFromEnv` throws on reachable configs. */
+  /**
+   * Deferred: `createSourceControlProviderFromEnv` throws on reachable
+   * configs. Assignable — the setter swaps the underlying cell for tests.
+   */
   sourceControlProvider: () => SourceControlProvider;
-  // Domain services.
   userEnvResolver: UserEnvResolver;
-  participantService: ParticipantService;
-  callbackService: CallbackNotificationService;
-  presenceService: PresenceService;
-  statusService: SessionStatusService;
-  titleService: SessionTitleService;
-  terminalMessageProjection: SessionTerminalMessageProjection;
-  diffService: SessionDiffService;
-  eventStream: SessionEventStream;
   lifecycleManager: SandboxLifecycleManager;
   messageQueue: SessionMessageQueue;
-  messageService: MessageService;
+  presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
-  /** Fire a background read-through refresh of the session's PR artifacts. */
-  schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
-  // Internal HTTP handlers.
-  messagesHandler: MessagesHandler;
-  childSessionsHandler: ChildSessionsHandler;
-  sandboxHandler: SandboxHandler;
-  attachmentsHandler: AttachmentsHandler;
-  wsTokenHandler: WsTokenHandler;
   sessionLifecycleHandler: SessionLifecycleHandler;
-  pullRequestHandler: PullRequestHandler;
-  participantsHandler: ParticipantsHandler;
-  diffsHandler: SessionDiffsHandler;
 }
 
 /** `resolveSandboxBackendName` throws on unsupported values; graph-time uses need null instead. */
@@ -876,23 +836,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   const components: SessionComponents = {
-    log,
-    backgroundTasks,
-    sessionCoreRepository,
     sandboxRepository,
-    attachmentRepository,
-    artifactRepository,
-    eventRepository,
-    messageRepository,
-    participantRepository,
-    wsClientMappingRepository,
-    alarmDeadlines,
-    alarmScheduler,
-    alarmHandler,
-    wsManager,
-    connections,
-    messenger,
-    sandboxDashboardSettings,
     // Accessor pair over the local cell: production reads never go through
     // this property; the setter is the live-DO integration seam.
     get sourceControlProvider() {
@@ -902,28 +846,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       scmProvider = next;
     },
     userEnvResolver,
-    participantService,
-    callbackService,
-    presenceService,
-    statusService,
-    titleService,
-    terminalMessageProjection,
-    diffService,
-    eventStream,
     lifecycleManager,
     messageQueue,
-    messageService,
+    presenceService,
     sandboxEventProcessor,
-    schedulePullRequestRefresh,
-    messagesHandler,
-    childSessionsHandler,
-    sandboxHandler,
-    attachmentsHandler,
-    wsTokenHandler,
     sessionLifecycleHandler,
-    pullRequestHandler,
-    participantsHandler,
-    diffsHandler,
   };
 
   return {
