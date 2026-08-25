@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { SandboxDeliveryUnavailableError, SessionMessengerImpl } from "./messenger";
-import type { SessionWebSocketManager } from "./websocket-manager";
 
 function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boolean } = {}) {
   const clientA = { readyState: WebSocket.OPEN } as WebSocket;
@@ -18,7 +17,7 @@ function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boo
     ),
     getSandboxSocket: vi.fn(() => sandbox),
     send: vi.fn(() => overrides.sendResult ?? true),
-  } as unknown as SessionWebSocketManager;
+  };
   return { messenger: new SessionMessengerImpl(wsManager), wsManager, clientA, clientB, sandbox };
 }
 

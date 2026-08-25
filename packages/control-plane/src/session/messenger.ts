@@ -13,6 +13,16 @@ import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxCommand } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
+/**
+ * The slice of the socket registry delivery needs: client fan-out and the
+ * sandbox send path. Typed narrowly so this seam cannot grow accidental
+ * coupling to admission, persistence, or teardown operations.
+ */
+type DeliverySockets = Pick<
+  SessionWebSocketManager,
+  "forEachClientSocket" | "getSandboxSocket" | "send"
+>;
+
 export class SandboxDeliveryUnavailableError extends Error {
   constructor(message = "No sandbox connected") {
     super(message);
@@ -29,7 +39,7 @@ export interface SessionMessenger {
 }
 
 export class SessionMessengerImpl implements SessionMessenger {
-  constructor(private readonly wsManager: SessionWebSocketManager) {}
+  constructor(private readonly wsManager: DeliverySockets) {}
 
   broadcast(message: ServerMessage): void {
     // Best effort; the registry handles per-client send failures.
