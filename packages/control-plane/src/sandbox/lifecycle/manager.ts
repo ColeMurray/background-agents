@@ -311,6 +311,19 @@ export type SandboxAlarmResult = "no_action" | "sandbox_failed" | "sandbox_termi
  * Uses dependency injection for all external interactions, enabling unit testing
  * with mocked dependencies.
  */
+/**
+ * A spawn attempt discovered at hash publication that a newer reservation
+ * had replaced its identity. The attempt must abandon without failure
+ * writes: the sandbox row and circuit breaker now describe the newer
+ * attempt, and marking them failed would clobber it.
+ */
+class SpawnSupersededError extends Error {
+  constructor() {
+    super("Spawn reservation superseded before its auth hash was published");
+    this.name = "SpawnSupersededError";
+  }
+}
+
 export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * In-memory flag to prevent concurrent spawn attempts within the same request.
@@ -480,7 +493,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     );
     const authTokenHash = await hashToken(sandboxAuthToken);
     if (!this.storage.updateSandboxAuthTokenHash(expectedSandboxId, authTokenHash)) {
-      throw new Error("Spawn reservation superseded before its auth hash was published");
+      throw new SpawnSupersededError();
     }
     return { sandboxAuthToken, expectedSandboxId };
   }
@@ -637,6 +650,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repo_name: session.repo_name,
       });
     } catch (error) {
+      if (error instanceof SpawnSupersededError) {
+        this.log.warn("Spawn attempt superseded; abandoning", {
+          event: "sandbox.spawn_superseded",
+        });
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : "Failed to spawn sandbox";
       this.log.error("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -937,6 +956,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         this.reportSandboxError(result.error || "Failed to restore from snapshot");
       }
     } catch (error) {
+      if (error instanceof SpawnSupersededError) {
+        this.log.warn("Restore attempt superseded; abandoning", {
+          event: "sandbox.spawn_superseded",
+        });
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : "Failed to restore sandbox";
       this.log.error("Sandbox restore completed", {
         event: "sandbox.restore",

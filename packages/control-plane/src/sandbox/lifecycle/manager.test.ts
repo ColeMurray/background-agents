@@ -3852,17 +3852,21 @@ describe("spawn admission race (#1589)", () => {
     );
   });
 
-  it("fails the spawn when the reservation is superseded before hash publication", async () => {
+  it("abandons the attempt without failure writes when the reservation is superseded", async () => {
     const sandbox = createMockSandbox({ status: "failed" });
     const { storage, manager } = raceHarness(sandbox);
     vi.mocked(storage.updateSandboxAuthTokenHash).mockReturnValue(false);
 
     await manager.spawnSandbox();
 
-    expect(sandbox.status).toBe("failed");
-    expect(storage.setLastSpawnError).toHaveBeenCalledWith(
+    // The row and circuit breaker describe the newer reservation now — the
+    // superseded attempt must not mark them failed on its way out.
+    expect(sandbox.status).toBe("spawning");
+    expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+    expect(storage.incrementCircuitBreakerFailure).not.toHaveBeenCalled();
+    expect(storage.setLastSpawnError).not.toHaveBeenCalledWith(
       expect.stringContaining("superseded"),
-      expect.any(Number)
+      expect.anything()
     );
   });
 });
