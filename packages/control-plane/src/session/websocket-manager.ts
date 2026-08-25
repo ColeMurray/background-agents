@@ -25,6 +25,9 @@ export interface WebSocketManagerConfig {
 // ---------------------------------------------------------------------------
 
 export interface SessionWebSocketManager {
+  /** Create the client/server WebSocket pair for an upgrade response. */
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket };
+
   /** Accept a client WebSocket with a wsId tag for hibernation recovery. */
   acceptClientSocket(ws: WebSocket, wsId: string): void;
 
@@ -102,6 +105,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
   // Accept
   // -------------------------------------------------------------------------
+
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket } {
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    return { client, server };
+  }
 
   acceptClientSocket(ws: WebSocket, wsId: string): void {
     this.ctx.acceptWebSocket(ws, [`wsid:${wsId}`]);

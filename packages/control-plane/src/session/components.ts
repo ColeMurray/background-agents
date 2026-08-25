@@ -21,7 +21,6 @@
  * Deployment-time validation is the gate for configuration, not the runtime.
  */
 
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
@@ -36,7 +35,6 @@ import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
   type SandboxStorage,
-  type SandboxBroadcaster,
   type WebSocketManager,
   type IdGenerator,
   type ImageBuildLookup,
@@ -68,7 +66,6 @@ import {
   type SandboxDashboardSettings,
 } from "./sandbox-access";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
-import { DurableObjectSessionConnections } from "./durable-object-session-connections";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
@@ -137,13 +134,6 @@ export interface SessionPlatform {
   ctx: DurableObjectState;
   sql: SqlStorage;
   db: SqlDatabase | null;
-  /**
-   * The adapter's idempotent initializer, threaded into the server stack so
-   * hibernation-restored callbacks self-heal exactly as before. Within this
-   * factory's own activation it is always a no-op (the adapter initializes
-   * before touching the runtime).
-   */
-  ensureInitialized: (rehydrateAlarm?: boolean) => void;
 }
 
 /**
@@ -210,7 +200,7 @@ function resolveExecutionTimeoutMs(
 }
 
 export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
-  const { ctx, sql, db, ensureInitialized } = platform;
+  const { ctx, sql, db } = platform;
   const durableObjectId = ctx.id.toString();
   const transaction = <T>(closure: () => T): T => ctx.storage.transactionSync(closure);
 
@@ -256,10 +246,17 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
   );
   const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
+  // Hibernation-level ping/pong: the runtime answers keepalives without
+  // waking the Durable Object. Platform-global wiring, so it lives here.
+  ctx.setWebSocketAutoResponse(
+    new WebSocketRequestResponsePair(
+      JSON.stringify({ type: "ping" }),
+      JSON.stringify({ type: "pong", timestamp: Date.now() })
+    )
+  );
 
-  // Tier 3 — connection fan-out.
-  const connections = new DurableObjectSessionConnections(ctx, wsManager);
-  const messenger: SessionMessenger = new SessionMessengerImpl(connections);
+  // Tier 3 — outbound delivery over the socket registry.
+  const messenger: SessionMessenger = new SessionMessengerImpl(wsManager);
 
   // Constructed eagerly — an invalid SCM configuration fails right here. The
   // cell is a local `let` so live-DO integration tests can substitute a stub
@@ -641,7 +638,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   const connectionAuthenticator = new SessionConnectionAuthenticator({
-    connections,
     wsManager,
     sessionCoreRepository,
     sandboxRepository,
@@ -743,9 +739,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 
   const server = new SessionServer<WebSocket, ClientInfo>({
-    ensureInitialized,
     http: new SessionHttpDispatcher({
-      ensureInitialized,
       getLogger: () => log,
       routes,
       handleWebSocketUpgrade: (request, url, requestLog) =>
@@ -893,11 +887,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     clearSandboxTtyd: () => sandboxRepository.clearSandboxTtyd(),
   };
 
-  // Broadcaster adapter
-  const broadcaster: SandboxBroadcaster = {
-    broadcast: (message) => messenger.broadcast(message as ServerMessage),
-  };
-
   // WebSocket manager adapter — thin delegation to wsManager
   const lifecycleWsManager: WebSocketManager = {
     getSandboxWebSocket: () => wsManager.getSandboxSocket(),
@@ -983,7 +972,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   return new SandboxLifecycleManager(
     provider,
     storage,
-    broadcaster,
+    messenger,
     lifecycleWsManager,
     alarmScheduler,
     idGenerator,

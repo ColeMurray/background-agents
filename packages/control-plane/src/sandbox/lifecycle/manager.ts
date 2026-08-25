@@ -12,6 +12,7 @@
 
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
 import {
@@ -156,11 +157,12 @@ export interface SandboxStorage {
 }
 
 /**
- * Broadcaster for sending messages to connected clients.
+ * Broadcaster for sending messages to connected clients. Satisfied directly
+ * by the session messenger — payloads are protocol messages, not loose objects.
  */
 export interface SandboxBroadcaster {
   /** Broadcast a message to all connected clients */
-  broadcast(message: object): void;
+  broadcast(message: ServerMessage): void;
 }
 
 /**

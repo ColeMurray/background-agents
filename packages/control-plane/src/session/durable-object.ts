@@ -45,15 +45,7 @@ export class SessionDO extends DurableObject<Env> {
     if (this._runtime) return;
     const initStart = performance.now();
     initSchema(this.sql);
-    const runtime = createSessionRuntime(
-      {
-        ctx: this.ctx,
-        sql: this.sql,
-        db: this.db,
-        ensureInitialized: (rehydrate) => this.ensureInitialized(rehydrate),
-      },
-      this.env
-    );
+    const runtime = createSessionRuntime({ ctx: this.ctx, sql: this.sql, db: this.db }, this.env);
     // Publish only after the graph is fully built: a throw above leaves the
     // activation uninitialized, so the next event retries initialization
     // instead of dereferencing an undefined runtime.
