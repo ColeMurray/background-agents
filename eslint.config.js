@@ -165,12 +165,15 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ["**/session/components", "./components"],
+              // Last-segment match: covers any relative depth (./, ../, ../../)
+              // and extension-bearing specifiers. The basename is unique in
+              // this package, so anchoring on it is precise.
+              regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
                 "Only the platform adapter (session/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
             },
             {
-              group: ["**/session/durable-object", "./durable-object"],
+              regex: "(?:^|/)durable-object(?:\\.[cm]?[jt]sx?)?$",
               message:
                 "Only the worker entrypoint (src/index.ts) may import the platform adapter. Depend on the session collaborators, not the Durable Object.",
             },
@@ -189,7 +192,10 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ["**/session/components", "./components"],
+              // Last-segment match: covers any relative depth (./, ../, ../../)
+              // and extension-bearing specifiers. The basename is unique in
+              // this package, so anchoring on it is precise.
+              regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
                 "Only the platform adapter (session/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
             },
