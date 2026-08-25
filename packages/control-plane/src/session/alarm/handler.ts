@@ -63,10 +63,12 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         }
       }
 
-      // `processing` is this session's in-flight execution: while it is set the
-      // sandbox is working, however long it has gone without emitting an event.
+      // Re-read rather than reusing `processing`: the branch above may have just
+      // failed that message, in which case nothing is executing and inactivity
+      // cleanup is due now rather than a check interval later. A re-read also
+      // sees a replacement message that started processing in the meantime.
       const lifecycleResult = await deps.lifecycleManager.handleAlarm({
-        hasInFlightExecution: processing !== null,
+        hasInFlightExecution: deps.repository.getProcessingMessageWithStartedAt() !== null,
       });
       if (lifecycleResult !== "no_action") {
         await deps.messageQueue.failStuckProcessingMessage();

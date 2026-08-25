@@ -16,7 +16,7 @@ function createHandler() {
   };
   const lifecycleManager = {
     handleAlarm: vi
-      .fn<(options?: SandboxAlarmOptions) => Promise<SandboxAlarmResult>>()
+      .fn<(options: SandboxAlarmOptions) => Promise<SandboxAlarmResult>>()
       .mockResolvedValue("no_action"),
   };
   const alarmScheduler = {
@@ -177,6 +177,43 @@ describe("createAlarmHandler", () => {
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledTimes(1);
     expect(alarmScheduler.schedule).not.toHaveBeenCalled();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports no in-flight execution after failing a timed-out message", async () => {
+    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 500,
+    });
+    // Mirror the production write: failing the message clears it from
+    // `processing`, so nothing is executing by the time the lifecycle runs and
+    // inactivity cleanup is due now rather than a check interval later.
+    messageQueue.failStuckProcessingMessage.mockImplementation(async () => {
+      repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    });
+
+    await handler.handle();
+
+    expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledTimes(1);
+    expect(lifecycleManager.handleAlarm).toHaveBeenCalledWith({ hasInFlightExecution: false });
+  });
+
+  it("reports an execution that started while the timed-out one was failed", async () => {
+    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 500,
+    });
+    messageQueue.failStuckProcessingMessage.mockImplementation(async () => {
+      repository.getProcessingMessageWithStartedAt.mockReturnValue({
+        id: "message-2",
+        started_at: 1999,
+      });
+    });
+
+    await handler.handle();
+
+    expect(lifecycleManager.handleAlarm).toHaveBeenCalledWith({ hasInFlightExecution: true });
   });
 
   it("fails stuck work without resuming after a connecting timeout", async () => {

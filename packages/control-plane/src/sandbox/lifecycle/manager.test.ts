@@ -1879,7 +1879,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      const result = await manager.handleAlarm();
+      const result = await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(result).toBe("sandbox_terminated");
       expect(storage.calls).toContain("updateSandboxStatus:stale");
@@ -1912,7 +1912,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      const result = await manager.handleAlarm();
+      const result = await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(result).toBe("sandbox_terminated");
       expect(storage.calls).toContain("updateSandboxStatus:stopped");
@@ -1972,7 +1972,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       // Should extend, not timeout
       expect(storage.calls).not.toContain("updateSandboxStatus:stopped");
@@ -2005,7 +2005,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(storage.calls).not.toContain("updateSandboxStatus:stopped");
       expect(alarmScheduler.alarms.length).toBe(1);
@@ -2033,7 +2033,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
     });
@@ -2063,7 +2063,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(provider.takeSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2107,7 +2107,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(provider.takeSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2147,7 +2147,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(provider.takeSnapshot).not.toHaveBeenCalled();
       expect(stopSandbox).toHaveBeenCalledWith(
@@ -2189,7 +2189,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(storage.calls).toContain("clearSandboxVnc");
       expect(sandbox.vnc_url).toBeNull();
@@ -2217,7 +2217,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      const result = await manager.handleAlarm();
+      const result = await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(result).toBe("sandbox_failed");
       expect(storage.calls).toContain("updateSandboxStatus:failed");
@@ -2255,7 +2255,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.handleAlarm();
+      await manager.handleAlarm({ hasInFlightExecution: false });
 
       expect(storage.calls).not.toContain("updateSandboxStatus:failed");
       // Should schedule a follow-up alarm

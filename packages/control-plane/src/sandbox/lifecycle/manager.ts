@@ -294,10 +294,10 @@ export interface SandboxAlarmOptions {
   /**
    * Whether a message is still being executed. The caller owns message state
    * (the lifecycle manager deliberately does not depend on the message queue),
-   * so it has to be passed in. Defaults to `false` for callers with no message
-   * queue at all.
+   * so it has to be passed in. Required, with no default: a caller that could
+   * omit it would silently reintroduce stopping a sandbox mid-execution.
    */
-  hasInFlightExecution?: boolean;
+  hasInFlightExecution: boolean;
 }
 
 /**
@@ -1212,7 +1212,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Handle alarm for inactivity and heartbeat monitoring.
    */
-  async handleAlarm(options: SandboxAlarmOptions = {}): Promise<SandboxAlarmResult> {
+  async handleAlarm(options: SandboxAlarmOptions): Promise<SandboxAlarmResult> {
     const sandbox = this.storage.getSandbox();
     if (!sandbox) {
       this.log.debug("Alarm fired: no sandbox found");
@@ -1323,7 +1323,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       lastActivity: sandbox.last_activity,
       status: sandbox.status,
       connectedClientCount: connectedClients,
-      hasInFlightExecution: options.hasInFlightExecution ?? false,
+      hasInFlightExecution: options.hasInFlightExecution,
     };
 
     const inactivityDecision = evaluateInactivityTimeout(
