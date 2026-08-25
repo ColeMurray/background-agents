@@ -170,7 +170,12 @@ export interface SessionRuntime {
  */
 export interface SessionComponents {
   sandboxRepository: SandboxRepository;
-  /** Assignable — the setter swaps the underlying cell for tests. */
+  /**
+   * Assignable — the setter swaps the underlying cell for tests. Substitution
+   * swaps operations only: the provider NAME was captured at construction and
+   * passed by value to its consumers, so stubs must model the configured
+   * provider family (every current stub is github-shaped, matching the env).
+   */
   sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
   lifecycleManager: SandboxLifecycleManager;
