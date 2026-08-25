@@ -16,12 +16,14 @@ function createLog() {
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const data = new Map<string, unknown[]>();
+  const written = new Map<string, number>();
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
       return {
         toArray: () => data.get(query) ?? [],
         one: () => null,
+        rowsWritten: written.get(query) ?? 0,
       };
     },
   };
@@ -29,6 +31,7 @@ function createMockSql() {
     sql,
     calls,
     setData: (query: string, rows: unknown[]) => data.set(query, rows),
+    setRowsWritten: (query: string, rows: number) => written.set(query, rows),
   };
 }
 
@@ -105,38 +108,55 @@ describe("SandboxRepository", () => {
   });
 
   describe("updateSandboxForSpawn", () => {
-    it("sets all spawn fields atomically", () => {
+    it("sets all spawn fields atomically and invalidates credentials", () => {
       repository.updateSandboxForSpawn({
         status: "spawning",
         createdAt: 1000,
-        authTokenHash: "token-hash-123",
         modalSandboxId: "modal-sb-1",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET");
       expect(mock.calls[0].query).toContain("status");
-      expect(mock.calls[0].query).toContain("auth_token_hash");
       expect(mock.calls[0].query).toContain("modal_sandbox_id");
+      // The reservation itself empties the hash (#1589 phase 1) — no caller
+      // can accidentally reserve with live credentials.
+      expect(mock.calls[0].query).toContain("auth_token_hash = ''");
       expect(mock.calls[0].query).toContain("auth_token = NULL");
       expect(mock.calls[0].query).toContain("modal_object_id = NULL");
       expect(mock.calls[0].query).toContain("vnc_url = NULL");
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
       // A replacement sandbox must not inherit the predecessor's runtime.
       expect(mock.calls[0].query).toContain("runtime_version = NULL");
-      expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual(["spawning", 1000, "modal-sb-1"]);
     });
 
     it("can preserve the provider object ID while fencing a replacement", () => {
       repository.updateSandboxForSpawn({
         status: "spawning",
         createdAt: 123,
-        authTokenHash: "hash",
         modalSandboxId: "sandbox-new",
         preserveProviderObjectId: true,
       });
 
       expect(mock.calls[0].query).toContain("modal_object_id = modal_object_id");
+    });
+  });
+
+  describe("updateSandboxAuthTokenHash", () => {
+    const query = `UPDATE sandbox SET auth_token_hash = ? WHERE modal_sandbox_id = ?`;
+
+    it("publishes the hash scoped to the reserved identity", () => {
+      mock.setRowsWritten(query, 1);
+
+      expect(repository.updateSandboxAuthTokenHash("modal-sb-1", "hash-1")).toBe(true);
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(query);
+      expect(mock.calls[0].params).toEqual(["hash-1", "modal-sb-1"]);
+    });
+
+    it("reports a superseded reservation instead of touching the current row", () => {
+      expect(repository.updateSandboxAuthTokenHash("modal-sb-stale", "hash-1")).toBe(false);
     });
   });
 

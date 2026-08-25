@@ -31,7 +31,6 @@ export interface CreateSandboxData {
 export interface SpawnSandboxData {
   status: SandboxStatus;
   createdAt: number;
-  authTokenHash: string;
   modalSandboxId: string;
   preserveProviderObjectId?: boolean;
 }
@@ -97,12 +96,17 @@ export class SandboxRepository {
     );
   }
 
+  /**
+   * Phase 1 of the two-phase spawn write (#1589): the reservation itself
+   * invalidates credentials — no token can match the emptied hash — until
+   * `updateSandboxAuthTokenHash` publishes the new one.
+   */
   updateSandboxForSpawn(data: SpawnSandboxData): void {
     this.sql.exec(
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
-         auth_token_hash = ?,
+         auth_token_hash = '',
          auth_token = NULL,
          modal_sandbox_id = ?,
          modal_object_id = ${data.preserveProviderObjectId ? "modal_object_id" : "NULL"},
@@ -117,17 +121,24 @@ export class SandboxRepository {
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
-      data.authTokenHash,
       data.modalSandboxId
     );
   }
 
-  /** Phase 2 of the two-phase spawn write: publish the reserved identity's hash. */
-  updateSandboxAuthTokenHash(authTokenHash: string): void {
-    this.sql.exec(
-      `UPDATE sandbox SET auth_token_hash = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      authTokenHash
+  /**
+   * Phase 2 of the two-phase spawn write (#1589): publish the reserved
+   * identity's hash. Scoped to that identity so a delayed publisher cannot
+   * attach its hash to a newer reservation; reports whether it applied.
+   */
+  updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET auth_token_hash = ? WHERE modal_sandbox_id = ?`,
+      authTokenHash,
+      modalSandboxId
     );
+    // Consume the result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSandboxForResume(data: ResumeSandboxData): void {

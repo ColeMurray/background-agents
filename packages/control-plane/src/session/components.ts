@@ -847,8 +847,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     getUserEnvVars: () => userEnvResolver.getUserEnvVars(),
     updateSandboxStatus: (status) => sandboxRepository.updateSandboxStatus(status),
     updateSandboxForSpawn: (data) => sandboxRepository.updateSandboxForSpawn(data),
-    updateSandboxAuthTokenHash: (authTokenHash) =>
-      sandboxRepository.updateSandboxAuthTokenHash(authTokenHash),
+    updateSandboxAuthTokenHash: (modalSandboxId, authTokenHash) =>
+      sandboxRepository.updateSandboxAuthTokenHash(modalSandboxId, authTokenHash),
     updateSandboxForResume: (data) => sandboxRepository.updateSandboxForResume(data),
     updateSandboxModalObjectId: (id) => sandboxRepository.updateSandboxModalObjectId(id),
     updateSandboxRuntimeVersion: (runtimeVersion) =>
