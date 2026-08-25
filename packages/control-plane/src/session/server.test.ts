@@ -25,8 +25,7 @@ function createHarness() {
   let currentClient: TestClient | null = client;
   let connectionKind: "client" | "sandbox" = "client";
   let now = 1000;
-  const monotonicTimes = [0, 2, 5, 8, 10];
-  const ensureInitialized = vi.fn();
+  const monotonicTimes = [0, 5, 8, 10];
   const clock: Clock = {
     nowMs: () => now,
     monotonicNowMs: vi.fn(() => {
@@ -68,7 +67,6 @@ function createHarness() {
   };
 
   const httpDeps: SessionHttpDispatcherDeps = {
-    ensureInitialized,
     getLogger: () => log,
     routes: [
       {
@@ -96,7 +94,6 @@ function createHarness() {
   const handleScheduledDeadline = vi.fn(async () => undefined);
 
   const server = new SessionServer({
-    ensureInitialized,
     http: new SessionHttpDispatcher(httpDeps),
     messages: new SessionMessageRouter(messageDeps),
     disconnects: new SessionDisconnectHandler(disconnectDeps),
@@ -105,7 +102,6 @@ function createHarness() {
 
   return {
     server,
-    ensureInitialized,
     httpDeps,
     messageDeps,
     sockets,
@@ -145,8 +141,8 @@ function createLogger() {
 }
 
 describe("SessionServer", () => {
-  it("initializes, dispatches HTTP routes, and preserves request correlation metrics", async () => {
-    const { server, ensureInitialized, httpDeps, log, requestLog } = createHarness();
+  it("dispatches HTTP routes and preserves request correlation metrics", async () => {
+    const { server, httpDeps, log, requestLog } = createHarness();
     const response = await server.onRequest(
       new Request(`https://session${SessionInternalPaths.state}`, {
         headers: { "x-trace-id": "trace-1", "x-request-id": "request-1" },
@@ -154,7 +150,6 @@ describe("SessionServer", () => {
     );
 
     expect(await response.text()).toBe("state");
-    expect(ensureInitialized).toHaveBeenCalledOnce();
     expect(log.child).toHaveBeenCalledWith({
       trace_id: "trace-1",
       request_id: "request-1",
@@ -170,20 +165,18 @@ describe("SessionServer", () => {
       http_path: SessionInternalPaths.state,
       http_status: 200,
       duration_ms: 10,
-      init_ms: 2,
       handler_ms: 3,
       outcome: "success",
     });
   });
 
   it("returns 404 for an unmatched HTTP route", async () => {
-    const { server, ensureInitialized, httpDeps } = createHarness();
+    const { server, httpDeps } = createHarness();
 
     const response = await server.onRequest(new Request("https://session/not-a-session-route"));
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Not Found");
-    expect(ensureInitialized).toHaveBeenCalledOnce();
     expect(httpDeps.routes[0].handler).not.toHaveBeenCalled();
   });
 
@@ -349,12 +342,10 @@ describe("SessionServer", () => {
   });
 
   it("delegates alarms after initialization", async () => {
-    const { server, ensureInitialized, handleScheduledDeadline } = createHarness();
+    const { server, handleScheduledDeadline } = createHarness();
 
     await server.onScheduledDeadline();
 
-    expect(ensureInitialized).toHaveBeenCalledOnce();
-    expect(ensureInitialized).toHaveBeenCalledWith(false);
     expect(handleScheduledDeadline).toHaveBeenCalledOnce();
   });
 });

@@ -1,20 +1,36 @@
 import { runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
-import type { UserEnvResolver } from "../../src/session/user-env-resolver";
+import type { SessionRuntime } from "../../src/session/components";
 
 /**
- * Invoke the DO's real (private) user-env resolver. The single place secrets
- * tests reach past SessionDO's encapsulation; `Pick` ties the cast to the real
- * class so a rename breaks this helper instead of silently passing.
+ * The DO internals integration tests are allowed to reach: the private
+ * `runtime` accessor (which initializes on first touch) and the component
+ * graph behind `SessionRuntime.internals`.
+ *
+ * NOTE: `test/integration/**` is never typechecked (eslint + grep are the only
+ * static gates here), and the `as unknown` cast below has no structural tie to
+ * SessionDO — its members are private, so they cannot be `Pick`ed. Renaming
+ * the DO's `runtime` accessor surfaces only as runtime TypeErrors across the
+ * integration suite; keep this interface in sync with SessionDO by hand. The
+ * `SessionRuntime` import does keep graph renames visible, but in-editor only.
+ */
+export interface SessionDOInternals {
+  runtime: SessionRuntime;
+}
+
+/** Initialize (idempotent) and expose the DO's component graph. */
+export function componentsOf(instance: SessionDO): SessionRuntime["internals"] {
+  return (instance as unknown as SessionDOInternals).runtime.internals;
+}
+
+/**
+ * Invoke the DO's real user-env resolver. The single place secrets tests
+ * reach past SessionDO's encapsulation.
  */
 export function getUserEnvVars(
   stub: DurableObjectStub
 ): Promise<Record<string, string> | undefined> {
   return runInDurableObject(stub, (instance: SessionDO) =>
-    (
-      instance as unknown as {
-        userEnvResolver: Pick<UserEnvResolver, "getUserEnvVars">;
-      }
-    ).userEnvResolver.getUserEnvVars()
+    componentsOf(instance).userEnvResolver.getUserEnvVars()
   );
 }

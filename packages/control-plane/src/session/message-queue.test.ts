@@ -121,6 +121,10 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
 });
 
 function buildQueue() {
+  // Mutable so tests can pin that the deadline honors the value current at
+  // dispatch time — the thunk exists because settings can be persisted after
+  // the queue is constructed.
+  let executionTimeoutMs = EXECUTION_TIMEOUT_MS;
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -231,7 +235,7 @@ function buildQueue() {
         completeDelivery: vi.fn(),
       }
     ),
-    EXECUTION_TIMEOUT_MS
+    () => executionTimeoutMs
   );
 
   return {
@@ -250,6 +254,9 @@ function buildQueue() {
     getProviderAuthenticationError,
     projectTerminalMessage,
     log,
+    setExecutionTimeoutMs(value: number) {
+      executionTimeoutMs = value;
+    },
   };
 }
 
@@ -962,6 +969,32 @@ describe("SessionMessageQueue", () => {
       const deadline = h.setAlarm.mock.calls[0][0];
       expect(deadline).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS);
       expect(deadline).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS);
+    });
+
+    it("arms each deadline with the timeout current at that dispatch", async () => {
+      const h = buildQueue();
+      // Model /internal/init persisting a sandbox_settings override after the
+      // graph (and this queue) was already built eagerly.
+      h.setExecutionTimeoutMs(EXECUTION_TIMEOUT_MS * 3);
+      const before = Date.now();
+
+      await dispatchPrompt(h);
+
+      expect(h.setAlarm).toHaveBeenCalledTimes(1);
+      const first = h.setAlarm.mock.calls[0][0];
+      expect(first).toBeGreaterThanOrEqual(before + EXECUTION_TIMEOUT_MS * 3);
+      expect(first).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 3);
+
+      // A later dispatch must re-resolve — the value is never captured, not
+      // even at first use.
+      h.setExecutionTimeoutMs(EXECUTION_TIMEOUT_MS * 5);
+      const beforeSecond = Date.now();
+      await dispatchPrompt(h);
+
+      expect(h.setAlarm).toHaveBeenCalledTimes(2);
+      const second = h.setAlarm.mock.calls[1][0];
+      expect(second).toBeGreaterThanOrEqual(beforeSecond + EXECUTION_TIMEOUT_MS * 5);
+      expect(second).toBeLessThanOrEqual(Date.now() + EXECUTION_TIMEOUT_MS * 5);
     });
 
     it("keeps an earlier existing alarm", async () => {
