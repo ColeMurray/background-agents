@@ -53,7 +53,7 @@ if MEM < 2 or MEM % 2 != 0:
 # `sleep` on each create from the base template — one harmless idle process.
 START_CMD = "sleep infinity"
 READY_CMD = (
-    "command -v python && command -v node && command -v opencode "
+    "command -v python && command -v node && command -v bun && command -v opencode "
     "&& command -v code-server "
     '&& test "$(command -v gh)" = /usr/local/bin/gh && test -x /usr/bin/gh '
     "&& PYTHONPATH=/app python -c 'import sandbox_runtime'"
