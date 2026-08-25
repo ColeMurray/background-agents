@@ -10,9 +10,9 @@ import {
   TRIGGER_TYPE_TO_SOURCE,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
-import type {
-  CreateAutomationRequest,
-  UpdateAutomationRequest,
+import {
+  createAutomationRequestSchema,
+  updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { listChannels } from "@open-inspect/shared/slack";
@@ -80,6 +80,31 @@ const MAX_NAME_LENGTH = 200;
 const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
 const RECENT_EXECUTION_COUNT = 10;
+
+const createAutomationBodySchema = createAutomationRequestSchema
+  .omit({ environmentIds: true, repositories: true, triggerConfig: true })
+  .extend({
+    environmentIds: z.unknown().optional(),
+    repositories: z.unknown().optional(),
+    triggerConfig: z.unknown().optional(),
+    // Bot-asserted actor display fields are cosmetic only; identity enforcement
+    // still runs against the raw pre-Zod body before these parsed values are used.
+    actorDisplayName: z.string().optional(),
+    actorEmail: z.string().optional(),
+    actorAvatarUrl: z.string().optional(),
+  });
+
+type CreateAutomationBody = z.infer<typeof createAutomationBodySchema>;
+
+const updateAutomationBodySchema = updateAutomationRequestSchema
+  .omit({ environmentIds: true, repositories: true, triggerConfig: true })
+  .extend({
+    environmentIds: z.unknown().optional(),
+    repositories: z.unknown().optional(),
+    triggerConfig: z.unknown().optional(),
+  });
+
+type UpdateAutomationBody = z.infer<typeof updateAutomationBodySchema>;
 
 type ParseTriggerConfigResult =
   | { ok: true; triggerConfig: TriggerConfig }
@@ -444,27 +469,29 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<
-    CreateAutomationRequest & {
-      // Bot-asserted actor display fields — cosmetic, never identity.
-      actorDisplayName?: string;
-      actorEmail?: string;
-      actorAvatarUrl?: string;
-    }
-  >(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
-    const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-    body.triggerConfig = parsedTriggerConfig.triggerConfig;
-  }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
 
   // Automation attribution comes from the verified principal. The stored
   // values are replayed by the scheduler as session identity at fire time,
   // so this is where they become trustworthy.
-  const enforcement = applyIdentityEnforcement(ctx, "automation-create", body);
+  const enforcement = applyIdentityEnforcement(ctx, "automation-create", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
+
+  const parsedBody = createAutomationBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) return error("Invalid automation request", 400);
+  const { triggerConfig: rawTriggerConfig, ...createFields } = parsedBody.data;
+  let triggerConfig: TriggerConfig | undefined;
+  if (rawTriggerConfig !== undefined) {
+    const parsedTriggerConfig = parseTriggerConfig(rawTriggerConfig);
+    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
+    triggerConfig = parsedTriggerConfig.triggerConfig;
+  }
+  const body: Omit<CreateAutomationBody, "triggerConfig"> & { triggerConfig?: TriggerConfig } = {
+    ...createFields,
+    ...(triggerConfig === undefined ? {} : { triggerConfig }),
+  };
 
   // Validate required fields
   if (!body.name || typeof body.name !== "string" || body.name.trim().length === 0) {
@@ -733,18 +760,30 @@ async function handleUpdateAutomation(
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
-  const body = await parseJsonBody<UpdateAutomationRequest>(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  const parsedBody = updateAutomationBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) return error("Invalid automation request", 400);
+  const { triggerConfig: rawTriggerConfig, ...updateBodyFields } = parsedBody.data;
+  let triggerConfig: TriggerConfig | null | undefined;
+  if (rawTriggerConfig !== undefined) {
     if (existing.trigger_type === "schedule") {
       return error("Cannot set triggerConfig on schedule automations", 400);
     }
-    if (body.triggerConfig !== null) {
-      const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
+    if (rawTriggerConfig !== null) {
+      const parsedTriggerConfig = parseTriggerConfig(rawTriggerConfig);
       if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-      body.triggerConfig = parsedTriggerConfig.triggerConfig;
+      triggerConfig = parsedTriggerConfig.triggerConfig;
+    } else {
+      triggerConfig = null;
     }
   }
+  const body: Omit<UpdateAutomationBody, "triggerConfig"> & {
+    triggerConfig?: TriggerConfig | null;
+  } = {
+    ...updateBodyFields,
+    ...(triggerConfig === undefined ? {} : { triggerConfig }),
+  };
 
   let replacementProviderSelections: ModelProviderSelections | null = null;
   if (body.providerSelections !== undefined) {
@@ -1190,16 +1229,24 @@ async function handleRegenerateKey(
 
   if (automation.trigger_type === "sentry") {
     // Sentry: user provides a new client secret
-    const body = await parseJsonBody<{ sentryClientSecret?: string }>(request);
+    const body = await parseJsonBody<unknown>(request);
     if (body instanceof Response) return body;
-    if (!body.sentryClientSecret || typeof body.sentryClientSecret !== "string") {
+    const sentryClientSecret =
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      "sentryClientSecret" in body &&
+      typeof body.sentryClientSecret === "string"
+        ? body.sentryClientSecret
+        : undefined;
+    if (!sentryClientSecret) {
       return error("sentryClientSecret is required", 400);
     }
     if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
       return error("Encryption key not configured", 503);
     }
     const encrypted = await encryptSentrySecret(
-      body.sentryClientSecret,
+      sentryClientSecret,
       env.REPO_SECRETS_ENCRYPTION_KEY
     );
     await store.update(id, { trigger_auth_data: encrypted } as Record<string, unknown>);
