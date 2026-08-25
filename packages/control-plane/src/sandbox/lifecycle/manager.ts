@@ -111,6 +111,13 @@ export interface SandboxStorage {
     modalSandboxId: string;
     preserveProviderObjectId?: boolean;
   }): void;
+  /**
+   * Publish the auth-token hash for the identity reserved by
+   * `updateSandboxForSpawn` (phase 2 of the two-phase spawn write — the
+   * reservation persists with credentials invalidated before the hash await
+   * opens the input gate, #1589).
+   */
+  updateSandboxAuthTokenHash(authTokenHash: string): void;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
   updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
   /** Update sandbox Modal object ID (for snapshot API) */
@@ -468,18 +475,24 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       let sandboxAuthToken = this.idGenerator.generateId();
       const hasRepository = sessionHasRepository(session);
       let expectedSandboxId = buildSandboxIdForSession(session, now);
-      const authTokenHash = await hashToken(sandboxAuthToken);
 
-      // Store expected sandbox ID and auth token BEFORE calling provider
+      // Two-phase write (#1589). Phase 1, before the first non-storage await:
+      // persist the replacement identity with credentials invalidated, so a
+      // stale bridge that authenticates while the token hashes below fails
+      // the sandbox-id and token checks instead of matching the old row.
       await this.enterProviderStartup("spawning", now, () =>
         this.storage.updateSandboxForSpawn({
           status: "spawning",
           createdAt: now,
-          authTokenHash,
+          authTokenHash: "",
           modalSandboxId: expectedSandboxId,
           preserveProviderObjectId: true,
         })
       );
+      // Phase 2: publish the credentials the new bridge will present. The
+      // hash-less gap is unobservable — the provider has not been invoked.
+      const authTokenHash = await hashToken(sandboxAuthToken);
+      this.storage.updateSandboxAuthTokenHash(authTokenHash);
 
       await this.stopPriorProviderSandbox();
 
@@ -564,17 +577,19 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         // locks such an orphan out of this DO exactly like the next
         // user-initiated respawn would.
         sandboxAuthToken = this.idGenerator.generateId();
-        const retryAuthTokenHash = await hashToken(sandboxAuthToken);
         const retryNow = Math.max(Date.now(), now + 1);
         expectedSandboxId = buildSandboxIdForSession(session, retryNow);
+        // Same two-phase ordering as the initial write (#1589).
         await this.enterProviderStartup("spawning", retryNow, () =>
           this.storage.updateSandboxForSpawn({
             status: "spawning",
             createdAt: retryNow,
-            authTokenHash: retryAuthTokenHash,
+            authTokenHash: "",
             modalSandboxId: expectedSandboxId,
           })
         );
+        const retryAuthTokenHash = await hashToken(sandboxAuthToken);
+        this.storage.updateSandboxAuthTokenHash(retryAuthTokenHash);
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -819,19 +834,22 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       const now = Date.now();
       const sandboxAuthToken = this.idGenerator.generateId();
-      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
       const expectedSandboxId = buildSandboxIdForSession(session, now);
 
-      // Store expected sandbox ID and auth token
+      // Two-phase write (#1589): reserve the replacement identity with
+      // credentials invalidated before the hash await opens the input gate,
+      // then publish the hash. See doSpawn for the full rationale.
       await this.enterProviderStartup("spawning", now, () =>
         this.storage.updateSandboxForSpawn({
           status: "spawning",
           createdAt: now,
-          authTokenHash: sandboxAuthTokenHash,
+          authTokenHash: "",
           modalSandboxId: expectedSandboxId,
           preserveProviderObjectId: true,
         })
       );
+      const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
+      this.storage.updateSandboxAuthTokenHash(sandboxAuthTokenHash);
 
       // A restored sandbox runs the snapshot's binaries whatever the provider
       // exports at launch, so the snapshot's version is the authoritative one.

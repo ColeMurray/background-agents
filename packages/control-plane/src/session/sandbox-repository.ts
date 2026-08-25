@@ -122,6 +122,14 @@ export class SandboxRepository {
     );
   }
 
+  /** Phase 2 of the two-phase spawn write: publish the reserved identity's hash. */
+  updateSandboxAuthTokenHash(authTokenHash: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET auth_token_hash = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      authTokenHash
+    );
+  }
+
   updateSandboxForResume(data: ResumeSandboxData): void {
     this.sql.exec(
       `UPDATE sandbox SET
