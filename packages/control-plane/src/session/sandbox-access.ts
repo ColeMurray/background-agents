@@ -51,11 +51,10 @@ export async function isValidSandboxToken(
  */
 export async function decryptStoredAccessValue(
   value: string | null,
-  encryptionKey: string | undefined,
+  encryptionKey: string,
   log: Pick<Logger, "warn">
 ): Promise<string | null> {
   if (!value) return null;
-  if (!encryptionKey) return value;
   try {
     return await decryptToken(value, encryptionKey);
   } catch (error) {

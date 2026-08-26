@@ -7,11 +7,11 @@ import type { Clock, ConnectedClient, SocketRegistry } from "./ports";
 
 const FETCH_HISTORY_MIN_INTERVAL_MS = 200;
 
-type ClientCancelPrompt = Extract<ClientMessage, { type: "cancel_prompt" }>;
-type ClientPresence = Extract<ClientMessage, { type: "presence" }>;
-type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
-type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
-type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
+export type ClientCancelPrompt = Extract<ClientMessage, { type: "cancel_prompt" }>;
+export type ClientPresence = Extract<ClientMessage, { type: "presence" }>;
+export type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
+export type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
+export type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
 
 type BoundarySchema<T> = {
   safeParse(

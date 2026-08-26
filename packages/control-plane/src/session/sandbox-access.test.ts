@@ -54,13 +54,6 @@ describe("decryptStoredAccessValue", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("returns the value verbatim when no encryption key is configured", async () => {
-    const log = warnLog();
-
-    await expect(decryptStoredAccessValue("plaintext", undefined, log)).resolves.toBe("plaintext");
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
   it("round-trips a value encrypted with the configured key", async () => {
     const encrypted = await encryptToken("s3cret", ENCRYPTION_KEY);
 
