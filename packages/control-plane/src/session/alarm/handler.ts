@@ -48,6 +48,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       // already failed (by lifecycle recovery or a prior alarm),
       // getProcessingMessageWithStartedAt() returns null.
       const processing = deps.repository.getProcessingMessageWithStartedAt();
+      let activityMessageId: string | null = null;
       if (processing?.started_at) {
         const now = deps.now();
         const executionTimeoutMs = deps.getExecutionTimeoutMs();
@@ -66,16 +67,11 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
           await deps.messageQueue.failStuckProcessingMessage();
         } else {
           // An earlier lifecycle or activity alarm has consumed the Durable
-          // Object's single alarm slot. Reassert the execution deadline first,
-          // then schedule another Slack refresh only when this message owns a
-          // valid Slack callback.
+          // Object's single alarm slot. Reassert the execution deadline first;
+          // a non-terminal lifecycle result below may then schedule another
+          // Slack refresh when this message owns a valid callback.
           await deps.alarmScheduler.schedule(processing.started_at + executionTimeoutMs);
-          const continueActivityHeartbeat = await deps.callbackService.notifyActivityHeartbeat(
-            processing.id
-          );
-          if (continueActivityHeartbeat) {
-            await deps.alarmScheduler.schedule(now + SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS);
-          }
+          activityMessageId = processing.id;
         }
       }
 
@@ -85,6 +81,13 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       }
       if (lifecycleResult === "sandbox_terminated") {
         await deps.messageQueue.resumeAfterSandboxTermination();
+      }
+      if (lifecycleResult === "no_action" && activityMessageId) {
+        const continueActivityHeartbeat =
+          await deps.callbackService.notifyActivityHeartbeat(activityMessageId);
+        if (continueActivityHeartbeat) {
+          await deps.alarmScheduler.schedule(deps.now() + SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS);
+        }
       }
     },
   };

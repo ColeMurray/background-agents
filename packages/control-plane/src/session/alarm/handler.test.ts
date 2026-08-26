@@ -128,6 +128,22 @@ describe("createAlarmHandler", () => {
     expect(alarmScheduler.schedule).toHaveBeenCalledWith(92_000);
   });
 
+  it("does not refresh activity when the same alarm terminates the sandbox", async () => {
+    const { handler, repository, messageQueue, lifecycleManager, callbackService, alarmScheduler } =
+      createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 1500,
+    });
+    lifecycleManager.handleAlarm.mockResolvedValue("sandbox_failed");
+
+    await handler.handle();
+
+    expect(alarmScheduler.schedule).toHaveBeenCalledWith(2500);
+    expect(callbackService.notifyActivityHeartbeat).not.toHaveBeenCalled();
+    expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
+  });
+
   it("does not re-arm activity when the processing message is not from Slack", async () => {
     const { handler, repository, callbackService, alarmScheduler } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue({
