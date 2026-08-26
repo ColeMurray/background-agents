@@ -364,6 +364,22 @@ describe("McpServerStore", () => {
       expect(local.env).toEqual({ DEBUG: "1" });
       expect(local.headers).toBeUndefined();
     });
+
+    it("reads an empty credential map without a doomed decrypt attempt", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const emptyEnvRow = { ...sampleRow, env: "{}" };
+      const { db } = createFakeD1({ allResults: [emptyEnvRow] });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].env ?? {}).toEqual({});
+      // The "{}" sentinel is written plaintext by encryptEnv; reading it must
+      // not attempt a decrypt that fails into the env_decrypt_error path.
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
   });
 
   describe("UNIQUE constraint handling", () => {

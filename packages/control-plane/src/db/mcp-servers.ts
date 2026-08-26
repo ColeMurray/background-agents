@@ -110,6 +110,10 @@ export class McpServerStore {
   }
 
   private async decryptEnv(raw: string): Promise<Record<string, string>> {
+    // The write side stores an empty credential map as plaintext "{}" (see
+    // encryptEnv) — recognize the sentinel, and legacy empty columns, before
+    // attempting a decrypt that is guaranteed to fail into the error path.
+    if (!raw || raw === "{}") return {};
     try {
       const plain = await decryptToken(raw, this.encryptionKey);
       return safeJsonParseEnv(plain);
