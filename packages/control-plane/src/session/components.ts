@@ -34,8 +34,6 @@ import type { Logger } from "../logger";
 import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
-  type SandboxStorage,
-  type WebSocketManager,
   type IdGenerator,
   type ImageBuildLookup,
   type McpServerLookup,
@@ -66,6 +64,8 @@ import {
   type SandboxDashboardSettings,
 } from "./sandbox-access";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { DurableObjectSandboxStorage, LifecycleSocketAdapter } from "./sandbox-lifecycle-adapters";
+import { SessionClientCommandFacade } from "./client-command-facade";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
@@ -106,7 +106,7 @@ import {
 import { createSessionInternalRoutes } from "./http/routes";
 import { SessionServer } from "./server";
 import { SessionHttpDispatcher } from "./http/dispatcher";
-import { SessionMessageRouter, type SessionClientCommands } from "./message-router";
+import { SessionMessageRouter } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
 import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
 import { SessionConnectionAuthenticator } from "./connection-authenticator";
@@ -720,15 +720,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         (client) => client.participantId === participantId
       ),
   };
-  const clientCommands: SessionClientCommands<WebSocket, ClientInfo> = {
-    subscribe: (ws, message) => connectionAuthenticator.handleSubscribe(ws, message),
-    submitPrompt: (ws, client, message) => messageQueue.handlePromptMessage(ws, client, message),
-    cancelPrompt: (ws, message) => messageQueue.cancelQueuedPrompt(ws, message),
-    stopExecution: () => messageQueue.stopExecution(),
-    notifyTyping: () => presenceService.handleTyping(),
-    updatePresence: (client, message) => presenceService.updatePresence(client, message),
-    getHistoryPage: (message) => eventStream.getHistoryPage(message),
-  };
+  const clientCommands = new SessionClientCommandFacade(
+    connectionAuthenticator,
+    messageQueue,
+    presenceService,
+    eventStream
+  );
   const sandboxDisconnects: SandboxDisconnectMonitor = {
     getStatus: () => sandboxRepository.getSandbox()?.status,
     scheduleCheck: () => lifecycleManager.scheduleDisconnectCheck(),
@@ -832,73 +829,13 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
   const provider = createSandboxProviderFromEnv(env, sandboxBackend);
 
-  // Storage adapter
-  const storage: SandboxStorage = {
-    getSandbox: () => sandboxRepository.getSandbox(),
-    getSandboxWithCircuitBreaker: () => sandboxRepository.getSandboxWithCircuitBreaker(),
-    getSession: () => sessionCoreRepository.getSession(),
-    getSessionRepositories: () =>
-      sessionCoreRepository.getSessionRepositories().map((entry) => ({
-        repoOwner: entry.repoOwner,
-        repoName: entry.repoName,
-        baseBranch: entry.baseBranch ?? "main",
-        baseSha: entry.row?.base_sha ?? null,
-      })),
-    getUserEnvVars: () => userEnvResolver.getUserEnvVars(),
-    updateSandboxStatus: (status) => sandboxRepository.updateSandboxStatus(status),
-    updateSandboxForSpawn: (data) => sandboxRepository.updateSandboxForSpawn(data),
-    updateSandboxAuthTokenHash: (modalSandboxId, authTokenHash) =>
-      sandboxRepository.updateSandboxAuthTokenHash(modalSandboxId, authTokenHash),
-    updateSandboxForResume: (data) => sandboxRepository.updateSandboxForResume(data),
-    updateSandboxModalObjectId: (id) => sandboxRepository.updateSandboxModalObjectId(id),
-    updateSandboxRuntimeVersion: (runtimeVersion) =>
-      sandboxRepository.updateSandboxRuntimeVersion(runtimeVersion),
-    updateSandboxSnapshotImageId: (sandboxId, imageId, runtimeVersion) =>
-      sandboxRepository.updateSandboxSnapshotImageId(sandboxId, imageId, runtimeVersion),
-    updateSandboxLastActivity: (timestamp) =>
-      sandboxRepository.updateSandboxLastActivity(timestamp),
-    incrementCircuitBreakerFailure: (timestamp) =>
-      sandboxRepository.incrementCircuitBreakerFailure(timestamp),
-    resetCircuitBreaker: () => sandboxRepository.resetCircuitBreaker(),
-    setLastSpawnError: (error, timestamp) =>
-      sandboxRepository.updateSandboxSpawnError(error, timestamp),
-    updateSandboxCodeServer: async (url, password) => {
-      const encrypted = env.REPO_SECRETS_ENCRYPTION_KEY
-        ? await encryptToken(password, env.REPO_SECRETS_ENCRYPTION_KEY)
-        : password;
-      sandboxRepository.updateSandboxCodeServer(url, encrypted);
-    },
-    clearSandboxCodeServer: () => sandboxRepository.clearSandboxCodeServer(),
-    clearSandboxCodeServerUrl: () => sandboxRepository.clearSandboxCodeServerUrl(),
-    updateSandboxVnc: async (url, password) => {
-      const encrypted = env.REPO_SECRETS_ENCRYPTION_KEY
-        ? await encryptToken(password, env.REPO_SECRETS_ENCRYPTION_KEY)
-        : password;
-      sandboxRepository.updateSandboxVnc(url, encrypted);
-    },
-    clearSandboxVnc: () => sandboxRepository.clearSandboxVnc(),
-    clearSandboxVncUrl: () => sandboxRepository.clearSandboxVncUrl(),
-    updateSandboxTunnelUrls: (urls) => sandboxRepository.updateSandboxTunnelUrls(urls),
-    clearSandboxTunnelUrls: () => sandboxRepository.clearSandboxTunnelUrls(),
-    updateSandboxTtyd: async (url, token) => {
-      const encrypted = env.REPO_SECRETS_ENCRYPTION_KEY
-        ? await encryptToken(token, env.REPO_SECRETS_ENCRYPTION_KEY)
-        : token;
-      sandboxRepository.updateSandboxTtyd(url, encrypted);
-    },
-    clearSandboxTtyd: () => sandboxRepository.clearSandboxTtyd(),
-  };
-
-  // WebSocket manager adapter — thin delegation to wsManager
-  const lifecycleWsManager: WebSocketManager = {
-    getSandboxWebSocket: () => wsManager.getSandboxSocket(),
-    detachSandboxWebSocket: (code, reason) => wsManager.detachSandboxSocket(code, reason),
-    sendToSandbox: (message) => {
-      const ws = wsManager.getSandboxSocket();
-      return ws ? wsManager.send(ws, message) : false;
-    },
-    getConnectedClientCount: () => wsManager.getConnectedClientCount(),
-  };
+  const storage = new DurableObjectSandboxStorage(
+    sandboxRepository,
+    sessionCoreRepository,
+    userEnvResolver,
+    env.REPO_SECRETS_ENCRYPTION_KEY
+  );
+  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
 
   // ID generator adapter
   const idGenerator: IdGenerator = {
