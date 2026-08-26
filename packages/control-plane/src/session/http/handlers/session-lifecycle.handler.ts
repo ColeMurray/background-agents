@@ -15,6 +15,7 @@ import { validateReasoningEffort } from "../../reasoning-effort";
 import { normalizeSessionTitle, type SessionTitleUpdateResult } from "../../title";
 import { z } from "zod";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
+import { DEFAULT_BASE_BRANCH } from "../../../repos/default-branch";
 
 /**
  * There is nothing to cancel once a session is no longer live work.
@@ -198,7 +199,9 @@ export class SessionLifecycleHandler {
     }
 
     const reasoningEffort = validateReasoningEffort(model, body.reasoningEffort ?? undefined, log);
-    const baseBranch = hasRepoOwner ? body.branch || body.defaultBranch || "main" : null;
+    const baseBranch = hasRepoOwner
+      ? body.branch || body.defaultBranch || DEFAULT_BASE_BRANCH
+      : null;
 
     const repositories = body.repositories ?? [];
     if (repositories.length > 0) {
