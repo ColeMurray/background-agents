@@ -843,7 +843,7 @@ describe("CallbackNotificationService", () => {
 
   describe("notifyComplete — automation callback", () => {
     it("routes automation callbacks to the injected completion function", async () => {
-      const completeAutomationRun = vi.fn(async () => new Response("ok"));
+      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
       const h = createTestHarness({
         completeAutomationRun,
       });
@@ -873,7 +873,7 @@ describe("CallbackNotificationService", () => {
     });
 
     it("sends failure details for failed automation runs", async () => {
-      const completeAutomationRun = vi.fn(async () => new Response("ok"));
+      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
       const h = createTestHarness({
         completeAutomationRun,
       });
@@ -935,7 +935,7 @@ describe("CallbackNotificationService", () => {
       const completeAutomationRun = vi
         .fn()
         .mockRejectedValueOnce(new Error("network error"))
-        .mockResolvedValueOnce(new Response("ok"));
+        .mockResolvedValueOnce({ outcome: "completed" });
       const h = createTestHarness({
         completeAutomationRun,
       });
@@ -959,8 +959,45 @@ describe("CallbackNotificationService", () => {
       );
     });
 
+    it("retries an explicitly retryable scheduler result", async () => {
+      const completeAutomationRun = vi
+        .fn()
+        .mockResolvedValueOnce({
+          outcome: "retryable_failure",
+          reason: "invalid_run_complete_callback",
+          error: "Invalid run-complete callback",
+        })
+        .mockResolvedValueOnce({ outcome: "ignored" });
+      const h = createTestHarness({ completeAutomationRun });
+      vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "automation",
+          automationId: "auto-1",
+          runId: "run-1",
+          automationName: "Daily sync",
+        }),
+        source: "automation",
+      });
+
+      await h.service.notifyComplete("msg-1", true);
+
+      expect(completeAutomationRun).toHaveBeenCalledTimes(2);
+      expect(h.log.warn).toHaveBeenCalledWith(
+        "callback.complete_delivery_attempt_failed",
+        expect.objectContaining({
+          source: "automation",
+          attempt: 1,
+          reject_reason: "invalid_run_complete_callback",
+        })
+      );
+      expect(h.log.info).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({ source: "automation", attempts: 2, retries: 1 })
+      );
+    });
+
     it("does not route automation callbacks to SLACK_BOT", async () => {
-      const completeAutomationRun = vi.fn(async () => new Response("ok"));
+      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
       const h = createTestHarness({
         completeAutomationRun,
       });

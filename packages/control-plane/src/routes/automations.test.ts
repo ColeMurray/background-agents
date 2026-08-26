@@ -254,9 +254,11 @@ describe("automation route handlers", () => {
     mockProviderAuthStore.bindInserts.mockReturnValue([{ sql: "insert-provider-auth" }]);
     mockProviderAuthStore.bindReplace.mockReturnValue([{ sql: "replace-provider-auth" }]);
     mockBatch.mockResolvedValue([]);
-    mockSchedulerTrigger.mockResolvedValue(
-      Response.json({ run: { id: "run-1" } }, { status: 201 })
-    );
+    mockSchedulerTrigger.mockResolvedValue({
+      outcome: "started",
+      invocationId: "inv-1",
+      runs: [{ id: "run-1" }],
+    });
     mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
     mockProviderAccountStore.getById.mockResolvedValue({
       id: "0123456789abcdef0123456789abcdef",
@@ -1379,9 +1381,10 @@ describe("automation route handlers", () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const env = createEnv();
-      mockSchedulerTrigger.mockResolvedValue(
-        Response.json({ error: "concurrent_run_active" }, { status: 409 })
-      );
+      mockSchedulerTrigger.mockResolvedValue({
+        outcome: "blocked",
+        error: "An active run already exists",
+      });
 
       const { handler, match } = getHandler("POST", "/automations/auto-1/trigger");
       const request = new Request("https://test.local/automations/auto-1/trigger", {
@@ -1389,6 +1392,22 @@ describe("automation route handlers", () => {
       });
       const res = await handler(request, env, match, createCtx());
       expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "A run is already active for this automation",
+      });
+    });
+
+    it("returns 500 when the scheduler cannot launch the automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockSchedulerTrigger.mockResolvedValue({
+        outcome: "failed",
+        error: "Failed to trigger automation",
+      });
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "Failed to trigger automation" });
     });
   });
 

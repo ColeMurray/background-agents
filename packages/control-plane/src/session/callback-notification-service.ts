@@ -14,12 +14,12 @@ import {
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
-import { deliverWithRetry } from "./callback-delivery";
+import { CALLBACK_ATTEMPTS, CALLBACK_RETRY_DELAY_MS, deliverWithRetry } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
-import type { AutomationRunCompletion } from "../scheduler/scheduler";
+import type { AutomationRunCompletion, SchedulerRunCompleteResult } from "../scheduler/scheduler";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
@@ -43,7 +43,7 @@ export interface CallbackServiceEnv {
 
 export type AutomationRunCompletionHandler = (
   completion: AutomationRunCompletion
-) => Promise<Response>;
+) => Promise<SchedulerRunCompleteResult>;
 
 /**
  * Dependencies injected into CallbackNotificationService.
@@ -310,10 +310,22 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    return deliverWithRetry(
-      () => this.completeAutomationRun!(payload),
-      this.sleep,
-      ({ attempt, response, error: deliveryError }) => {
+    let rejectReason: string | undefined;
+    for (let attempt = 1; attempt <= CALLBACK_ATTEMPTS; attempt++) {
+      let result: SchedulerRunCompleteResult | undefined;
+      let deliveryError: unknown;
+      try {
+        result = await this.completeAutomationRun(payload);
+        if (result.outcome !== "retryable_failure") {
+          return { delivered: true, attempts: attempt };
+        }
+        rejectReason = result.reason;
+      } catch (error) {
+        deliveryError = error;
+        rejectReason = undefined;
+      }
+
+      try {
         this.log.warn("callback.complete_delivery_attempt_failed", {
           message_id: messageId,
           session_id: this.getSessionId(),
@@ -321,16 +333,23 @@ export class CallbackNotificationService {
           automation_id: context.automationId,
           run_id: context.runId,
           attempt,
-          ...(response ? { http_status: response.status } : {}),
+          ...(result?.outcome === "retryable_failure" ? { reject_reason: result.reason } : {}),
           ...(deliveryError !== undefined
             ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
             : {}),
         });
-      },
-      // D1 operations do not accept AbortSignals. A fake timeout would retry
-      // while the first in-process completion can still be running.
-      { attemptTimeoutMs: null }
-    );
+      } catch {
+        // Observability must not alter the delivery retry policy.
+      }
+
+      if (attempt < CALLBACK_ATTEMPTS) await this.sleep(CALLBACK_RETRY_DELAY_MS);
+    }
+
+    return {
+      delivered: false,
+      attempts: CALLBACK_ATTEMPTS,
+      ...(rejectReason ? { rejectReason } : {}),
+    };
   }
 
   /**

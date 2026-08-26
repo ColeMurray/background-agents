@@ -11,13 +11,8 @@ import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts"
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import type { Env } from "../../src/types";
 
-function getSchedulerStub(schedulerEnv = env as Env) {
-  const scheduler = new Scheduler(env.DB, schedulerEnv, { submit() {} });
-  return {
-    fetch(input: RequestInfo | URL, init?: RequestInit) {
-      return scheduler.dispatch(new Request(input, init));
-    },
-  };
+function createScheduler(schedulerEnv = env as Env) {
+  return new Scheduler(env.DB, schedulerEnv, { submit() {} });
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -156,35 +151,28 @@ describe("Scheduler (integration)", () => {
 
   // ─── Health check ─────────────────────────────────────────────────────────
 
-  describe("/internal/health", () => {
+  describe("health", () => {
     it("returns healthy with overdue count", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-h1", next_run_at: now - 60000, enabled: 1 }));
       await store.create(makeAutomation({ id: "auto-h2", next_run_at: now + 60000, enabled: 1 }));
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/health", { method: "GET" });
+      const result = await createScheduler().health();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ status: string; overdueCount: number }>();
-      expect(body.status).toBe("healthy");
-      expect(body.overdueCount).toBe(1);
+      expect(result).toEqual({ status: "healthy", overdueCount: 1 });
     });
 
     it("returns zero overdue when none are due", async () => {
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/health", { method: "GET" });
+      const result = await createScheduler().health();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ status: string; overdueCount: number }>();
-      expect(body.overdueCount).toBe(0);
+      expect(result).toEqual({ status: "healthy", overdueCount: 0 });
     });
   });
 
   // ─── Run complete callback ────────────────────────────────────────────────
 
-  describe("/internal/run-complete", () => {
+  describe("run completion", () => {
     it("marks run as completed and resets failures on success", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
@@ -199,22 +187,15 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/run-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationId: "auto-rc1",
-          runId: "run-rc1",
-          sessionId: "sess-1",
-          messageId: "msg-1",
-          success: true,
-        }),
+      const result = await createScheduler().runComplete({
+        automationId: "auto-rc1",
+        runId: "run-rc1",
+        sessionId: "sess-1",
+        messageId: "msg-1",
+        success: true,
       });
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ ok: boolean }>();
-      expect(body.ok).toBe(true);
+      expect(result).toEqual({ outcome: "completed" });
 
       // Verify run status
       const run = await store.getRunById("auto-rc1", "run-rc1");
@@ -240,21 +221,16 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/run-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationId: "auto-rc2",
-          runId: "run-rc2",
-          sessionId: "sess-2",
-          messageId: "msg-2",
-          success: false,
-          error: "Sandbox crashed",
-        }),
+      const result = await createScheduler().runComplete({
+        automationId: "auto-rc2",
+        runId: "run-rc2",
+        sessionId: "sess-2",
+        messageId: "msg-2",
+        success: false,
+        error: "Sandbox crashed",
       });
 
-      expect(res.status).toBe(200);
+      expect(result).toEqual({ outcome: "completed" });
 
       const run = await store.getRunById("auto-rc2", "run-rc2");
       expect(run!.status).toBe("failed");
@@ -285,19 +261,15 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      await stub.fetch("http://internal/internal/run-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationId: "auto-rc3",
-          runId: "run-rc3",
-          sessionId: "sess-3",
-          messageId: "msg-3",
-          success: false,
-          error: "Third consecutive failure",
-        }),
+      const result = await createScheduler().runComplete({
+        automationId: "auto-rc3",
+        runId: "run-rc3",
+        sessionId: "sess-3",
+        messageId: "msg-3",
+        success: false,
+        error: "Third consecutive failure",
       });
+      expect(result).toEqual({ outcome: "completed" });
 
       const automation = await store.getById("auto-rc3");
       expect(automation!.consecutive_failures).toBe(3);
@@ -319,19 +291,15 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      await stub.fetch("http://internal/internal/run-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationId: "auto-rc4",
-          runId: "run-rc4",
-          sessionId: "sess-4",
-          messageId: "msg-4",
-          success: false,
-          error: "Second failure",
-        }),
+      const result = await createScheduler().runComplete({
+        automationId: "auto-rc4",
+        runId: "run-rc4",
+        sessionId: "sess-4",
+        messageId: "msg-4",
+        success: false,
+        error: "Second failure",
       });
+      expect(result).toEqual({ outcome: "completed" });
 
       const automation = await store.getById("auto-rc4");
       expect(automation!.consecutive_failures).toBe(2);
@@ -341,16 +309,11 @@ describe("Scheduler (integration)", () => {
 
   // ─── Tick handler ─────────────────────────────────────────────────────────
 
-  describe("/internal/tick", () => {
+  describe("scheduled tick", () => {
     it("returns empty tick summary when nothing to process", async () => {
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      const result = await createScheduler().tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.processed).toBe(0);
-      expect(body.skipped).toBe(0);
-      expect(body.failed).toBe(0);
+      expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
     });
 
     it("recovers orphaned starting runs during sweep", async () => {
@@ -371,9 +334,8 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/tick", { method: "POST" });
-      expect(res.status).toBe(200);
+      const result = await createScheduler().tick();
+      expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
 
       // Verify orphaned run was recovered
       const run = await store.getRunById("auto-t1", "run-orphan-t1");
@@ -405,9 +367,8 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/tick", { method: "POST" });
-      expect(res.status).toBe(200);
+      const result = await createScheduler().tick();
+      expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
 
       const run = await store.getRunById("auto-t2", "run-timeout-t2");
       expect(run!.status).toBe("failed");
@@ -432,12 +393,9 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/tick", { method: "POST" });
-      expect(res.status).toBe(200);
-
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.skipped).toBeGreaterThanOrEqual(1);
+      const result = await createScheduler().tick();
+      expect(result).toMatchObject({ processed: 0, skipped: expect.any(Number), failed: 0 });
+      expect(result.skipped).toBeGreaterThanOrEqual(1);
 
       // Assert on the automation this test owns rather than only the tick's
       // global counters: auto-t3 must get exactly one skipped firing — a
@@ -469,12 +427,8 @@ describe("Scheduler (integration)", () => {
       });
       await store.create(overdue);
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/tick", { method: "POST" });
-      expect(res.status).toBe(200);
-
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.processed + body.failed).toBeGreaterThanOrEqual(1);
+      const result = await createScheduler().tick();
+      expect(result.processed + result.failed).toBeGreaterThanOrEqual(1);
 
       // Assert on auto-t4 specifically rather than the tick's global counters.
       // Session creation may succeed or fail in the test env; either way the
@@ -512,8 +466,7 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      await createScheduler().tick();
 
       const automation = await store.getById("auto-t5");
       expect(automation!.consecutive_failures).toBe(3);
@@ -541,9 +494,7 @@ describe("Scheduler (integration)", () => {
         );
       }
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/tick", { method: "POST" });
-      expect(res.status).toBe(200);
+      await createScheduler().tick();
 
       for (const runId of runIds) {
         const run = await store.getRunById("auto-t6", runId);
@@ -558,7 +509,7 @@ describe("Scheduler (integration)", () => {
 
   // ─── Trigger handler ──────────────────────────────────────────────────────
 
-  describe("/internal/trigger", () => {
+  describe("manual trigger", () => {
     it("admits exactly one run across two triggers and a concurrent tick", async () => {
       const store = new AutomationStore(env.DB);
       const dueAt = Date.now() - 60_000;
@@ -590,41 +541,33 @@ describe("Scheduler (integration)", () => {
         } as unknown as DurableObjectNamespace,
       };
 
-      const triggerRequest = () =>
-        new Request("http://internal/internal/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ automationId: "auto-concurrent-admission" }),
-        });
       const schedulers = [
-        getSchedulerStub(schedulerEnv),
-        getSchedulerStub(schedulerEnv),
-        getSchedulerStub(schedulerEnv),
+        createScheduler(schedulerEnv),
+        createScheduler(schedulerEnv),
+        createScheduler(schedulerEnv),
       ];
 
       // Not allSettled: a rejected entry point is itself a failure of this
-      // gate. Losing the admission race must degrade to a clean status code,
+      // gate. Losing the admission race must degrade to a blocked outcome,
       // not a thrown request — that is exactly what the removed Durable
       // Object used to guarantee by serializing every caller.
       const [triggerA, triggerB, tick] = await Promise.all([
-        schedulers[0]!.fetch(triggerRequest()),
-        schedulers[1]!.fetch(triggerRequest()),
-        schedulers[2]!.fetch("http://internal/internal/tick", { method: "POST" }),
+        schedulers[0]!.trigger({ automationId: "auto-concurrent-admission" }),
+        schedulers[1]!.trigger({ automationId: "auto-concurrent-admission" }),
+        schedulers[2]!.tick(),
       ]);
 
-      const triggerStatuses = [triggerA.status, triggerB.status].sort();
-      const tickSummary = await tick.json<{ processed: number; skipped: number }>();
+      const triggerOutcomes = [triggerA.outcome, triggerB.outcome].sort();
 
-      expect(tick.status).toBe(200);
       // Exactly one admission across all three entry points: either a trigger
-      // won (the other returns 409 and the tick found nothing to process) or
-      // the tick won (both triggers return 409).
-      if (triggerStatuses.includes(201)) {
-        expect(triggerStatuses).toEqual([201, 409]);
-        expect(tickSummary.processed).toBe(0);
+      // won (the other is blocked and the tick found nothing to process) or
+      // the tick won (both triggers are blocked).
+      if (triggerOutcomes.includes("started")) {
+        expect(triggerOutcomes).toEqual(["blocked", "started"]);
+        expect(tick.processed).toBe(0);
       } else {
-        expect(triggerStatuses).toEqual([409, 409]);
-        expect(tickSummary.processed).toBe(1);
+        expect(triggerOutcomes).toEqual(["blocked", "blocked"]);
+        expect(tick.processed).toBe(1);
       }
 
       const runs = await fetchRuns("auto-concurrent-admission");
@@ -698,27 +641,17 @@ describe("Scheduler (integration)", () => {
       expect((await store.getById("auto-slot-ownership"))!.next_run_at).toBe(winnerNext);
     });
 
-    it("returns 400 when automationId is missing", async () => {
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(res.status).toBe(400);
+    it("returns invalid when automationId is missing", async () => {
+      const result = await createScheduler().trigger({});
+      expect(result).toEqual({ outcome: "invalid", error: "automationId required" });
     });
 
-    it("returns 404 when automation not found", async () => {
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ automationId: "nonexistent" }),
-      });
-      expect(res.status).toBe(404);
+    it("returns not_found when automation is not found", async () => {
+      const result = await createScheduler().trigger({ automationId: "nonexistent" });
+      expect(result).toEqual({ outcome: "not_found", error: "Automation not found" });
     });
 
-    it("returns 409 when active run exists", async () => {
+    it("returns blocked when active run exists", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-trig1" }));
@@ -732,29 +665,19 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ automationId: "auto-trig1" }),
-      });
-      expect(res.status).toBe(409);
+      const result = await createScheduler().trigger({ automationId: "auto-trig1" });
+      expect(result).toEqual({ outcome: "blocked", error: "An active run already exists" });
     });
 
     it("creates a run record when triggered", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-trig2" }));
 
-      const stub = getSchedulerStub();
-      const res = await stub.fetch("http://internal/internal/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ automationId: "auto-trig2" }),
-      });
+      const result = await createScheduler().trigger({ automationId: "auto-trig2" });
 
-      // Trigger will attempt session creation. In test env it may succeed (201)
-      // or fail at prompt sending (500). Either way, a run record is created.
-      expect([201, 500]).toContain(res.status);
+      // Trigger will attempt session creation. In test env it may start or fail
+      // at prompt sending. Either way, a run record is created.
+      expect(["started", "failed"]).toContain(result.outcome);
 
       const runs = await fetchRuns("auto-trig2");
       expect(runs.length).toBeGreaterThanOrEqual(1);
@@ -810,23 +733,14 @@ describe("Scheduler (integration)", () => {
       expect(inserted).toBe(true);
     }
 
-    async function completeRun(
-      automationId: string,
-      runId: string,
-      success: boolean
-    ): Promise<Response> {
-      const stub = getSchedulerStub();
-      return stub.fetch("http://internal/internal/run-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationId,
-          runId,
-          sessionId: `sess-${runId}`,
-          messageId: `msg-${runId}`,
-          success,
-          ...(success ? {} : { error: "boom" }),
-        }),
+    async function completeRun(automationId: string, runId: string, success: boolean) {
+      return createScheduler().runComplete({
+        automationId,
+        runId,
+        sessionId: `sess-${runId}`,
+        messageId: `msg-${runId}`,
+        success,
+        ...(success ? {} : { error: "boom" }),
       });
     }
 
@@ -883,14 +797,14 @@ describe("Scheduler (integration)", () => {
       // died after the child update, before the callback's accounting).
       await seedInvocation(store, "auto-f2", "inv-f2", [{ id: "run-f2-a", status: "failed" }]);
 
-      const stub = getSchedulerStub();
-      await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       let automation = await store.getById("auto-f2");
       expect(automation!.consecutive_failures).toBe(1);
 
       // A second sweep must not double-strike (failure_counted_at CAS).
-      await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      await scheduler.tick();
       automation = await store.getById("auto-f2");
       expect(automation!.consecutive_failures).toBe(1);
     });
@@ -906,19 +820,10 @@ describe("Scheduler (integration)", () => {
         { id: "run-f2r-b", status: "completed" },
       ]);
 
-      const stub = getSchedulerStub();
-      await stub.fetch("http://internal/internal/tick", { method: "POST" });
+      await createScheduler().tick();
 
       const automation = await store.getById("auto-f2r");
       expect(automation!.consecutive_failures).toBe(0);
     });
-  });
-
-  // ─── Unknown routes ────────────────────────────────────────────────────────
-
-  it("returns 404 for unknown routes", async () => {
-    const stub = getSchedulerStub();
-    const res = await stub.fetch("http://internal/unknown", { method: "GET" });
-    expect(res.status).toBe(404);
   });
 });

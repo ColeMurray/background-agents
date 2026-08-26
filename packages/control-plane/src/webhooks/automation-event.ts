@@ -113,21 +113,19 @@ export async function forwardAutomationEventToScheduler(
   event: AutomationEvent,
   ctx: RequestContext
 ): Promise<Response> {
-  let response: Response;
+  let result;
   try {
-    response = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+    result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
   } catch {
     return json({ ok: false, error: "Failed to reach scheduler" }, 502);
   }
 
-  let result: { triggered: number; skipped: number; steered?: number };
-  try {
-    result = await response.json<{ triggered: number; skipped: number; steered?: number }>();
-  } catch {
-    return json({ ok: false, error: "Invalid response from scheduler" }, 502);
+  if (result.outcome === "invalid") {
+    return json({ ok: true, error: result.error }, 400);
   }
 
-  return json({ ok: true, ...result }, response.status);
+  const { outcome: _, ...summary } = result;
+  return json({ ok: true, ...summary });
 }
 
 export function createAutomationEventRoute(opts: {

@@ -1,5 +1,5 @@
-const CALLBACK_ATTEMPTS = 2;
-const CALLBACK_RETRY_DELAY_MS = 1000;
+export const CALLBACK_ATTEMPTS = 2;
+export const CALLBACK_RETRY_DELAY_MS = 1000;
 const CALLBACK_ATTEMPT_TIMEOUT_MS = 10_000;
 
 type DeliveryFailure =
