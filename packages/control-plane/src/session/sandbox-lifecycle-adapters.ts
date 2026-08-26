@@ -1,33 +1,26 @@
 /**
  * Composition-root adapters for the sandbox lifecycle manager's ports.
  *
- * `DurableObjectSandboxStorage` satisfies the manager's `SandboxStorage` port
- * without a forwarding layer: the sandbox-row surface (encryption included) is
- * the repository itself, inherited; this class adds only the session-context
- * reads the port bundles with it. Keeping the `implements` here — not on the
- * repository — keeps the manager-port dependency at the composition edge.
+ * `SandboxStorage` needs no adapter at all — it is the repository's contract
+ * and `SandboxRepository` satisfies it structurally. What lives here are the
+ * two ports that genuinely span or narrow other collaborators: the session
+ * context the manager reads alongside storage, and the slice of the socket
+ * registry it may touch.
  */
 
-import type { SandboxStorage, WebSocketManager } from "../sandbox/lifecycle/manager";
+import type { SessionContextReader, WebSocketManager } from "../sandbox/lifecycle/manager";
 import type { SessionRepositoryInfo } from "../sandbox/provider";
-import type { Logger } from "../logger";
-import { SandboxRepository } from "./sandbox-repository";
-import type { SqlStorage } from "./sql-storage";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { UserEnvResolver } from "./user-env-resolver";
 import type { SessionRow } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
-export class DurableObjectSandboxStorage extends SandboxRepository implements SandboxStorage {
+/** The session-context reads owned by the session repositories and resolver. */
+export class LifecycleSessionContext implements SessionContextReader {
   constructor(
-    sql: SqlStorage,
-    log: Logger,
-    encryptionKey: string,
     private readonly sessions: SessionCoreRepository,
     private readonly userEnv: UserEnvResolver
-  ) {
-    super(sql, log, encryptionKey);
-  }
+  ) {}
 
   getSession(): SessionRow | null {
     return this.sessions.getSession();

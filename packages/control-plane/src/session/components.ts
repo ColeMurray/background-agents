@@ -34,6 +34,8 @@ import type { Logger } from "../logger";
 import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
+  type SandboxStorage,
+  type SessionContextReader,
   type IdGenerator,
   type ImageBuildLookup,
   type McpServerLookup,
@@ -49,7 +51,7 @@ import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
 import { SessionCoreRepository } from "./session-core-repository";
-import type { SandboxRepository } from "./sandbox-repository";
+import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -65,7 +67,7 @@ import {
   type SandboxDashboardSettings,
 } from "./sandbox-access";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
-import { DurableObjectSandboxStorage, LifecycleSocketAdapter } from "./sandbox-lifecycle-adapters";
+import { LifecycleSessionContext, LifecycleSocketAdapter } from "./sandbox-lifecycle-adapters";
 import { SessionClientCommandFacade } from "./client-command-facade";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
@@ -238,40 +240,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getPublicSessionId
   );
   const backgroundTasks = createCloudflareBackgroundTasks(ctx, () => log);
-
-  // Constructed eagerly — an invalid SCM configuration fails right here. The
-  // cell is a local `let` so live-DO integration tests can substitute a stub
-  // after the init request has already built this graph; consumer closures
-  // read the cell per call (never through the returned record), and
-  // `internals.sourceControlProvider` exposes it as an accessor pair.
-  let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
-  const sourceControlProvider = () => scmProvider;
-  const scmProviderName = scmProvider.name;
-
-  const resolveRepoId = (sessionRow: SessionRow) =>
-    resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider);
-
-  const userEnvResolver = new UserEnvResolver({
-    db,
-    sessionCoreRepository,
-    resolveRepoId,
-    durableObjectId,
-    repoSecretsEncryptionKey,
-    secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
-    log,
-  });
-
-  // The single sandbox-storage instance: the repository (which validates the
-  // status it reads and owns encrypt-at-rest, so it needs the session logger
-  // and the key) plus the session-context reads the lifecycle manager's
-  // storage port bundles with it.
-  const sandboxRepository = new DurableObjectSandboxStorage(
-    sql,
-    log,
-    repoSecretsEncryptionKey,
-    sessionCoreRepository,
-    userEnvResolver
-  );
+  // The sandbox repository validates the status it reads and warns on anything
+  // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
+  // for access secrets, so it takes the key.
+  const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
 
   // Tier 2 — sockets and alarm scheduling.
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
@@ -294,10 +266,21 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Tier 3 — outbound delivery over the socket registry.
   const messenger: SessionMessenger = new SessionMessengerImpl(wsManager);
 
+  // Constructed eagerly — an invalid SCM configuration fails right here. The
+  // cell is a local `let` so live-DO integration tests can substitute a stub
+  // after the init request has already built this graph; consumer closures
+  // read the cell per call (never through the returned record), and
+  // `internals.sourceControlProvider` exposes it as an accessor pair.
+  let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
+  const sourceControlProvider = () => scmProvider;
+  const scmProviderName = scmProvider.name;
+
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
   const sessionIndexStore = db ? new SessionIndexStore(db) : null;
   const sessionPullRequestStore = db ? new SessionPullRequestStore(db) : null;
+  const resolveRepoId = (sessionRow: SessionRow) =>
+    resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider);
 
   const sandboxDashboardSettings: SandboxDashboardSettings = {
     sandboxProvider: env.SANDBOX_PROVIDER,
@@ -306,6 +289,16 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 
   // Tier 4 — session-scoped domain services.
+  const userEnvResolver = new UserEnvResolver({
+    db,
+    sessionCoreRepository,
+    resolveRepoId,
+    durableObjectId,
+    repoSecretsEncryptionKey,
+    secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
+    log,
+  });
+
   const terminalMessageProjection = new SessionTerminalMessageProjection(
     sessionIndexStore,
     () => {
@@ -384,6 +377,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     db,
     getSessionId: getPublicSessionId,
     storage: sandboxRepository,
+    sessionContext: new LifecycleSessionContext(sessionCoreRepository, userEnvResolver),
     repoSecretsEncryptionKey,
     messenger,
     wsManager,
@@ -814,8 +808,9 @@ interface LifecycleManagerDeps {
   db: SqlDatabase | null;
   /** The latched public-session-id resolver shared with the session logger. */
   getSessionId: () => string;
-  /** The one storage instance — the repository with its session-context reads. */
-  storage: DurableObjectSandboxStorage;
+  /** The repository, satisfying the manager's storage port structurally. */
+  storage: SandboxStorage;
+  sessionContext: SessionContextReader;
   repoSecretsEncryptionKey: string;
   messenger: SessionMessenger;
   wsManager: SessionWebSocketManager;
@@ -830,6 +825,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     db,
     getSessionId,
     storage,
+    sessionContext,
     repoSecretsEncryptionKey,
     messenger,
     wsManager,
@@ -918,6 +914,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   return new SandboxLifecycleManager(
     provider,
     storage,
+    sessionContext,
     messenger,
     lifecycleWsManager,
     alarmScheduler,
