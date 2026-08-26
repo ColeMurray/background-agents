@@ -38,10 +38,7 @@ export class SessionSandboxEventProcessor {
 
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
-    // The DO swaps its logger for a request-scoped child during fetch();
-    // a getter keeps this singleton reading the current logger instead of
-    // capturing one by value at construction time.
-    private readonly getLog: () => Logger,
+    private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly sandboxRepository: SandboxRepository,
     private readonly messageRepository: MessageRepository,
@@ -67,10 +64,6 @@ export class SessionSandboxEventProcessor {
     private readonly processMessageQueue: () => Promise<void>,
     private readonly broadcastPromptQueue: () => void
   ) {}
-
-  private get log(): Logger {
-    return this.getLog();
-  }
 
   async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
     if (event.type === "heartbeat" || event.type === "token") {

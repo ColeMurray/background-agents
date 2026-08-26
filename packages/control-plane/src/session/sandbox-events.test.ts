@@ -87,7 +87,7 @@ function createProcessor() {
 
   const processor = new SessionSandboxEventProcessor(
     backgroundTasks,
-    () => log,
+    log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as SandboxRepository,
     repository as unknown as MessageRepository,

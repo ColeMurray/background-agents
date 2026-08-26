@@ -36,7 +36,7 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
 }
 
 export interface SessionMessageRouterDeps<Connection, Client extends ConnectedClient> {
-  getLogger: () => Logger;
+  log: Logger;
   sockets: SocketRegistry<Connection, Client>;
   clientCommands: SessionClientCommands<Connection, Client>;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
@@ -65,7 +65,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     try {
       await this.deps.processSandboxEvent(parsed.data);
     } catch (error) {
-      this.deps.getLogger().error("Error processing sandbox message", {
+      this.deps.log.error("Error processing sandbox message", {
         error: error instanceof Error ? error : String(error),
       });
     }
@@ -126,7 +126,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
           data satisfies never;
       }
     } catch (error) {
-      this.deps.getLogger().error("Error processing client message", {
+      this.deps.log.error("Error processing client message", {
         error: error instanceof Error ? error : String(error),
       });
       this.deps.sockets.send(connection, {
@@ -183,7 +183,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     try {
       raw = JSON.parse(message);
     } catch (error) {
-      this.deps.getLogger().error("Invalid WebSocket JSON", {
+      this.deps.log.error("Invalid WebSocket JSON", {
         boundary,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -192,7 +192,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
 
     const result = schema.safeParse(raw);
     if (!result.success) {
-      this.deps.getLogger().warn("Invalid WebSocket message", {
+      this.deps.log.warn("Invalid WebSocket message", {
         boundary,
         issues: result.error.issues,
       });

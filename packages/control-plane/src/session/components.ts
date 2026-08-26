@@ -236,7 +236,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)),
     getPublicSessionId
   );
-  const backgroundTasks = createCloudflareBackgroundTasks(ctx, () => log);
+  const backgroundTasks = createCloudflareBackgroundTasks(ctx, log);
   // The sandbox repository validates the status it reads and warns on anything
   // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
   // for access secrets, so it takes the key.
@@ -426,7 +426,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     backgroundTasks,
-    () => log,
+    log,
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
@@ -724,21 +724,21 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const server = new SessionServer<WebSocket, ClientInfo>({
     http: new SessionHttpDispatcher({
-      getLogger: () => log,
+      log,
       routes,
       handleWebSocketUpgrade: (request, url, requestLog) =>
         connectionAuthenticator.handleWebSocketUpgrade(request, url, requestLog),
       clock,
     }),
     messages: new SessionMessageRouter({
-      getLogger: () => log,
+      log,
       sockets,
       clientCommands,
       processSandboxEvent: (event) => sandboxEventProcessor.processSandboxEvent(event),
       clock,
     }),
     disconnects: new SessionDisconnectHandler({
-      getLogger: () => log,
+      log,
       sockets,
       sandbox: sandboxDisconnects,
       broadcaster: disconnectBroadcaster,
