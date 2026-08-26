@@ -9,7 +9,11 @@ import { z } from "zod";
 import type { Env } from "./types";
 import { createSlackCompletionJob, type SlackCompletionJob } from "./completion/job";
 import { createLogger } from "./logger";
-import { formatToolStatus, setAssistantThreadStatusBestEffort } from "./activity-status";
+import {
+  ASSISTANT_WORKING_STATUS,
+  formatToolStatus,
+  setAssistantThreadStatusBestEffort,
+} from "./activity-status";
 
 const log = createLogger("callback");
 
@@ -34,6 +38,14 @@ const completionCallbackSchema = z.looseObject({
   messageId: z.string(),
   success: z.boolean(),
   error: z.string().optional(),
+  timestamp: z.number(),
+  signature: z.string(),
+  context: slackCallbackContextSchema,
+});
+
+const activityCallbackSchema = z.looseObject({
+  sessionId: z.string(),
+  messageId: z.string(),
   timestamp: z.number(),
   signature: z.string(),
   context: slackCallbackContextSchema,
@@ -228,6 +240,58 @@ callbacksRouter.post("/complete", async (c) => {
     "/callbacks/complete",
     startTime
   );
+});
+
+/** Refresh Slack's expiring assistant-thread activity for an active message. */
+callbacksRouter.post("/activity", async (c) => {
+  const startTime = Date.now();
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  let payload: unknown;
+
+  try {
+    payload = await c.req.json();
+  } catch {
+    return rejectInvalidPayload(c, "/callbacks/activity", traceId, startTime);
+  }
+
+  const parsed = activityCallbackSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    return rejectInvalidPayload(c, "/callbacks/activity", traceId, startTime);
+  }
+  const valid = parsed.data;
+
+  const rejection = await rejectInvalidCallback(c, payload, {
+    path: "/callbacks/activity",
+    traceId,
+    startTime,
+  });
+  if (rejection) return rejection;
+
+  c.executionCtx.waitUntil(
+    setAssistantThreadStatusBestEffort(
+      c.env,
+      valid.context.channel,
+      valid.context.threadTs,
+      ASSISTANT_WORKING_STATUS,
+      {
+        event: "heartbeat",
+        traceId,
+        sessionId: valid.sessionId,
+      }
+    )
+  );
+
+  log.info("http.request", {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: "/callbacks/activity",
+    http_status: 200,
+    session_id: valid.sessionId,
+    message_id: valid.messageId,
+    duration_ms: Date.now() - startTime,
+  });
+
+  return c.json({ ok: true });
 });
 
 /**

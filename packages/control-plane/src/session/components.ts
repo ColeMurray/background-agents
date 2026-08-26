@@ -542,6 +542,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionStop,
     lifecycleManager,
     terminalMessageProjection,
+    callbackService,
     alarmScheduler,
     getExecutionTimeoutMs,
     now: () => Date.now(),

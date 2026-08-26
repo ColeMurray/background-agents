@@ -351,6 +351,90 @@ export class CallbackNotificationService {
   }
 
   /**
+   * Refresh Slack's expiring assistant-thread activity while a message remains
+   * in processing. Returns true only when the caller should schedule another
+   * refresh for this message.
+   */
+  async notifyActivityHeartbeat(messageId: string): Promise<boolean> {
+    const startedAt = Date.now();
+    const message = this.messageRepository.getMessageCallbackContext(messageId);
+    if (!message?.callback_context || message.source !== "slack") {
+      this.log.debug("callback.activity_heartbeat", {
+        message_id: messageId,
+        source: message?.source ?? null,
+        outcome: "skipped",
+        skip_reason: message?.callback_context ? "non_slack_source" : "no_callback_context",
+      });
+      return false;
+    }
+
+    const { binding, secret } = this.resolveCallbackRoute("slack");
+    if (!secret || !binding) {
+      this.log.debug("callback.activity_heartbeat", {
+        message_id: messageId,
+        source: "slack",
+        outcome: "skipped",
+        skip_reason: secret ? "no_binding" : "no_secret",
+      });
+      return false;
+    }
+
+    let context: unknown;
+    try {
+      context = JSON.parse(message.callback_context);
+    } catch (error) {
+      this.log.warn("callback.activity_heartbeat", {
+        message_id: messageId,
+        source: "slack",
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+        duration_ms: Date.now() - startedAt,
+      });
+      return false;
+    }
+
+    let sessionId: string | null = null;
+    try {
+      sessionId = this.getSessionId();
+      const callbackData = {
+        sessionId,
+        messageId,
+        timestamp: Date.now(),
+        context,
+      };
+      const signature = await this.signPayload(callbackData, secret);
+      const response = await binding.fetch("https://internal/callbacks/activity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...callbackData, signature }),
+      });
+      const fields = {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: response.ok ? "success" : "error",
+        http_status: response.status,
+        duration_ms: Date.now() - startedAt,
+      };
+      if (response.ok) this.log.info("callback.activity_heartbeat", fields);
+      else this.log.warn("callback.activity_heartbeat", fields);
+    } catch (error) {
+      this.log.warn("callback.activity_heartbeat", {
+        message_id: messageId,
+        session_id: sessionId,
+        source: "slack",
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+        duration_ms: Date.now() - startedAt,
+      });
+    }
+
+    // Delivery is best-effort. Keep refreshing while the message remains active
+    // so a transient Slack or service-binding failure can recover on the next alarm.
+    return true;
+  }
+
+  /**
    * Notify the originating client of a tool_call event (best-effort, throttled).
    * Max 1 callback per 3 seconds per session.
    */
