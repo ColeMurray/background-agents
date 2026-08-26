@@ -1,7 +1,18 @@
 {
+  // Typecheck program for test/integration/**, run by `npm run typecheck`
+  // (`tsc -p test/integration`) and picked up by editors as the nearest
+  // config — one type surface for both. These files execute inside workerd
+  // via @cloudflare/vitest-pool-workers, so they compile against workers
+  // types plus the `cloudflare:test` module (published at the package's
+  // ./types subpath) — and, like the production config, without Node
+  // globals. Node-context files such as vitest.integration.config.ts run in
+  // the Vite host process and are typechecked by tsconfig.test.json instead.
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "types": ["@cloudflare/vitest-pool-workers"]
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types"],
+    // Re-root inherited settings that are relative to the extending config.
+    "paths": { "@/*": ["../../src/*"] }
   },
-  "include": ["**/*.ts", "../../src/**/*.ts"]
+  "include": ["**/*.ts", "../../src/**/*.ts"],
+  "exclude": ["../../src/**/*.test.ts"]
 }

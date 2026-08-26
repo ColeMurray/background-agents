@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
+import { SessionLifecycleHandler } from "./session-lifecycle.handler";
+import type { SessionTitleService } from "../../title-service";
+import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatusService } from "../../session-status-service";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
@@ -89,6 +91,8 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 }
 
 function createHandler() {
+  const getSession = vi.fn<() => SessionRow | null>();
+  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const repository = {
     upsertSession: vi.fn(),
     replaceSessionRepositories: vi.fn(),
@@ -96,11 +100,17 @@ function createHandler() {
     createParticipant: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 0),
+    getSession,
+    getParticipantByUserId,
   };
-  const sandboxRepository = { createSandbox: vi.fn() } as unknown as SandboxRepository;
-  const getDurableObjectId = vi.fn(() => "session-do-id");
+  const getSandbox = vi.fn<() => SandboxRow | null>();
+  const updateSandboxStatus = vi.fn();
+  const sandboxRepository = {
+    createSandbox: vi.fn(),
+    getSandbox,
+    updateSandboxStatus,
+  } as unknown as SandboxRepository;
   const encryptToken = vi.fn();
-  const validateReasoningEffort = vi.fn();
   const generateId = vi.fn();
   const now = vi.fn(() => 1234);
   const scheduleWarmSandbox = vi.fn();
@@ -111,10 +121,6 @@ function createHandler() {
     error: vi.fn(),
     child: vi.fn(),
   } as unknown as Logger;
-  const getSession = vi.fn<() => SessionRow | null>();
-  const getSandbox = vi.fn<() => SandboxRow | null>();
-  const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
-  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
@@ -127,53 +133,52 @@ function createHandler() {
   const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
-  const updateSandboxStatus = vi.fn();
 
-  const lifecycleHandler = createSessionLifecycleHandler({
-    sessionCoreRepository: repository as unknown as SessionCoreRepository,
+  const lifecycleHandler = new SessionLifecycleHandler(
+    repository as unknown as SessionCoreRepository,
     sandboxRepository,
-    messageRepository: repository as unknown as MessageRepository,
-    participantRepository: repository as unknown as ParticipantRepository,
-    getDurableObjectId,
-    tokenEncryptionKey: "encryption-key",
-    encryptToken,
-    validateReasoningEffort,
-    generateId,
-    now,
-    scheduleWarmSandbox,
-    getSession,
-    getSandbox,
-    getPublicSessionId,
-    getParticipantByUserId,
+    repository as unknown as MessageRepository,
+    repository as unknown as ParticipantRepository,
     statusService,
-    applySessionTitleUpdate,
+    { applySessionTitleUpdate } as unknown as SessionTitleService,
+    {
+      getSandboxWebSocket: getSandboxSocket,
+      detachSandboxWebSocket: vi.fn(),
+      sendToSandbox,
+      getConnectedClientCount: vi.fn(() => 0),
+    } as unknown as WebSocketManager,
+    "session-do-id",
+    "encryption-key",
+    scheduleWarmSandbox,
     cancelSession,
-    getSandboxSocket,
-    sendToSandbox,
-    updateSandboxStatus,
-  });
+    encryptToken,
+    generateId,
+    now
+  );
 
   // Bind the request-scoped log so call sites exercise the threading without
   // repeating it at every invocation.
   const handler = {
-    ...lifecycleHandler,
     init: (request: Request) => lifecycleHandler.init(request, log),
+    getState: () => lifecycleHandler.getState(),
+    updateTitle: (request: Request) => lifecycleHandler.updateTitle(request),
+    archive: (request: Request) => lifecycleHandler.archive(request),
+    unarchive: (request: Request) => lifecycleHandler.unarchive(request),
+    expireDraft: () => lifecycleHandler.expireDraft(),
+    cancel: () => lifecycleHandler.cancel(),
   };
 
   return {
     handler,
     repository,
     sandboxRepository,
-    getDurableObjectId,
     encryptToken,
-    validateReasoningEffort,
     generateId,
     now,
     scheduleWarmSandbox,
     log,
     getSession,
     getSandbox,
-    getPublicSessionId,
     getParticipantByUserId,
     transition,
     repairIndexStatus,
@@ -186,7 +191,7 @@ function createHandler() {
   };
 }
 
-describe("createSessionLifecycleHandler", () => {
+describe("SessionLifecycleHandler", () => {
   it.each([
     ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
     ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
@@ -221,16 +226,12 @@ describe("createSessionLifecycleHandler", () => {
       handler,
       repository,
       sandboxRepository,
-      getDurableObjectId,
       encryptToken,
-      validateReasoningEffort,
       generateId,
       scheduleWarmSandbox,
       log,
     } = createHandler();
-    getDurableObjectId.mockReturnValue("session-do-id");
     encryptToken.mockResolvedValue("encrypted-scm-token");
-    validateReasoningEffort.mockReturnValue("high");
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -323,8 +324,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("persists the repositories list in position order", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -354,8 +354,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("persists an empty member set for repo-less sessions", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -376,8 +375,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("accepts nullable init fields and sandbox settings", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -437,8 +435,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("preserves optional init fields the schema must not silently drop", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue("high");
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -575,10 +572,8 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("falls back to pre-encrypted token when plain-token encryption fails", async () => {
-    const { handler, repository, encryptToken, validateReasoningEffort, generateId, log } =
-      createHandler();
+    const { handler, repository, encryptToken, generateId, log } = createHandler();
     encryptToken.mockRejectedValue(new Error("encrypt failed"));
-    validateReasoningEffort.mockReturnValue(null);
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -610,8 +605,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("logs invalid model warning and stores normalized model", async () => {
-    const { handler, repository, validateReasoningEffort, generateId, log } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId, log } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -652,10 +646,9 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("maps state response with sandbox details", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId } = createHandler();
+    const { handler, getSession, getSandbox } = createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
-    getPublicSessionId.mockReturnValue("public-session-1");
 
     const response = handler.getState();
 
@@ -1081,7 +1074,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
     expect(cancelSession).toHaveBeenCalledOnce();
-    expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
+    expect(sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
   });
 });

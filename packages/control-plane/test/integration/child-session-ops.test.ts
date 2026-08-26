@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
@@ -24,7 +26,7 @@ describe("Child session operations (list, get, cancel)", () => {
    * Helper to set up a parent+child pair.
    * Creates both DOs (via initNamedSession) and D1 rows.
    */
-  async function setupParentAndChild(opts?: { childStatus?: string }) {
+  async function setupParentAndChild(opts?: { childStatus?: SessionStatus }) {
     const pName = parentName();
     const childName = `child-ops-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -544,8 +546,8 @@ describe("Child session operations (list, get, cancel)", () => {
         "SELECT id FROM messages WHERE status = 'processing'"
       );
       if (!processing) throw new Error("Expected processing parent prompt");
-      await runInDurableObject(parentStub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec(
+      await runInSessionDO(parentStub, (instance: SessionDO, state) => {
+        state.storage.sql.exec(
           `INSERT INTO participants (
              id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email,
              role, joined_at
@@ -565,8 +567,8 @@ describe("Child session operations (list, get, cancel)", () => {
         "SELECT id FROM participants WHERE user_id = 'slack:U2'"
       );
       if (!secondUser) throw new Error("Expected second participant");
-      await runInDurableObject(parentStub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec(
+      await runInSessionDO(parentStub, (instance: SessionDO, state) => {
+        state.storage.sql.exec(
           "UPDATE messages SET author_id = ? WHERE id = ?",
           secondUser.id,
           processing.id

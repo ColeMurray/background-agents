@@ -67,7 +67,7 @@ function createHarness() {
   };
 
   const httpDeps: SessionHttpDispatcherDeps = {
-    getLogger: () => log,
+    log,
     routes: [
       {
         method: "GET",
@@ -79,14 +79,14 @@ function createHarness() {
     clock,
   };
   const messageDeps: SessionMessageRouterDeps<string, TestClient> = {
-    getLogger: () => log,
+    log,
     sockets,
     clientCommands,
     processSandboxEvent: vi.fn(async () => undefined),
     clock,
   };
   const disconnectDeps = {
-    getLogger: () => log,
+    log,
     sockets,
     sandbox,
     broadcaster,
