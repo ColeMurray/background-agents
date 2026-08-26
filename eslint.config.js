@@ -17,7 +17,6 @@ export default tseslint.config(
       "**/coverage/**",
       "**/.venv/**",
       "**/venv/**",
-      ".opencode/**",
       "opencode-reference/**",
       "**/*.d.ts",
       // Bundled/generated files
@@ -30,6 +29,17 @@ export default tseslint.config(
   // Base JS/TS config for all TypeScript files
   js.configs.recommended,
   ...tseslint.configs.recommended,
+
+  // Repository-authored and runtime-injected OpenCode extensions run under Node.js.
+  {
+    files: [".opencode/**/*.{js,ts}"],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+    },
+  },
 
   // TypeScript files configuration
   {
