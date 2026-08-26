@@ -132,13 +132,17 @@ export default function Home() {
       storedProviderSelectionsValue ?? legacyProviderSelectionsValue
     );
     if (legacyProviderSelectionsValue !== null) {
-      if (storedProviderSelections) {
-        localStorage.setItem(
-          LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
-          JSON.stringify(storedProviderSelections)
-        );
+      try {
+        if (storedProviderSelections) {
+          localStorage.setItem(
+            LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
+            JSON.stringify(storedProviderSelections)
+          );
+        }
+        localStorage.removeItem(LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY);
+      } catch {
+        // Storage migration must not block provider-selection hydration.
       }
-      localStorage.removeItem(LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY);
     }
     setStoredPreference({
       model: storedModel ?? DEFAULT_MODEL,

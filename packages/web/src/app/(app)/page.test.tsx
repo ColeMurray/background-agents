@@ -216,6 +216,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -224,6 +225,23 @@ function sessionCreateBody(): Record<string, unknown> {
   const createCall = calls.find(([input]) => String(input) === "/api/sessions");
   expect(createCall).toBeDefined();
   return JSON.parse(String(createCall?.[1]?.body)) as Record<string, unknown>;
+}
+
+function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[number] {
+  return {
+    id,
+    provider: "openai",
+    displayName: "Team ChatGPT",
+    externalAccountId: "acct_public",
+    status: "active",
+    createdBy: null,
+    updatedBy: null,
+    lastVerifiedAt: null,
+    lastUsedAt: null,
+    createdAt: 1,
+    updatedAt: 1,
+    archivedAt: null,
+  };
 }
 
 describe("Home", () => {
@@ -477,22 +495,7 @@ describe("Home", () => {
       category: "OpenAI",
       models: [{ id: openAiModel, name: "GPT-5.4", description: "" }],
     });
-    mocks.providerAccountsValue = [
-      {
-        id: accountId,
-        provider: "openai",
-        displayName: "Team ChatGPT",
-        externalAccountId: "acct_public",
-        status: "active",
-        createdBy: null,
-        updatedBy: null,
-        lastVerifiedAt: null,
-        lastUsedAt: null,
-        createdAt: 1,
-        updatedAt: 1,
-        archivedAt: null,
-      },
-    ];
+    mocks.providerAccountsValue = [activeOpenAiAccount(accountId)];
     localStorage.setItem("open-inspect-last-selected-model", openAiModel);
     const first = render(<Home />);
 
@@ -529,10 +532,53 @@ describe("Home", () => {
     });
   });
 
+  it("migrates a valid legacy provider selection", async () => {
+    const accountId = "a".repeat(32);
+    mocks.providerAccountsValue = [activeOpenAiAccount(accountId)];
+    const selection = JSON.stringify({ openai: { mode: "provider_account", accountId } });
+    localStorage.setItem("open-inspect-last-provider-selections", selection);
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(sessionCreateBody()).toMatchObject({
+      providerSelections: { openai: { mode: "provider_account", accountId } },
+    });
+    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(selection);
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBeNull();
+  });
+
+  it("continues hydrating when legacy provider selection migration fails", async () => {
+    const accountId = "a".repeat(32);
+    mocks.providerAccountsValue = [activeOpenAiAccount(accountId)];
+    const selection = JSON.stringify({ openai: { mode: "provider_account", accountId } });
+    localStorage.setItem("open-inspect-last-provider-selections", selection);
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation((key, value) => {
+      if (key === "open-inspect-last-provider-selections:v1") throw new Error("Quota exceeded");
+      setItem(key, value);
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(sessionCreateBody()).toMatchObject({
+      providerSelections: { openai: { mode: "provider_account", accountId } },
+    });
+    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBeNull();
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe(selection);
+  });
+
   it("waits for provider accounts and removes a stale stored selection", async () => {
     const staleAccountId = "b".repeat(32);
     localStorage.setItem(
-      "open-inspect-last-provider-selections",
+      "open-inspect-last-provider-selections:v1",
       JSON.stringify({ xai: { mode: "provider_account", accountId: staleAccountId } })
     );
     mocks.providerAccountsLoadingValue = true;
@@ -552,7 +598,6 @@ describe("Home", () => {
 
     await waitFor(() => expect(sessionCreateBody()).toMatchObject({ providerSelections: {} }));
     expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}");
-    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBeNull();
   });
 
   it("waits for environments to load before restoring a stored environment", async () => {
