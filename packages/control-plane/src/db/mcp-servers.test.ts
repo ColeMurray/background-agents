@@ -8,6 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ValidatedCreateMcpServerInput } from "@open-inspect/shared/types/integrations";
 import { McpServerStore, McpServerValidationError } from "./mcp-servers";
+import { generateEncryptionKey } from "../auth/crypto";
 
 // ─── Fake D1 helpers ────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ const remoteRowWithHeaders = {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-const TEST_ENCRYPTION_KEY = "bm90YXJlYWxrZXlub3RhcmVhbGtleW5vdGFyZWFsa2V5eA==";
+const TEST_ENCRYPTION_KEY = generateEncryptionKey();
 
 describe("McpServerStore", () => {
   describe("list()", () => {

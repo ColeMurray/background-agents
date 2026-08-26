@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { generateEncryptionKey } from "../auth/crypto";
 import { DurableObjectSandboxStorage, LifecycleSocketAdapter } from "./sandbox-lifecycle-adapters";
 import type { SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
@@ -39,7 +40,7 @@ function createStorage() {
   const storage = new DurableObjectSandboxStorage(
     sql,
     log,
-    "0123456789abcdef0123456789abcdef",
+    generateEncryptionKey(),
     sessions,
     userEnv
   );

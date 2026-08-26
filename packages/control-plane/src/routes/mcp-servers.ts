@@ -80,8 +80,9 @@ async function handleCreateMcpServer(
   const parsed = createMcpServerInputSchema.safeParse(body);
   if (!parsed.success) return error("Invalid MCP server configuration", 400);
 
+  const encryptionKey = requireRepoSecretsEncryptionKey(env);
   try {
-    const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
+    const store = new McpServerStore(ctx.db, encryptionKey);
     const server = await store.create(parsed.data);
     logger.info("MCP server created", {
       event: "mcp_server.created",
@@ -114,8 +115,9 @@ async function handleUpdateMcpServer(
   const parsed = updateMcpServerInputSchema.safeParse(body);
   if (!parsed.success) return error("Invalid MCP server configuration", 400);
 
+  const encryptionKey = requireRepoSecretsEncryptionKey(env);
   try {
-    const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
+    const store = new McpServerStore(ctx.db, encryptionKey);
     const { revision, ...patch } = parsed.data;
     const updated = await store.update(id, patch, revision);
     if (!updated) return error("MCP server not found", 404);

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxRepository } from "./sandbox-repository";
-import { decryptToken } from "../auth/crypto";
+import { decryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
 
@@ -36,7 +36,7 @@ function createMockSql() {
   };
 }
 
-const TEST_ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef";
+const TEST_ENCRYPTION_KEY = generateEncryptionKey();
 
 describe("SandboxRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
