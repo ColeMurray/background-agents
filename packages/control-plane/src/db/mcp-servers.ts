@@ -99,18 +99,17 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
 export class McpServerStore {
   constructor(
     private readonly db: SqlDatabase,
-    private readonly encryptionKey?: string
+    private readonly encryptionKey: string
   ) {}
 
   /** Empty dicts are stored as plaintext "{}" so rowToMetadata() can detect "no credentials". */
   private async encryptEnv(env: Record<string, string>): Promise<string> {
     const plain = JSON.stringify(env);
-    if (!this.encryptionKey || Object.keys(env).length === 0) return plain;
+    if (Object.keys(env).length === 0) return plain;
     return encryptToken(plain, this.encryptionKey);
   }
 
   private async decryptEnv(raw: string): Promise<Record<string, string>> {
-    if (!this.encryptionKey) return safeJsonParseEnv(raw);
     try {
       const plain = await decryptToken(raw, this.encryptionKey);
       return safeJsonParseEnv(plain);

@@ -1064,7 +1064,7 @@ describe("SandboxLifecycleManager", () => {
         last_spawn_failure: now - 60000,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
-      // updateSandboxSpawnError is a bare synchronous sql.exec in the DO, so
+      // setLastSpawnError is a bare synchronous sql.exec in the DO, so
       // this is a real failure mode, not a hypothetical one.
       vi.mocked(storage.setLastSpawnError).mockImplementation(() => {
         throw new Error("storage unavailable");

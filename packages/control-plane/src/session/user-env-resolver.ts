@@ -46,7 +46,7 @@ export interface UserEnvResolverDeps {
   resolveRepoId: (session: SessionRow) => Promise<number>;
   /** The owning Durable Object's id; the resolvePublicSessionId fallback. */
   durableObjectId: string;
-  repoSecretsEncryptionKey: string | undefined;
+  repoSecretsEncryptionKey: string;
   secretsCapEnforcement: string | undefined;
   /** The session-scoped logger; the composition root creates it before this class. */
   log: Logger;
@@ -62,7 +62,7 @@ export class UserEnvResolver {
   private readonly sessionCoreRepository: SessionCoreRepository;
   private readonly resolveRepoId: (session: SessionRow) => Promise<number>;
   private readonly durableObjectId: string;
-  private readonly repoSecretsEncryptionKey: string | undefined;
+  private readonly repoSecretsEncryptionKey: string;
   private readonly secretsCapEnforcement: string | undefined;
   private readonly log: Logger;
 
@@ -122,18 +122,6 @@ export class UserEnvResolver {
     const providerAuthModes = Object.fromEntries(
       providerAuth.map(({ provider, authMode }) => [provider, authMode])
     ) as Record<SubscriptionProviderId, SessionProviderAuthMode>;
-
-    if (!this.repoSecretsEncryptionKey) {
-      this.log.debug("Ordinary secrets not configured, skipping secret loading", {
-        has_encryption_key: !!this.repoSecretsEncryptionKey,
-      });
-      const sandboxEnv = prepareManagedProviderEnv({
-        exposedSecrets: {},
-        brokerSecrets: {},
-        providerAuthModes,
-      });
-      return { sandboxEnv, providerAuthModes };
-    }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
     const encryptionKey = this.repoSecretsEncryptionKey;

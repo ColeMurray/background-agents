@@ -44,11 +44,12 @@ import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integratio
 import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
+import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
 import { SessionCoreRepository } from "./session-core-repository";
-import { SandboxRepository } from "./sandbox-repository";
+import type { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -219,6 +220,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sessionCoreRepository = new SessionCoreRepository(sql, transaction);
   const alarmDeadlines = new PersistedAlarmDeadlineStore(sql);
 
+  // Secrets-at-rest encryption is not optional. Every consumer below takes
+  // the validated key, so no fallback path can persist a secret in plaintext.
+  const repoSecretsEncryptionKey = requireRepoSecretsEncryptionKey(env);
+
   // The session-scoped logger, created before anything can capture a logger
   // at all. Its `session_id` is injected per emit through the latched
   // resolver: before `init` writes the session row it is the Durable Object
@@ -233,9 +238,40 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getPublicSessionId
   );
   const backgroundTasks = createCloudflareBackgroundTasks(ctx, () => log);
-  // The sandbox repository validates the status it reads and warns on anything
-  // unmodelled, so it needs the session logger.
-  const sandboxRepository = new SandboxRepository(sql, log);
+
+  // Constructed eagerly — an invalid SCM configuration fails right here. The
+  // cell is a local `let` so live-DO integration tests can substitute a stub
+  // after the init request has already built this graph; consumer closures
+  // read the cell per call (never through the returned record), and
+  // `internals.sourceControlProvider` exposes it as an accessor pair.
+  let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
+  const sourceControlProvider = () => scmProvider;
+  const scmProviderName = scmProvider.name;
+
+  const resolveRepoId = (sessionRow: SessionRow) =>
+    resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider);
+
+  const userEnvResolver = new UserEnvResolver({
+    db,
+    sessionCoreRepository,
+    resolveRepoId,
+    durableObjectId,
+    repoSecretsEncryptionKey,
+    secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
+    log,
+  });
+
+  // The single sandbox-storage instance: the repository (which validates the
+  // status it reads and owns encrypt-at-rest, so it needs the session logger
+  // and the key) plus the session-context reads the lifecycle manager's
+  // storage port bundles with it.
+  const sandboxRepository = new DurableObjectSandboxStorage(
+    sql,
+    log,
+    repoSecretsEncryptionKey,
+    sessionCoreRepository,
+    userEnvResolver
+  );
 
   // Tier 2 — sockets and alarm scheduling.
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
@@ -258,21 +294,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Tier 3 — outbound delivery over the socket registry.
   const messenger: SessionMessenger = new SessionMessengerImpl(wsManager);
 
-  // Constructed eagerly — an invalid SCM configuration fails right here. The
-  // cell is a local `let` so live-DO integration tests can substitute a stub
-  // after the init request has already built this graph; consumer closures
-  // read the cell per call (never through the returned record), and
-  // `internals.sourceControlProvider` exposes it as an accessor pair.
-  let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
-  const sourceControlProvider = () => scmProvider;
-  const scmProviderName = scmProvider.name;
-
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
   const sessionIndexStore = db ? new SessionIndexStore(db) : null;
   const sessionPullRequestStore = db ? new SessionPullRequestStore(db) : null;
-  const resolveRepoId = (sessionRow: SessionRow) =>
-    resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider);
 
   const sandboxDashboardSettings: SandboxDashboardSettings = {
     sandboxProvider: env.SANDBOX_PROVIDER,
@@ -281,16 +306,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 
   // Tier 4 — session-scoped domain services.
-  const userEnvResolver = new UserEnvResolver({
-    db,
-    sessionCoreRepository,
-    resolveRepoId,
-    durableObjectId,
-    repoSecretsEncryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
-    secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
-    log,
-  });
-
   const terminalMessageProjection = new SessionTerminalMessageProjection(
     sessionIndexStore,
     () => {
@@ -368,9 +383,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     env,
     db,
     getSessionId: getPublicSessionId,
-    sessionCoreRepository,
-    sandboxRepository,
-    userEnvResolver,
+    storage: sandboxRepository,
+    repoSecretsEncryptionKey,
     messenger,
     wsManager,
     alarmScheduler,
@@ -513,7 +527,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     refreshOpenAIToken: async (sessionRow, requestLog) => {
       const service = new OpenAITokenRefreshService(
         db!,
-        env.REPO_SECRETS_ENCRYPTION_KEY!,
+        repoSecretsEncryptionKey,
         resolveRepoId,
         requestLog
       );
@@ -522,13 +536,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     refreshXaiToken: async (sessionRow, requestLog) => {
       const service = new XaiTokenRefreshService(
         db!,
-        env.REPO_SECRETS_ENCRYPTION_KEY!,
+        repoSecretsEncryptionKey,
         resolveRepoId,
         requestLog
       );
       return service.refresh(sessionRow);
     },
-    isManagedSecretsConfigured: () => Boolean(db && env.REPO_SECRETS_ENCRYPTION_KEY),
+    isManagedSecretsConfigured: () => Boolean(db),
     getScmCredentials: (requestLog) =>
       new ScmCredentialsService(sourceControlProvider(), requestLog).getCredentials(),
     messenger,
@@ -633,7 +647,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const accessReader = new SessionAccessReader({
     sessionCoreRepository,
     sandboxRepository,
-    repoSecretsEncryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
+    repoSecretsEncryptionKey,
     log,
   });
 
@@ -800,9 +814,9 @@ interface LifecycleManagerDeps {
   db: SqlDatabase | null;
   /** The latched public-session-id resolver shared with the session logger. */
   getSessionId: () => string;
-  sessionCoreRepository: SessionCoreRepository;
-  sandboxRepository: SandboxRepository;
-  userEnvResolver: UserEnvResolver;
+  /** The one storage instance — the repository with its session-context reads. */
+  storage: DurableObjectSandboxStorage;
+  repoSecretsEncryptionKey: string;
   messenger: SessionMessenger;
   wsManager: SessionWebSocketManager;
   alarmScheduler: RehydratableAlarmScheduler;
@@ -815,9 +829,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     env,
     db,
     getSessionId,
-    sessionCoreRepository,
-    sandboxRepository,
-    userEnvResolver,
+    storage,
+    repoSecretsEncryptionKey,
     messenger,
     wsManager,
     alarmScheduler,
@@ -829,12 +842,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
   const provider = createSandboxProviderFromEnv(env, sandboxBackend);
 
-  const storage = new DurableObjectSandboxStorage(
-    sandboxRepository,
-    sessionCoreRepository,
-    userEnvResolver,
-    env.REPO_SECRETS_ENCRYPTION_KEY
-  );
   const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
 
   // ID generator adapter
@@ -850,7 +857,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   // Create D1-backed lookups if database is available
   let mcpServerLookup: McpServerLookup | undefined;
   if (db) {
-    const mcpStore = new McpServerStore(db, env.REPO_SECRETS_ENCRYPTION_KEY);
+    const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
     mcpServerLookup = {
       getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
     };

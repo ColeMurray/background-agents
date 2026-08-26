@@ -815,7 +815,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * changing state, and that distinction is theirs to make.
    */
   reportSandboxError(reason: string): void {
-    // Persisting is best effort. `updateSandboxSpawnError` is a bare synchronous
+    // Persisting is best effort. `setLastSpawnError` is a bare synchronous
     // sql.exec, so a storage failure would otherwise also cost the broadcast —
     // the one signal an already-open tab gets — and, from the message queue's
     // spawn catch, would replace the spawn error being reported with the

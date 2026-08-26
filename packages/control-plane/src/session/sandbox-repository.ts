@@ -4,6 +4,7 @@ import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { SandboxRow } from "./types";
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
+import { encryptToken } from "../auth/crypto";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
@@ -41,11 +42,20 @@ export interface ResumeSandboxData {
   createdAt: number;
 }
 
-/** Persistence for the sandbox scoped to one session. */
+/**
+ * Persistence for the sandbox scoped to one session.
+ *
+ * Owns encrypt-at-rest for access secrets (code-server/VNC passwords, ttyd
+ * tokens): callers hand over plaintext and every write path encrypts before
+ * touching a column, so no caller can accidentally persist a secret in the
+ * clear. Matches the D1 stores (`McpServerStore`, scoped secrets), which own
+ * their keys the same way.
+ */
 export class SandboxRepository {
   constructor(
     private readonly sql: SqlStorage,
-    private readonly log: Logger
+    private readonly log: Logger,
+    private readonly encryptionKey: string
   ) {}
 
   private rows<T>(result: SqlResult): T[] {
@@ -226,7 +236,7 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxSpawnError(error: string | null, timestamp: number | null): void {
+  setLastSpawnError(error: string | null, timestamp: number | null): void {
     this.sql.exec(
       `UPDATE sandbox SET last_spawn_error = ?, last_spawn_error_at = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       error,
@@ -234,11 +244,11 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxCodeServer(url: string, password: string): void {
+  async updateSandboxCodeServer(url: string, password: string): Promise<void> {
     this.sql.exec(
       `UPDATE sandbox SET code_server_url = ?, code_server_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       url,
-      password
+      await this.encrypt(password)
     );
   }
 
@@ -254,11 +264,11 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxVnc(url: string, password: string): void {
+  async updateSandboxVnc(url: string, password: string): Promise<void> {
     this.sql.exec(
       `UPDATE sandbox SET vnc_url = ?, vnc_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       url,
-      password
+      await this.encrypt(password)
     );
   }
 
@@ -285,11 +295,11 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxTtyd(url: string, encryptedToken: string): void {
+  async updateSandboxTtyd(url: string, token: string): Promise<void> {
     this.sql.exec(
       `UPDATE sandbox SET ttyd_url = ?, ttyd_token = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       url,
-      encryptedToken
+      await this.encrypt(token)
     );
   }
 
@@ -303,6 +313,10 @@ export class SandboxRepository {
     this.sql.exec(
       `UPDATE sandbox SET spawn_failure_count = 0 WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
+  }
+
+  private encrypt(value: string): Promise<string> {
+    return encryptToken(value, this.encryptionKey);
   }
 
   incrementCircuitBreakerFailure(timestamp: number): void {
