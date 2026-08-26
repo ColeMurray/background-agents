@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -89,7 +90,7 @@ async function seedSlackAutomation(
   const id = `auto-slack-${Math.random().toString(36).slice(2, 8)}`;
   await store.create(makeAutomation({ id, ...overrides }));
   const channels = new SlackChannelStore(env.DB);
-  await env.DB.batch(channels.bindChannelStatements(id, ["C1"]));
+  await sqlDatabase(env.DB).batch(channels.bindChannelStatements(id, ["C1"]));
   return id;
 }
 

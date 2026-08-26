@@ -1,4 +1,5 @@
 import { createExecutionContext, env } from "cloudflare:test";
+import { createCloudflareBackgroundTasks } from "../../src/cloudflare/background-tasks";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { describe, expect, it } from "vitest";
 import { handleRequest as routeRequest } from "../../src/router";
@@ -12,7 +13,11 @@ function handleRequest(
   request: Request,
   requestEnv: Parameters<typeof routeRequest>[1]
 ): Promise<Response> {
-  return routeRequest(request, requestEnv, createExecutionContext());
+  return routeRequest(
+    request,
+    requestEnv,
+    createCloudflareBackgroundTasks(createExecutionContext())
+  );
 }
 
 async function signedServiceRequest(
@@ -87,7 +92,9 @@ describe("browser auth router", () => {
     const url = `${CONTROL_PLANE_ORIGIN}${path}`;
     const wrongService = new Request(url, {
       headers: await buildServiceAuthHeaders({
-        service: "modal",
+        // Deliberately not a control-plane caller: signed as an
+        // unrecognized service to prove the endpoint is web-only.
+        service: "modal" as ServiceName,
         secret: "test-service-secret-modal",
         method: "GET",
         url,
@@ -204,7 +211,7 @@ describe("browser auth router", () => {
         callbackURL: "/",
         disableRedirect: true,
       },
-      "modal",
+      "modal" as ServiceName,
       "test-service-secret-modal"
     );
 

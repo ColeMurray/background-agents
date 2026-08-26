@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { runInSessionDO, ctxOf } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { MIGRATIONS } from "../../src/session/schema";
 
@@ -67,9 +68,9 @@ describe("SessionDO Durable Object", () => {
       }),
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      const tables = instance.ctx.storage.sql
-        .exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    await runInSessionDO(stub, (instance: SessionDO) => {
+      const tables = ctxOf(instance)
+        .storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .toArray();
 
       const tableNames = tables.map((row: Record<string, unknown>) => row.name);
@@ -99,9 +100,9 @@ describe("SessionDO Durable Object", () => {
       }),
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      const rows = instance.ctx.storage.sql
-        .exec("SELECT id FROM _schema_migrations ORDER BY id")
+    await runInSessionDO(stub, (instance: SessionDO) => {
+      const rows = ctxOf(instance)
+        .storage.sql.exec("SELECT id FROM _schema_migrations ORDER BY id")
         .toArray() as Array<{ id: number }>;
 
       const ids = rows.map((r) => r.id);

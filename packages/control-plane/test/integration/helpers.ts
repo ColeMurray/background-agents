@@ -1,11 +1,32 @@
-import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
+import { runInSessionDO, ctxOf } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
 import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
+
+/**
+ * The test D1 binding viewed through the engine-neutral interface, so tests
+ * can `batch()` statements bound by stores (which type them as SqlStatement).
+ * Plain assignment — D1Database satisfies SqlDatabase structurally by the
+ * interface's documented method bivariance.
+ */
+export function sqlDatabase(db: D1Database): SqlDatabase {
+  return db;
+}
+
+/**
+ * `Headers.getSetCookie()`, which workerd implements but this workers-types
+ * version does not declare (src/routes/browser-auth.ts carries the same
+ * cast for the production proxy path).
+ */
+export function getSetCookies(headers: Headers): string[] {
+  return (headers as Headers & { getSetCookie(): string[] }).getSetCookie();
+}
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
 export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
@@ -211,8 +232,10 @@ export async function queryDO<T>(
   sql: string,
   ...params: unknown[]
 ): Promise<T[]> {
-  return runInDurableObject(stub, (instance: SessionDO) => {
-    return instance.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
+  return runInSessionDO(stub, (instance: SessionDO) => {
+    return ctxOf(instance)
+      .storage.sql.exec(sql, ...params)
+      .toArray() as T[];
   });
 }
 
@@ -248,9 +271,9 @@ export async function seedEvents(
     createdAt: number;
   }>
 ): Promise<void> {
-  await runInDurableObject(stub, (instance: SessionDO) => {
+  await runInSessionDO(stub, (instance: SessionDO) => {
     for (const e of events) {
-      instance.ctx.storage.sql.exec(
+      ctxOf(instance).storage.sql.exec(
         `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
          VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
         e.id,
@@ -278,8 +301,8 @@ export async function seedMessage(
     startedAt?: number;
   }
 ): Promise<void> {
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO) => {
+    ctxOf(instance).storage.sql.exec(
       "INSERT INTO messages (id, author_id, content, source, status, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       msg.id,
       msg.authorId,
@@ -484,8 +507,8 @@ export async function seedSandboxAuth(
   await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO) => {
+    ctxOf(instance).storage.sql.exec(
       "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
       tokenHash,
@@ -508,8 +531,8 @@ export async function seedSandboxAuthHash(
   await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO) => {
+    ctxOf(instance).storage.sql.exec(
       "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,
       opts.sandboxId,
