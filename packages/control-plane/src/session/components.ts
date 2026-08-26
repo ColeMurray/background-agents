@@ -87,17 +87,17 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
-import { createMessagesHandler } from "./http/handlers/messages.handler";
+import { MessagesHandler } from "./http/handlers/messages.handler";
 import { createChildSessionsHandler } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
-import { createWsTokenHandler } from "./http/handlers/ws-token.handler";
+import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
   createSessionLifecycleHandler,
   type SessionLifecycleHandler,
 } from "./http/handlers/session-lifecycle.handler";
 import { createPullRequestHandler } from "./http/handlers/pull-request.handler";
-import { createParticipantsHandler } from "./http/handlers/participants.handler";
+import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler } from "./alarm/handler";
 import {
@@ -492,9 +492,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 
   // Tier 8 — internal HTTP handlers.
-  const messagesHandler = createMessagesHandler({
-    messageService,
-  });
+  const messagesHandler = new MessagesHandler(messageService);
 
   const childSessionsHandler = createChildSessionsHandler({
     messageRepository,
@@ -546,13 +544,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const attachmentsHandler = new AttachmentsHandler(attachmentRepository, log);
 
-  const wsTokenHandler = createWsTokenHandler({
-    repository: participantRepository,
-    getParticipantByUserId: (userId) => participantService.getByUserId(userId),
-    generateId: (bytes) => generateId(bytes),
-    hashToken: (token) => hashToken(token),
-    now: () => Date.now(),
-  });
+  const wsTokenHandler = new WsTokenHandler(
+    participantRepository,
+    participantService,
+    generateId,
+    hashToken
+  );
 
   const sessionLifecycleHandler = createSessionLifecycleHandler({
     sessionCoreRepository,
@@ -619,9 +616,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     triggerPullRequestRefresh: () => schedulePullRequestRefresh("manual"),
   });
 
-  const participantsHandler = createParticipantsHandler({
-    repository: participantRepository,
-  });
+  const participantsHandler = new ParticipantsHandler(participantRepository);
 
   // Tier 9 — the read models, connection admission, and the server stack.
   const snapshotReader = new SessionSnapshotReader({
