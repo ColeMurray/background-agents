@@ -381,6 +381,20 @@ describe("McpServerStore", () => {
       expect(errorSpy).not.toHaveBeenCalled();
       errorSpy.mockRestore();
     });
+
+    it('reads the legacy "null" credential sentinel as an empty map', async () => {
+      // rowToMetadata's credential-free set is "", "{}", and "null" — the
+      // decrypt path must accept all three. JSON.parse("null") is null, so
+      // without the guard this row throws in the catch and rejects the call.
+      const nullEnvRow = { ...sampleRow, env: "null" };
+      const { db } = createFakeD1({ allResults: [nullEnvRow] });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].env ?? {}).toEqual({});
+    });
   });
 
   describe("UNIQUE constraint handling", () => {
