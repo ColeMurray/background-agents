@@ -60,7 +60,6 @@ import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 import { createLatchedPublicSessionIdResolver, resolvePublicSessionId } from "./public-session-id";
 import { resolveScmSettings } from "./scm-settings-resolution";
-import { validateReasoningEffort } from "./reasoning-effort";
 import {
   isValidSandboxToken,
   resolveSandboxDashboardUrl,
@@ -92,10 +91,7 @@ import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
 import { SandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
-import {
-  createSessionLifecycleHandler,
-  type SessionLifecycleHandler,
-} from "./http/handlers/session-lifecycle.handler";
+import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
@@ -556,35 +552,29 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     hashToken
   );
 
-  const sessionLifecycleHandler = createSessionLifecycleHandler({
+  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
+  const sessionLifecycleHandler = new SessionLifecycleHandler(
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
     participantRepository,
-    getDurableObjectId: () => durableObjectId,
+    participantService,
+    statusService,
+    titleService,
+    lifecycleWsManager,
+    durableObjectId,
+    log,
     tokenEncryptionKey,
-    encryptToken: (token, encryptionKey) => encryptToken(token, encryptionKey),
-    validateReasoningEffort: (model, effort) => validateReasoningEffort(model, effort, log),
-    generateId: (bytes) => generateId(bytes),
-    now: () => Date.now(),
-    scheduleWarmSandbox: () =>
+    () =>
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
         name: "sandbox.warm",
       }),
-    getSession: () => sessionCoreRepository.getSession(),
-    getSandbox: () => sandboxRepository.getSandbox(),
-    getPublicSessionId: (sessionRow) => resolvePublicSessionId(sessionRow, durableObjectId),
-    getParticipantByUserId: (userId) => participantService.getByUserId(userId),
-    statusService,
-    applySessionTitleUpdate: (title, options) =>
-      titleService.applySessionTitleUpdate(title, options),
-    cancelSession: async () => {
+    async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
     },
-    getSandboxSocket: () => wsManager.getSandboxSocket(),
-    sendToSandbox: (ws, message) => wsManager.send(ws, message),
-    updateSandboxStatus: (status) => sandboxRepository.updateSandboxStatus(status),
-  });
+    encryptToken,
+    generateId
+  );
 
   const prCreationClaims = new PullRequestCreationClaims();
   const pullRequestHandler = new PullRequestHandler(
