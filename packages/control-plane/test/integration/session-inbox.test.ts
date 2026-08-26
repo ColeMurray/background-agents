@@ -289,11 +289,12 @@ describe("session inbox", () => {
     expect(finishedBody.items[0].descendantSessions.map(({ id }) => id)).toEqual(["draft-child"]);
   });
 
-  it("shows user-attributed children of automation sessions in Mine", async () => {
+  it("shows automation children but excludes directly automated sessions from Mine", async () => {
     await serviceFetch("https://example.com/sessions/inbox?category=finished");
     const store = new SessionIndexStore(env.DB);
     await store.create(session("mine"));
     await store.create(session("another-user", { userId: "22222222222222222222222222222222" }));
+    await store.create(session("github-bot", { spawnSource: "github-bot" }));
     await store.create(
       session("automation", {
         automationId: "automation-1",
