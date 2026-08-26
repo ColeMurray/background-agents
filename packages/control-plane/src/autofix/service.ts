@@ -422,11 +422,10 @@ export class AutofixService {
   ): Promise<string | null> {
     const authorType = feedback.author.type.toLowerCase();
     const authorLogin = feedback.author.login.toLowerCase();
-    if (authorLogin === this.botUsername.toLowerCase()) {
-      return settings.openInspectReviewsEnabled ? "own_app_unattributed" : "own_reviews_disabled";
-    }
-
-    if (authorType === "user") {
+    if (authorType === "bot" && authorLogin === this.botUsername.toLowerCase()) {
+      if (feedback.kind !== "review") return "bot_pr_comment";
+      if (!settings.openInspectReviewsEnabled) return "own_reviews_disabled";
+    } else if (authorType === "user") {
       if (
         feedback.kind === "pr_comment" &&
         feedback.body.toLowerCase().includes(`@${this.botUsername.toLowerCase()}`)
