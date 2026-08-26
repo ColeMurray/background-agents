@@ -316,6 +316,7 @@ describe("SessionMessageQueue", () => {
     });
     expect(h.repository.createEvent).not.toHaveBeenCalled();
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "prompt_queue_updated", promptQueue: [] });
   });
 
   it("re-drives duplicate pending Autofix work without admitting another message", async () => {
@@ -341,6 +342,9 @@ describe("SessionMessageQueue", () => {
 
     expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sandbox_event" })
+    );
   });
 
   it("passes closed-session state into atomic Autofix admission", async () => {

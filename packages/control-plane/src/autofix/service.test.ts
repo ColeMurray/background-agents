@@ -145,6 +145,11 @@ describe("AutofixService", () => {
         body: expect.stringContaining("Please handle the null case."),
       })
     );
+    const dispatch = h.sessions.fetch.mock.calls[0] as unknown as [string, string, RequestInit];
+    expect(dispatch[2].body).toContain(
+      "Reply concisely on the originating pull request when an outcome response is warranted"
+    );
+    expect(dispatch[2].body).toContain("validation results, no-change explanation, or question");
     expect(h.feedbackStore.markQueued).toHaveBeenCalledWith(
       "github:pr_comment:1234",
       "message-1",

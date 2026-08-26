@@ -26,6 +26,7 @@ export type {
 
 export {
   githubAutofixEnvelopeSchema,
+  githubAutofixOriginSchema,
   githubAutofixSessionCommandSchema,
   githubAutofixSessionResponseSchema,
 } from "./github-autofix";

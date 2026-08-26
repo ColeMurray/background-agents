@@ -180,6 +180,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
         avatar: z.string().optional(),
       })
       .optional(),
+    origin: githubAutofixOriginSchema.optional(),
     // Attachment metadata only — never inline content, which would bloat the
     // events table and every broadcast. attachmentId lets clients stream attachments.
     attachments: resolvedSessionAttachmentsSchema.optional(),
