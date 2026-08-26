@@ -3674,3 +3674,57 @@ describe("SandboxLifecycleManager", () => {
     });
   });
 });
+
+describe("SandboxLifecycleManager log context", () => {
+  it("derives session_id from getSessionId per use, upgrading once the id changes", async () => {
+    let currentId = "do-fallback-id";
+    const manager = new SandboxLifecycleManager(
+      createMockProvider(),
+      createMockStorage(null),
+      createMockBroadcaster(),
+      createMockWebSocketManager(false),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      { ...createTestConfig(), getSessionId: () => currentId }
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    // The no-session spawn guard is the cheapest this.log-emitting operation.
+    await manager.spawnSandbox();
+    currentId = "public-session-name";
+    await manager.spawnSandbox();
+
+    const errorLogs = parseStructuredLogs(errorSpy);
+    errorSpy.mockRestore();
+
+    // A constructor-time capture (the pre-composition-root behavior) would
+    // stamp both lines with the first id; a latched-first-value memo would
+    // never upgrade. Each line must carry the id current at emit time.
+    const contexts = errorLogs
+      .filter((line) => line.msg === "Cannot spawn sandbox: no session")
+      .map((line) => line.session_id);
+    expect(contexts).toEqual(["do-fallback-id", "public-session-name"]);
+  });
+
+  it("omits session_id entirely when no getSessionId is configured", async () => {
+    const manager = new SandboxLifecycleManager(
+      createMockProvider(),
+      createMockStorage(null),
+      createMockBroadcaster(),
+      createMockWebSocketManager(false),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await manager.spawnSandbox();
+
+    const errorLogs = parseStructuredLogs(errorSpy);
+    errorSpy.mockRestore();
+
+    const line = errorLogs.find((entry) => entry.msg === "Cannot spawn sandbox: no session");
+    expect(line).toBeDefined();
+    expect(line).not.toHaveProperty("session_id");
+  });
+});

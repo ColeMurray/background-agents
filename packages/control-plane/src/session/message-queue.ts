@@ -150,7 +150,8 @@ export class SessionMessageQueue {
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
-    private readonly executionTimeoutMs: number
+    /** Resolved per use so it honors settings persisted after construction. */
+    private readonly getExecutionTimeoutMs: () => number
   ) {}
 
   async handlePromptMessage(
@@ -400,7 +401,7 @@ export class SessionMessageQueue {
       this.sandboxLifecycle.updateLastActivity(now);
 
       // Execution timeout shares the DO's single alarm slot with lifecycle checks.
-      const deadline = now + this.executionTimeoutMs;
+      const deadline = now + this.getExecutionTimeoutMs();
       await this.alarmScheduler.schedule(deadline);
 
       this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {

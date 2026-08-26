@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
+import { componentsOf } from "./session-do-access";
 import { encryptToken } from "../../src/auth/crypto";
 import {
   collectMessages,
@@ -142,9 +143,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ...statements: string[]
   ): Promise<void> {
     await runInDurableObject(stub, (instance: SessionDO) => {
-      const repository = (
-        instance as unknown as { sandboxRepository: { getSandbox: () => unknown } }
-      ).sandboxRepository;
+      const repository = componentsOf(instance).sandboxRepository;
       const readSandbox = repository.getSandbox.bind(repository);
       vi.spyOn(repository, "getSandbox").mockImplementation(() => {
         const sandbox = readSandbox();
@@ -359,11 +358,9 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       status: "spawning",
     });
     await runInDurableObject(stub, (instance: SessionDO) => {
-      const lifecycleManager = (
-        instance as unknown as {
-          lifecycleManager: { providerStartupPending: boolean };
-        }
-      ).lifecycleManager;
+      const lifecycleManager = componentsOf(instance).lifecycleManager as unknown as {
+        providerStartupPending: boolean;
+      };
       lifecycleManager.providerStartupPending = true;
     });
     const { ws: clientWs } = await openClientWs(name, { subscribe: true });

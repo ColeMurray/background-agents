@@ -3,7 +3,6 @@ import type { Clock } from "../ports";
 import type { SessionInternalRoute } from "./routes";
 
 export interface SessionHttpDispatcherDeps {
-  ensureInitialized: () => void;
   getLogger: () => Logger;
   routes: readonly SessionInternalRoute[];
   handleWebSocketUpgrade: (request: Request, url: URL, log: Logger) => Promise<Response>;
@@ -16,8 +15,6 @@ export class SessionHttpDispatcher {
 
   async dispatch(request: Request): Promise<Response> {
     const fetchStart = this.deps.clock.monotonicNowMs();
-    this.deps.ensureInitialized();
-    const initMs = this.deps.clock.monotonicNowMs() - fetchStart;
     const log = this.requestLogger(request);
     const url = new URL(request.url);
     const path = url.pathname;
@@ -53,7 +50,6 @@ export class SessionHttpDispatcher {
         http_path: path,
         http_status: status,
         duration_ms: Math.round(totalMs * 100) / 100,
-        init_ms: Math.round(initMs * 100) / 100,
         handler_ms: Math.round(handlerMs * 100) / 100,
         outcome,
       });

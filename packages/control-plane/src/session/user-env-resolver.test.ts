@@ -226,7 +226,7 @@ function makeHarness(
   const storage = fakeSqlStorage({ session, memberRows: options.memberRows ?? [] });
   const db = new FakeSqlDatabase();
   const logs: LogEntry[] = [];
-  let currentLogger = recordingLogger(logs);
+  const log = recordingLogger(logs);
   const sessionCoreRepository = new SessionCoreRepository(storage.sql, (closure) => closure());
   let resolveRepoIdCalls = 0;
   // Default mirrors production wiring: the real resolution function over a
@@ -249,7 +249,7 @@ function makeHarness(
     durableObjectId: "do-id-fallback",
     repoSecretsEncryptionKey: options.encryptionKey,
     secretsCapEnforcement: options.capEnforcement,
-    log: () => currentLogger,
+    log,
   });
 
   return {
@@ -258,9 +258,6 @@ function makeHarness(
     logs,
     sqlCalls: storage.calls,
     resolveRepoIdCalls: () => resolveRepoIdCalls,
-    setLogger(logger: Logger) {
-      currentLogger = logger;
-    },
   };
 }
 
@@ -529,27 +526,6 @@ describe("UserEnvResolver", () => {
       await expect(
         h.resolver.getProviderAuthenticationError("anthropic/claude-sonnet-4-5")
       ).resolves.toBeNull();
-    });
-  });
-
-  describe("thunk contracts", () => {
-    it("logs through the logger current at call time, not construction time", async () => {
-      const h = makeHarness({ session: null });
-      const swappedEntries: LogEntry[] = [];
-
-      await h.resolver.getUserEnvVars();
-      expect(h.logs).toHaveLength(1);
-
-      h.setLogger(recordingLogger(swappedEntries));
-      await h.resolver.getUserEnvVars();
-
-      // The swapped-in logger received the second warn; the original saw only the first.
-      expect(swappedEntries).toContainEqual({
-        level: "warn",
-        msg: "Cannot load secrets: no session",
-        data: undefined,
-      });
-      expect(h.logs).toHaveLength(1);
     });
   });
 });

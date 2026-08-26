@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { Mock } from "vitest";
-import type { SandboxLifecycleManager } from "../../src/sandbox/lifecycle/manager";
-import type { PresenceService } from "../../src/session/presence-service";
-import type { SessionSandboxEventProcessor } from "../../src/session/sandbox-events";
+import type { SessionComponents } from "../../src/session/components";
 import type { SessionDO } from "../../src/session/durable-object";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { GitPushSpec } from "../../src/source-control";
 import { cleanD1Tables } from "./cleanup";
+import { componentsOf } from "./session-do-access";
 import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpers";
 
 /**
@@ -34,23 +33,14 @@ import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpe
  * lazy getters with an explicit `SessionComponents` seam, repoint THIS function
  * at it and every test below should keep passing unchanged.
  */
-function collaboratorsOf(instance: SessionDO): {
-  lifecycleManager: SandboxLifecycleManager;
-  presenceService: PresenceService;
-  sandboxEventProcessor: SessionSandboxEventProcessor;
-} {
-  return instance as unknown as {
-    lifecycleManager: SandboxLifecycleManager;
-    presenceService: PresenceService;
-    sandboxEventProcessor: SessionSandboxEventProcessor;
-  };
+function collaboratorsOf(
+  instance: SessionDO
+): Pick<SessionComponents, "lifecycleManager" | "presenceService" | "sandboxEventProcessor"> {
+  return componentsOf(instance);
 }
 
 /** The repository this suite's stubbed provider pushes to. */
 const PUSH_REPO = { repoOwner: "acme", repoName: "web-app" } as const;
-
-/** Own-property key used to count reads of a shadowed lazy getter. */
-const GETTER_READS = "__wiringLifecycleManagerReads";
 
 function notUsedHere(member: string): never {
   throw new Error(`${member} is not exercised by the collaborator-wiring suite`);
@@ -186,9 +176,10 @@ describe("SessionDO collaborator wiring", () => {
     });
 
     await runInDurableObject(stub, (instance: SessionDO) => {
-      (
-        instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-      )._sourceControlProvider = stubSourceControlProvider();
+      // SCM access reads through the components record, so replacing this
+      // property substitutes the stub for every consumer.
+      const provider = stubSourceControlProvider();
+      componentsOf(instance).sourceControlProvider = provider;
       // Without a connected sandbox the real implementation short-circuits to
       // `{ success: true }`, which is exactly what a dropped edge would return.
       // Spying is the only way to tell the two apart from out here.
@@ -228,61 +219,48 @@ describe("SessionDO collaborator wiring", () => {
     ]);
   });
 
-  it("keeps session init succeeding when the sandbox provider cannot be built", async () => {
+  it("keeps session init succeeding when the warm spawn fails at runtime", async () => {
     const sessionName = `wiring-provider-throws-${crypto.randomUUID()}`;
     const stub = env.SESSION.get(env.SESSION.idFromName(sessionName));
 
-    // `lifecycleManager` is a lazy getter that constructs the sandbox provider,
-    // and that construction throws on a deployment missing provider
-    // credentials. Shadow it before init so the warm-spawn thunk hits the same
-    // failure; init must still succeed, because its session rows are already
-    // committed by the time the warm spawn is scheduled.
+    // A runtime spawn failure (provider API down, quota exhausted) rejects
+    // `warmSandbox`; init must still succeed, because its session rows are
+    // already committed by the time the warm spawn runs. (Init's own
+    // ensureInitialized() is idempotent, so pre-initializing here matches
+    // production order within the same activation.)
     await runInDurableObject(stub, (instance: SessionDO) => {
-      const probe = instance as unknown as Record<string, unknown>;
-      probe[GETTER_READS] = 0;
-      Object.defineProperty(instance, "lifecycleManager", {
-        configurable: true,
-        get() {
-          probe[GETTER_READS] = (probe[GETTER_READS] as number) + 1;
-          throw new Error("MODAL_API_SECRET and MODAL_WORKSPACE are required");
-        },
-      });
+      componentsOf(instance).lifecycleManager.warmSandbox = vi.fn(() =>
+        Promise.reject(new Error("modal API unavailable"))
+      );
     });
 
-    try {
-      const response = await stub.fetch("http://internal/internal/init", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionName,
-          repoOwner: "acme",
-          repoName: "web-app",
-          repoId: 12345,
-          userId: "user-1",
-        }),
-      });
+    const response = await stub.fetch("http://internal/internal/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionName,
+        repoOwner: "acme",
+        repoName: "web-app",
+        repoId: 12345,
+        userId: "user-1",
+      }),
+    });
 
-      expect(response.status).toBe(200);
+    expect(response.status).toBe(200);
 
-      // Asserting only the 200 would be a false positive: removing warm-spawn
-      // scheduling from init altogether also returns 200. The read count is
-      // what pins that init still reaches the warm-spawn edge, so the 200 is
-      // evidence the throw was absorbed rather than evidence it never happened.
-      // `submit` invokes the warm-spawn task factory synchronously inside its
-      // own try/catch, so the getter read still lands before init responds and
-      // the throw is logged as background_task.failed instead of escaping.
-      const getterReads = await runInDurableObject(
-        stub,
-        (instance: SessionDO) => (instance as unknown as Record<string, number>)[GETTER_READS] ?? 0
-      );
-      expect(getterReads).toBeGreaterThan(0);
-    } finally {
-      await runInDurableObject(stub, (instance: SessionDO) => {
-        const probe = instance as unknown as Record<string, unknown>;
-        delete probe.lifecycleManager;
-        delete probe[GETTER_READS];
-      });
-    }
+    // Asserting only the 200 would be a false positive: removing warm-spawn
+    // scheduling from init altogether also returns 200. The call count is
+    // what pins that init still reaches the warm-spawn edge, so the 200 is
+    // evidence the rejection was absorbed rather than evidence it never
+    // happened. `submit` runs the task factory synchronously and routes the
+    // rejection to background_task.failed instead of letting it escape.
+    const warmSpawnCalls = await runInDurableObject(stub, (instance: SessionDO) => {
+      const spy = componentsOf(instance).lifecycleManager.warmSandbox as unknown as Mock<
+        () => Promise<void>
+      >;
+      return spy.mock.calls.length;
+    });
+    expect(warmSpawnCalls).toBeGreaterThan(0);
   });
 
   it("surfaces stored tunnel URLs in the session snapshot", async () => {

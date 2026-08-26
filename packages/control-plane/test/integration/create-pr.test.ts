@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { SessionDO } from "../../src/session/durable-object";
+import { componentsOf } from "./session-do-access";
 import { initNamedSession, initSession, queryDO, seedMessage, serviceFetch } from "./helpers";
 
 describe("POST /internal/create-pr", () => {
@@ -157,9 +158,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      (
-        instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-      )._sourceControlProvider = mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
 
     const res = await stub.fetch("http://internal/internal/create-pr", {
@@ -238,9 +237,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      (
-        instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-      )._sourceControlProvider = mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
 
     const res = await stub.fetch("http://internal/internal/create-pr", {
@@ -332,9 +329,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      (
-        instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-      )._sourceControlProvider = mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
   }
 
@@ -500,9 +495,7 @@ describe("POST /internal/create-pr", () => {
           }),
         } as unknown as SourceControlProvider;
 
-        (
-          instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-        )._sourceControlProvider = mockProvider;
+        componentsOf(instance).sourceControlProvider = mockProvider;
       });
     }
 
