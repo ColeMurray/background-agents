@@ -17,6 +17,7 @@ describe("session title API route", () => {
     it("rejects a malformed title request", () => {
       expect(parseSessionTitlePatchBody({ title: 123 })).toBeNull();
       expect(parseSessionTitlePatchBody(null)).toBeNull();
+      expect(parseSessionTitlePatchBody([])).toBeNull();
     });
   });
 });
