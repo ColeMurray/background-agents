@@ -96,7 +96,7 @@ import {
   createSessionLifecycleHandler,
   type SessionLifecycleHandler,
 } from "./http/handlers/session-lifecycle.handler";
-import { createPullRequestHandler } from "./http/handlers/pull-request.handler";
+import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler } from "./alarm/handler";
@@ -587,17 +587,17 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   const prCreationClaims = new PullRequestCreationClaims();
-  const pullRequestHandler = createPullRequestHandler({
-    getSession: () => sessionCoreRepository.getSession(),
-    getSessionRepositories: () => sessionCoreRepository.getSessionRepositories(),
-    getPromptingParticipantForPR: () => participantService.getPromptingParticipantForPR(),
-    resolveAuthForPR: (participant) => participantService.resolveAuthForPR(participant),
-    getSessionUrl: (sessionRow) => {
+  const pullRequestHandler = new PullRequestHandler(
+    sessionCoreRepository,
+    participantService,
+    artifactRepository,
+    messenger,
+    (sessionRow) => {
       const sessionId = sessionRow.session_name || sessionRow.id;
       const webAppUrl = env.WEB_APP_URL || env.WORKER_URL || "";
       return webAppUrl + "/session/" + sessionId;
     },
-    createPullRequest: async (input, requestLog) => {
+    async (input, requestLog) => {
       const pullRequestService = new SessionPullRequestService({
         repository: sessionCoreRepository,
         artifactRepository,
@@ -614,12 +614,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
       return pullRequestService.createPullRequest(input);
     },
-    getArtifactById: (artifactId) => artifactRepository.getArtifactById(artifactId),
-    updateArtifact: (artifactId, data) => artifactRepository.updateArtifact(artifactId, data),
-    messenger,
-    now: () => Date.now(),
-    triggerPullRequestRefresh: () => schedulePullRequestRefresh("manual"),
-  });
+    () => schedulePullRequestRefresh("manual")
+  );
 
   const participantsHandler = new ParticipantsHandler(participantRepository);
 
