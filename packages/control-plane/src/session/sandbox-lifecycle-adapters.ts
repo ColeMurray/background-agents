@@ -105,8 +105,10 @@ export class DurableObjectSandboxStorage implements SandboxStorage {
     this.sandboxes.updateSandboxSpawnError(error, timestamp);
   }
 
-  async updateSandboxCodeServer(url: string, password: string): Promise<void> {
-    this.sandboxes.updateSandboxCodeServer(url, await this.encryptIfConfigured(password));
+  updateSandboxCodeServer(url: string, password: string): void | Promise<void> {
+    return this.persistEncrypted(password, (stored) =>
+      this.sandboxes.updateSandboxCodeServer(url, stored)
+    );
   }
 
   clearSandboxCodeServer(): void {
@@ -117,8 +119,10 @@ export class DurableObjectSandboxStorage implements SandboxStorage {
     this.sandboxes.clearSandboxCodeServerUrl();
   }
 
-  async updateSandboxVnc(url: string, password: string): Promise<void> {
-    this.sandboxes.updateSandboxVnc(url, await this.encryptIfConfigured(password));
+  updateSandboxVnc(url: string, password: string): void | Promise<void> {
+    return this.persistEncrypted(password, (stored) =>
+      this.sandboxes.updateSandboxVnc(url, stored)
+    );
   }
 
   clearSandboxVnc(): void {
@@ -137,22 +141,41 @@ export class DurableObjectSandboxStorage implements SandboxStorage {
     this.sandboxes.clearSandboxTunnelUrls();
   }
 
-  async updateSandboxTtyd(url: string, token: string): Promise<void> {
-    this.sandboxes.updateSandboxTtyd(url, await this.encryptIfConfigured(token));
+  updateSandboxTtyd(url: string, token: string): void | Promise<void> {
+    return this.persistEncrypted(token, (stored) => this.sandboxes.updateSandboxTtyd(url, stored));
   }
 
   clearSandboxTtyd(): void {
     this.sandboxes.clearSandboxTtyd();
   }
 
-  private async encryptIfConfigured(value: string): Promise<string> {
-    return this.encryptionKey ? encryptToken(value, this.encryptionKey) : value;
+  /**
+   * Encrypt-at-rest for access secrets. The keyless branch persists
+   * synchronously so callers that do not await still observe the write in the
+   * same turn, matching the pre-extraction literal's ordering.
+   */
+  private persistEncrypted(value: string, persist: (stored: string) => void): void | Promise<void> {
+    if (!this.encryptionKey) {
+      persist(value);
+      return;
+    }
+    return encryptToken(value, this.encryptionKey).then(persist);
   }
 }
 
+/**
+ * The slice of the socket registry the lifecycle manager's port needs —
+ * narrowed like the messenger's `DeliverySockets` so lifecycle wiring cannot
+ * grow dependencies on admission, identity, or teardown operations.
+ */
+type LifecycleSockets = Pick<
+  SessionWebSocketManager,
+  "getSandboxSocket" | "detachSandboxSocket" | "send" | "getConnectedClientCount"
+>;
+
 /** The lifecycle manager's view of the session socket registry. */
 export class LifecycleSocketAdapter implements WebSocketManager {
-  constructor(private readonly sockets: SessionWebSocketManager) {}
+  constructor(private readonly sockets: LifecycleSockets) {}
 
   getSandboxWebSocket(): WebSocket | null {
     return this.sockets.getSandboxSocket();

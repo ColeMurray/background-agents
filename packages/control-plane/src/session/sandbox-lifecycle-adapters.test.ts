@@ -63,11 +63,15 @@ describe("DurableObjectSandboxStorage", () => {
     }
   });
 
-  it("stores secrets as-is when no key is configured", async () => {
+  it("stores secrets as-is and synchronously when no key is configured", () => {
     const { storage, sandboxes } = createStorage();
 
-    await storage.updateSandboxCodeServer("https://cs.example", "cs-secret");
+    // No await before asserting: the keyless branch must persist before the
+    // call returns, so a same-turn caller that does not await still observes
+    // the write (and a later clear cannot be overwritten by a deferred store).
+    const result = storage.updateSandboxCodeServer("https://cs.example", "cs-secret");
 
+    expect(result).toBeUndefined();
     expect(sandboxes.updateSandboxCodeServer).toHaveBeenCalledWith(
       "https://cs.example",
       "cs-secret"
