@@ -20,6 +20,11 @@ function createHandler() {
   const terminalMessageProjection = {
     flushPending: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
+  const callbackService = {
+    notifyActivityHeartbeat: vi
+      .fn<(messageId: string) => Promise<boolean>>()
+      .mockResolvedValue(true),
+  };
   const alarmScheduler = {
     schedule: vi.fn<(timestamp: number) => Promise<void>>().mockResolvedValue(),
     cancel: vi.fn<() => Promise<void>>().mockResolvedValue(),
@@ -39,6 +44,7 @@ function createHandler() {
     messageQueue,
     lifecycleManager,
     terminalMessageProjection,
+    callbackService,
     alarmScheduler,
     getExecutionTimeoutMs: () => 1000,
     now,
@@ -51,6 +57,7 @@ function createHandler() {
     messageQueue,
     lifecycleManager,
     terminalMessageProjection,
+    callbackService,
     alarmScheduler,
     now,
     log,
@@ -59,14 +66,22 @@ function createHandler() {
 
 describe("createAlarmHandler", () => {
   it("delegates to lifecycle manager when no processing message exists", async () => {
-    const { handler, repository, messageQueue, lifecycleManager, alarmScheduler, now } =
-      createHandler();
+    const {
+      handler,
+      repository,
+      messageQueue,
+      lifecycleManager,
+      callbackService,
+      alarmScheduler,
+      now,
+    } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
 
     await handler.handle();
 
     expect(now).not.toHaveBeenCalled();
     expect(alarmScheduler.schedule).not.toHaveBeenCalled();
+    expect(callbackService.notifyActivityHeartbeat).not.toHaveBeenCalled();
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
     expect(messageQueue.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
@@ -98,6 +113,33 @@ describe("createAlarmHandler", () => {
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
     expect(alarmScheduler.schedule).toHaveBeenCalledWith(2500);
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules another activity refresh while a Slack message is still processing", async () => {
+    const { handler, repository, callbackService, alarmScheduler } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 1500,
+    });
+
+    await handler.handle();
+
+    expect(callbackService.notifyActivityHeartbeat).toHaveBeenCalledWith("message-1");
+    expect(alarmScheduler.schedule).toHaveBeenCalledWith(92_000);
+  });
+
+  it("does not re-arm activity when the processing message is not from Slack", async () => {
+    const { handler, repository, callbackService, alarmScheduler } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 1500,
+    });
+    callbackService.notifyActivityHeartbeat.mockResolvedValue(false);
+
+    await handler.handle();
+
+    expect(alarmScheduler.schedule).toHaveBeenCalledTimes(1);
+    expect(alarmScheduler.schedule).toHaveBeenCalledWith(2500);
   });
 
   it("keeps the execution deadline ahead of a later lifecycle check", async () => {
@@ -139,11 +181,16 @@ describe("createAlarmHandler", () => {
       resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
 
+    const callbackService = {
+      notifyActivityHeartbeat: vi.fn(async () => true),
+    };
+
     const handler = createAlarmHandler({
       repository: repository as unknown as MessageRepository,
       messageQueue,
       lifecycleManager,
       terminalMessageProjection: { flushPending: vi.fn(async () => {}) },
+      callbackService,
       alarmScheduler,
       getExecutionTimeoutMs: () => 1000,
       now: () => 2000,

@@ -5,6 +5,8 @@ import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
 import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
+import type { CallbackNotificationService } from "../callback-notification-service";
+import { SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS } from "../activity-heartbeat";
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
@@ -16,6 +18,7 @@ export interface AlarmHandlerDeps {
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
+  callbackService: Pick<CallbackNotificationService, "notifyActivityHeartbeat">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
@@ -62,10 +65,17 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
           });
           await deps.messageQueue.failStuckProcessingMessage();
         } else {
-          // An earlier lifecycle alarm has consumed the Durable Object's single
-          // alarm slot. Reassert this message's deadline before lifecycle handling
-          // schedules its next check so stuck-message recovery cannot be delayed.
+          // An earlier lifecycle or activity alarm has consumed the Durable
+          // Object's single alarm slot. Reassert the execution deadline first,
+          // then schedule another Slack refresh only when this message owns a
+          // valid Slack callback.
           await deps.alarmScheduler.schedule(processing.started_at + executionTimeoutMs);
+          const continueActivityHeartbeat = await deps.callbackService.notifyActivityHeartbeat(
+            processing.id
+          );
+          if (continueActivityHeartbeat) {
+            await deps.alarmScheduler.schedule(now + SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS);
+          }
         }
       }
 
