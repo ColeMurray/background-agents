@@ -2,6 +2,7 @@ import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sess
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { SessionRepositoryRow, SessionRow } from "./types";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 /** Data for upserting a session. */
 export interface UpsertSessionData {
@@ -79,7 +80,7 @@ export class SessionCoreRepository {
       data.repoOwner,
       data.repoName,
       data.repoId ?? null,
-      data.baseBranch ?? (hasRepoOwner ? "main" : null),
+      data.baseBranch ?? (hasRepoOwner ? DEFAULT_BASE_BRANCH : null),
       data.model,
       data.reasoningEffort ?? null,
       data.status,
