@@ -129,13 +129,17 @@ export default function Home() {
       const legacyValue = localStorage.getItem(LEGACY_LAST_PROVIDER_SELECTIONS_STORAGE_KEY);
       storedProviderSelections = parseStoredProviderSelections(legacyValue);
       if (legacyValue !== null) {
-        if (storedProviderSelections) {
-          localStorage.setItem(
-            LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
-            JSON.stringify(storedProviderSelections)
-          );
+        try {
+          if (storedProviderSelections) {
+            localStorage.setItem(
+              LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
+              JSON.stringify(storedProviderSelections)
+            );
+          }
+          localStorage.removeItem(LEGACY_LAST_PROVIDER_SELECTIONS_STORAGE_KEY);
+        } catch {
+          // Persistence is best-effort; the recovered selection still hydrates this visit.
         }
-        localStorage.removeItem(LEGACY_LAST_PROVIDER_SELECTIONS_STORAGE_KEY);
       }
     }
     setStoredPreference({

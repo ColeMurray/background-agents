@@ -216,6 +216,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -556,6 +557,23 @@ describe("Home", () => {
 
     await waitFor(() => expect(sessionCreateBody()).toMatchObject({ providerSelections: {} }));
     expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}");
+  });
+
+  it("hydrates when migrating provider selections cannot write to storage", async () => {
+    localStorage.setItem("open-inspect-last-provider-selections", "{}");
+    const originalSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (key === "open-inspect-last-provider-selections:v1") {
+        throw new DOMException("Storage denied", "SecurityError");
+      }
+      return originalSetItem.call(this, key, value);
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+
+    expect(screen.getByRole("button", { name: /send/i })).toBeEnabled();
   });
 
   it("waits for environments to load before restoring a stored environment", async () => {
