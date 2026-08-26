@@ -4,6 +4,7 @@ import {
 } from "@open-inspect/shared/types/github-identity";
 import { z } from "zod";
 import { encryptToken } from "../auth/crypto";
+import { requireTokenEncryptionKey } from "../env-validation";
 import type {
   GitHubAccountSelection,
   GitHubCredentialAuthority,
@@ -168,11 +169,9 @@ export async function resolveGitHubEnrichment(
 
   const [user, tokens] = await Promise.all([
     userStore.getUserById(userId),
-    env.TOKEN_ENCRYPTION_KEY
-      ? new UserScmTokenStore(db, env.TOKEN_ENCRYPTION_KEY).getEncryptedTokens(
-          githubIdentity.providerUserId
-        )
-      : null,
+    new UserScmTokenStore(db, requireTokenEncryptionKey(env)).getEncryptedTokens(
+      githubIdentity.providerUserId
+    ),
   ]);
 
   const authorIdentity = resolveGitAuthorIdentity({

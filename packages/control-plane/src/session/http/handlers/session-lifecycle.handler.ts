@@ -40,7 +40,7 @@ export interface SessionLifecycleHandlerDeps {
   messageRepository: MessageRepository;
   participantRepository: ParticipantRepository;
   getDurableObjectId: () => string;
-  tokenEncryptionKey?: string;
+  tokenEncryptionKey: string;
   encryptToken: (token: string, encryptionKey: string) => Promise<string>;
   validateReasoningEffort: (model: string, effort: string | undefined) => string | null;
   generateId: (bytes?: number) => string;
@@ -202,7 +202,7 @@ export function createSessionLifecycleHandler(
       }
 
       let encryptedToken = body.scmTokenEncrypted ?? null;
-      if (body.scmToken && deps.tokenEncryptionKey) {
+      if (body.scmToken) {
         try {
           encryptedToken = await deps.encryptToken(body.scmToken, deps.tokenEncryptionKey);
           log.debug("Encrypted SCM token for storage");

@@ -3,7 +3,7 @@
  *
  * Misconfigured deployments fail loudly at the first touch instead of running
  * degraded (the #1602 posture). Secrets-at-rest encryption in particular must
- * never silently fall back to plaintext: Terraform requires the key, so its
+ * never silently fall back to plaintext: Terraform requires the keys, so their
  * absence always means a broken deployment.
  */
 
@@ -20,11 +20,10 @@ const KEY_GENERATION_HINT = "generate with: openssl rand -base64 32";
  * otherwise survive graph construction and throw at the first secret write —
  * mid-spawn — while a short key would silently downgrade to AES-128/192.
  */
-export function requireRepoSecretsEncryptionKey(env: Env): string {
-  const key = env.REPO_SECRETS_ENCRYPTION_KEY;
+function requireEncryptionKey(key: string | undefined, name: string, protects: string): string {
   if (!key) {
     throw new Error(
-      "REPO_SECRETS_ENCRYPTION_KEY is not configured; refusing to operate on secrets without encryption at rest"
+      `${name} is not configured; refusing to operate on ${protects} without encryption at rest`
     );
   }
   let decodedBytes: number | null = null;
@@ -36,12 +35,24 @@ export function requireRepoSecretsEncryptionKey(env: Env): string {
     }
   }
   if (decodedBytes === null) {
-    throw new Error(`REPO_SECRETS_ENCRYPTION_KEY is not valid base64 (${KEY_GENERATION_HINT})`);
+    throw new Error(`${name} is not valid base64 (${KEY_GENERATION_HINT})`);
   }
   if (decodedBytes !== AES_256_KEY_BYTES) {
     throw new Error(
-      `REPO_SECRETS_ENCRYPTION_KEY must decode to ${AES_256_KEY_BYTES} bytes for AES-256, got ${decodedBytes} (${KEY_GENERATION_HINT})`
+      `${name} must decode to ${AES_256_KEY_BYTES} bytes for AES-256, got ${decodedBytes} (${KEY_GENERATION_HINT})`
     );
   }
   return key;
+}
+
+export function requireRepoSecretsEncryptionKey(env: Env): string {
+  return requireEncryptionKey(
+    env.REPO_SECRETS_ENCRYPTION_KEY,
+    "REPO_SECRETS_ENCRYPTION_KEY",
+    "secrets"
+  );
+}
+
+export function requireTokenEncryptionKey(env: Env): string {
+  return requireEncryptionKey(env.TOKEN_ENCRYPTION_KEY, "TOKEN_ENCRYPTION_KEY", "OAuth tokens");
 }
