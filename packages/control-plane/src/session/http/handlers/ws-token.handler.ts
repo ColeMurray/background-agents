@@ -1,6 +1,5 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRepository } from "../../participant-repository";
-import type { ParticipantService } from "../../participant-service";
 import { z } from "zod";
 
 const nullableOptionalString = z.string().nullable().optional();
@@ -27,7 +26,6 @@ type GenerateWsTokenRequest = z.infer<typeof generateWsTokenRequestSchema>;
 export class WsTokenHandler {
   constructor(
     private readonly repository: ParticipantRepository,
-    private readonly participants: ParticipantService,
     private readonly generateId: (bytes?: number) => string,
     private readonly hashToken: (token: string) => Promise<string>,
     private readonly now: () => number = Date.now
@@ -52,7 +50,7 @@ export class WsTokenHandler {
     }
 
     const now = this.now();
-    let participant = this.participants.getByUserId(body.userId);
+    let participant = this.repository.getParticipantByUserId(body.userId);
 
     if (participant) {
       // Only accept client tokens if they're newer than what we have in the DB.
@@ -102,7 +100,7 @@ export class WsTokenHandler {
         role: "member",
         joinedAt: now,
       });
-      participant = this.participants.getByUserId(body.userId)!;
+      participant = this.repository.getParticipantByUserId(body.userId)!;
     }
 
     const plainToken = this.generateId(32);

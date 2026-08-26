@@ -7,6 +7,7 @@ import {
   resolveBrowserGitHubEnrichment,
   resolveGitAuthorIdentity,
   resolveGitHubEnrichment,
+  resolveGitHubEnrichmentForRequest,
 } from "./identity";
 
 describe("resolveGitAuthorIdentity", () => {
@@ -194,6 +195,24 @@ describe("resolveGitHubEnrichment", () => {
     const enrichment = await resolveGitHubEnrichment(env, env.DB, store, "user-1");
 
     expect(enrichment?.email).toBe("42+pm-dev@users.noreply.github.com");
+  });
+});
+
+describe("resolveGitHubEnrichmentForRequest", () => {
+  it("rejects invalid token-encryption key material before any authority branch runs", async () => {
+    const env = { DB: {}, TOKEN_ENCRYPTION_KEY: "dG9vc2hvcnQ=" } as unknown as Env;
+    const store = { getIdentitiesForUser: vi.fn(), getUserById: vi.fn() } as unknown as UserStore;
+    const authority = {
+      kind: "browser_session",
+      accountClient: {},
+      githubAccount: null,
+    } as unknown as Parameters<typeof resolveGitHubEnrichmentForRequest>[4];
+
+    await expect(
+      resolveGitHubEnrichmentForRequest(env, env.DB, store, "user-1", authority)
+    ).rejects.toThrow(/TOKEN_ENCRYPTION_KEY must decode to 32 bytes/);
+    // The guard fires before either branch touches identity or account state.
+    expect(store.getIdentitiesForUser).not.toHaveBeenCalled();
   });
 });
 

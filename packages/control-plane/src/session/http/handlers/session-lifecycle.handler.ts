@@ -8,7 +8,6 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { ParticipantRepository } from "../../participant-repository";
-import type { ParticipantService } from "../../participant-service";
 import type { SessionStatusService } from "../../session-status-service";
 import type { SessionTitleService } from "../../title-service";
 import { resolvePublicSessionId } from "../../public-session-id";
@@ -132,12 +131,10 @@ export class SessionLifecycleHandler {
     private readonly sandboxRepository: SandboxRepository,
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
-    private readonly participants: ParticipantService,
     private readonly statusService: SessionStatusService,
     private readonly titleService: SessionTitleService,
     private readonly sockets: WebSocketManager,
     private readonly durableObjectId: string,
-    private readonly log: Logger,
     private readonly tokenEncryptionKey: string,
     private readonly scheduleWarmSandbox: () => void,
     private readonly cancelSession: () => Promise<void>,
@@ -200,11 +197,7 @@ export class SessionLifecycleHandler {
       });
     }
 
-    const reasoningEffort = validateReasoningEffort(
-      model,
-      body.reasoningEffort ?? undefined,
-      this.log
-    );
+    const reasoningEffort = validateReasoningEffort(model, body.reasoningEffort ?? undefined, log);
     const baseBranch = hasRepoOwner ? body.branch || body.defaultBranch || "main" : null;
 
     const repositories = body.repositories ?? [];
@@ -368,7 +361,7 @@ export class SessionLifecycleHandler {
       return Response.json({ error: normalizedTitle.error }, { status: 400 });
     }
 
-    const participant = this.participants.getByUserId(body.userId);
+    const participant = this.participantRepository.getParticipantByUserId(body.userId);
     if (!participant) {
       return Response.json(
         { error: "Not authorized to update the session title" },
@@ -407,7 +400,7 @@ export class SessionLifecycleHandler {
       return Response.json({ error: "userId is required" }, { status: 400 });
     }
 
-    const participant = this.participants.getByUserId(body.userId);
+    const participant = this.participantRepository.getParticipantByUserId(body.userId);
     if (!participant) {
       return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
     }
@@ -498,7 +491,7 @@ export class SessionLifecycleHandler {
       return Response.json({ error: "userId is required" }, { status: 400 });
     }
 
-    const participant = this.participants.getByUserId(body.userId);
+    const participant = this.participantRepository.getParticipantByUserId(body.userId);
     if (!participant) {
       return Response.json({ error: "Not authorized to unarchive this session" }, { status: 403 });
     }

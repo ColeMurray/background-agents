@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { SessionLifecycleHandler } from "./session-lifecycle.handler";
-import type { ParticipantService } from "../../participant-service";
 import type { SessionTitleService } from "../../title-service";
 import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatusService } from "../../session-status-service";
@@ -93,6 +92,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
+  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const repository = {
     upsertSession: vi.fn(),
     replaceSessionRepositories: vi.fn(),
@@ -101,6 +101,7 @@ function createHandler() {
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 0),
     getSession,
+    getParticipantByUserId,
   };
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const updateSandboxStatus = vi.fn();
@@ -120,7 +121,6 @@ function createHandler() {
     error: vi.fn(),
     child: vi.fn(),
   } as unknown as Logger;
-  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
@@ -139,7 +139,6 @@ function createHandler() {
     sandboxRepository,
     repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
-    { getByUserId: getParticipantByUserId } as unknown as ParticipantService,
     statusService,
     { applySessionTitleUpdate } as unknown as SessionTitleService,
     {
@@ -149,7 +148,6 @@ function createHandler() {
       getConnectedClientCount: vi.fn(() => 0),
     } as unknown as WebSocketManager,
     "session-do-id",
-    log,
     "encryption-key",
     scheduleWarmSandbox,
     cancelSession,

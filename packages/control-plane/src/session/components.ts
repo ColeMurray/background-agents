@@ -545,12 +545,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const attachmentsHandler = new AttachmentsHandler(attachmentRepository, log);
 
-  const wsTokenHandler = new WsTokenHandler(
-    participantRepository,
-    participantService,
-    generateId,
-    hashToken
-  );
+  const wsTokenHandler = new WsTokenHandler(participantRepository, generateId, hashToken);
 
   const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
   const sessionLifecycleHandler = new SessionLifecycleHandler(
@@ -558,12 +553,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sandboxRepository,
     messageRepository,
     participantRepository,
-    participantService,
     statusService,
     titleService,
     lifecycleWsManager,
     durableObjectId,
-    log,
     tokenEncryptionKey,
     () =>
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {

@@ -206,6 +206,9 @@ export async function resolveGitHubEnrichmentForRequest(
   userId: string,
   authority: GitHubCredentialAuthority
 ): Promise<GitHubEnrichment | null> {
+  // One invariant for the whole boundary: both authorities encrypt with
+  // validated AES-256 material, regardless of which branch runs.
+  const tokenEncryptionKey = requireTokenEncryptionKey(env);
   if (authority.kind === "legacy") {
     return resolveGitHubEnrichment(env, db, userStore, userId);
   }
@@ -216,6 +219,6 @@ export async function resolveGitHubEnrichmentForRequest(
   return resolveBrowserGitHubEnrichment(userId, githubAccount, {
     getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
     getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
-    encryptAccessToken: (accessToken) => encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY),
+    encryptAccessToken: (accessToken) => encryptToken(accessToken, tokenEncryptionKey),
   });
 }

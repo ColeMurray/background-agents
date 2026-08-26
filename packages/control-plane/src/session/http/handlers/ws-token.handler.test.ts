@@ -3,7 +3,6 @@ import type { Logger } from "../../../logger";
 import type { ParticipantRow } from "../../types";
 import { WsTokenHandler } from "./ws-token.handler";
 import type { ParticipantRepository } from "../../participant-repository";
-import type { ParticipantService } from "../../participant-service";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -26,13 +25,14 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 }
 
 function createHandler() {
+  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const repository = {
     createParticipant: vi.fn(),
     updateParticipantCoalesce: vi.fn(),
     updateParticipantWsToken: vi.fn(),
+    getParticipantByUserId,
   };
 
-  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const generateId = vi
     .fn<(bytes?: number) => string>()
     .mockImplementation((bytes?: number) => (bytes === 32 ? "plain-token" : "participant-1"));
@@ -48,7 +48,6 @@ function createHandler() {
 
   const wsTokenHandler = new WsTokenHandler(
     repository as unknown as ParticipantRepository,
-    { getByUserId: getParticipantByUserId } as unknown as ParticipantService,
     generateId,
     hashToken,
     now
