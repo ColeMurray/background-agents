@@ -1,4 +1,4 @@
-import { runInSessionDO, ctxOf } from "./session-do-access";
+import { runInSessionDO } from "./session-do-access";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/sandbox/lifecycle/manager";
 import type { SessionDO } from "../../src/session/durable-object";
@@ -15,8 +15,8 @@ const CONNECTING_TIMEOUT_BUFFER_MS = 1_000;
  */
 async function parkSandboxPastConnectingTimeout(stub: DurableObjectStub): Promise<void> {
   await waitForSandboxStatus(stub, "failed");
-  await runInSessionDO(stub, (instance: SessionDO) => {
-    ctxOf(instance).storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       // modal_object_id stays null, so terminating never calls the provider.
       "UPDATE sandbox SET status = 'connecting', modal_object_id = NULL, created_at = ?",
       Date.now() -

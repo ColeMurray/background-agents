@@ -364,15 +364,15 @@ describe("Scheduler event handling (integration)", () => {
         })
       );
 
+      // The active run's firing key lives on its invocation: seed it there so
+      // this proves per-key scoping, not merely keyed-vs-unkeyed.
       await seedRun(
-        // NOTE: runs no longer carry concurrency_key (it lives on the
-        // invocation); this seed never expressed one, so the "unrelated
-        // active run" below is unkeyed either way.
         makeRunRow(automationId, {
           status: "running",
           session_id: "sess-existing",
           started_at: Date.now(),
-        })
+        }),
+        { concurrencyKey: "sentry_issue:42" }
       );
 
       const event = makeSentryEvent(automationId, {

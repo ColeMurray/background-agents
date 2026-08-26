@@ -782,7 +782,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       "message-linear"
     );
     const { ws, messages } = await openClientWs(name, { subscribe: true });
-    const subscribed = messages!.find((message) => message.type === "subscribed") as {
+    const subscribed = messages.find((message) => message.type === "subscribed") as {
       promptQueue: Array<{ messageId: string }>;
     };
     expect(subscribed.promptQueue).toContainEqual(
@@ -883,7 +883,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       userId: "slack:U123",
       canonicalUserId: "canonical-bot",
     });
-    const subscribed = bot.messages!.find((message) => message.type === "subscribed") as {
+    const subscribed = bot.messages.find((message) => message.type === "subscribed") as {
       participant: { userId: string };
     };
     expect(subscribed.participant.userId).toBe("canonical-bot");

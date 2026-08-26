@@ -24,20 +24,14 @@ export interface SessionDOInternals {
  * the adapter class, which sits behind the only-index-imports-it boundary),
  * so every test stub arrives as `DurableObjectStub<undefined>`. This seam is
  * the one place that asserts what the SESSION namespace actually hosts.
+ * Callbacks that need storage use the `state` parameter — it is the same
+ * object as the DO's protected `ctx`, supplied by the test API itself.
  */
 export function runInSessionDO<R>(
   stub: DurableObjectStub,
   callback: (instance: SessionDO, state: DurableObjectState) => R | Promise<R>
 ): Promise<R> {
   return runInDurableObject(stub as unknown as DurableObjectStub<SessionDO>, callback);
-}
-
-/**
- * The DO's `ctx` for storage seeding/assertions. Protected on the
- * `DurableObject` base class, so tests go through this single cast.
- */
-export function ctxOf(instance: SessionDO): DurableObjectState {
-  return (instance as unknown as { ctx: DurableObjectState }).ctx;
 }
 
 /** Initialize (idempotent) and expose the DO's component graph. */

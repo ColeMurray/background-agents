@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
-import { runInSessionDO, ctxOf } from "./session-do-access";
+import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
@@ -546,8 +546,8 @@ describe("Child session operations (list, get, cancel)", () => {
         "SELECT id FROM messages WHERE status = 'processing'"
       );
       if (!processing) throw new Error("Expected processing parent prompt");
-      await runInSessionDO(parentStub, (instance: SessionDO) => {
-        ctxOf(instance).storage.sql.exec(
+      await runInSessionDO(parentStub, (instance: SessionDO, state) => {
+        state.storage.sql.exec(
           `INSERT INTO participants (
              id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email,
              role, joined_at
@@ -567,8 +567,8 @@ describe("Child session operations (list, get, cancel)", () => {
         "SELECT id FROM participants WHERE user_id = 'slack:U2'"
       );
       if (!secondUser) throw new Error("Expected second participant");
-      await runInSessionDO(parentStub, (instance: SessionDO) => {
-        ctxOf(instance).storage.sql.exec(
+      await runInSessionDO(parentStub, (instance: SessionDO, state) => {
+        state.storage.sql.exec(
           "UPDATE messages SET author_id = ? WHERE id = ?",
           secondUser.id,
           processing.id

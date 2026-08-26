@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env, runDurableObjectAlarm } from "cloudflare:test";
-import { ctxOf, runInSessionDO } from "./session-do-access";
+import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { cleanD1Tables } from "./cleanup";
 import {
@@ -28,8 +28,8 @@ async function evictSessionDO(sessionName: string): Promise<DurableObjectStub> {
   ).resolves.toBe(INSTANCE_MARKER);
 
   await expect(
-    runInSessionDO(stub, (instance: SessionDO) => {
-      ctxOf(instance).abort("test: force eviction");
+    runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.abort("test: force eviction");
     })
   ).rejects.toThrow();
 
@@ -47,11 +47,11 @@ async function deliverOnRestoredSocket(
   message: unknown,
   until: (frame: Record<string, unknown>) => boolean
 ): Promise<Record<string, unknown>[]> {
-  return runInSessionDO(stub, async (instance: SessionDO) => {
+  return runInSessionDO(stub, async (instance: SessionDO, state) => {
     const pair = new WebSocketPair();
     const clientSocket = pair[0];
     const restoredSocket = pair[1];
-    ctxOf(instance).acceptWebSocket(restoredSocket, [`wsid:${wsId}`]);
+    state.acceptWebSocket(restoredSocket, [`wsid:${wsId}`]);
     clientSocket.accept();
 
     const received: Record<string, unknown>[] = [];
@@ -141,8 +141,8 @@ describe("SessionDO eviction and hibernation restore", () => {
     });
 
     const restored = await evictSessionDO(sessionName);
-    await runInSessionDO(restored, (instance: SessionDO) =>
-      ctxOf(instance).storage.setAlarm(Date.now() + 60_000)
+    await runInSessionDO(restored, (instance: SessionDO, state) =>
+      state.storage.setAlarm(Date.now() + 60_000)
     );
 
     await expect(runDurableObjectAlarm(restored)).resolves.toBe(true);

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
-import { componentsOf, runInSessionDO, ctxOf } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 import { encryptToken } from "../../src/auth/crypto";
 import {
   collectMessages,
@@ -90,8 +90,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
         sandboxId: SANDBOX_ID,
         status: "ready",
       });
-      await runInSessionDO(stub, (instance: SessionDO) => {
-        ctxOf(instance).storage.sql.exec("UPDATE session SET status = ?", status);
+      await runInSessionDO(stub, (instance: SessionDO, state) => {
+        state.storage.sql.exec("UPDATE session SET status = ?", status);
       });
 
       const { ws, response } = await openSandboxWs(name, {
@@ -114,8 +114,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
         sandboxId: SANDBOX_ID,
         status: "connecting",
       });
-      await runInSessionDO(stub, (instance: SessionDO) => {
-        ctxOf(instance).storage.sql.exec("UPDATE session SET status = ?", status);
+      await runInSessionDO(stub, (instance: SessionDO, state) => {
+        state.storage.sql.exec("UPDATE session SET status = ?", status);
       });
 
       const { ws, response } = await openSandboxWs(name, {
@@ -142,14 +142,14 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     stub: DurableObjectStub,
     ...statements: string[]
   ): Promise<void> {
-    await runInSessionDO(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
       const repository = componentsOf(instance).sandboxRepository;
       const readSandbox = repository.getSandbox.bind(repository);
       vi.spyOn(repository, "getSandbox").mockImplementation(() => {
         const sandbox = readSandbox();
         queueMicrotask(() => {
           for (const statement of statements) {
-            ctxOf(instance).storage.sql.exec(statement);
+            state.storage.sql.exec(statement);
           }
         });
         return sandbox;
@@ -307,8 +307,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
       encryptToken("terminal-token", env.REPO_SECRETS_ENCRYPTION_KEY!),
     ]);
-    await runInSessionDO(stub, (instance: SessionDO) => {
-      ctxOf(instance).storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         `UPDATE sandbox
          SET code_server_url = ?, code_server_password = ?, vnc_url = ?, vnc_password = ?,
              ttyd_url = ?, ttyd_token = ?`,
@@ -452,8 +452,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     await closed;
 
     const oldHeartbeat = Date.now() - 10 * 60 * 1000;
-    await runInSessionDO(stub, (instance: SessionDO) => {
-      ctxOf(instance).storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
     });
 
     const { ws: reconnectedWs, response } = await openSandboxWs(name, {
@@ -610,7 +610,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       subscribe: true,
       userId: "user-replay",
     });
-    const subscribed = replayMessages!.find((message) => message.type === "subscribed") as
+    const subscribed = replayMessages.find((message) => message.type === "subscribed") as
       | { timeline: { events: Array<{ event: unknown }> } }
       | undefined;
     expect(subscribed?.timeline.events.map(({ event }) => event)).toEqual([

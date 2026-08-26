@@ -3,7 +3,7 @@ import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import type { Env } from "../../src/types";
 import { createSessionRuntime } from "../../src/session/components";
-import { componentsOf, runInSessionDO, ctxOf } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 
 /**
  * The composition root is fail-fast: both provider factories construct at
@@ -15,7 +15,7 @@ describe("createSessionRuntime", () => {
   async function buildWithEnv(overrides: Partial<Record<keyof Env, string | undefined>>) {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-eager-${crypto.randomUUID()}`));
 
-    return runInSessionDO(stub, (instance: SessionDO) => {
+    return runInSessionDO(stub, (instance: SessionDO, state) => {
       // Apply the schema first (idempotent init), matching production order.
       componentsOf(instance);
 
@@ -28,8 +28,8 @@ describe("createSessionRuntime", () => {
       try {
         createSessionRuntime(
           {
-            ctx: ctxOf(instance),
-            sql: ctxOf(instance).storage.sql,
+            ctx: state,
+            sql: state.storage.sql,
             db: null,
           },
           doctored

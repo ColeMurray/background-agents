@@ -49,7 +49,7 @@ export default defineConfig({
           // otherwise defaults its runner to today's compatibility date.
           compatibilityDate: "2024-09-23",
           compatibilityFlags: ["nodejs_compat"],
-          async outboundService(request) {
+          async outboundService(request: Request) {
             const url = new URL(request.url);
             if (url.hostname.endsWith(".modal.run")) {
               return new Response("Modal is unavailable in integration tests", { status: 404 });
