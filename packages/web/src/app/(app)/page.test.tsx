@@ -511,7 +511,7 @@ describe("Home", () => {
     fireEvent.keyDown(authenticationMenu, { key: "ArrowRight" });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Team ChatGPT" }));
 
-    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe(
+    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(
       JSON.stringify({ openai: { mode: "provider_account", accountId } })
     );
 
@@ -551,7 +551,8 @@ describe("Home", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(sessionCreateBody()).toMatchObject({ providerSelections: {} }));
-    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe("{}");
+    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}");
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBeNull();
   });
 
   it("waits for environments to load before restoring a stored environment", async () => {
