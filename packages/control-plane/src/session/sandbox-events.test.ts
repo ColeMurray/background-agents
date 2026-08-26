@@ -779,7 +779,7 @@ describe("SessionSandboxEventProcessor", () => {
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
     });
 
-    it("does not reset activity timer on heartbeat", async () => {
+    it("does not reset activity timer on heartbeat while idle", async () => {
       const h = createProcessor();
       await h.processor.processSandboxEvent({
         type: "heartbeat",
@@ -789,6 +789,20 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.updateLastActivity).not.toHaveBeenCalled();
+    });
+
+    it("resets activity timer on heartbeat while a message is processing", async () => {
+      const h = createProcessor();
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+
+      await h.processor.processSandboxEvent({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        status: "ready",
+        timestamp: 1000,
+      });
+
+      expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
     });
 
     it("does not reset activity timer on token", async () => {

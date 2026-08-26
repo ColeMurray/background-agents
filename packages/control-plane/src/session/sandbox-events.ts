@@ -78,6 +78,12 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "heartbeat") {
       this.sandboxRepository.updateSandboxHeartbeat(now);
+      // A quiet tool call may emit no events for longer than the inactivity
+      // timeout. While its message is processing, the bridge heartbeat proves
+      // the sandbox is still occupied and should renew its activity timestamp.
+      if (this.messageRepository.getProcessingMessage() !== null) {
+        this.updateLastActivity(now);
+      }
       return;
     }
 
