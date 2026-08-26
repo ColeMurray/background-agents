@@ -49,6 +49,74 @@ export default defineConfig({
           // otherwise defaults its runner to today's compatibility date.
           compatibilityDate: "2024-09-23",
           compatibilityFlags: ["nodejs_compat"],
+          async outboundService(request) {
+            const url = new URL(request.url);
+            if (url.hostname.endsWith(".modal.run")) {
+              return new Response("Modal is unavailable in integration tests", { status: 404 });
+            }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
+              return Response.json({
+                device_auth_id: "integration-device",
+                user_code: "TEST-CODE",
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/token") {
+              return Response.json({
+                authorization_code: "integration-authorization",
+                code_verifier: "integration-verifier",
+              });
+            }
+            if (url.href === "https://auth.openai.com/oauth/token") {
+              const body = await request.text();
+              if (
+                !body.includes("integration-openai") &&
+                !body.includes("integration-authorization")
+              ) {
+                throw new Error("Unexpected OpenAI integration-test credential");
+              }
+              return Response.json({
+                id_token:
+                  "eyJhbGciOiJub25lIn0.eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LWludGVncmF0aW9uIn0.",
+                access_token: "integration-openai-access-token",
+                refresh_token: "integration-openai-rotated-refresh",
+                expires_in: 3600,
+              });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/device/code") {
+              return Response.json({
+                device_code: "integration-xai-device",
+                user_code: "XAI-CODE",
+                verification_uri: "https://accounts.x.ai/oauth2/device",
+                verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=XAI-CODE",
+                expires_in: 300,
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/userinfo") {
+              return Response.json({ sub: "xai-integration" });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/token") {
+              const body = await request.text();
+              if (body.includes("integration-xai-device")) {
+                return Response.json({
+                  id_token: "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4YWktaW50ZWdyYXRpb24ifQ.",
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-refresh-token",
+                  expires_in: 3600,
+                });
+              }
+              if (body.includes("integration-xai")) {
+                return Response.json({
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-rotated-refresh",
+                  expires_in: 3600,
+                });
+              }
+              throw new Error("Unexpected xAI integration-test credential");
+            }
+            throw new Error(`Unexpected outbound request: ${request.url}`);
+          },
           queueProducers: ["IMAGE_BUILD_FINALIZATION_QUEUE"],
           bindings: {
             IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
@@ -67,6 +135,7 @@ export default defineConfig({
             // inside a swallowed waitUntil.
             TOKEN_ENCRYPTION_KEY: generateTestEncryptionKey(),
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            PROVIDER_ACCOUNTS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             DEPLOYMENT_NAME: "integration-test",
             MODAL_API_SECRET: "test-modal-api-secret",
             MODAL_WORKSPACE: "test-workspace",

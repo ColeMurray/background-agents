@@ -19,7 +19,7 @@ import type {
   GitHubAutomationEvent,
   GitHubPullRequestEventFacts,
 } from "@open-inspect/shared/triggers";
-import type { PullRequestStatus } from "@open-inspect/shared";
+import type { PullRequestStatus } from "@open-inspect/shared/types/artifacts";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -36,7 +36,7 @@ export interface SessionArtifactSummary {
 }
 
 /** The slice of session-index state the processor needs. */
-export interface PullRequestLifecycleSessions {
+interface PullRequestLifecycleSessions {
   /** Primary-repo identity for the legacy identity-less-artifact convention. */
   get(id: string): Promise<{ repoOwner: string | null; repoName: string | null } | null>;
   isRepositoryAssociated(sessionId: string, repoOwner: string, repoName: string): Promise<boolean>;

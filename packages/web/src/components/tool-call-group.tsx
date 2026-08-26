@@ -6,6 +6,7 @@ import { formatSessionEventTime } from "@/lib/time";
 import { formatToolGroup } from "@/lib/tool-formatters";
 import { toolCallKey } from "@/lib/timeline-items";
 import { ToolCallItem } from "./tool-call-item";
+import { TimelineRowContent } from "./timeline-row-content";
 import {
   ChevronRightIcon,
   FileIcon,
@@ -15,7 +16,7 @@ import {
 } from "@/components/ui/icons";
 
 function ToolIcon({ toolName }: { toolName: string }) {
-  const iconClass = "w-3.5 h-3.5 text-secondary-foreground";
+  const iconClass = "mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground";
 
   switch (toolName) {
     case "Read":
@@ -65,21 +66,22 @@ export const ToolCallGroup = memo(
         <button
           type="button"
           onClick={onToggleGroup}
-          className="w-full flex items-center gap-2 text-sm text-left hover:bg-muted px-2 py-1 -mx-2 transition-colors"
+          className="-mx-2 flex w-full min-w-0 items-start gap-2 px-2 py-1 text-left text-sm transition-colors hover:bg-muted"
         >
           <ChevronRightIcon
-            className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+            className={`mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
               isExpanded ? "rotate-90" : ""
             }`}
           />
           <ToolIcon toolName={formatted.toolName} />
-          <span className="font-medium text-foreground">{formatted.toolName}</span>
-          <span className="text-muted-foreground">{formatted.summary}</span>
-          <span className="text-xs text-secondary-foreground ml-auto flex-shrink-0">{time}</span>
+          <TimelineRowContent time={time}>
+            <span className="font-medium text-foreground">{formatted.toolName}</span>{" "}
+            <span className="text-muted-foreground">{formatted.summary}</span>
+          </TimelineRowContent>
         </button>
 
         {isExpanded && (
-          <div className="ml-4 mt-1 pl-2 border-l-2 border-border">
+          <div className="ml-2 mt-1 border-l-2 border-border pl-2 sm:ml-4">
             {events.map((event) => (
               <ToolCallItem
                 key={toolCallKey(event)}

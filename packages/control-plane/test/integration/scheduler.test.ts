@@ -1,12 +1,21 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
+import { Scheduler, resolveAutomationProviderAuth } from "../../src/scheduler/scheduler";
+import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
+import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
+import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
+import type { Env } from "../../src/types";
 
-function getSchedulerStub() {
-  const id = env.SCHEDULER.idFromName("global-scheduler");
-  return env.SCHEDULER.get(id);
+function getSchedulerStub(schedulerEnv = env as Env) {
+  const scheduler = new Scheduler(env.DB, schedulerEnv, { submit() {} });
+  return {
+    fetch(input: RequestInfo | URL, init?: RequestInit) {
+      return scheduler.dispatch(new Request(input, init));
+    },
+  };
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -35,8 +44,113 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   };
 }
 
-describe("SchedulerDO (integration)", () => {
-  beforeEach(cleanD1Tables);
+describe("Scheduler (integration)", () => {
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await env.DB.exec(
+      "DELETE FROM model_provider_account_defaults; DELETE FROM model_provider_accounts;"
+    );
+  });
+
+  describe("automation provider auth resolution", () => {
+    const accountIds = {
+      openai: "00000000000000000000000000000001",
+      xai: "00000000000000000000000000000002",
+    } as const;
+
+    async function seedProviderAccounts(): Promise<void> {
+      const accounts = new ModelProviderAccountStore(env.DB);
+      const defaults = new ProviderDefaultStore(env.DB);
+      for (const provider of ["openai", "xai"] as const) {
+        await accounts.create({
+          id: accountIds[provider],
+          provider,
+          displayName: provider,
+        });
+        await defaults.set(provider, accountIds[provider], "provider_account", null);
+      }
+    }
+
+    it.each(["openai", "xai"] as const)("uses an account pin for %s", async (provider) => {
+      await seedProviderAccounts();
+      const automation = makeAutomation({ id: `auto-account-${provider}` });
+      await new AutomationStore(env.DB).create(automation);
+      const authStore = new AutomationModelProviderAuthStore(env.DB);
+      await env.DB.batch(
+        authStore.bindReplace(
+          automation.id,
+          {
+            [provider]: { mode: "provider_account", accountId: accountIds[provider] },
+          },
+          Date.now()
+        )
+      );
+
+      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id);
+
+      expect(resolved).toContainEqual({
+        provider,
+        authMode: "provider_account",
+        providerAccountId: accountIds[provider],
+        selectionSource: "automation_pin",
+      });
+    });
+
+    it.each(["openai", "xai"] as const)("uses an API-key pin for %s", async (provider) => {
+      await seedProviderAccounts();
+      const automation = makeAutomation({ id: `auto-api-key-${provider}` });
+      await new AutomationStore(env.DB).create(automation);
+      const authStore = new AutomationModelProviderAuthStore(env.DB);
+      await env.DB.batch(
+        authStore.bindReplace(automation.id, { [provider]: { mode: "api_key" } }, Date.now())
+      );
+
+      const resolved = await resolveAutomationProviderAuth(env.DB, automation.id);
+
+      expect(resolved).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider,
+            authMode: "api_key",
+            selectionSource: "automation_pin",
+          }),
+        ])
+      );
+    });
+
+    it.each(["openai", "xai"] as const)(
+      "resolves the unattended policy on every unpinned %s run",
+      async (provider) => {
+        await seedProviderAccounts();
+        const automation = makeAutomation({ id: `auto-policy-${provider}` });
+        await new AutomationStore(env.DB).create(automation);
+        const defaults = new ProviderDefaultStore(env.DB);
+        await defaults.set(provider, accountIds[provider], "api_key", null);
+
+        await expect(resolveAutomationProviderAuth(env.DB, automation.id)).resolves.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              provider,
+              authMode: "api_key",
+              selectionSource: "unattended_policy",
+            }),
+          ])
+        );
+
+        await defaults.set(provider, accountIds[provider], "provider_account", null);
+        await expect(resolveAutomationProviderAuth(env.DB, automation.id)).resolves.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              provider,
+              authMode: "provider_account",
+              providerAccountId: accountIds[provider],
+              selectionSource: "unattended_policy",
+            }),
+          ])
+        );
+      }
+    );
+  });
 
   // ─── Health check ─────────────────────────────────────────────────────────
 
@@ -443,6 +557,145 @@ describe("SchedulerDO (integration)", () => {
   // ─── Trigger handler ──────────────────────────────────────────────────────
 
   describe("/internal/trigger", () => {
+    it("admits exactly one run across two triggers and a concurrent tick", async () => {
+      const store = new AutomationStore(env.DB);
+      const dueAt = Date.now() - 60_000;
+      await store.create(
+        makeAutomation({
+          id: "auto-concurrent-admission",
+          schedule_cron: "* * * * *",
+          next_run_at: dueAt,
+        })
+      );
+
+      const requestPath = (input: RequestInfo | URL) =>
+        new URL(
+          typeof input === "string" ? input : input instanceof Request ? input.url : input.href
+        ).pathname;
+      const sessionFetch = vi.fn(async (input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        if (path === "/internal/init") return Response.json({ status: "ok" });
+        if (path === "/internal/prompt") {
+          return Response.json({ messageId: "msg-concurrent", status: "queued" });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+      const schedulerEnv = {
+        ...(env as Env),
+        SESSION: {
+          idFromName: vi.fn((name: string) => name),
+          get: vi.fn(() => ({ fetch: sessionFetch })),
+        } as unknown as DurableObjectNamespace,
+      };
+
+      const triggerRequest = () =>
+        new Request("http://internal/internal/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automationId: "auto-concurrent-admission" }),
+        });
+      const schedulers = [
+        getSchedulerStub(schedulerEnv),
+        getSchedulerStub(schedulerEnv),
+        getSchedulerStub(schedulerEnv),
+      ];
+
+      // Not allSettled: a rejected entry point is itself a failure of this
+      // gate. Losing the admission race must degrade to a clean status code,
+      // not a thrown request — that is exactly what the removed Durable
+      // Object used to guarantee by serializing every caller.
+      const [triggerA, triggerB, tick] = await Promise.all([
+        schedulers[0]!.fetch(triggerRequest()),
+        schedulers[1]!.fetch(triggerRequest()),
+        schedulers[2]!.fetch("http://internal/internal/tick", { method: "POST" }),
+      ]);
+
+      const triggerStatuses = [triggerA.status, triggerB.status].sort();
+      const tickSummary = await tick.json<{ processed: number; skipped: number }>();
+
+      expect(tick.status).toBe(200);
+      // Exactly one admission across all three entry points: either a trigger
+      // won (the other returns 409 and the tick found nothing to process) or
+      // the tick won (both triggers return 409).
+      if (triggerStatuses.includes(201)) {
+        expect(triggerStatuses).toEqual([201, 409]);
+        expect(tickSummary.processed).toBe(0);
+      } else {
+        expect(triggerStatuses).toEqual([409, 409]);
+        expect(tickSummary.processed).toBe(1);
+      }
+
+      const runs = await fetchRuns("auto-concurrent-admission");
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: "running", session_id: expect.any(String) });
+
+      const initCalls = sessionFetch.mock.calls.filter(([input]) =>
+        requestPath(input).endsWith("/internal/init")
+      );
+      const promptCalls = sessionFetch.mock.calls.filter(([input]) =>
+        requestPath(input).endsWith("/internal/prompt")
+      );
+      expect(initCalls).toHaveLength(1);
+      expect(promptCalls).toHaveLength(1);
+
+      const sessionCount = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE automation_id = ?"
+      )
+        .bind("auto-concurrent-admission")
+        .first<{ count: number }>();
+      expect(sessionCount?.count).toBe(1);
+
+      const automation = await store.getById("auto-concurrent-admission");
+      expect(automation!.next_run_at).toBeGreaterThan(dueAt);
+    });
+
+    it("does not let a firing that lost the slot advance the schedule again", async () => {
+      // Two ticks straddling a cron boundary both read slot S and compute
+      // successors from their own wall clock. The winner moves S -> N. Under a
+      // "later timestamp wins" guard the loser could then move N -> N2, and
+      // slot N would never fire at all. Only the firing that still owns S may
+      // advance it.
+      const store = new AutomationStore(env.DB);
+      const slot = Date.now() - 60_000;
+      const winnerNext = slot + 60_000;
+      const loserNext = slot + 120_000;
+      await store.create(
+        makeAutomation({
+          id: "auto-slot-ownership",
+          schedule_cron: "* * * * *",
+          next_run_at: slot,
+        })
+      );
+
+      const skipInvocation = (id: string) => ({
+        id,
+        automation_id: "auto-slot-ownership",
+        source: "schedule" as const,
+        scheduled_at: slot,
+        trigger_key: null,
+        concurrency_key: null,
+        trigger_metadata: null,
+        skip_reason: "concurrent_run_active",
+        failure_counted_at: null,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+
+      await store.insertSkippedInvocation(skipInvocation("inv-slot-winner"), {
+        fromSlot: slot,
+        nextRunAt: winnerNext,
+      });
+      expect((await store.getById("auto-slot-ownership"))!.next_run_at).toBe(winnerNext);
+
+      // The loser still believes it owns `slot` and carries a later successor.
+      await store.insertSkippedInvocation(skipInvocation("inv-slot-loser"), {
+        fromSlot: slot,
+        nextRunAt: loserNext,
+      });
+
+      expect((await store.getById("auto-slot-ownership"))!.next_run_at).toBe(winnerNext);
+    });
+
     it("returns 400 when automationId is missing", async () => {
       const stub = getSchedulerStub();
       const res = await stub.fetch("http://internal/internal/trigger", {

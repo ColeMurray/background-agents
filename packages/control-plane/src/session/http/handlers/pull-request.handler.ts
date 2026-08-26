@@ -11,7 +11,7 @@ import {
   resolveSessionRepositoryTarget,
   type SessionRepositoryEntry,
 } from "../../repository-target";
-import type { UpdateArtifactData } from "../../repository";
+import type { UpdateArtifactData } from "../../artifact-repository";
 import type { ArtifactRow, ParticipantRow, SessionRow } from "../../types";
 import { z } from "zod";
 
@@ -142,6 +142,9 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         prNumber: result.prNumber,
         prUrl: result.prUrl,
         state: result.state,
+        headBranch: result.headBranch,
+        baseBranch: result.baseBranch,
+        updated: result.updated,
       });
     },
 

@@ -67,7 +67,7 @@ export interface SelectedImageBuild {
   runtimeVersion: string;
 }
 
-export type ImageBuildMissReason =
+type ImageBuildMissReason =
   | "no_ready_image"
   | "missing_artifact"
   | "runtime_below_floor"
@@ -80,8 +80,7 @@ export type ImageBuildSelectionResult =
 /**
  * Evaluate the latest ready image (or its absence) against the session's own
  * repository snapshot. Checks run cheapest-first; the floor fails closed on an
- * unparseable runtime version (an unversioned image must never boot a
- * multi-repo workspace).
+ * unparseable runtime version.
  */
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,

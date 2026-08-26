@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from "../logger";
+import { z } from "zod";
 
 const log = createLogger("daytona-rest-client");
 
@@ -36,6 +37,7 @@ const TIMEOUT_CREATE_MS = 90_000;
 const TIMEOUT_START_MS = 60_000;
 const TIMEOUT_RECOVER_MS = 60_000;
 const TIMEOUT_STOP_MS = 30_000;
+const TIMEOUT_DELETE_MS = 30_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_PREVIEW_URL_MS = 15_000;
 
@@ -43,15 +45,19 @@ const TIMEOUT_PREVIEW_URL_MS = 15_000;
 // Response types
 // ---------------------------------------------------------------------------
 
-export interface DaytonaSandboxResponse {
-  id: string;
-  state: string;
-  recoverable?: boolean;
-}
+export const daytonaSandboxResponseSchema = z.object({
+  id: z.string(),
+  state: z.string(),
+  recoverable: z.boolean().optional(),
+});
 
-export interface DaytonaSignedPreviewUrlResponse {
-  url: string;
-}
+export type DaytonaSandboxResponse = z.infer<typeof daytonaSandboxResponseSchema>;
+
+export const daytonaSignedPreviewUrlResponseSchema = z.object({
+  url: z.string(),
+});
+
+export type DaytonaSignedPreviewUrlResponse = z.infer<typeof daytonaSignedPreviewUrlResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -119,11 +125,12 @@ export class DaytonaRestClient {
   async createSandbox(params: DaytonaCreateSandboxParams): Promise<DaytonaSandboxResponse> {
     const startMs = Date.now();
     try {
-      return await this.request<DaytonaSandboxResponse>(
+      return await this.requestJson(
         "POST",
         "/sandbox",
         TIMEOUT_CREATE_MS,
-        params
+        daytonaSandboxResponseSchema,
+        { body: params }
       );
     } finally {
       log.info("daytona.create_sandbox", {
@@ -134,19 +141,23 @@ export class DaytonaRestClient {
   }
 
   async getSandbox(id: string): Promise<DaytonaSandboxResponse> {
-    return this.request<DaytonaSandboxResponse>("GET", `/sandbox/${id}`, TIMEOUT_GET_MS);
+    return this.requestJson("GET", `/sandbox/${id}`, TIMEOUT_GET_MS, daytonaSandboxResponseSchema);
   }
 
   async startSandbox(id: string): Promise<void> {
-    await this.request<void>("POST", `/sandbox/${id}/start`, TIMEOUT_START_MS);
+    await this.requestVoid("POST", `/sandbox/${id}/start`, TIMEOUT_START_MS);
   }
 
   async stopSandbox(id: string): Promise<void> {
-    await this.request<void>("POST", `/sandbox/${id}/stop`, TIMEOUT_STOP_MS);
+    await this.requestVoid("POST", `/sandbox/${id}/stop`, TIMEOUT_STOP_MS);
+  }
+
+  async deleteSandbox(id: string, signal?: AbortSignal): Promise<void> {
+    await this.requestVoid("DELETE", `/sandbox/${id}`, TIMEOUT_DELETE_MS, { signal });
   }
 
   async recoverSandbox(id: string): Promise<void> {
-    await this.request<void>("POST", `/sandbox/${id}/recover`, TIMEOUT_RECOVER_MS);
+    await this.requestVoid("POST", `/sandbox/${id}/recover`, TIMEOUT_RECOVER_MS);
   }
 
   async getSignedPreviewUrl(
@@ -154,10 +165,11 @@ export class DaytonaRestClient {
     port: number,
     expirySeconds: number
   ): Promise<DaytonaSignedPreviewUrlResponse> {
-    return this.request<DaytonaSignedPreviewUrlResponse>(
+    return this.requestJson(
       "GET",
       `/sandbox/${id}/ports/${port}/signed-preview-url?expires_in_seconds=${expirySeconds}`,
-      TIMEOUT_PREVIEW_URL_MS
+      TIMEOUT_PREVIEW_URL_MS,
+      daytonaSignedPreviewUrlResponseSchema
     );
   }
 
@@ -172,11 +184,69 @@ export class DaytonaRestClient {
     };
   }
 
-  private async request<T>(
+  /**
+   * Request whose success body is required: it must be JSON and must satisfy
+   * `schema`, otherwise the call fails as an invalid response. The value type
+   * comes from the schema, so validating the body is the only way to produce
+   * one — a caller cannot opt out of it.
+   */
+  private requestJson<T>(
     method: "GET" | "POST",
     path: string,
     timeoutMs: number,
-    body?: unknown
+    schema: z.ZodType<T>,
+    options?: { body?: unknown; signal?: AbortSignal }
+  ): Promise<T> {
+    return this.send(method, path, timeoutMs, options, async (response) =>
+      this.parseJson(schema, await response.text(), response.status)
+    );
+  }
+
+  /**
+   * Command whose success body carries nothing we act on. Daytona answers start,
+   * stop, and recover with an empty 200/204 or with a status blob; both are
+   * discarded, so neither shape can fail the call.
+   */
+  private requestVoid(
+    method: "DELETE" | "GET" | "POST",
+    path: string,
+    timeoutMs: number,
+    options?: { body?: unknown; signal?: AbortSignal }
+  ): Promise<void> {
+    return this.send<void>(method, path, timeoutMs, options, () => {});
+  }
+
+  /**
+   * Validate a required body. Daytona does not always label JSON responses with
+   * `application/json`, so the text is parsed regardless of content type; a
+   * missing, non-JSON, or non-conforming body is a protocol violation and is
+   * reported as one instead of reaching the caller.
+   */
+  private parseJson<T>(schema: z.ZodType<T>, text: string, status: number): T {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new DaytonaApiError("Invalid Daytona API response", status);
+    }
+
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) {
+      throw new DaytonaApiError("Invalid Daytona API response", status);
+    }
+    return parsed.data;
+  }
+
+  /**
+   * Issue the request under `timeoutMs` and hand a successful response to
+   * `consume`. The timeout stays armed while `consume` reads the body.
+   */
+  private async send<T>(
+    method: "DELETE" | "GET" | "POST",
+    path: string,
+    timeoutMs: number,
+    options: { body?: unknown; signal?: AbortSignal } | undefined,
+    consume: (response: Response) => T | Promise<T>
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
@@ -186,10 +256,12 @@ export class DaytonaRestClient {
       const init: RequestInit = {
         method,
         headers: this.getHeaders(),
-        signal: controller.signal,
+        signal: options?.signal
+          ? AbortSignal.any([controller.signal, options.signal])
+          : controller.signal,
       };
-      if (body !== undefined) {
-        init.body = JSON.stringify(body);
+      if (options?.body !== undefined) {
+        init.body = JSON.stringify(options.body);
       }
 
       const response = await fetch(url, init);
@@ -204,13 +276,7 @@ export class DaytonaRestClient {
         throw new DaytonaApiError(text || response.statusText, response.status);
       }
 
-      // Some endpoints (start, stop, recover) may return empty 200/204
-      const contentType = response.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
-        return (await response.json()) as T;
-      }
-
-      return undefined as T;
+      return await consume(response);
     } finally {
       clearTimeout(timeoutId);
     }

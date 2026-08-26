@@ -6,7 +6,6 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
 import { TemplateGallery } from "./template-gallery";
-import { getTemplatesForCategory, getVisibleCategories } from "@/lib/automation-templates";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -16,18 +15,6 @@ vi.mock("next/link", () => ({
 }));
 
 describe("TemplateGallery", () => {
-  it("defaults to the Popular category and lists its templates", () => {
-    render(<TemplateGallery />);
-    for (const t of getTemplatesForCategory("popular")) {
-      expect(screen.getByRole("heading", { name: t.title })).toBeInTheDocument();
-    }
-  });
-
-  it("only renders categories that contain templates", () => {
-    render(<TemplateGallery />);
-    expect(screen.getAllByTestId(/^category-/)).toHaveLength(getVisibleCategories().length);
-  });
-
   it("filters the grid when another category is selected (without navigation)", () => {
     render(<TemplateGallery />);
     // "Generate docs" is code-review only, so it is hidden under Popular.

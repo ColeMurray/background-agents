@@ -17,12 +17,12 @@ resource "null_resource" "e2b_template" {
     interpreter = ["bash"]
 
     environment = {
-      E2B_API_KEY      = var.api_key
-      E2B_API_URL      = var.api_url
-      E2B_TEMPLATE_ID  = var.template_id
-      E2B_TEMPLATE_CPU = var.template_cpu
-      E2B_TEMPLATE_MEM = var.template_memory_mb
-      DEPLOY_PATH      = var.deploy_path
+      E2B_API_KEY            = var.api_key
+      E2B_API_URL            = var.api_url
+      E2B_TEMPLATE_ID        = var.template_id
+      E2B_TEMPLATE_CPU       = var.template_cpu
+      E2B_TEMPLATE_MEMORY_MB = var.template_memory_mb
+      DEPLOY_PATH            = var.deploy_path
     }
   }
 }

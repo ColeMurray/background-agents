@@ -1,11 +1,11 @@
 import type { Artifact } from "@/types/session";
-import { toDisplayStatus } from "@open-inspect/shared";
-import type {
-  PullRequestDisplayStatus,
-  ScreenshotArtifactMetadata,
-  SessionArtifact,
-  VideoArtifactMetadata,
-} from "@open-inspect/shared";
+import {
+  toDisplayStatus,
+  type PullRequestDisplayStatus,
+  type ScreenshotArtifactMetadata,
+  type SessionArtifact,
+  type VideoArtifactMetadata,
+} from "@open-inspect/shared/types/artifacts";
 
 /**
  * Maps the wire artifact shape (`SessionArtifact`, with loosely-typed

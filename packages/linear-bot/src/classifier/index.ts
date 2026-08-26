@@ -3,7 +3,11 @@
  * Uses raw Anthropic API (no SDK) to classify which repo an issue belongs to.
  */
 
-import type { Env, RepoConfig, ClassificationResult } from "../types";
+import type {
+  ClassificationResult,
+  RepoConfig,
+} from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
 import { z } from "zod";
 import { getAvailableRepos, buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
@@ -11,6 +15,7 @@ import { createLogger } from "../logger";
 const log = createLogger("classifier");
 
 const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
+export const CLASSIFIER_REQUEST_TIMEOUT_MS = 10_000;
 
 export const classifyToolInputSchema = z.object({
   repoId: z.string().nullable(),
@@ -19,7 +24,7 @@ export const classifyToolInputSchema = z.object({
   alternatives: z.array(z.string()),
 });
 
-export type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
+type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
 
 export const anthropicMessagesResponseSchema = z.object({
   content: z.array(
@@ -131,6 +136,7 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
       tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
       messages: [{ role: "user", content: prompt }],
     }),
+    signal: AbortSignal.timeout(CLASSIFIER_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {

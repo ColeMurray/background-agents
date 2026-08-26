@@ -1,17 +1,30 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
-import type { SandboxStatus } from "../../src/types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+import { SessionIndexStore } from "../../src/db/session-index";
+import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
 const TEST_BROWSER_SESSION_COOKIE = "__Secure-openinspect.session_token";
+const TEST_NAMED_SESSION_DEFAULTS = {
+  repoOwner: "acme",
+  repoName: "web-app",
+  repoId: 12345,
+  userId: "user-1",
+} as const;
+export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
+  { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+  { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+];
 
 async function signCookieValue(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -44,8 +57,8 @@ async function testBrowserSessionCookie(): Promise<string> {
   const applicationTimestamp = now.getTime();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_users
-         (id, name, email, emailVerified, image, createdAt, updatedAt)
+      `INSERT OR IGNORE INTO users
+         (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_USER_ID,
@@ -53,40 +66,24 @@ async function testBrowserSessionCookie(): Promise<string> {
       "browser@test.local",
       1,
       null,
-      now.toISOString(),
-      now.toISOString()
-    ),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO users
-         (id, display_name, email, avatar_url, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(
-      TEST_BROWSER_USER_ID,
-      "Integration Browser User",
-      "browser@test.local",
-      null,
       applicationTimestamp,
       applicationTimestamp
     ),
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_accounts
-         (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
-          accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO user_identities
+         (id, user_id, provider, provider_user_id, provider_login, provider_email,
+          provider_issuer, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_ACCOUNT_ID,
-      TEST_BROWSER_PROVIDER_SUBJECT,
-      "github",
       TEST_BROWSER_USER_ID,
+      "github",
+      TEST_BROWSER_PROVIDER_SUBJECT,
       null,
       null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      now.toISOString(),
-      now.toISOString()
+      "https://github.com",
+      applicationTimestamp,
+      applicationTimestamp
     ),
     env.DB.prepare(
       `INSERT OR IGNORE INTO auth_sessions
@@ -94,10 +91,10 @@ async function testBrowserSessionCookie(): Promise<string> {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_SESSION_ID,
-      expiresAt.toISOString(),
+      expiresAt.getTime(),
       TEST_BROWSER_SESSION_TOKEN,
-      now.toISOString(),
-      now.toISOString(),
+      applicationTimestamp,
+      applicationTimestamp,
       "127.0.0.1",
       "integration-test",
       TEST_BROWSER_USER_ID
@@ -147,9 +144,7 @@ export async function serviceFetch(
   });
 }
 
-/**
- * Create a fresh DO, call /internal/init, return the stub and id.
- */
+/** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
   repoOwner?: string;
@@ -169,24 +164,43 @@ export async function initSession(overrides?: {
   sandboxSettings?: SandboxSettings;
   userId?: string;
   scmLogin?: string;
+  providerAuth?: SessionModelProviderAuthInput[];
 }) {
-  const id = env.SESSION.newUniqueId();
-  const stub = env.SESSION.get(id);
   const defaults = {
-    sessionName: `test-${Date.now()}`,
+    sessionName: `test-${Date.now()}-${crypto.randomUUID()}`,
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
     userId: "user-1",
     ...overrides,
   };
+  const id = env.SESSION.idFromName(defaults.sessionName);
+  const stub = env.SESSION.get(id);
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const now = Date.now();
+  await new SessionIndexStore(env.DB).create({
+    id: defaults.sessionName,
+    title: defaults.title ?? null,
+    repoOwner: defaults.repoOwner,
+    repoName: defaults.repoName,
+    model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    reasoningEffort: defaults.reasoningEffort ?? null,
+    baseBranch: defaults.defaultBranch ?? "main",
+    repositories: defaults.repositories,
+    environmentId: defaults.environmentId ?? null,
+    status: "created",
+    userId: defaults.userId,
+    providerAuth,
+    createdAt: now,
+    updatedAt: now,
+  });
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(defaults),
+    body: JSON.stringify(doDefaults),
   });
   if (res.status !== 200) throw new Error(`Init failed: ${res.status}`);
-  return { stub, id };
+  return { stub, id, sessionName: defaults.sessionName };
 }
 
 /**
@@ -283,8 +297,7 @@ export async function seedMessage(
 // ---------------------------------------------------------------------------
 
 /**
- * Create a session using idFromName() so the worker's /sessions/:name/ws
- * route can locate the DO via the same name. Returns stub + sessionName.
+ * Create a production-shaped named session: D1 index first, then the session DO.
  */
 export async function initNamedSession(
   sessionName: string,
@@ -303,23 +316,51 @@ export async function initNamedSession(
     model?: string;
     reasoningEffort?: string;
     userId?: string;
+    canonicalUserId?: string;
     scmLogin?: string;
+    parentSessionId?: string;
+    spawnSource?: "user" | "agent" | "automation";
+    spawnDepth?: number;
+    sandboxSettings?: Record<string, unknown>;
+    providerAuth?: SessionModelProviderAuthInput[];
   }
 ) {
-  const id = env.SESSION.idFromName(sessionName);
-  const stub = env.SESSION.get(id);
   const defaults = {
     sessionName,
-    repoOwner: "acme",
-    repoName: "web-app",
-    repoId: 12345,
-    userId: "user-1",
+    ...TEST_NAMED_SESSION_DEFAULTS,
     ...overrides,
   };
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const now = Date.now();
+  await new SessionIndexStore(env.DB).create({
+    id: sessionName,
+    title: defaults.title ?? null,
+    repoOwner: defaults.repoOwner ?? null,
+    repoName: defaults.repoName ?? null,
+    model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    reasoningEffort: defaults.reasoningEffort ?? null,
+    baseBranch: defaults.defaultBranch ?? "main",
+    status: "created",
+    parentSessionId: defaults.parentSessionId ?? null,
+    spawnSource: defaults.spawnSource ?? "user",
+    spawnDepth: defaults.spawnDepth ?? 0,
+    userId: defaults.canonicalUserId ?? defaults.userId,
+    providerAuth,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return initNamedSessionDO(sessionName, doDefaults);
+}
+
+/** Create only the named session DO for tests that manage the D1 row explicitly. */
+export async function initNamedSessionDO(sessionName: string, init: Record<string, unknown> = {}) {
+  const id = env.SESSION.idFromName(sessionName);
+  const stub = env.SESSION.get(id);
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(defaults),
+    body: JSON.stringify({ sessionName, ...TEST_NAMED_SESSION_DEFAULTS, ...init }),
   });
   if (res.status !== 200) throw new Error(`Init failed: ${res.status}`);
   return { stub, id, sessionName };
@@ -335,8 +376,8 @@ export function collectMessages(
 ): Promise<Record<string, unknown>[]> {
   return new Promise((resolve) => {
     const messages: Record<string, unknown>[] = [];
-    const timeout = opts?.timeoutMs ?? 2000;
-    const timer = setTimeout(() => resolve(messages), timeout);
+    const timeoutMs = opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS;
+    const timer = setTimeout(() => resolve(messages), timeoutMs);
 
     ws.addEventListener("message", (event) => {
       const msg = JSON.parse(typeof event.data === "string" ? event.data : "{}");
@@ -355,7 +396,13 @@ export function collectMessages(
  */
 export async function openClientWs(
   sessionName: string,
-  opts?: { subscribe?: boolean; userId?: string; canonicalUserId?: string }
+  opts?: {
+    subscribe?: boolean;
+    userId?: string;
+    canonicalUserId?: string;
+    scmLogin?: string;
+    scmName?: string;
+  }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },
@@ -378,6 +425,8 @@ export async function openClientWs(
     body: JSON.stringify({
       userId: opts.userId ?? "user-1",
       canonicalUserId: opts.canonicalUserId,
+      scmLogin: opts.scmLogin,
+      scmName: opts.scmName,
     }),
   });
   const { token, participantId } = await tokenRes.json<{

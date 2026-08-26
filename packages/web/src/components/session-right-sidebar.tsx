@@ -8,13 +8,14 @@ import { TasksSection } from "./sidebar/tasks-section";
 import { FilesChangedSection } from "./sidebar/files-changed-section";
 import { MediaSection } from "./sidebar/media-section";
 import { CodeServerSection } from "./sidebar/code-server-section";
+import { VncSection } from "./sidebar/vnc-section";
 import { TunnelUrlsSection } from "./sidebar/tunnel-urls-section";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
+import type { ParticipantPresence, SessionState } from "@open-inspect/shared/types/server-messages";
 import type {
   SessionDiffFile,
   SessionDiffRepository,
@@ -23,11 +24,14 @@ import type {
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 
 interface SessionRightSidebarProps {
+  isOpen?: boolean;
   sessionId: string;
   sessionState: SessionState | null;
   participants: ParticipantPresence[];
+  presenceSynced: boolean;
   events: SandboxEvent[];
   artifacts: Artifact[];
   terminalOpen?: boolean;
@@ -45,6 +49,7 @@ export function SessionRightSidebarContent({
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -98,7 +103,7 @@ export function SessionRightSidebarContent({
     <>
       {/* Participants */}
       <div className="px-4 py-4 border-b border-border-muted">
-        <ParticipantsSection participants={participants} />
+        <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />
       </div>
 
       {/* Metadata */}
@@ -128,6 +133,17 @@ export function SessionRightSidebarContent({
           <CodeServerSection
             url={sessionState.codeServerUrl}
             password={sessionState.codeServerPassword ?? null}
+            sandboxStatus={sessionState.sandboxStatus}
+          />
+        </div>
+      )}
+
+      {/* VNC Desktop */}
+      {sessionState.vncUrl && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <VncSection
+            url={sessionState.vncUrl}
+            password={sessionState.vncPassword ?? null}
             sandboxStatus={sessionState.sandboxStatus}
           />
         </div>
@@ -184,6 +200,8 @@ export function SessionRightSidebarContent({
 
       {/* Child Sessions */}
       <ChildSessionsSection sessionId={sessionState.id} />
+
+      <ManagedSkillsSection sessionId={sessionState.id} />
 
       {/* Canonical durable checkout changes */}
       {diffView.kind !== "hidden" && (
@@ -255,9 +273,11 @@ export function SessionRightSidebarContent({
 }
 
 export function SessionRightSidebar({
+  isOpen = true,
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -269,11 +289,20 @@ export function SessionRightSidebar({
   onOpenDiff,
 }: SessionRightSidebarProps) {
   return (
-    <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
+    <aside
+      id="session-details-sidebar"
+      aria-hidden={!isOpen}
+      className={
+        isOpen
+          ? "hidden w-80 shrink-0 overflow-y-auto border-l border-border-muted lg:block"
+          : "hidden"
+      }
+    >
       <SessionRightSidebarContent
         sessionId={sessionId}
         sessionState={sessionState}
         participants={participants}
+        presenceSynced={presenceSynced}
         events={events}
         artifacts={artifacts}
         terminalOpen={terminalOpen}

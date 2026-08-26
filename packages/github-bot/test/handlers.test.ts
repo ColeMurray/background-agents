@@ -483,6 +483,27 @@ describe("handleReviewRequested", () => {
     );
   });
 
+  it("encodes nested repository owners in the reaction URL", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload = {
+      ...reviewRequestedPayload,
+      repository: {
+        ...reviewRequestedPayload.repository,
+        owner: { login: "group/platform" },
+      },
+    };
+
+    await handleReviewRequested(env, log, payload, "trace-nested-owner");
+
+    expect(postReaction).toHaveBeenCalledWith(
+      "test-installation-token",
+      "https://api.github.com/repos/group%2Fplatform/widgets/issues/42/reactions",
+      "eyes",
+      "Open-Inspect"
+    );
+  });
+
   it("returns early if reviewer is not the bot", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
@@ -712,13 +733,28 @@ describe("error handling", () => {
   it("throws when session creation fails", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
+    let finishReaction!: (ok: boolean) => void;
+    vi.mocked(postReaction).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishReaction = resolve;
+      })
+    );
     getControlPlaneFetch(env).mockResolvedValue(
       new Response("Internal Server Error", { status: 500 })
     );
 
-    await expect(
-      handleReviewRequested(env, log, reviewRequestedPayload, "trace-err")
-    ).rejects.toThrow("Session creation failed: 500");
+    const handlerPromise = handleReviewRequested(env, log, reviewRequestedPayload, "trace-err");
+    let handlerSettled = false;
+    void handlerPromise
+      .finally(() => {
+        handlerSettled = true;
+      })
+      .catch(() => {});
+    await vi.waitFor(() => expect(getControlPlaneFetch(env)).toHaveBeenCalled());
+    expect(handlerSettled).toBe(false);
+
+    finishReaction(true);
+    await expect(handlerPromise).rejects.toThrow("Session creation failed: 500");
   });
 
   it("proceeds with session even if reaction fails", async () => {
@@ -730,6 +766,7 @@ describe("error handling", () => {
 
     // Session should still be created despite reaction failure
     expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(3);
+    expect(log.warn).toHaveBeenCalledWith("acknowledgment.failed", expect.any(Object));
   });
 });
 

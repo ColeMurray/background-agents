@@ -4,13 +4,25 @@ import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
+const AUTOMATION_LIST_QUERY_PARAMS = [
+  "search",
+  "limit",
+  "cursor",
+  "repoOwner",
+  "repoName",
+] as const;
+
 export async function GET(request: NextRequest) {
   const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const path = buildControlPlanePath("/automations", request.nextUrl.searchParams);
+  const path = buildControlPlanePath(
+    "/automations",
+    request.nextUrl.searchParams,
+    AUTOMATION_LIST_QUERY_PARAMS
+  );
 
   try {
     const response = await controlPlaneUserFetch(path);
@@ -46,6 +58,7 @@ export async function POST(request: NextRequest) {
       sentryClientSecret: body.sentryClientSecret,
       repositories: body.repositories,
       environmentIds: body.environmentIds,
+      providerSelections: body.providerSelections,
     };
 
     const response = await controlPlaneUserFetch("/automations", {

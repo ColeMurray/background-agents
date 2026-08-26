@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { computeHmacHex, verifyCallbackFromControlPlane } from "./auth";
+import { computeHmacHex, isSignedCallbackPayload, verifyCallbackFromControlPlane } from "./auth";
 import {
   ACTOR_HEADER,
   buildCanonicalRequestString,
@@ -58,7 +58,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("golden vectors (cross-language contract with service_auth.py)", () => {
+describe("golden vectors", () => {
   it.each(vectors.map((v) => [v.name, v] as const))("%s", async (_name, vector) => {
     const url = new URL(vector.url);
     expect(url.pathname).toBe(vector.expected.pathname);
@@ -336,6 +336,14 @@ describe("verifyCallbackFromControlPlane", () => {
       await verifyCallbackFromControlPlane(payload, { SERVICE_AUTH_SECRET: "bot-secret" })
     ).toBe(false);
     expect(await verifyCallbackFromControlPlane(payload, {})).toBe(false);
+  });
+});
+
+describe("isSignedCallbackPayload", () => {
+  it("accepts only objects with string signatures", () => {
+    expect(isSignedCallbackPayload({ signature: "signed" })).toBe(true);
+    expect(isSignedCallbackPayload({ signature: 42 })).toBe(false);
+    expect(isSignedCallbackPayload(null)).toBe(false);
   });
 });
 

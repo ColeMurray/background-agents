@@ -3,12 +3,12 @@ import {
   sendPromptResponseSchema,
   type CreateSessionResponse,
   type SendPromptResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import { signedControlPlaneFetch } from "../internal-auth";
+import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
-import type { CallbackContext, Env } from "../types";
+import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 const log = createLogger("handler");
@@ -29,7 +29,7 @@ export type SendPromptResult =
   | { ok: false; reason: "stale" | "transient" };
 
 export async function createSession(
-  env: Env,
+  env: ControlPlaneEnv,
   options: CreateSessionOptions
 ): Promise<CreateSessionResponse | null> {
   const {
@@ -118,7 +118,10 @@ export interface SendPromptOptions {
   traceId?: string;
 }
 
-export async function sendPrompt(env: Env, options: SendPromptOptions): Promise<SendPromptResult> {
+export async function sendPrompt(
+  env: ControlPlaneEnv,
+  options: SendPromptOptions
+): Promise<SendPromptResult> {
   const { sessionId, content, authorId, callbackContext, attachments, traceId } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };

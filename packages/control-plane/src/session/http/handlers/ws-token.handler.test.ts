@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow } from "../../types";
 import { createWsTokenHandler } from "./ws-token.handler";
+import type { ParticipantRepository } from "../../participant-repository";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -45,7 +46,7 @@ function createHandler() {
   } as unknown as Logger;
 
   const wsTokenHandler = createWsTokenHandler({
-    repository,
+    repository: repository as unknown as ParticipantRepository,
     getParticipantByUserId,
     generateId,
     hashToken,

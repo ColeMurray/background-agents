@@ -295,6 +295,12 @@ variable "anthropic_api_key" {
   description = "Anthropic API key for Claude"
   type        = string
   sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = trimspace(var.anthropic_api_key) != ""
+    error_message = "anthropic_api_key must be non-blank."
+  }
 }
 
 # =============================================================================
@@ -311,6 +317,22 @@ variable "repo_secrets_encryption_key" {
   description = "Key for encrypting repo secrets in D1 (generate with: openssl rand -base64 32)"
   type        = string
   sensitive   = true
+}
+
+variable "provider_accounts_encryption_key" {
+  description = "Optional existing key for provider account credentials; when blank, Terraform generates and persists a dedicated key"
+  type        = string
+  sensitive   = true
+  nullable    = false
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.provider_accounts_encryption_key) == "" ||
+      can(regex("^[A-Za-z0-9+/]{43}=$", trimspace(var.provider_accounts_encryption_key)))
+    )
+    error_message = "provider_accounts_encryption_key must be blank or a Base64-encoded 32-byte key."
+  }
 }
 
 variable "modal_api_secret" {
@@ -492,6 +514,18 @@ variable "e2b_auto_pause" {
   default     = true
 }
 
+variable "e2b_template_cpu" {
+  description = "vCPU count for the E2B sandbox template (and every sandbox created from it)."
+  type        = number
+  default     = 2
+}
+
+variable "e2b_template_memory_mb" {
+  description = "Memory (MB, even number) for the E2B sandbox template. Default sized for the agent toolchain (OpenCode + code-server + builds); lower it on plans that cap sandbox memory. The full invariant (positive, even, integral) is validated at the e2b-infra module boundary."
+  type        = number
+  default     = 4096
+}
+
 variable "nextauth_secret" {
   description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
   type        = string
@@ -546,12 +580,6 @@ variable "app_name" {
   default     = "Open-Inspect"
 }
 
-variable "app_short_name" {
-  description = "Short brand label shown only in the web sidebar header. Defaults to 'Inspect' to keep the sidebar visually compact."
-  type        = string
-  default     = "Inspect"
-}
-
 variable "app_icon_url" {
   description = "Optional URL (absolute or root-relative) to a custom logo image for the command menu and browser favicon. Leave empty to use the built-in favicon and default in-app icon."
   type        = string
@@ -578,6 +606,12 @@ variable "control_plane_migration_old_tag" {
 
 variable "control_plane_new_sqlite_classes" {
   description = "DO classes new in this control plane migration step (empty means treat all configured classes as new)"
+  type        = list(string)
+  default     = []
+}
+
+variable "control_plane_deleted_classes" {
+  description = "DO classes deleted in this control plane migration step"
   type        = list(string)
   default     = []
 }

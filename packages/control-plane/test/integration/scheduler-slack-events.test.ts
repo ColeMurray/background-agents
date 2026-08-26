@@ -4,11 +4,17 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
+import { Scheduler } from "../../src/scheduler/scheduler";
+import type { Env } from "../../src/types";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 
 function getSchedulerStub() {
-  const id = env.SCHEDULER.idFromName("global-scheduler");
-  return env.SCHEDULER.get(id);
+  const scheduler = new Scheduler(env.DB, env as Env, { submit() {} });
+  return {
+    fetch(input: RequestInfo | URL, init?: RequestInit) {
+      return scheduler.dispatch(new Request(input, init));
+    },
+  };
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -82,7 +88,8 @@ async function seedSlackAutomation(
 ): Promise<string> {
   const id = `auto-slack-${Math.random().toString(36).slice(2, 8)}`;
   await store.create(makeAutomation({ id, ...overrides }));
-  await new SlackChannelStore(env.DB).setSlackChannels(id, ["C1"]);
+  const channels = new SlackChannelStore(env.DB);
+  await env.DB.batch(channels.bindChannelStatements(id, ["C1"]));
   return id;
 }
 
@@ -92,7 +99,7 @@ async function fetchInvocations(store: AutomationStore, automationId: string) {
   return invocations;
 }
 
-describe("SchedulerDO /internal/event — slack (integration)", () => {
+describe("Scheduler slack event handling (integration)", () => {
   beforeEach(cleanD1Tables);
 
   it("triggers a matching slack automation and records thread coordinates", async () => {
@@ -106,7 +113,7 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     const runs = await fetchRuns(id);
     expect(runs.length).toBeGreaterThanOrEqual(1);
     // The firing keys and message coordinates live on the invocation.
-    const invocation = await store.getInvocationById(runs[0]!.invocation_id!);
+    const invocation = await store.getInvocationById(runs[0]!.invocation_id);
     expect(invocation!.trigger_key).toBe(event.triggerKey);
     const metadata = JSON.parse(invocation!.trigger_metadata!);
     expect(metadata.channel).toBe("C1");
@@ -152,7 +159,7 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     // A run still in "starting" has not created its session yet, so a follow-up
     // has nothing to steer and is dropped with the "already active" notice.
     // (The steering path — where the active run has a session_id — is covered in
-    // the SchedulerDO unit tests with a mocked session, so it doesn't attempt a
+    // the scheduler unit tests with a mocked session, so it doesn't attempt a
     // real sandbox spawn here.)
     const concurrencyKey = "slack:C1:thread-1";
     // The active run's concurrency key lives on its invocation.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import {
   parseRepositoryFullName,
   type RepositoryInput,
@@ -20,7 +20,7 @@ import { useBranches } from "@/hooks/use-branches";
 import { useRepos, type Repo } from "@/hooks/use-repos";
 import { RepositoryMultiSelect } from "@/components/repository-multi-select";
 import { repositorySelectionKey } from "@/lib/repository-selection";
-import { supportsRepoImages } from "@/lib/sandbox-provider";
+import { getRepoImageProviders, supportsRepoImages } from "@/lib/sandbox-provider";
 
 export interface EnvironmentFormValues {
   name: string;
@@ -234,8 +234,14 @@ export function EnvironmentForm({
           </>
         ) : (
           <p className="text-xs text-muted-foreground">
-            Prebuilt images are only available when <code>SANDBOX_PROVIDER=modal</code>,{" "}
-            <code>vercel</code>, or <code>opencomputer</code>.
+            Prebuilt images are only available when{" "}
+            {getRepoImageProviders().map((provider, index, all) => (
+              <Fragment key={provider}>
+                {index > 0 && (index === all.length - 1 ? ", or " : ", ")}
+                <code>{index === 0 ? `SANDBOX_PROVIDER=${provider}` : provider}</code>
+              </Fragment>
+            ))}
+            .
           </p>
         )}
       </div>

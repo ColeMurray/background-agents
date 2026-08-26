@@ -12,15 +12,6 @@ function basename(filePath: string | undefined): string {
 }
 
 /**
- * Truncate a string to a maximum length with ellipsis
- */
-function truncate(str: string | undefined, maxLen: number): string {
-  if (!str) return "";
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen) + "...";
-}
-
-/**
  * Count lines in a string
  */
 function countLines(str: string | undefined): number {
@@ -45,7 +36,7 @@ function getStringArg(
 ): string | undefined {
   for (const key of keys) {
     const value = args?.[key];
-    if (typeof value === "string") return value;
+    if (typeof value === "string" && value.trim()) return value;
   }
   return undefined;
 }
@@ -182,7 +173,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       const command = getStringArg(args, "command");
       return {
         toolName: "Bash",
-        summary: truncate(command, 50),
+        summary: command ?? "",
         icon: "terminal",
         getDetails: () => ({ args, output }),
       };
@@ -194,7 +185,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       return {
         toolName: "Grep",
         summary: pattern
-          ? `"${truncate(pattern, 30)}"${matchCount > 0 ? ` (${matchCount} matches)` : ""}`
+          ? `"${pattern}"${matchCount > 0 ? ` (${matchCount} matches)` : ""}`
           : "search",
         icon: "search",
         getDetails: () => ({ args, output }),
@@ -206,9 +197,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       const fileCount = output ? countLines(output) : 0;
       return {
         toolName: "Glob",
-        summary: pattern
-          ? `${truncate(pattern, 30)}${fileCount > 0 ? ` (${fileCount} files)` : ""}`
-          : "search",
+        summary: pattern ? `${pattern}${fileCount > 0 ? ` (${fileCount} files)` : ""}` : "search",
         icon: "folder",
         getDetails: () => ({ args, output }),
       };
@@ -216,11 +205,20 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
 
     case "task": {
       const description = getStringArg(args, "description");
-      const prompt = getStringArg(args, "prompt");
       return {
         toolName: "Task",
-        summary: description ? truncate(description, 40) : prompt ? truncate(prompt, 40) : "task",
+        summary: description ?? "task",
         icon: "box",
+        getDetails: () => ({ args, output }),
+      };
+    }
+
+    case "skill": {
+      const name = getStringArg(args, "name");
+      return {
+        toolName: "skill",
+        summary: name ? `"${name}"` : "",
+        icon: null,
         getDetails: () => ({ args, output }),
       };
     }
@@ -229,7 +227,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       const url = getStringArg(args, "url");
       return {
         toolName: "WebFetch",
-        summary: url ? truncate(url, 40) : "url",
+        summary: url ?? "url",
         icon: "globe",
         getDetails: () => ({ args, output }),
       };
@@ -239,7 +237,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       const query = getStringArg(args, "query");
       return {
         toolName: "WebSearch",
-        summary: query ? `"${truncate(query, 40)}"` : "search",
+        summary: query ? `"${query}"` : "search",
         icon: "search",
         getDetails: () => ({ args, output }),
       };
@@ -284,19 +282,22 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
 
       return {
         toolName: "Child Status",
-        summary: childId ? truncate(childId, 20) : "List Children",
+        summary: childId ?? "List Children",
         icon: "box",
         getDetails: () => ({ args, output }),
       };
     }
 
-    default:
+    default: {
+      const argumentCount = args ? Object.keys(args).length : 0;
       return {
         toolName: tool || "Unknown",
-        summary: args && Object.keys(args).length > 0 ? truncate(JSON.stringify(args), 50) : "",
+        summary:
+          argumentCount > 0 ? `${argumentCount} argument${argumentCount === 1 ? "" : "s"}` : "",
         icon: null,
         getDetails: () => ({ args, output }),
       };
+    }
   }
 }
 

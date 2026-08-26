@@ -63,7 +63,8 @@ async function seedSlackAutomation(): Promise<string> {
   const store = new AutomationStore(env.DB);
   const automation = makeSlackAutomation();
   await store.create(automation);
-  await new SlackChannelStore(env.DB).setSlackChannels(automation.id, ["C1"]);
+  const channels = new SlackChannelStore(env.DB);
+  await env.DB.batch(channels.bindChannelStatements(automation.id, ["C1"]));
   return automation.id;
 }
 
@@ -144,6 +145,19 @@ describe("POST /internal/slack-event (integration)", () => {
   it("returns 400 when eventType/triggerKey/concurrencyKey are missing", async () => {
     const res = await postEvent(makeSlackEventBody({ triggerKey: undefined }));
     expect(res.status).toBe(400);
+  });
+
+  it.each([
+    ["eventType", { type: "message.posted" }],
+    ["triggerKey", ["slack:msg:C1:1"]],
+    ["concurrencyKey", { key: "slack:C1:1" }],
+    ["channelId", ["C1"]],
+    ["ts", { value: "1700000000.000200" }],
+  ])("returns 400 when %s is not a string", async (field, value) => {
+    const res = await postEvent(makeSlackEventBody({ [field]: value }));
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(field);
   });
 
   it("forwards a valid event to the scheduler and returns trigger counts", async () => {

@@ -6,8 +6,13 @@
  */
 
 import { z } from "zod";
-import { controlPlaneReposResponseSchema, repoConfigSchema } from "@open-inspect/shared";
-import type { Env, RepoConfig, ControlPlaneRepo } from "../types";
+import {
+  controlPlaneReposResponseSchema,
+  repoConfigSchema,
+  type ControlPlaneRepo,
+  type RepoConfig,
+} from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
 import { createCachedResource } from "../cached-resource";
 import { fetchControlPlaneJson } from "../control-plane";
 

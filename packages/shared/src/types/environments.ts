@@ -84,7 +84,7 @@ export const environmentSchema = z.object({
    * channel-association stage). Absent when the environment has none.
    */
   channelAssociations: z.array(z.string()).optional(),
-  /** Ordered repositories; [0] is the primary (sandbox/code-server settings source). */
+  /** Ordered repositories; [0] is the primary (sandbox/integration settings source). */
   repositories: z.array(environmentRepositorySchema),
 });
 

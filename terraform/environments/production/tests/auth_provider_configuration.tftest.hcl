@@ -14,17 +14,18 @@ mock_provider "random" {}
 mock_provider "vercel" {}
 
 variables {
-  cloudflare_api_token        = "test-cloudflare-token"
-  cloudflare_account_id       = "test-account"
-  cloudflare_worker_subdomain = "test-account"
-  github_app_id               = "1"
-  github_app_private_key      = "test-private-key"
-  github_app_installation_id  = "1"
-  anthropic_api_key           = "test-anthropic-key"
-  token_encryption_key        = "test-token-key"
-  repo_secrets_encryption_key = "test-repo-key"
-  nextauth_secret             = "test-browser-auth-secret-with-32-characters"
-  deployment_name             = "auth-provider-test"
+  cloudflare_api_token             = "test-cloudflare-token"
+  cloudflare_account_id            = "test-account"
+  cloudflare_worker_subdomain      = "test-account"
+  github_app_id                    = "1"
+  github_app_private_key           = "test-private-key"
+  github_app_installation_id       = "1"
+  anthropic_api_key                = "test-anthropic-key"
+  token_encryption_key             = "test-token-key"
+  repo_secrets_encryption_key      = "test-repo-key"
+  provider_accounts_encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+  nextauth_secret                  = "test-browser-auth-secret-with-32-characters"
+  deployment_name                  = "auth-provider-test"
 
   modal_token_id     = "test-modal-token-id"
   modal_token_secret = "test-modal-token-secret"
@@ -59,6 +60,70 @@ run "github_only" {
     )
     error_message = "The control plane must bind only the enabled GitHub OAuth credential pair."
   }
+
+  assert {
+    condition     = contains(module.control_plane_worker.secret_binding_names, "PROVIDER_ACCOUNTS_ENCRYPTION_KEY")
+    error_message = "The control plane must bind the provider account credential encryption key."
+  }
+
+  assert {
+    condition     = nonsensitive(local.effective_provider_accounts_encryption_key) == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    error_message = "An operator-provided provider account key must remain unchanged."
+  }
+}
+
+run "terraform_generated_provider_account_key" {
+  command = plan
+
+  variables {
+    provider_accounts_encryption_key = ""
+  }
+
+  override_resource {
+    target          = random_bytes.provider_accounts_encryption_key
+    override_during = plan
+    values = {
+      base64 = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    }
+  }
+
+  assert {
+    condition = (
+      nonsensitive(local.effective_provider_accounts_encryption_key) == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" &&
+      length(base64decode(nonsensitive(local.effective_provider_accounts_encryption_key))) == 32
+    )
+    error_message = "Terraform must generate a Base64-encoded 32-byte provider account key."
+  }
+}
+
+run "reject_malformed_provider_account_key" {
+  command = plan
+
+  variables {
+    provider_accounts_encryption_key = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!="
+  }
+
+  expect_failures = [var.provider_accounts_encryption_key]
+}
+
+run "reject_31_byte_provider_account_key" {
+  command = plan
+
+  variables {
+    provider_accounts_encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZQ=="
+  }
+
+  expect_failures = [var.provider_accounts_encryption_key]
+}
+
+run "reject_33_byte_provider_account_key" {
+  command = plan
+
+  variables {
+    provider_accounts_encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYw"
+  }
+
+  expect_failures = [var.provider_accounts_encryption_key]
 }
 
 run "vercel_github_only" {
@@ -190,4 +255,17 @@ run "combined_with_github_only_admission" {
   }
 
   expect_failures = [terraform_data.sign_in_provider_gate]
+}
+
+run "anthropic_api_key_blank" {
+  command = plan
+
+  variables {
+    enable_slack_bot     = true
+    slack_bot_token      = "test-slack-token"
+    slack_signing_secret = "test-slack-signing-secret"
+    anthropic_api_key    = ""
+  }
+
+  expect_failures = [var.anthropic_api_key]
 }

@@ -6,20 +6,27 @@ the synchronous per-event translator (`_apply_sse_event`) dispositions and
 the cross-prompt session-title dedupe, which are directly testable now.
 """
 
-import time
 from unittest.mock import MagicMock
 
 import pytest
 
 from sandbox_runtime.constants import MAX_SNAPSHOT_RESERVE_SECONDS
+from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _Disposition,
+    _message_created_epoch_ms,
     _PromptState,
 )
+from tests.conftest import oc_message_id
 
 PARENT_SESSION_ID = "oc-session-123"
 CHILD_SESSION_ID = "oc-child-456"
+
+# Anchor for ID-boundary tests: the prompt's user message sits at a fixed
+# (timestamp, counter) so neighbouring IDs can be placed exactly around it.
+PROMPT_TS_MS = 1_754_000_000_000
+PROMPT_MESSAGE_ID = oc_message_id(PROMPT_TS_MS, 2, "p")
 
 
 def make_stream() -> OpenCodePromptStream:
@@ -33,19 +40,46 @@ def make_stream() -> OpenCodePromptStream:
     )
 
 
-def make_state() -> _PromptState:
+def make_state(
+    opencode_message_id: str = "msg_test", start_time: float = PROMPT_TS_MS / 1000
+) -> _PromptState:
+    """Anchor the prompt boundary to PROMPT_TS_MS so fixture creation times and
+    fixture IDs describe the same instant."""
     state = _PromptState(
         opencode_session_id=PARENT_SESSION_ID,
         message_id="cp-msg-1",
-        opencode_message_id="msg_test",
-        start_time=time.time(),
+        opencode_message_id=opencode_message_id,
+        start_time=start_time,
     )
-    state.user_message_ids.add("msg_test")
     return state
 
 
 def sse(event_type: str, properties: dict) -> dict:
     return {"type": event_type, "properties": properties}
+
+
+def test_message_created_epoch_ms_treats_unusable_values_as_absent():
+    """Anything int() would reject must read as absent: raising here would tear
+    down the SSE loop over one malformed message."""
+    assert _message_created_epoch_ms({"time": {"created": PROMPT_TS_MS}}) == PROMPT_TS_MS
+    assert _message_created_epoch_ms({}) is None
+    assert _message_created_epoch_ms({"time": None}) is None
+    assert _message_created_epoch_ms({"time": {}}) is None
+    assert _message_created_epoch_ms({"time": {"created": "1754000000000"}}) is None
+    assert _message_created_epoch_ms({"time": {"created": True}}) is None
+    assert _message_created_epoch_ms({"time": {"created": float("nan")}}) is None
+    assert _message_created_epoch_ms({"time": {"created": float("inf")}}) is None
+
+
+def test_oc_message_id_matches_real_generator_format():
+    """The fixture helper must reproduce OpenCodeIdentifier's encoding, so
+    boundary tests exercise the real ID contract rather than ad-hoc strings."""
+    real = OpenCodeIdentifier.ascending("message")
+    encoded = int(real[4:16], 16)
+    rebuilt = oc_message_id(encoded // 0x1000, encoded % 0x1000)
+
+    assert rebuilt[:16] == real[:16]
+    assert len(rebuilt) == len(real)
 
 
 class TestApplySseEventDispositions:
@@ -275,7 +309,7 @@ class TestApplySseEventDispositions:
             ),
         )
 
-        assert "oc-summary" not in state.allowed_assistant_msg_ids
+        assert not state.attribution.is_assistant_allowed("oc-summary")
         assert step.events == []
 
     def test_child_context_overflow_continues_without_error(self):
@@ -407,7 +441,7 @@ class TestApplySseEventDispositions:
 
     def test_late_child_part_keeps_message_ownership_after_task_completion(self):
         state = make_state()
-        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.attribution.allow_assistant("parent-msg")
         state.child_activity.associate(CHILD_SESSION_ID, "task-call")
         stream = make_stream()
 
@@ -461,7 +495,7 @@ class TestApplySseEventDispositions:
 
     def test_child_message_after_completion_keeps_completed_task_ownership(self):
         state = make_state()
-        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.attribution.allow_assistant("parent-msg")
         stream = make_stream()
 
         completed_task = stream._apply_sse_event(
@@ -612,8 +646,187 @@ class TestApplySseEventDispositions:
             state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
         )
 
-        assert state.compaction_occurred is True
+        assert state.attribution.is_compacted
+        assert step.events == [{"type": "context_compacted", "messageId": "cp-msg-1"}]
         assert step.disposition is _Disposition.CONTINUE
+
+    def test_each_parent_compaction_emits_a_marker(self):
+        state = make_state()
+        stream = make_stream()
+
+        first = stream._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
+        )
+        second = stream._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
+        )
+
+        expected = [{"type": "context_compacted", "messageId": "cp-msg-1"}]
+        assert first.events == expected
+        assert second.events == expected
+
+    def test_child_compaction_does_not_emit_parent_marker(self):
+        state = make_state()
+        state.child_activity.track(CHILD_SESSION_ID)
+        state.pending_overflow_error = "parent overflow"
+
+        step = make_stream()._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": CHILD_SESSION_ID})
+        )
+
+        assert not state.attribution.is_compacted
+        assert state.pending_overflow_error == "parent overflow"
+        assert step.events == []
+
+    def test_post_compaction_prior_prompt_message_is_not_accepted(self):
+        """The compaction fallback must not claim messages created before the
+        prompt: forwarding them would replay prior turns' text as current
+        output."""
+        prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
+        prior_user_id = oc_message_id(PROMPT_TS_MS - 61_000, 1, "u")
+        stream = make_stream()
+        state = make_state(PROMPT_MESSAGE_ID)
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-prior",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": prior_assistant_id,
+                        "text": "Stale text from an earlier turn",
+                    }
+                },
+            ),
+        )
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": prior_assistant_id,
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": prior_user_id,
+                        "time": {"created": PROMPT_TS_MS - 60_000},
+                    }
+                },
+            ),
+        )
+
+        assert not state.attribution.is_assistant_allowed(prior_assistant_id)
+        assert prior_assistant_id in state.pending_parts
+        assert step.events == []
+
+    def test_post_compaction_later_message_is_accepted(self):
+        continuation_id = oc_message_id(PROMPT_TS_MS + 5_000, 1, "r")
+        continue_user_id = oc_message_id(PROMPT_TS_MS + 4_000, 1, "v")
+        stream = make_stream()
+        state = make_state(PROMPT_MESSAGE_ID)
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": continuation_id,
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": continue_user_id,
+                        "time": {"created": PROMPT_TS_MS + 5_000},
+                    }
+                },
+            ),
+        )
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-continuation",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": continuation_id,
+                        "text": "Continuing after compaction",
+                    }
+                },
+            ),
+        )
+
+        assert state.attribution.is_assistant_allowed(continuation_id)
+        assert step.events == [
+            {
+                "type": "token",
+                "content": "Continuing after compaction",
+                "messageId": "cp-msg-1",
+            }
+        ]
+
+    def test_post_compaction_millisecond_boundary(self):
+        """The boundary is the prompt's start millisecond and the comparison is
+        strict: a message created in that same millisecond is rejected, because
+        a prior turn could have produced it earlier within that millisecond."""
+        at_boundary_id = oc_message_id(PROMPT_TS_MS, 1, "s")
+        after_boundary_id = oc_message_id(PROMPT_TS_MS + 1, 3, "t")
+        stream = make_stream()
+        state = make_state(PROMPT_MESSAGE_ID)
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        for oc_msg_id, created in (
+            (at_boundary_id, PROMPT_TS_MS),
+            (after_boundary_id, PROMPT_TS_MS + 1),
+        ):
+            stream._apply_sse_event(
+                state,
+                sse(
+                    "message.updated",
+                    {
+                        "info": {
+                            "id": oc_msg_id,
+                            "role": "assistant",
+                            "sessionID": PARENT_SESSION_ID,
+                            "parentID": oc_message_id(PROMPT_TS_MS, 0, "w"),
+                            "time": {"created": created},
+                        }
+                    },
+                ),
+            )
+
+        assert not state.attribution.is_assistant_allowed(at_boundary_id)
+        assert state.attribution.is_assistant_allowed(after_boundary_id)
+
+    def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
+        prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
+        stream = make_stream()
+        state = make_state(PROMPT_MESSAGE_ID)
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": prior_assistant_id,
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": oc_message_id(PROMPT_TS_MS - 61_000, 1, "u"),
+                        "time": {"created": PROMPT_TS_MS - 60_000},
+                        "error": {"name": "SomeError", "data": {"message": "Old failure"}},
+                    }
+                },
+            ),
+        )
+
+        assert step.events == []
 
     def test_session_created_tracks_direct_children_only(self):
         state = make_state()
@@ -638,7 +851,7 @@ class TestApplySseEventDispositions:
 
     def test_task_metadata_reemits_same_status_and_releases_buffered_child_activity(self):
         state = make_state()
-        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.attribution.allow_assistant("parent-msg")
         state.child_activity.track(CHILD_SESSION_ID)
         stream = make_stream()
 

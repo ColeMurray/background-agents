@@ -10,7 +10,7 @@ checkout layout has exactly one authority.
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -102,9 +102,9 @@ def parse_repositories(
     raw = session_config.get("repositories")
     entries: list[RepoEntry] = []
     seen_names: set[str] = set()
-    if isinstance(raw, list):
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
         for item in raw:
-            if not isinstance(item, dict):
+            if not isinstance(item, Mapping):
                 continue
             owner = _str_field(item, "repo_owner")
             name = _str_field(item, "repo_name")

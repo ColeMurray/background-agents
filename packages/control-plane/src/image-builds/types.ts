@@ -1,6 +1,6 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type { CorrelationContext } from "../logger";
-import type { ImageBuildProvider, ImageBuildProviderImageRef, ImageBuildScope } from "./model";
+import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
 export type ImageBuildWorkflowContext = CorrelationContext;
 
@@ -52,7 +52,6 @@ export type ImageBuildCloneAuth =
 
 /** Every supported provider uses the same create-bind-launch session contract. */
 export interface ImageBuildPlan extends BaseImageBuildPlan {
-  provider: ImageBuildProvider;
   callbackToken: string;
   cloneAuth: ImageBuildCloneAuth;
 }

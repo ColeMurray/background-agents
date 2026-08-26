@@ -1,4 +1,5 @@
 import type { Logger } from "../../../logger";
+import { eventTypeSchema } from "@open-inspect/shared/types/sandbox-events";
 import {
   enqueuePromptRequestSchema,
   type EnqueuePromptRequest,
@@ -6,27 +7,11 @@ import {
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
-
-/**
- * Valid event types for filtering.
- * Includes both external types (from types.ts) and internal types used by the sandbox.
- */
-const VALID_EVENT_TYPES = [
-  "tool_call",
-  "tool_result",
-  "token",
-  "error",
-  "warning",
-  "git_sync",
-  "step_start",
-  "step_finish",
-  "execution_complete",
-  "heartbeat",
-  "push_complete",
-  "push_error",
-  "artifact",
-  "user_message",
-] as const;
+import {
+  PromptQueueFullError,
+  PromptRequestConflictError,
+  SessionNotPromptableError,
+} from "../../message-queue";
 
 /**
  * Valid message statuses for filtering.
@@ -61,6 +46,21 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
         if (error instanceof SessionAttachmentError) {
           return Response.json({ error: error.message }, { status: 400 });
         }
+        if (error instanceof SessionNotPromptableError) {
+          return Response.json({ error: error.message }, { status: 409 });
+        }
+        if (error instanceof PromptQueueFullError) {
+          return Response.json(
+            { error: error.message, code: "PROMPT_QUEUE_FULL" },
+            { status: 429 }
+          );
+        }
+        if (error instanceof PromptRequestConflictError) {
+          return Response.json(
+            { error: error.message, code: "PROMPT_REQUEST_CONFLICT" },
+            { status: 409 }
+          );
+        }
         log.error("handleEnqueuePrompt error", {
           error: error instanceof Error ? error : String(error),
         });
@@ -78,7 +78,7 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
       const type = url.searchParams.get("type");
       const messageId = url.searchParams.get("message_id");
 
-      if (type && !VALID_EVENT_TYPES.includes(type as (typeof VALID_EVENT_TYPES)[number])) {
+      if (type && !eventTypeSchema.safeParse(type).success) {
         return Response.json({ error: `Invalid event type: ${type}` }, { status: 400 });
       }
 

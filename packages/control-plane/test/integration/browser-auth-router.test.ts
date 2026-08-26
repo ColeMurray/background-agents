@@ -1,12 +1,19 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { describe, expect, it } from "vitest";
-import { handleRequest } from "../../src/router";
+import { handleRequest as routeRequest } from "../../src/router";
 import type { Env } from "../../src/types";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
 const WEB_SERVICE_SECRET = "test-service-secret-web";
+
+function handleRequest(
+  request: Request,
+  requestEnv: Parameters<typeof routeRequest>[1]
+): Promise<Response> {
+  return routeRequest(request, requestEnv, createExecutionContext());
+}
 
 async function signedServiceRequest(
   path: string,

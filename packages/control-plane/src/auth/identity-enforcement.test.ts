@@ -10,6 +10,7 @@ import {
 import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
 import type { RequestContext } from "../routes/shared";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const USER_PRINCIPAL: Principal = {
   kind: "user",
@@ -34,6 +35,7 @@ function createCtx(principal?: Principal): RequestContext {
     trace_id: "trace-test",
     request_id: "req-test",
     principal,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
   } as RequestContext;
 }
 

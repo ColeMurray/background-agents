@@ -130,7 +130,6 @@ export function normalizeSentryEvent(
           eventType: "metric_alert.critical",
           triggerKey,
           concurrencyKey,
-          sentryProject: "",
           sentryLevel: "critical",
           contextBlock: buildSentryMetricContextBlock(p),
           meta: {

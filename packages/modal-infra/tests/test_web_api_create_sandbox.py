@@ -16,7 +16,13 @@ def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(web_api, "require_valid_control_plane_url", lambda _url: None)
 
 
-def _patch_manager(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
+def _patch_manager(
+    monkeypatch: pytest.MonkeyPatch,
+    captured: dict,
+    *,
+    vnc_url: str | None = None,
+    vnc_password: str | None = None,
+) -> None:
     class FakeManager:
         async def create_sandbox(self, config):
             captured["config"] = config
@@ -27,6 +33,8 @@ def _patch_manager(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
                 created_at=123.0,
                 code_server_url=None,
                 code_server_password=None,
+                vnc_url=vnc_url,
+                vnc_password=vnc_password,
                 ttyd_url=None,
                 tunnel_urls=None,
             )
@@ -34,7 +42,13 @@ def _patch_manager(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
     monkeypatch.setattr(manager_module, "SandboxManager", FakeManager)
 
 
-def _patch_restore_manager(monkeypatch: pytest.MonkeyPatch, captured: dict) -> None:
+def _patch_restore_manager(
+    monkeypatch: pytest.MonkeyPatch,
+    captured: dict,
+    *,
+    vnc_url: str | None = None,
+    vnc_password: str | None = None,
+) -> None:
     class FakeManager:
         async def restore_from_snapshot(self, **kwargs):
             captured["restore"] = kwargs
@@ -44,6 +58,8 @@ def _patch_restore_manager(monkeypatch: pytest.MonkeyPatch, captured: dict) -> N
                 status=SandboxStatus.WARMING,
                 code_server_url=None,
                 code_server_password=None,
+                vnc_url=vnc_url,
+                vnc_password=vnc_password,
                 ttyd_url=None,
                 tunnel_urls=None,
             )
@@ -114,6 +130,31 @@ async def test_create_sandbox_forwards_timeout(monkeypatch):
 
     assert result["success"] is True
     assert captured["config"].timeout_seconds == 14_400
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_forwards_vnc_and_returns_credentials(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(
+        monkeypatch,
+        captured,
+        vnc_url="https://vnc.example.com",
+        vnc_password="vnc-password",
+    )
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+            "vnc_enabled": True,
+        }
+    )
+
+    assert captured["config"].vnc_enabled is True
+    assert result["data"]["vnc_url"] == "https://vnc.example.com"
+    assert result["data"]["vnc_password"] == "vnc-password"
 
 
 @pytest.mark.asyncio
@@ -280,6 +321,32 @@ async def test_restore_sandbox_forwards_timeout(monkeypatch):
 
     assert result["success"] is True
     assert captured["restore"]["timeout_seconds"] == 14_400
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_forwards_vnc_and_returns_credentials(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(
+        monkeypatch,
+        captured,
+        vnc_url="https://restored-vnc.example.com",
+        vnc_password="restored-vnc-password",
+    )
+
+    result = await _call_restore_sandbox(
+        {
+            "snapshot_image_id": "img-abc",
+            "session_config": {"session_id": "sess-1"},
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+            "vnc_enabled": True,
+        }
+    )
+
+    assert captured["restore"]["vnc_enabled"] is True
+    assert result["data"]["vnc_url"] == "https://restored-vnc.example.com"
+    assert result["data"]["vnc_password"] == "restored-vnc-password"
 
 
 @pytest.mark.asyncio

@@ -31,3 +31,42 @@ describe("formatToolCall child session tools", () => {
     });
   });
 });
+
+describe("formatToolCall summaries", () => {
+  it("preserves complete commands in the collapsed summary", () => {
+    const command = `PYTHONPATH=src uv run pytest ${"tests/very_long_directory/".repeat(4)}test_file.py`;
+
+    expect(formatToolCall(toolCall("bash", { command })).summary).toBe(command);
+  });
+
+  it("preserves complete task descriptions and URLs", () => {
+    const description = "Investigate the complete responsive timeline overflow behavior";
+    const url = `https://example.com/${"deeply/nested/".repeat(5)}resource`;
+
+    expect(formatToolCall(toolCall("task", { description })).summary).toBe(description);
+    expect(formatToolCall(toolCall("webfetch", { url })).summary).toBe(url);
+  });
+
+  it("renders skill calls with the skill name", () => {
+    expect(formatToolCall(toolCall("skill", { name: "visual-verification" }))).toMatchObject({
+      toolName: "skill",
+      summary: '"visual-verification"',
+    });
+  });
+
+  it("does not render full task prompts or unknown-tool arguments in collapsed summaries", () => {
+    const prompt = "x".repeat(1_000);
+    const args = { query: "y".repeat(1_000), limit: 10 };
+
+    expect(formatToolCall(toolCall("task", { prompt })).summary).toBe("task");
+    expect(formatToolCall(toolCall("custom-tool", args)).summary).toBe("2 arguments");
+  });
+
+  it("uses fallback summaries for empty and whitespace-only display arguments", () => {
+    expect(formatToolCall(toolCall("task", { description: "   " })).summary).toBe("task");
+    expect(formatToolCall(toolCall("webfetch", { url: "" })).summary).toBe("url");
+    expect(formatToolCall(toolCall("get-child-status", { childId: "\t" })).summary).toBe(
+      "List Children"
+    );
+  });
+});

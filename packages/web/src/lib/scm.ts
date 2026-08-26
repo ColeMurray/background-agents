@@ -6,7 +6,7 @@
  * defaulting to "github" for upstream compatibility.
  */
 
-export type ScmProvider = "github" | "gitlab" | "bitbucket";
+type ScmProvider = "github" | "gitlab" | "bitbucket";
 
 const BASE_URLS: Record<ScmProvider, string> = {
   github: "https://github.com",

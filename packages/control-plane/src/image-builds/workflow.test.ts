@@ -15,6 +15,7 @@ import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildFinalizationQueue } from "./finalization-job";
 import type { ImageBuildPlan } from "./types";
+import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 import { ImageBuildWorkflow } from "./workflow";
 
 const ENV_SCOPE: ImageBuildScope = { kind: "environment", id: "env_1" };
@@ -88,7 +89,6 @@ function plannedBuild(overrides: Record<string, unknown> = {}): ImageBuildPlan {
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     buildTimeoutMs: 1800_000,
     correlation: { trace_id: "t", request_id: "r" },
-    provider: "modal",
     callbackToken: MODAL_CALLBACK_TOKEN,
     cloneAuth: { type: "unavailable" },
     ...overrides,
@@ -105,7 +105,6 @@ function vercelPlannedBuild(): ImageBuildPlan {
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     buildTimeoutMs: 1800_000,
     correlation: { trace_id: "t", request_id: "r" },
-    provider: "vercel",
     callbackToken: "callback-token",
     cloneAuth: { type: "unavailable" },
   };
@@ -161,7 +160,7 @@ function validCompletion(overrides: Record<string, unknown> = {}) {
     buildId: "imgb-env_1-1-abcd",
     providerSessionId: "vercel-session-1",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
-    runtimeVersion: "v56-managed-provider-runtime",
+    runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
     buildDurationSeconds: 12.5,
     ...overrides,
   };

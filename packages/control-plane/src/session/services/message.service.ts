@@ -1,7 +1,10 @@
 import type { ArtifactRow } from "../types";
-import type { SessionMessage } from "@open-inspect/shared";
-import type { ArtifactResponse, ListEventsResponse } from "../../types";
-import type { SessionRepository } from "../repository";
+import type { SessionMessage } from "@open-inspect/shared/types/sessions";
+import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
+import type { NormalizedArtifactResponse } from "../artifacts";
+import type { MessageRepository } from "../message-repository";
+import type { ArtifactRepository } from "../artifact-repository";
+import type { EventRepository } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
@@ -16,7 +19,9 @@ export interface ListMessagesRequest {
 }
 
 interface MessageServiceDeps {
-  repository: SessionRepository;
+  repository: MessageRepository;
+  eventRepository: EventRepository;
+  artifactRepository: ArtifactRepository;
   messageQueue: SessionMessageQueue;
   stopExecution: () => Promise<void>;
   parseArtifactMetadata: (
@@ -28,7 +33,7 @@ export class MessageService {
   private readonly eventStream: SessionEventStream;
 
   constructor(private readonly deps: MessageServiceDeps) {
-    this.eventStream = new SessionEventStream(deps.repository);
+    this.eventStream = new SessionEventStream(deps.eventRepository);
   }
 
   enqueuePrompt(request: EnqueuePromptRequest): Promise<{ messageId: string; status: "queued" }> {
@@ -44,17 +49,8 @@ export class MessageService {
     return this.eventStream.listEvents(request);
   }
 
-  listArtifacts(): {
-    artifacts: Array<{
-      id: string;
-      type: ArtifactRow["type"];
-      url: string | null;
-      metadata: Record<string, unknown> | null;
-      createdAt: number;
-      updatedAt: number;
-    }>;
-  } {
-    const artifacts = this.deps.repository.listArtifacts();
+  listArtifacts(): { artifacts: NormalizedArtifactResponse[] } {
+    const artifacts = this.deps.artifactRepository.listArtifacts();
     return {
       artifacts: artifacts.map((artifact) => ({
         id: artifact.id,
@@ -67,8 +63,8 @@ export class MessageService {
     };
   }
 
-  getArtifact(artifactId: string): { artifact: ArtifactResponse | null } {
-    const artifact = this.deps.repository.getArtifactById(artifactId);
+  getArtifact(artifactId: string): { artifact: NormalizedArtifactResponse | null } {
+    const artifact = this.deps.artifactRepository.getArtifactById(artifactId);
     if (!artifact) {
       return { artifact: null };
     }

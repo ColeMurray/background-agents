@@ -11,6 +11,7 @@ import { generateInternalToken } from "@open-inspect/shared/auth";
 import { authenticate, isAuthError, SERVICE_REQUEST_MAX_BODY_BYTES } from "./authenticate";
 import type { RequestContext } from "../routes/shared";
 import type { Env } from "../types";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const SECRETS = {
   SERVICE_AUTH_SECRET_WEB: "web-secret",
@@ -36,6 +37,7 @@ function createCtx(identityRow: Record<string, unknown> | null = null): RequestC
   return {
     trace_id: "trace-test",
     request_id: "req-test",
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: { summarize: () => ({}) },
     db: { prepare: vi.fn(() => statement), batch: vi.fn(), exec: vi.fn() },
   } as unknown as RequestContext;
@@ -324,6 +326,7 @@ describe("authenticate — compound browser credentials", () => {
   }
 
   it("requires the web sig1 channel and Better Auth session for a browser resource", async () => {
+    const userId = "0123456789abcdef0123456789abcdef";
     const request = await signedRequest({
       service: "web",
       method: "GET",
@@ -333,8 +336,8 @@ describe("authenticate — compound browser credentials", () => {
       },
     });
     const ctx = createUserAuthContext({
-      session: { id: "session-1", userId: "user-1" },
-      user: { id: "user-1" },
+      session: { id: "session-1", userId },
+      user: { id: userId },
     });
 
     const result = await authenticate(request, createEnv(), ctx, {
@@ -343,7 +346,7 @@ describe("authenticate — compound browser credentials", () => {
 
     expect(isAuthError(result)).toBe(false);
     if (isAuthError(result)) return;
-    expect(result.principal).toEqual({ kind: "user", userId: "user-1" });
+    expect(result.principal).toEqual({ kind: "user", userId });
     expect(result.authentication).toEqual({
       mechanism: "browser_session",
       credentialId: "session-1",

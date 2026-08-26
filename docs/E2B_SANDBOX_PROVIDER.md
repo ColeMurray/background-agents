@@ -25,6 +25,8 @@ e2b_template_id = "open-inspect-sandbox" # template name to build/use
 # e2b_api_url                 = "https://api.e2b.app" # REST API base URL
 # e2b_sandbox_timeout_seconds = 7200                  # sandbox TTL (default 2h)
 # e2b_auto_pause              = true                   # pause (recoverable), not kill, on TTL lapse
+# e2b_template_cpu            = 2                      # template vCPU count
+# e2b_template_memory_mb      = 4096                   # template memory (MB, even number)
 ```
 
 For GitHub Actions-based deployment, configure the matching repository secrets:
@@ -36,6 +38,8 @@ E2B_TEMPLATE_ID
 E2B_API_URL                 # optional
 E2B_SANDBOX_TIMEOUT_SECONDS # optional
 E2B_AUTO_PAUSE              # optional
+E2B_TEMPLATE_CPU            # optional
+E2B_TEMPLATE_MEMORY_MB      # optional
 ```
 
 The E2B provider also needs the normal Open-Inspect values such as Cloudflare, GitHub App,
@@ -81,22 +85,31 @@ export E2B_TEMPLATE_ID=open-inspect-sandbox
 uv run python build-template.py
 ```
 
-Optional build knobs: `E2B_TEMPLATE_CPU` (default `2`), `E2B_TEMPLATE_MEM` MB (default `1024`) —
-these apply to **manual** builds; Terraform-managed templates use the module's fixed defaults of **2
-vCPU / 1024 MB**. See [`packages/e2b-infra/README.md`](../packages/e2b-infra/README.md) for details
-on the template tooling and the launcher.
+Optional build knobs: `E2B_TEMPLATE_CPU` (default `2`), `E2B_TEMPLATE_MEMORY_MB` (default `4096`) —
+these apply to **manual** builds; Terraform-managed templates are sized by the `e2b_template_cpu` /
+`e2b_template_memory_mb` variables (same defaults). See
+[`packages/e2b-infra/README.md`](../packages/e2b-infra/README.md) for details on the template
+tooling.
 
 ## Runtime Behavior
 
-The E2B provider creates fresh sandboxes from the configured template. E2B runs the template's start
-command once at build and resumes it per create, so it never sees per-session env. The launcher
-(`oi-launch`) works around this:
+The E2B provider creates fresh sandboxes from the configured template, delivering env and starting
+the runtime the same way Open-Inspect does on every other provider:
 
-1. waits for the control plane to drop the per-session env file (`/tmp/oi-session.env`) over envd
-2. `exec`s the supervisor (`python -m sandbox_runtime.entrypoint`) with that env
+1. the per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, the sandbox auth token, user secrets
+   — is passed as create-time `envVars` on `POST /sandboxes`; envd applies it to every process it
+   starts
+2. the control plane starts the supervisor (`python -m sandbox_runtime.entrypoint`) via envd,
+   detached, with stdout/stderr in `/tmp/oi-supervisor.log`; the template itself runs nothing (its
+   start command is inert, and a prebuilt image's snapshot resume never re-runs it anyway)
 3. the supervisor clones or syncs the selected repositories, starts OpenCode and code-server, and
    connects the Open-Inspect bridge back to the control plane
-4. agent events stream back through the control plane
+4. agent events stream back through the control plane; readiness is the bridge phoning home, and the
+   shared connecting timeout fails the session otherwise
+
+Prebuilt repo images boot identically — the image (a snapshot template baked by the image-build
+workflow after running `.openinspect/setup.sh` once) is purely a filesystem; the entrypoint is
+started fresh on every spawn, mirroring how Modal reboots a repo image's entrypoint.
 
 ## Lifecycle: Pause and Resume
 
@@ -111,7 +124,7 @@ therefore drives the lifecycle through the shared lifecycle manager, treating E2
 - The next prompt **resumes** the paused sandbox in place (workspace state preserved); if E2B has
   since dropped it, the control plane spawns a fresh sandbox.
 - Only sandboxes that fail before becoming usable — a spawn that never connects, or one whose
-  session-env write fails — are **killed**, to avoid orphaning them.
+  entrypoint could not be started — are **killed**, to avoid orphaning them.
 
 Paused E2B sandboxes are not billed and are retained indefinitely, so pausing is the default
 recoverable stop. `E2B_AUTO_PAUSE` controls the **TTL action** (pause vs kill when the timeout
@@ -154,8 +167,18 @@ After `terraform apply`, verify:
    tell me about this repository
    ```
 
-If a session starts but never produces agent output, check the control-plane Worker logs and the E2B
-sandbox logs for runtime startup, bridge connection, and OpenCode health events.
+If a session starts but never produces agent output, check the control-plane Worker logs for runtime
+startup, bridge connection, and OpenCode health events. E2B's platform logs never contain process
+output (envd reports byte counts only); the in-sandbox forensics file is `/tmp/oi-supervisor.log`
+(reachable via the session's code-server terminal while the sandbox is alive).
+
+## Upgrading from the launcher-based template
+
+Earlier versions delivered session env as a file (`/tmp/oi-session.env`) consumed by a launcher
+baked into the template (`oi-launch`). One `terraform apply` upgrades in place: the control plane
+deploys first and boots every sandbox by direct exec, then the template rebuild removes the
+launcher. **Existing prebuilt images keep working without a rebuild** — their baked launcher is
+simply never fed and never runs; the runtime they bundle boots by direct exec like everything else.
 
 ## Common Issues
 

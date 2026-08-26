@@ -1,4 +1,7 @@
-import type { ScreenshotArtifactMetadata, VideoArtifactMetadata } from "@open-inspect/shared";
+import type {
+  ScreenshotArtifactMetadata,
+  VideoArtifactMetadata,
+} from "@open-inspect/shared/types/artifacts";
 import { generateId } from "../auth/crypto";
 import {
   buildMediaObjectKey,
@@ -18,7 +21,14 @@ import {
 import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-storage";
 import type { Env } from "../types";
 import { listSessionArtifactsFromRuntime, persistMediaArtifact } from "./session-media-artifacts";
-import { error, json, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  json,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 function getRequiredFormString(value: MultipartFieldValue | null, name: string): string | Response {
@@ -236,10 +246,10 @@ async function handleVideoUpload(input: {
   return json({ artifactId, objectKey }, 201);
 }
 
-export const sessionMediaUploadRoutes: Route[] = [
+export const sessionMediaUploadRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/media"),
     handler: handleMediaUpload,
   }),
-];
+]);

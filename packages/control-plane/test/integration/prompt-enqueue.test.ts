@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { initSession, queryDO } from "./helpers";
+import {
+  collectMessages,
+  initNamedSession,
+  initSession,
+  openSandboxWs,
+  queryDO,
+  seedSandboxAuth,
+} from "./helpers";
+
+const SANDBOX_TOKEN = "prompt-order-sandbox-token";
+const SANDBOX_ID = "prompt-order-sandbox";
 
 describe("POST /internal/prompt", () => {
   it("enqueues prompt and returns messageId", async () => {
@@ -42,6 +52,27 @@ describe("POST /internal/prompt", () => {
     expect(["pending", "processing"]).toContain(messages[0].status);
   });
 
+  it("persists queued prompts in FIFO order", async () => {
+    const { stub } = await initSession();
+    const enqueue = async (content: string) => {
+      const response = await stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+      });
+      return (await response.json<{ messageId: string }>()).messageId;
+    };
+
+    const firstId = await enqueue("First queued prompt");
+    const secondId = await enqueue("Second queued prompt");
+    const queued = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC"
+    );
+
+    expect(queued.map(({ id }) => id)).toEqual([firstId, secondId]);
+  });
+
   it("creates participant for new authorId", async () => {
     const { stub } = await initSession({ userId: "user-1" });
 
@@ -67,7 +98,7 @@ describe("POST /internal/prompt", () => {
     expect(member!.role).toBe("member");
   });
 
-  it("writes user_message event", async () => {
+  it("does not write a timeline event while a prompt is pending", async () => {
     const { stub } = await initSession();
 
     const res = await stub.fetch("http://internal/internal/prompt", {
@@ -84,18 +115,107 @@ describe("POST /internal/prompt", () => {
     const { messageId } = await res.json<{ messageId: string }>();
     const events = await queryDO<{ type: string; data: string; message_id: string }>(
       stub,
-      "SELECT type, data, message_id FROM events WHERE type = 'user_message'"
+      "SELECT type, data, message_id FROM events WHERE type = 'user_message' AND message_id = ?",
+      messageId
     );
 
-    const matching = events.filter((e) => e.message_id === messageId);
-    expect(matching.length).toBeGreaterThanOrEqual(1);
+    expect(events).toEqual([]);
+  });
 
-    const data = JSON.parse(matching[0].data);
-    expect(data.content).toBe("Refactor auth");
-    expect(data.messageId).toBe(messageId);
-    expect(data.author).toEqual(
-      expect.objectContaining({ participantId: expect.any(String), userId: "canonical-bot" })
+  it("orders a queued user_message after the preceding prompt completes", async () => {
+    const name = `prompt-timeline-order-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const enqueue = async (content: string) => {
+      const response = await stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+      });
+      return (await response.json<{ messageId: string }>()).messageId;
+    };
+    const firstPrompt = collectMessages(sandboxWs!, {
+      until: (message) => message.type === "prompt",
+    });
+    const firstId = await enqueue("First prompt");
+    await firstPrompt;
+    const secondId = await enqueue("Queued follow-up");
+
+    expect(
+      await queryDO(
+        stub,
+        "SELECT id FROM events WHERE type = 'user_message' AND message_id = ?",
+        secondId
+      )
+    ).toEqual([]);
+
+    const secondPrompt = collectMessages(sandboxWs!, {
+      until: (message) => message.type === "prompt" && message.messageId === secondId,
+    });
+    sandboxWs!.send(
+      JSON.stringify({
+        type: "execution_complete",
+        messageId: firstId,
+        success: true,
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1000,
+      })
     );
+    await secondPrompt;
+
+    const events = await queryDO<{ type: string; message_id: string }>(
+      stub,
+      `SELECT type, message_id FROM events
+       WHERE message_id IN (?, ?) ORDER BY timeline_sequence`,
+      firstId,
+      secondId
+    );
+    expect(events.map((event) => [event.type, event.message_id])).toEqual([
+      ["user_message", firstId],
+      ["execution_complete", firstId],
+      ["user_message", secondId],
+    ]);
+    sandboxWs!.close();
+  });
+
+  it("dispatches exactly one of two concurrent prompts and leaves the other queued", async () => {
+    const name = `prompt-concurrent-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const sandboxMessages = collectMessages(sandboxWs!, { timeoutMs: 500 });
+    const enqueue = (content: string) =>
+      stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, authorId: "user-1", source: "web" }),
+      });
+    const responses = await Promise.all([enqueue("Concurrent A"), enqueue("Concurrent B")]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+
+    const prompts = (await sandboxMessages).filter((message) => message.type === "prompt");
+    expect(prompts).toHaveLength(1);
+    const rows = await queryDO<{ id: string; status: string }>(
+      stub,
+      `SELECT id, status FROM messages ORDER BY created_at ASC, rowid ASC`
+    );
+    expect(rows.map(({ status }) => status).sort()).toEqual(["pending", "processing"]);
+    expect(prompts[0].messageId).toBe(rows.find(({ status }) => status === "processing")?.id);
+
+    sandboxWs!.close();
   });
 
   it("stores attachments as JSON", async () => {

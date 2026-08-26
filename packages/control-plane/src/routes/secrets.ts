@@ -9,6 +9,8 @@ import type { Env } from "../types";
 import { createLogger } from "../logger";
 import {
   type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   type RequestContext,
   parsePattern,
   json,
@@ -369,7 +371,7 @@ async function handleDeleteGlobalSecret(
   }
 }
 
-export const secretsRoutes: Route[] = [
+export const secretsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "PUT",
     pattern: parsePattern("/repos/:owner/:name/secrets"),
@@ -400,4 +402,4 @@ export const secretsRoutes: Route[] = [
     pattern: parsePattern("/secrets/:key"),
     handler: handleDeleteGlobalSecret,
   },
-];
+]);

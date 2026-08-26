@@ -116,22 +116,11 @@ def test_draft_mode_requires_explicit_user_request(tmp_path: Path) -> None:
     assert "otherwise omit this field" in result.stdout
 
 
-@pytest.mark.parametrize(
-    ("state", "message"),
-    [
-        ("draft", "The pull request is in draft mode."),
-        ("open", "The pull request is now ready for review."),
-    ],
-)
-def test_formats_pull_request_state(tmp_path: Path, state: str, message: str) -> None:
+def _format_success(tmp_path: Path, result_json: str) -> str:
     script = """
       console.log = () => {};
       const { formatPullRequestSuccess } = await import(process.argv[1]);
-      process.stdout.write(formatPullRequestSuccess({
-        prNumber: 42,
-        prUrl: "https://example.test/pull/42",
-        state: process.argv[2],
-      }));
+      process.stdout.write(formatPullRequestSuccess(JSON.parse(process.argv[2])));
     """
     result = subprocess.run(
         [
@@ -140,12 +129,69 @@ def test_formats_pull_request_state(tmp_path: Path, state: str, message: str) ->
             "-e",
             script,
             _plugin_module(tmp_path).as_uri(),
-            state,
+            result_json,
         ],
         capture_output=True,
         text=True,
         check=True,
         timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
     )
+    return result.stdout
 
-    assert message in result.stdout
+
+@pytest.mark.parametrize(
+    ("state", "message"),
+    [
+        ("draft", "The pull request is in draft mode."),
+        ("open", "The pull request is now ready for review."),
+    ],
+)
+def test_formats_pull_request_state(tmp_path: Path, state: str, message: str) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps({"prNumber": 42, "prUrl": "https://example.test/pull/42", "state": state}),
+    )
+
+    assert message in output
+
+
+def test_formats_updated_pull_request(tmp_path: Path) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "state": "open",
+                "headBranch": "feature-x",
+                "baseBranch": "main",
+                "updated": True,
+            }
+        ),
+    )
+
+    assert "updated with your latest commits" in output
+    assert "PR #42" in output
+    assert "https://example.test/pull/42" in output
+    assert "feature-x" in output
+    assert "created successfully" not in output
+
+
+def test_formats_branches_on_creation(tmp_path: Path) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "state": "open",
+                "headBranch": "feature-x",
+                "baseBranch": "release-1.0",
+                "updated": False,
+            }
+        ),
+    )
+
+    assert "created successfully" in output
+    assert "feature-x" in output
+    assert "release-1.0" in output

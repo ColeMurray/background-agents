@@ -11,6 +11,7 @@ import {
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
+  type VncSettings,
 } from "@open-inspect/shared/types/integrations";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
@@ -26,6 +27,8 @@ import { createLogger } from "../logger";
 import {
   type Route,
   type RequestContext,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   parsePattern,
   json,
   error,
@@ -448,6 +451,18 @@ async function handleGetResolvedConfig(
     });
   }
 
+  if (id === "vnc") {
+    const vncSettings = settings as VncSettings;
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        enabled: vncSettings.enabled ?? false,
+        enabledRepos,
+      },
+    });
+  }
+
   if (id === "sandbox") {
     const sandboxSettings = settings as SandboxSettings;
     return json({
@@ -472,7 +487,7 @@ async function handleGetResolvedConfig(
   return error(`Unsupported integration: ${id}`, 400);
 }
 
-export const integrationSettingsRoutes: Route[] = [
+export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   // Integration settings — global
   {
     method: "GET",
@@ -511,7 +526,7 @@ export const integrationSettingsRoutes: Route[] = [
     handler: handleDeleteRepoSettings,
   },
   // Integration settings — per-environment (design §13.5; sandbox and
-  // code-server only)
+  // code-server, and VNC only)
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
@@ -533,4 +548,4 @@ export const integrationSettingsRoutes: Route[] = [
     pattern: parsePattern("/integration-settings/:id/resolved/:owner/:name"),
     handler: handleGetResolvedConfig,
   },
-];
+]);

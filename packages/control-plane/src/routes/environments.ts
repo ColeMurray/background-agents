@@ -22,6 +22,8 @@ import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
 import {
   type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   type RequestContext,
   parsePattern,
   json,
@@ -260,7 +262,7 @@ async function handleDeleteEnvironment(
   return json({ status: "deleted", id });
 }
 
-export const environmentRoutes: Route[] = [
+export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   { method: "GET", pattern: parsePattern("/environments"), handler: handleListEnvironments },
   { method: "POST", pattern: parsePattern("/environments"), handler: handleCreateEnvironment },
   { method: "GET", pattern: parsePattern("/environments/:id"), handler: handleGetEnvironment },
@@ -270,4 +272,4 @@ export const environmentRoutes: Route[] = [
     pattern: parsePattern("/environments/:id"),
     handler: handleDeleteEnvironment,
   },
-];
+]);

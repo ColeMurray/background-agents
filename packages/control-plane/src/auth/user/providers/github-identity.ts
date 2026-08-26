@@ -1,9 +1,9 @@
 import { z } from "zod";
+import { SIGN_IN_PROVIDER_ISSUERS } from "@open-inspect/shared/sign-in-provider";
 import { createLogger, type Logger } from "../../../logger";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./constants";
 import { assertCanonicalIssuer, OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 
-const GITHUB_ISSUER = "https://github.com";
 const GITHUB_API_URL = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_EMAILS_PER_PAGE = 100;
@@ -50,7 +50,7 @@ export class GitHubProviderIdentityResolver {
     private readonly config: GitHubProviderIdentityResolverConfig,
     dependencies: GitHubProviderIdentityResolverDependencies = {}
   ) {
-    assertCanonicalIssuer(config.issuer, GITHUB_ISSUER);
+    assertCanonicalIssuer(config.issuer, SIGN_IN_PROVIDER_ISSUERS.github);
     this.fetchImpl = dependencies.fetch ?? globalThis.fetch.bind(globalThis);
     this.requestTimeoutMs = dependencies.requestTimeoutMs ?? DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
     this.logger = dependencies.logger ?? createLogger("github-provider-identity");
@@ -67,7 +67,7 @@ export class GitHubProviderIdentityResolver {
     ];
     return {
       provider: "github",
-      issuer: GITHUB_ISSUER,
+      issuer: SIGN_IN_PROVIDER_ISSUERS.github,
       subject: String(user.id),
       login: user.login,
       displayName: user.name ?? user.login,

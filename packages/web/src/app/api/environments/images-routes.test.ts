@@ -1,6 +1,10 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as SandboxProviderModuleNamespace from "@/lib/sandbox-provider";
+
+type SandboxProviderModule = typeof SandboxProviderModuleNamespace;
+
 const mocks = vi.hoisted(() => ({
   supportsRepoImagesValue: true,
 }));
@@ -13,12 +17,16 @@ vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-vi.mock("@/lib/sandbox-provider", () => ({
+// Only the provider probe is stubbed; the 501 copy comes from the real module so
+// the assertion below pins the message routes actually answer with.
+vi.mock("@/lib/sandbox-provider", async (importOriginal) => ({
+  ...(await importOriginal<SandboxProviderModule>()),
   supportsRepoImages: () => mocks.supportsRepoImagesValue,
 }));
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { REPO_IMAGES_UNSUPPORTED_MESSAGE } from "@/lib/sandbox-provider";
 import { GET as getEnvironmentStatus } from "./[id]/images/route";
 import { POST as triggerBuild } from "./[id]/images/trigger/route";
 
@@ -59,6 +67,9 @@ describe.each(routes)("$name", ({ call }) => {
     const response = await call();
 
     expect(response.status).toBe(501);
+    // Every image-build route answers with the one derived message, so adding a
+    // provider cannot leave a stale list behind on some subset of routes.
+    expect(await response.json()).toEqual({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE });
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
@@ -87,6 +98,7 @@ describe("unified route consumption", () => {
       scope_id: "env-1",
       provider: "modal",
       status: "ready",
+      repositories_fingerprint: "fp-env",
       repository_shas: "[]",
       runtime_version: "60",
       build_duration_seconds: 10,
@@ -103,6 +115,17 @@ describe("unified route consumption", () => {
       "/image-builds/status?scope_kind=environment&scope_id=env-1"
     );
     await expect(response.json()).resolves.toEqual({ images: [readyRow] });
+  });
+
+  it("returns 502 when the unified status response omits images", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({}));
+
+    const response = await getEnvironmentStatus(request, params);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Failed to fetch environment image status",
+    });
   });
 
   it("trigger posts to the unified environment trigger route", async () => {

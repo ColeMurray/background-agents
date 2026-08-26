@@ -1,9 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+  MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
   buildModalSandboxDashboardUrl,
   buildModalWorkspaceSlug,
   createModalClient,
 } from "./client";
+import { RequestDeadlineError } from "./request-deadline";
+
+function rejectWhenAborted(signal: AbortSignal): Promise<Response> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
+function stalledBodyResponse(signal: AbortSignal): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        if (signal.aborted) {
+          controller.error(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
 
 describe("buildModalWorkspaceSlug", () => {
   it("uses the raw workspace when the Modal environment has no web suffix", () => {
@@ -70,7 +95,85 @@ describe("buildModalSandboxDashboardUrl", () => {
 
 describe("ModalClient", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("times out image-build creation when response headers stall", async () => {
+    vi.useFakeTimers();
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => (markFetchStarted = resolve));
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      markFetchStarted();
+      return rejectWhenAborted(init?.signal as AbortSignal);
+    });
+
+    const request = createModalClient("secret", "acme").createImageBuildSandbox({
+      scopeKind: "repo",
+      scopeId: "acme/repo",
+      buildId: "imgb-1",
+      repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
+      callbackUrl: "https://cp.test/image-builds/build-complete",
+      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+      buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
+    });
+
+    const rejection = expect(request).rejects.toMatchObject({
+      name: RequestDeadlineError.name,
+      provider: "Modal",
+      endpoint: "createImageBuildSandbox",
+      timeoutMs: MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+    });
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(MODAL_SANDBOX_START_REQUEST_DEADLINE_MS);
+    await rejection;
+  });
+
+  it("keeps the deadline armed while reading a Modal response body", async () => {
+    vi.useFakeTimers();
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => (markFetchStarted = resolve));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      markFetchStarted();
+      return Promise.resolve(stalledBodyResponse(init?.signal as AbortSignal));
+    });
+
+    const request = createModalClient("secret", "acme").snapshotSandbox({
+      providerObjectId: "mo-1",
+      sessionId: "session-1",
+      reason: "manual",
+    });
+
+    const rejection = expect(request).rejects.toThrow(
+      `Modal request timeout after ${MODAL_SNAPSHOT_REQUEST_DEADLINE_MS}ms (snapshotSandbox)`
+    );
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(MODAL_SNAPSHOT_REQUEST_DEADLINE_MS - 10_000);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+  });
+
+  it("combines caller cancellation with the Modal deadline", async () => {
+    const caller = new AbortController();
+    const callerReason = new DOMException("caller cancelled", "AbortError");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_url, init) => rejectWhenAborted(init?.signal as AbortSignal));
+
+    const request = createModalClient("secret", "acme").snapshotSandbox({
+      providerObjectId: "mo-1",
+      sessionId: "session-1",
+      reason: "manual",
+      signal: caller.signal,
+    });
+    caller.abort(callerReason);
+
+    await expect(request).rejects.toBe(callerReason);
+    const providerSignal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
+    expect(providerSignal).not.toBe(caller.signal);
+    expect(providerSignal.reason).toBe(callerReason);
   });
 
   it("routes the restore session_config through buildSessionConfig (carries mcp_servers)", async () => {
@@ -176,6 +279,8 @@ describe("ModalClient", () => {
             created_at: 1,
             code_server_url: "https://code.test",
             code_server_password: "pw",
+            vnc_url: "https://vnc.test",
+            vnc_password: "vnc-pw",
             ttyd_url: "https://ttyd.test",
             tunnel_urls: { "3000": "https://3000.test" },
           },
@@ -196,10 +301,11 @@ describe("ModalClient", () => {
     ).resolves.toEqual({
       sandboxId: "sb-1",
       modalObjectId: "mo-1",
-      status: "spawning",
       createdAt: 1,
       codeServerUrl: "https://code.test",
       codeServerPassword: "pw",
+      vncUrl: "https://vnc.test",
+      vncPassword: "vnc-pw",
       ttydUrl: "https://ttyd.test",
       tunnelUrls: { "3000": "https://3000.test" },
     });
@@ -217,6 +323,8 @@ describe("ModalClient", () => {
             created_at: 1,
             code_server_url: null,
             code_server_password: null,
+            vnc_url: null,
+            vnc_password: null,
             ttyd_url: null,
             tunnel_urls: null,
           },
@@ -237,10 +345,11 @@ describe("ModalClient", () => {
     expect(result).toEqual({
       sandboxId: "sb-1",
       modalObjectId: undefined,
-      status: "spawning",
       createdAt: 1,
       codeServerUrl: undefined,
       codeServerPassword: undefined,
+      vncUrl: undefined,
+      vncPassword: undefined,
       ttydUrl: undefined,
       tunnelUrls: undefined,
     });
@@ -336,6 +445,8 @@ describe("ModalClient", () => {
             status: "warming",
             code_server_url: null,
             code_server_password: null,
+            vnc_url: null,
+            vnc_password: null,
             ttyd_url: null,
             tunnel_urls: null,
           },
@@ -363,9 +474,49 @@ describe("ModalClient", () => {
       modalObjectId: undefined,
       codeServerUrl: undefined,
       codeServerPassword: undefined,
+      vncUrl: undefined,
+      vncPassword: undefined,
       ttydUrl: undefined,
       tunnelUrls: undefined,
     });
+  });
+
+  it("sends VNC enablement on create and restore", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    const client = createModalClient("secret", "acme", "prod-web");
+
+    await client.createSandbox({
+      sessionId: "session-123",
+      repoOwner: null,
+      repoName: null,
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+      vncEnabled: true,
+    });
+    await client.restoreSandbox({
+      snapshotImageId: "img-1",
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      sandboxAuthToken: "auth-token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: null,
+      repoName: null,
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-5",
+      vncEnabled: true,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).vnc_enabled).toBe(true);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).vnc_enabled).toBe(true);
   });
 
   it("parses valid snapshot responses", async () => {
@@ -482,7 +633,6 @@ describe("ModalClient", () => {
       failure_callback_url: "https://worker.test/image-builds/build-failed",
       build_execution_timeout_seconds: 1800,
       provider_session_timeout_seconds: 2400,
-      build_timeout_seconds: 2400,
     });
     expect(result).toEqual({ providerSessionId: "modal-session-1" });
   });

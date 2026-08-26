@@ -4,7 +4,6 @@
 
 import type { TriggerSourceDefinition } from "../types";
 
-export type { SentryAutomationEvent } from "../types";
 export type {
   SentryIssueAlertPayload,
   SentryIssueWebhookPayload,

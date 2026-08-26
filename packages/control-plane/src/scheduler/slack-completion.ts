@@ -1,7 +1,7 @@
 /**
  * Pure builders for the scheduler → slack-bot notifications (run completion and
  * concurrency-skip). Kept free of Durable Object state so they can be unit
- * tested directly; the SchedulerDO method signs the result (HMAC over the JSON
+ * tested directly; the scheduler signs the result (HMAC over the JSON
  * body) and POSTs it via the optional `SLACK_BOT` Fetcher.
  *
  * Returning `null` from either builder is the explicit signal to skip the bot
@@ -41,7 +41,7 @@ export function parseSlackTriggerMetadata(raw: string | null | undefined): Slack
 
 /**
  * Run result fields the bot needs to post the agent's final response into the
- * triggering message's thread. The SchedulerDO sources `sessionId`/`messageId`
+ * triggering message's thread. The scheduler sources `sessionId`/`messageId`
  * (and success/error) from the run-complete callback and repo/model from the
  * automation row.
  */

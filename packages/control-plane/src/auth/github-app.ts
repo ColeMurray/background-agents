@@ -17,7 +17,7 @@ import { z } from "zod";
 import { base64UrlEncode } from "./encoding";
 
 /** Timeout for individual GitHub API requests (ms). */
-export const GITHUB_FETCH_TIMEOUT_MS = 60_000;
+const GITHUB_FETCH_TIMEOUT_MS = 60_000;
 
 /** Cache installation tokens for this duration at most (ms). */
 export const INSTALLATION_TOKEN_CACHE_MAX_AGE_MS = 50 * 60 * 1000;
@@ -26,7 +26,7 @@ export const INSTALLATION_TOKEN_CACHE_MAX_AGE_MS = 50 * 60 * 1000;
 export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 
 /** Upper bound for KV cache TTL (seconds). */
-export const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
+const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
 
 const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v1";
 
@@ -73,7 +73,7 @@ export function fetchWithTimeout(
 }
 
 /** Per-page timing record returned from listInstallationRepositories. */
-export interface GitHubPageTiming {
+interface GitHubPageTiming {
   page: number;
   fetchMs: number;
   repoCount: number;
@@ -205,7 +205,7 @@ async function importPrivateKeyCached(pem: string): Promise<CryptoKey> {
  * @param privateKey - PEM-encoded private key
  * @returns Signed JWT valid for 10 minutes
  */
-export async function generateAppJwt(appId: string, privateKey: string): Promise<string> {
+async function generateAppJwt(appId: string, privateKey: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
   // JWT header

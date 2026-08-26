@@ -250,6 +250,24 @@ describe("GitHubSourceControlProvider", () => {
 
       expect(result).toBeNull();
     });
+
+    it("returns the provider's canonical repository identity", async () => {
+      mockGetInstallationRepository.mockResolvedValueOnce({
+        id: 1,
+        owner: "New-Owner",
+        name: "Renamed-Repo",
+        fullName: "New-Owner/Renamed-Repo",
+        description: null,
+        private: true,
+        archived: false,
+        defaultBranch: "main",
+      });
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      const result = await provider.checkRepositoryAccess({ owner: "old-owner", name: "old-repo" });
+
+      expect(result).toMatchObject({ repoOwner: "new-owner", repoName: "renamed-repo" });
+    });
   });
 
   describe("listRepositories", () => {
@@ -544,6 +562,111 @@ describe("GitHubSourceControlProvider", () => {
       expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
       const sentBody = JSON.parse(mockFetchWithTimeout.mock.calls[0][1]?.body as string);
       expect(sentBody.draft).toBe(true);
+    });
+
+    it("adds an existing label without trying to create it", async () => {
+      mockFetchWithTimeout
+        .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+        .mockResolvedValueOnce(makeResponse({ name: "open inspect" }))
+        .mockResolvedValueOnce(makeResponse([]));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        labels: ["open inspect"],
+      });
+
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(3);
+      expect(mockFetchWithTimeout.mock.calls[1][0]).toMatch(
+        /\/repos\/acme\/web\/labels\/open%20inspect$/
+      );
+      expect(mockFetchWithTimeout.mock.calls[1][1]?.method).toBeUndefined();
+      expect(mockFetchWithTimeout.mock.calls[2][0]).toMatch(/\/issues\/7\/labels$/);
+      expect(JSON.parse(mockFetchWithTimeout.mock.calls[2][1]?.body as string)).toEqual({
+        labels: ["open inspect"],
+      });
+    });
+
+    it("creates a missing label before adding it to the pull request", async () => {
+      mockFetchWithTimeout
+        .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+        .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+        .mockResolvedValueOnce(makeResponse({ name: "generated" }, 201))
+        .mockResolvedValueOnce(makeResponse([]));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        labels: ["generated"],
+      });
+
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(4);
+      expect(mockFetchWithTimeout.mock.calls[2][0]).toMatch(/\/repos\/acme\/web\/labels$/);
+      expect(mockFetchWithTimeout.mock.calls[2][1]?.method).toBe("POST");
+      expect(JSON.parse(mockFetchWithTimeout.mock.calls[2][1]?.body as string)).toEqual({
+        name: "generated",
+        color: "ededed",
+      });
+      expect(mockFetchWithTimeout.mock.calls[3][0]).toMatch(/\/issues\/7\/labels$/);
+    });
+
+    it("confirms a concurrent label creation after a 422 response", async () => {
+      mockFetchWithTimeout
+        .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+        .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+        .mockResolvedValueOnce(makeResponse({ message: "Validation Failed" }, 422))
+        .mockResolvedValueOnce(makeResponse({ name: "generated" }))
+        .mockResolvedValueOnce(makeResponse([]));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        labels: ["generated"],
+      });
+
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(5);
+      expect(mockFetchWithTimeout.mock.calls[3][0]).toMatch(/\/labels\/generated$/);
+      expect(mockFetchWithTimeout.mock.calls[4][0]).toMatch(/\/issues\/7\/labels$/);
+    });
+
+    it("logs an unconfirmed 422 label creation failure", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        mockFetchWithTimeout
+          .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+          .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+          .mockResolvedValueOnce(makeResponse({ message: "Validation Failed" }, 422))
+          .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+          .mockResolvedValueOnce(makeResponse([]));
+
+        const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+        await provider.createPullRequest(fakeAuth, {
+          repository: fakeRepository,
+          title: "Add feature",
+          body: "Body",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          labels: ["generated"],
+        });
+
+        expect(warn).toHaveBeenCalledWith('Failed to create label "generated" in acme/web: 422');
+        expect(mockFetchWithTimeout.mock.calls[3][0]).toMatch(/\/labels\/generated$/);
+        expect(mockFetchWithTimeout.mock.calls[4][0]).toMatch(/\/issues\/7\/labels$/);
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it("throws a SourceControlProviderError when PR creation fails", async () => {
@@ -987,5 +1110,126 @@ describe("response validation (zod boundary)", () => {
 
     expect(err).toBeInstanceOf(SourceControlProviderError);
     expect((err as SourceControlProviderError).errorType).toBe("permanent");
+  });
+});
+
+describe("managed-skill repository reads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+  });
+
+  it("resolves commits with GitHub's SHA representation", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response("abc123\n"));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.resolveCommit({ owner: "acme", name: "skills", ref: "feature/test" })
+    ).resolves.toEqual({ sha: "abc123" });
+    expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+      expect.stringContaining("commits/feature%2Ftest"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/vnd.github.sha" }),
+      })
+    );
+  });
+
+  it("returns null for a missing commit ref", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response("", { status: 404 }));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.resolveCommit({ owner: "acme", name: "skills", ref: "missing" })
+    ).resolves.toBeNull();
+  });
+
+  it("classifies symlinks and submodules as unsupported tree entries", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({
+        tree: [
+          { path: "SKILL.md", type: "blob", mode: "100644", sha: "file", size: 10 },
+          { path: "run.sh", type: "blob", mode: "100755", sha: "exec", size: 5 },
+          { path: "link", type: "blob", mode: "120000", sha: "link", size: 8 },
+          { path: "module", type: "commit", mode: "160000", sha: "module" },
+        ],
+      })
+    );
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    const tree = await provider.listTree({ owner: "acme", name: "skills", commitSha: "abc" });
+
+    expect(tree.entries.map(({ type, executable }) => ({ type, executable }))).toEqual([
+      { type: "file", executable: false },
+      { type: "file", executable: true },
+      { type: "other", executable: false },
+      { type: "other", executable: false },
+    ]);
+  });
+
+  it("resolves and recursively lists only the requested subtree", async () => {
+    mockFetchWithTimeout
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          tree: [{ path: "skills", type: "tree", mode: "040000", sha: "skills" }],
+        })
+      )
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          tree: [{ path: "deploy", type: "tree", mode: "040000", sha: "deploy" }],
+        })
+      )
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          tree: [{ path: "SKILL.md", type: "blob", mode: "100644", sha: "file", size: 10 }],
+        })
+      );
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    const tree = await provider.listTree({
+      owner: "acme",
+      name: "skills",
+      commitSha: "abc",
+      path: "skills/deploy",
+    });
+
+    expect(tree.entries[0]?.path).toBe("skills/deploy/SKILL.md");
+    expect(mockFetchWithTimeout.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/git/trees/abc"),
+      expect.stringContaining("/git/trees/skills"),
+      expect.stringContaining("/git/trees/deploy?recursive=1"),
+    ]);
+  });
+
+  it("returns an empty scoped tree when a path segment is missing", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ tree: [] }));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.listTree({ owner: "acme", name: "skills", commitSha: "abc", path: "missing" })
+    ).resolves.toEqual({ entries: [], truncated: false });
+    expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an undeclared oversized blob while streaming it", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5, 6]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response(body));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    const error = await provider
+      .readBlob({ owner: "acme", name: "skills", blobId: "big", maxBytes: 4 })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SourceControlProviderError);
+    expect((error as SourceControlProviderError).httpStatus).toBe(413);
+    expect(cancelled).toBe(true);
   });
 });

@@ -13,6 +13,7 @@ const IMAGE_BUILD_PROVIDERS = {
   modal: true,
   vercel: true,
   opencomputer: true,
+  e2b: true,
 } satisfies Record<ImageBuildProvider, true>;
 
 export function getImageBuildsUnsupportedMessage(env: Env): string | null {
@@ -20,7 +21,7 @@ export function getImageBuildsUnsupportedMessage(env: Env): string | null {
     return null;
   }
 
-  return "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, or opencomputer";
+  return "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, opencomputer, or e2b";
 }
 
 export function resolveImageBuildProvider(value: string | undefined): ImageBuildProvider | null {

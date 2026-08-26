@@ -1,5 +1,6 @@
 import { postBlocks, postMessage, removeReaction } from "@open-inspect/shared/slack";
-import type { AgentResponse, Env } from "../types";
+import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
+import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { extractAgentResponse } from "./extractor";
 import { buildCompletionBlocks, truncateError } from "./blocks";

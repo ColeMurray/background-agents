@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared/types/session-api";
 import { createChildSessionsHandler } from "./child-sessions.handler";
+import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
   FINAL_RESPONSE_MAX_EVENTS,
@@ -13,6 +15,10 @@ import type {
   SandboxRow,
   SessionRow,
 } from "../../types";
+import type { ArtifactRepository } from "../../artifact-repository";
+import type { ParticipantRepository } from "../../participant-repository";
+import type { EventRepository } from "../../event-repository";
+import type { MessageRepository } from "../../message-repository";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -34,6 +40,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -70,9 +77,11 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     modal_object_id: null,
     snapshot_id: null,
     snapshot_image_id: null,
+    snapshot_runtime_version: null,
+    runtime_version: null,
     auth_token: null,
     auth_token_hash: null,
-    status: "running",
+    status: "ready",
     git_sync_status: "pending",
     last_heartbeat: null,
     last_activity: null,
@@ -80,6 +89,8 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
@@ -121,8 +132,11 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    client_request_id: null,
+    request_fingerprint: null,
     status: "completed",
     error_message: null,
+    stop_confirmation_deadline: null,
     created_at: 1,
     started_at: 2,
     completed_at: 3,
@@ -133,11 +147,16 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
 function createHandler() {
   const repository = {
     listParticipants: vi.fn(),
-    listArtifacts: vi.fn(),
+    getProcessingMessageAuthor: vi.fn<() => { author_id: string } | null>(() => ({
+      author_id: "participant-1",
+    })),
+    getParticipantById: vi.fn<(id: string) => ParticipantRow | null>(() => createParticipant()),
     listEventPage: vi.fn(),
     getLatestTerminalMessage: vi.fn(),
     getEventTimelinePage: vi.fn(),
+    getPendingOrProcessingCount: vi.fn(() => 0),
   };
+  const artifactRepository = { listArtifacts: vi.fn() };
   const getSession = vi.fn<() => SessionRow | null>();
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
@@ -145,29 +164,183 @@ function createHandler() {
     artifact.metadata ? (JSON.parse(artifact.metadata) as Record<string, unknown>) : null
   );
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
+  const enqueuePrompt = vi.fn(async () => ({
+    messageId: "message-follow-up",
+    status: "queued" as const,
+  }));
+  const messageService = { enqueuePrompt };
 
   const handler = createChildSessionsHandler({
-    repository,
+    messageRepository: repository as unknown as MessageRepository,
+    eventRepository: repository as unknown as EventRepository,
+    participantRepository: repository as unknown as ParticipantRepository,
+    artifactRepository: artifactRepository as unknown as ArtifactRepository,
     getSession,
     getSandbox,
     getPublicSessionId,
     parseArtifactMetadata,
     messenger,
+    messageService,
   });
 
   return {
     handler,
     repository,
+    artifactRepository,
     getSession,
     getSandbox,
     getPublicSessionId,
     parseArtifactMetadata,
     broadcast,
+    enqueuePrompt,
   };
 }
 
 describe("createChildSessionsHandler", () => {
+  describe("parentPrompt", () => {
+    function request(body: unknown): Request {
+      const withAuthor =
+        typeof body === "object" && body !== null
+          ? {
+              ...body,
+              author: {
+                userId: "owner-1",
+                canonicalUserId: "canonical-1",
+                scmUserId: null,
+                scmLogin: null,
+                scmName: null,
+                scmEmail: null,
+              },
+            }
+          : body;
+      return new Request("http://internal/internal/parent-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(withAuthor),
+      });
+    }
+
+    it("queues a parent follow-up as the propagated prompt author", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([
+        createParticipant({ user_id: "owner-1", canonical_user_id: "canonical-1" }),
+      ]);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue with the edge cases" })
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        messageId: "message-follow-up",
+        status: "queued",
+      });
+      expect(enqueuePrompt).toHaveBeenCalledWith({
+        content: "Continue with the edge cases",
+        authorId: "owner-1",
+        canonicalUserId: "canonical-1",
+        source: "agent",
+        scmEnrichment: {
+          userId: null,
+          login: null,
+          name: null,
+          email: null,
+          accessTokenEncrypted: null,
+          refreshTokenEncrypted: null,
+          tokenExpiresAt: null,
+        },
+      });
+    });
+
+    it("returns distinct validation reasons for blank and oversized prompts", async () => {
+      const { handler } = createHandler();
+
+      const blank = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "" })
+      );
+      const oversized = await handler.parentPrompt(
+        request({
+          parentSessionId: "parent-1",
+          content: "x".repeat(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS + 1),
+        })
+      );
+      const blankBody = (await blank.json()) as { error: string };
+      const oversizedBody = (await oversized.json()) as { error: string };
+
+      expect(blank.status).toBe(400);
+      expect(oversized.status).toBe(400);
+      expect(blankBody.error).toMatch(/^Invalid prompt body: .+/);
+      expect(oversizedBody.error).toMatch(/^Invalid prompt body: .+/);
+      expect(blankBody.error).not.toBe(oversizedBody.error);
+    });
+
+    it("returns 404 when the authoritative parent does not match", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "actual-parent" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "wrong-parent", content: "Continue" })
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Child session not found" });
+      expect(enqueuePrompt).not.toHaveBeenCalled();
+    });
+
+    it.each(["cancelled", "archived"] as const)(
+      "rejects a %s child without storing a prompt",
+      async (status) => {
+        const { handler, getSession, repository, enqueuePrompt } = createHandler();
+        getSession.mockReturnValue(createSession({ parent_session_id: "parent-1", status }));
+        repository.listParticipants.mockReturnValue([createParticipant()]);
+
+        const response = await handler.parentPrompt(
+          request({ parentSessionId: "parent-1", content: "Continue" })
+        );
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({
+          error: `Cannot prompt a ${status} session`,
+        });
+        expect(enqueuePrompt).not.toHaveBeenCalled();
+      }
+    );
+
+    it("rejects a follow-up when the child queue is full", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      enqueuePrompt.mockRejectedValue(new PromptQueueFullError());
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(429);
+      await expect(response.json()).resolves.toEqual({ error: "Child prompt queue is full" });
+      expect(enqueuePrompt).toHaveBeenCalledOnce();
+    });
+
+    it("maps a promptability race to 409", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      enqueuePrompt.mockRejectedValue(new SessionNotPromptableError("archived"));
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: "Cannot prompt a archived session",
+      });
+    });
+  });
+
   it("returns 404 when session is missing for spawn context", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(null);
@@ -178,18 +351,109 @@ describe("createChildSessionsHandler", () => {
     expect(await response.json()).toEqual({ error: "Session not found" });
   });
 
-  it("returns 404 when owner participant is missing", async () => {
+  it("returns 401 when the processing prompt author is missing", async () => {
     const { handler, getSession, repository } = createHandler();
     getSession.mockReturnValue(createSession());
-    repository.listParticipants.mockReturnValue([createParticipant({ role: "member" })]);
+    repository.getParticipantById.mockReturnValue(null);
 
     const response = handler.getSpawnContext();
 
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: "No owner participant found" });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Prompt author not found" });
   });
 
-  it("maps spawn context from session and owner participant", async () => {
+  it("maps spawn attribution from the processing prompt author instead of the owner", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    repository.listParticipants.mockReturnValue([
+      createParticipant(),
+      createParticipant({
+        id: "participant-2",
+        user_id: "slack:U2",
+        canonical_user_id: "canonical-2",
+        scm_user_id: "222",
+        scm_login: "second-user",
+        scm_name: "Second User",
+        scm_email: "second@example.com",
+        role: "member",
+        scm_access_token_encrypted: "second-access",
+        scm_refresh_token_encrypted: "second-refresh",
+        scm_token_expires_at: 5678,
+      }),
+    ]);
+    repository.getProcessingMessageAuthor.mockReturnValue({ author_id: "participant-2" });
+    repository.getParticipantById.mockReturnValue(
+      createParticipant({
+        id: "participant-2",
+        user_id: "slack:U2",
+        canonical_user_id: "canonical-2",
+        role: "member",
+        scm_user_id: "222",
+        scm_login: "second-user",
+        scm_name: "Second User",
+        scm_email: "second@example.com",
+        scm_access_token_encrypted: "second-access",
+        scm_refresh_token_encrypted: "second-refresh",
+        scm_token_expires_at: 5678,
+      })
+    );
+
+    const response = handler.getSpawnContext();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      promptAuthor: {
+        userId: "slack:U2",
+        canonicalUserId: "canonical-2",
+        scmUserId: "222",
+        scmLogin: "second-user",
+        scmAccessTokenEncrypted: "second-access",
+      },
+    });
+  });
+
+  it("returns a narrow active prompt author without encrypted credentials", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    repository.getParticipantById.mockReturnValue(
+      createParticipant({
+        user_id: "slack:U2",
+        canonical_user_id: "canonical-2",
+        scm_user_id: "222",
+        scm_login: "second-user",
+        scm_name: "Second User",
+        scm_email: "second@example.com",
+        scm_access_token_encrypted: "secret-access",
+        scm_refresh_token_encrypted: "secret-refresh",
+      })
+    );
+
+    const response = handler.getActivePromptAuthor();
+
+    expect(response.status).toBe(200);
+    const body = await response.json<Record<string, unknown>>();
+    expect(body).toMatchObject({
+      userId: "slack:U2",
+      canonicalUserId: "canonical-2",
+      scmUserId: "222",
+      scmLogin: "second-user",
+    });
+    expect(body).not.toHaveProperty("scmAccessTokenEncrypted");
+    expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
+  });
+
+  it("rejects spawn context when no prompt is processing", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    repository.getProcessingMessageAuthor.mockReturnValue(null);
+
+    const response = handler.getSpawnContext();
+
+    expect(response.status).toBe(400);
+    expect(repository.getParticipantById).not.toHaveBeenCalled();
+  });
+
+  it("maps spawn context from session and processing prompt author", async () => {
     const { handler, getSession, repository } = createHandler();
     getSession.mockReturnValue(
       createSession({
@@ -210,7 +474,7 @@ describe("createChildSessionsHandler", () => {
       reasoningEffort: "high",
       baseBranch: "main",
       sandboxTimeoutMs: 14_400_000,
-      owner: {
+      promptAuthor: {
         userId: "user-1",
         scmUserId: null,
         scmLogin: "octocat",
@@ -223,7 +487,7 @@ describe("createChildSessionsHandler", () => {
     });
   });
 
-  it("maps repo-less spawn context from session and owner participant", async () => {
+  it("maps repo-less spawn context from session and processing prompt author", async () => {
     const { handler, getSession, repository } = createHandler();
     getSession.mockReturnValue(
       createSession({
@@ -269,12 +533,13 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("maps child summary and filters noisy events", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
 
-    repository.listArtifacts.mockReturnValue([
+    artifactRepository.listArtifacts.mockReturnValue([
       createArtifact({ type: "pr", metadata: '{"number":42}' }),
       createArtifact({ type: "preview", metadata: null }),
     ]);
@@ -314,7 +579,8 @@ describe("createChildSessionsHandler", () => {
         createdAt: 1000,
         updatedAt: 2000,
       },
-      sandbox: { status: "running" },
+      sandbox: { status: "ready" },
+      hasUnfinishedPrompt: false,
       artifacts: [
         {
           type: "pr",
@@ -340,11 +606,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("includes final response when requested", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
     getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([
+    artifactRepository.listArtifacts.mockReturnValue([
       createArtifact({
         type: "branch",
         url: "https://example.com/tree/fix",
@@ -414,11 +681,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("scopes final response artifacts to the terminal message window", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
     getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([
+    artifactRepository.listArtifacts.mockReturnValue([
       createArtifact({
         id: "artifact-old",
         type: "branch",
@@ -478,11 +746,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("paginates final response events when requested", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
     getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([]);
+    artifactRepository.listArtifacts.mockReturnValue([]);
     repository.getLatestTerminalMessage.mockReturnValue(createMessage({ id: "msg-final" }));
     repository.listEventPage
       .mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null })
@@ -563,11 +832,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("includes chronological trajectory when requested", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([]);
+    artifactRepository.listArtifacts.mockReturnValue([]);
     repository.getLatestTerminalMessage.mockReturnValue(null);
     repository.listEventPage.mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null });
     repository.getEventTimelinePage.mockReturnValue({
@@ -605,7 +875,8 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("returns 400 for malformed trajectory cursors", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
@@ -616,14 +887,21 @@ describe("createChildSessionsHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid trajectoryCursor" });
-    expect(repository.listArtifacts).not.toHaveBeenCalled();
+    expect(artifactRepository.listArtifacts).not.toHaveBeenCalled();
     expect(repository.getEventTimelinePage).not.toHaveBeenCalled();
   });
 
   it.each(["0", "-1", "abc", "1.5"])(
     "returns 400 for invalid trajectory limits (%s)",
     async (trajectoryLimit) => {
-      const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+      const {
+        handler,
+        getSession,
+        getSandbox,
+        getPublicSessionId,
+        repository,
+        artifactRepository,
+      } = createHandler();
       getSession.mockReturnValue(createSession());
       getSandbox.mockReturnValue(createSandbox());
       getPublicSessionId.mockReturnValue("public-session-1");
@@ -636,13 +914,13 @@ describe("createChildSessionsHandler", () => {
 
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ error: "Invalid trajectoryLimit" });
-      expect(repository.listArtifacts).not.toHaveBeenCalled();
+      expect(artifactRepository.listArtifacts).not.toHaveBeenCalled();
       expect(repository.getEventTimelinePage).not.toHaveBeenCalled();
     }
   );
 
   it("returns 400 for invalid child summary includes", async () => {
-    const { handler, getSession, repository } = createHandler();
+    const { handler, getSession, repository, artifactRepository } = createHandler();
     getSession.mockReturnValue(createSession());
 
     const response = handler.getChildSummary(
@@ -651,16 +929,17 @@ describe("createChildSessionsHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid include: unknown" });
-    expect(repository.listArtifacts).not.toHaveBeenCalled();
+    expect(artifactRepository.listArtifacts).not.toHaveBeenCalled();
     expect(repository.listEventPage).not.toHaveBeenCalled();
   });
 
   it("paginates trajectory with an explicit limit and cursor", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([]);
+    artifactRepository.listArtifacts.mockReturnValue([]);
     repository.getLatestTerminalMessage.mockReturnValue(null);
     repository.listEventPage.mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null });
     repository.getEventTimelinePage.mockReturnValue({
@@ -720,6 +999,38 @@ describe("createChildSessionsHandler", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when child session update body is malformed JSON", async () => {
+    const { handler, broadcast } = createHandler();
+
+    const response = await handler.childSessionUpdate(
+      new Request("http://internal/internal/child-session/update", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"childSessionId":',
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "childSessionId and status are required" });
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when child session update status is invalid", async () => {
+    const { handler, broadcast } = createHandler();
+
+    const response = await handler.childSessionUpdate(
+      new Request("http://internal/internal/child-session/update", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ childSessionId: "child-1", status: "paused", title: null }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "childSessionId and status are required" });
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
   it("broadcasts child session update when payload is valid", async () => {
     const { handler, broadcast } = createHandler();
 
@@ -742,6 +1053,30 @@ describe("createChildSessionsHandler", () => {
       childSessionId: "child-1",
       status: "completed",
       title: "Child title",
+    });
+  });
+
+  it("broadcasts child session update when title is null", async () => {
+    const { handler, broadcast } = createHandler();
+
+    const response = await handler.childSessionUpdate(
+      new Request("http://internal/internal/child-session/update", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          childSessionId: "child-1",
+          status: "active",
+          title: null,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "child_session_update",
+      childSessionId: "child-1",
+      status: "active",
+      title: null,
     });
   });
 });

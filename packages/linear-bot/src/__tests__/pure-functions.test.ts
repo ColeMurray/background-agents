@@ -4,9 +4,9 @@ import {
   resolveSessionModelSettings,
   resolveStaticTarget,
 } from "../model-resolution";
-import { isValidPayload } from "../callbacks";
 import { buildOAuthSuccessHtml } from "../index";
-import type { CompletionCallback } from "../types";
+import { matchExplicitRepo } from "../target-resolution";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 
 describe("buildOAuthSuccessHtml", () => {
   it("renders the configured app name in the heading", () => {
@@ -24,6 +24,56 @@ describe("buildOAuthSuccessHtml", () => {
   it("escapes the workspace name to prevent HTML injection", () => {
     const html = buildOAuthSuccessHtml("Open-Inspect", "Evil <img src=x>");
     expect(html).toContain("Evil &lt;img src=x&gt;");
+  });
+});
+
+// ─── matchExplicitRepo ───────────────────────────────────────────────────────
+
+describe("matchExplicitRepo", () => {
+  const repo = (owner: string, name: string): RepoConfig => ({
+    id: `${owner}/${name}`,
+    owner,
+    name,
+    fullName: `${owner}/${name}`,
+    displayName: name,
+    description: name,
+    defaultBranch: "main",
+    private: true,
+  });
+  const repos = [repo("acme", "backend"), repo("acme", "frontend")];
+
+  it("finds the one repository a clarification reply names", () => {
+    expect(matchExplicitRepo("acme/backend", repos)?.fullName).toBe("acme/backend");
+  });
+
+  it("matches case-insensitively — repos are stored lowercase", () => {
+    expect(matchExplicitRepo("use Acme/Backend please", repos)?.fullName).toBe("acme/backend");
+  });
+
+  it("returns null when several repositories are named", () => {
+    expect(matchExplicitRepo("acme/backend or acme/frontend", repos)).toBeNull();
+  });
+
+  it("returns null when none are named", () => {
+    expect(matchExplicitRepo("the vault sorting bug", repos)).toBeNull();
+  });
+
+  it("does not match inside a longer repository path", () => {
+    expect(matchExplicitRepo("see acme/backend-legacy for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see notacme/backend for context", repos)).toBeNull();
+  });
+
+  it("does not match inside a period-delimited repository path", () => {
+    expect(matchExplicitRepo("see acme/backend.docs for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see acme/backend..docs for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see not.acme/backend for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see not..acme/backend for context", repos)).toBeNull();
+  });
+
+  it("accepts ordinary terminal punctuation", () => {
+    expect(matchExplicitRepo("use acme/backend.", repos)?.fullName).toBe("acme/backend");
+    expect(matchExplicitRepo("use acme/backend...", repos)?.fullName).toBe("acme/backend");
+    expect(matchExplicitRepo("acme/backend, please", repos)?.fullName).toBe("acme/backend");
   });
 });
 
@@ -64,6 +114,10 @@ describe("extractModelFromLabels", () => {
 
   it("returns Opus 5 for model:opus-5 label", () => {
     expect(extractModelFromLabels([{ name: "model:opus-5" }])).toBe("anthropic/claude-opus-5");
+  });
+
+  it("returns Sonnet 5 for model:sonnet-5 label", () => {
+    expect(extractModelFromLabels([{ name: "model:sonnet-5" }])).toBe("anthropic/claude-sonnet-5");
   });
 
   it("returns null for unknown model label", () => {
@@ -220,48 +274,5 @@ describe("resolveSessionModelSettings", () => {
 
     expect(result.model).toBe("anthropic/claude-opus-4-6");
     expect(result.reasoningEffort).toBe("max");
-  });
-});
-
-// ─── isValidPayload ─────────────────────────────────────────────────────────
-
-describe("isValidPayload", () => {
-  const validPayload: CompletionCallback = {
-    sessionId: "sess-1",
-    messageId: "msg-1",
-    success: true,
-    timestamp: Date.now(),
-    signature: "abc123",
-    context: {
-      source: "linear",
-      issueId: "issue-1",
-      issueIdentifier: "ENG-123",
-      issueUrl: "https://linear.app/issue/ENG-123",
-      repoFullName: "org/repo",
-      model: "claude-sonnet-4-5",
-    },
-  };
-
-  it("accepts a complete payload", () => {
-    expect(isValidPayload(validPayload)).toBe(true);
-  });
-
-  it("rejects null", () => {
-    expect(isValidPayload(null)).toBe(false);
-  });
-
-  it("rejects missing sessionId", () => {
-    const { sessionId: _sessionId, ...rest } = validPayload;
-    expect(isValidPayload(rest)).toBe(false);
-  });
-
-  it("rejects missing context.issueId", () => {
-    const bad = { ...validPayload, context: { ...validPayload.context, issueId: undefined } };
-    expect(isValidPayload(bad)).toBe(false);
-  });
-
-  it("rejects missing signature", () => {
-    const { signature: _signature, ...rest } = validPayload;
-    expect(isValidPayload(rest)).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import type { Logger } from "../../../logger";
-import type { SessionRepository } from "../../repository";
+import type { ParticipantRepository } from "../../participant-repository";
 import type { ParticipantRow } from "../../types";
 import { z } from "zod";
 
@@ -20,10 +20,7 @@ const generateWsTokenRequestSchema = z.object({
 type GenerateWsTokenRequest = z.infer<typeof generateWsTokenRequestSchema>;
 
 export interface WsTokenHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    "createParticipant" | "updateParticipantCoalesce" | "updateParticipantWsToken"
-  >;
+  repository: ParticipantRepository;
   getParticipantByUserId: (userId: string) => ParticipantRow | null;
   generateId: (bytes?: number) => string;
   hashToken: (token: string) => Promise<string>;
