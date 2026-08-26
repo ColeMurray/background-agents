@@ -14,6 +14,7 @@ import {
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
+  type VncSettings,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
@@ -307,6 +308,10 @@ export class IntegrationSettingsStore {
       this.validateCodeServerSettings(settings as CodeServerSettings);
     }
 
+    if (integrationId === "vnc") {
+      this.validateVncSettings(settings as VncSettings);
+    }
+
     if (integrationId === "sandbox") {
       return normalizeSandboxSettings(settings, {
         invalid: "throw",
@@ -417,6 +422,12 @@ export class IntegrationSettingsStore {
   }
 
   private validateCodeServerSettings(settings: CodeServerSettings): void {
+    if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
+      throw new IntegrationSettingsValidationError("enabled must be a boolean");
+    }
+  }
+
+  private validateVncSettings(settings: VncSettings): void {
     if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
       throw new IntegrationSettingsValidationError("enabled must be a boolean");
     }

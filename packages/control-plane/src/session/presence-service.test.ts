@@ -35,7 +35,7 @@ function createTestHarness() {
 
   const deps: PresenceServiceDeps = {
     getAuthenticatedClients: vi.fn(() => clients.values()),
-    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
+    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) },
     send: vi.fn(() => true),
     getSandboxSocket: vi.fn(() => null),
     isSpawning: vi.fn(() => false),

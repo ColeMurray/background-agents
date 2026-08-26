@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UserStore } from "./db/user-store";
 import { resolveGitHubEnrichmentForRequest } from "./session/identity";
 import { handleRequest } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import {
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
 
 vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
@@ -109,7 +113,8 @@ describe("session prompt identity enrichment", () => {
     });
     const response = await handleRequest(
       await userPromptRequest({ content: "Fix the bug" }),
-      createEnv(sessionFetch) as never
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(200);
@@ -132,7 +137,8 @@ describe("session prompt identity enrichment", () => {
     });
     const response = await handleRequest(
       await userPromptRequest({ content: "Fix the bug" }),
-      createEnv(sessionFetch) as never
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(200);
@@ -154,7 +160,8 @@ describe("session prompt identity enrichment", () => {
     });
     const response = await handleRequest(
       await userPromptRequest({ content: "Fix the bug" }),
-      createEnv(sessionFetch) as never
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(200);
@@ -165,7 +172,8 @@ describe("session prompt identity enrichment", () => {
     const sessionFetch = vi.fn(async () => Response.json({ status: "queued" }));
     const response = await handleRequest(
       await userPromptRequest({ content: "Fix the bug", authorId: "someone-else" }),
-      createEnv(sessionFetch) as never
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);

@@ -8,23 +8,24 @@
 # which stages packages/sandbox-runtime/src/sandbox_runtime and applies the COPY /
 # WORKDIR / start-command steps programmatically (API-key auth, no access token).
 #
-# Start command (set by build-template.py / Terraform, not ENTRYPOINT here):
-#   python /usr/local/bin/oi-launch
+# The template runs nothing of its own (its start command is an inert sleep —
+# see build-template.py): the control plane starts the supervisor entrypoint
+# via envd on every sandbox create, with per-sandbox env from the create call.
 
 FROM python:3.12-slim-bookworm
 
 # Pinned toolchain versions (keep in sync with daytona-infra/src/toolchain.py).
-ARG OPENCODE_VERSION=1.18.11
+ARG OPENCODE_VERSION=1.18.18
 ARG CODE_SERVER_VERSION=4.109.5
 ARG AGENT_BROWSER_VERSION=0.21.2
 
-# System packages: git/build toolchain + headless-browser shared libs + ffmpeg.
+# System packages: git/build toolchain + browser and VNC/noVNC dependencies.
 RUN apt-get update \
   && apt-get install -y git curl build-essential ca-certificates gnupg \
      openssh-client jq unzip libnss3 libnspr4 libatk1.0-0 \
      libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
      libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
-     libpango-1.0-0 libcairo2 ffmpeg \
+     libpango-1.0-0 libcairo2 ffmpeg xvfb fluxbox x11vnc websockify novnc \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' \
@@ -73,17 +74,23 @@ RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_c
   && git config --system credential.helper /usr/local/bin/oi-git-credentials \
   && git config --system credential.useHttpPath true
 
-# Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
-# so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
-# control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.
+# Build-time env only. E2B does NOT propagate Docker ENV to the runtime process:
+# everything the supervisor needs (HOME/PYTHONPATH/NODE_PATH, CONTROL_PLANE_URL,
+# secrets, …) is injected by the control plane via create-time envVars.
+#
+# Deliberately no SANDBOX_VERSION here. It would never reach the supervisor (see
+# above), so a literal could only rot: image selection gates on the version the
+# runtime *reports*, which comes from E2B_SANDBOX_VERSION in the control plane —
+# derived from sandbox_runtime/runtime_manifest.json. A second copy in this file
+# would drift below the floor the next time the manifest bumps, with nothing to
+# catch it.
 ENV HOME=/root \
     NODE_ENV=development \
     PATH=/usr/local/bin:/usr/bin:/bin \
     PYTHONPATH=/app \
-    NODE_PATH=/usr/lib/node_modules \
-    SANDBOX_VERSION=e2b-v1
+    NODE_PATH=/usr/lib/node_modules
 
-# NOTE: file staging (sandbox_runtime, oi-launch.py), WORKDIR, and the start/ready
-# commands are applied by build-template.py via the E2B Template SDK
+# NOTE: file staging (sandbox_runtime), WORKDIR, and the start/ready commands
+# are applied by build-template.py via the E2B Template SDK
 # (.copy()/.setWorkdir()/.setStartCmd()) — not here. This Dockerfile defines only
 # the base image layers; it is not built standalone.

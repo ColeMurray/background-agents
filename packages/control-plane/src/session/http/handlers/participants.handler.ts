@@ -1,7 +1,7 @@
-import type { SessionRepository } from "../../repository";
+import type { ParticipantRepository } from "../../participant-repository";
 
 export interface ParticipantsHandlerDeps {
-  repository: Pick<SessionRepository, "listParticipants">;
+  repository: ParticipantRepository;
 }
 
 export interface ParticipantsHandler {

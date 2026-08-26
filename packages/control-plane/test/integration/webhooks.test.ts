@@ -179,7 +179,7 @@ describe("POST /webhooks/sentry/:id", () => {
       body,
     });
 
-    // The handler passes auth and attempts to forward to SchedulerDO.
+    // The handler passes auth and attempts to process the scheduler event.
     // In the test env, the DO may throw a transient invalidation error (500).
     // The key assertion: signature verification succeeded (not 401).
     expect(response.status).not.toBe(401);

@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import type { EnvironmentRepository } from "@open-inspect/shared/types/environments";
-import type { CodeServerSettings } from "@open-inspect/shared/types/integrations";
+import type { CodeServerSettings, VncSettings } from "@open-inspect/shared/types/integrations";
 import { Button } from "@/components/ui/button";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
@@ -16,15 +16,15 @@ import {
 } from "@/components/ui/select";
 import { SandboxSettingsEditor } from "./sandbox-settings";
 
-interface EnvironmentCodeServerResponse {
+interface EnvironmentEnablementResponse {
   integrationId: string;
   environmentId: string;
-  settings: CodeServerSettings | null;
+  settings: CodeServerSettings | VncSettings | null;
 }
 
-type CodeServerChoice = "inherit" | "enabled" | "disabled";
+type EnablementChoice = "inherit" | "enabled" | "disabled";
 
-const CODE_SERVER_CHOICES: Array<{ value: CodeServerChoice; label: string }> = [
+const ENABLEMENT_CHOICES: Array<{ value: EnablementChoice; label: string }> = [
   { value: "inherit", label: "Inherit" },
   { value: "enabled", label: "Enabled" },
   { value: "disabled", label: "Disabled" },
@@ -54,7 +54,22 @@ export function EnvironmentIntegrationSettings({
         left unset inherits from {primaryLabel}&apos;s settings.
       </p>
 
-      <EnvironmentCodeServerOverride environmentId={environmentId} />
+      <EnvironmentEnablementOverride
+        environmentId={environmentId}
+        integrationId="code-server"
+        title="Code Editor"
+        description="Whether sessions from this environment get the browser-based editor."
+        ariaLabel="Code editor override"
+        successMessage="Code editor setting saved"
+      />
+      <EnvironmentEnablementOverride
+        environmentId={environmentId}
+        integrationId="vnc"
+        title="VNC Desktop"
+        description="Whether sessions from this environment get a remote desktop."
+        ariaLabel="VNC desktop override"
+        successMessage="VNC desktop setting saved"
+      />
 
       <div>
         <h3 className="text-sm font-medium text-foreground mb-1">Sandbox</h3>
@@ -78,17 +93,31 @@ export function EnvironmentIntegrationSettings({
  * resolved setting, or force it on/off for this environment. "Inherit" is
  * modeled as no stored override at all.
  */
-function EnvironmentCodeServerOverride({ environmentId }: { environmentId: string }) {
-  const apiUrl: BrowserApiPath = `/api/integration-settings/code-server/environments/${environmentId}`;
-  const { data, mutate, isLoading } = useSWR<EnvironmentCodeServerResponse>(apiUrl);
+function EnvironmentEnablementOverride({
+  environmentId,
+  integrationId,
+  title,
+  description,
+  ariaLabel,
+  successMessage,
+}: {
+  environmentId: string;
+  integrationId: "code-server" | "vnc";
+  title: string;
+  description: string;
+  ariaLabel: string;
+  successMessage: string;
+}) {
+  const apiUrl: BrowserApiPath = `/api/integration-settings/${integrationId}/environments/${environmentId}`;
+  const { data, mutate, isLoading } = useSWR<EnvironmentEnablementResponse>(apiUrl);
 
-  const current: CodeServerChoice =
+  const current: EnablementChoice =
     data?.settings?.enabled === true
       ? "enabled"
       : data?.settings?.enabled === false
         ? "disabled"
         : "inherit";
-  const [choice, setChoice] = useState<CodeServerChoice | null>(null);
+  const [choice, setChoice] = useState<EnablementChoice | null>(null);
   const [saving, setSaving] = useState(false);
   const resolved = choice ?? current;
 
@@ -109,7 +138,7 @@ function EnvironmentCodeServerOverride({ environmentId }: { environmentId: strin
       }
       await mutate();
       setChoice(null);
-      toast.success("Code editor setting saved");
+      toast.success(successMessage);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -119,21 +148,19 @@ function EnvironmentCodeServerOverride({ environmentId }: { environmentId: strin
 
   return (
     <div>
-      <h3 className="text-sm font-medium text-foreground mb-1">Code Editor</h3>
-      <p className="text-xs text-muted-foreground mb-3">
-        Whether sessions from this environment get the browser-based editor.
-      </p>
+      <h3 className="text-sm font-medium text-foreground mb-1">{title}</h3>
+      <p className="text-xs text-muted-foreground mb-3">{description}</p>
       <div className="flex items-center gap-2 max-w-sm">
         <Select
           value={resolved}
-          onValueChange={(value) => setChoice(value as CodeServerChoice)}
+          onValueChange={(value) => setChoice(value as EnablementChoice)}
           disabled={isLoading}
         >
-          <SelectTrigger className="w-40" aria-label="Code editor override">
+          <SelectTrigger className="w-40" aria-label={ariaLabel}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {CODE_SERVER_CHOICES.map((option) => (
+            {ENABLEMENT_CHOICES.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
               </SelectItem>

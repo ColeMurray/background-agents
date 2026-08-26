@@ -5,6 +5,7 @@ import { HttpError, type RequestContext } from "../routes/shared";
 import type { AutomationRunRow } from "../db/automation-store";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 vi.mock("../repos/resolve", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -28,6 +29,7 @@ const ctx: RequestContext = {
   request_id: "req-1",
   metrics: {} as RequestContext["metrics"],
   db: env.DB,
+  executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
 };
 
 function run(overrides?: Partial<AutomationRunRow>): AutomationRunRow {

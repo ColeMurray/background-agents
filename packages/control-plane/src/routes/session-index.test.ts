@@ -4,6 +4,7 @@ import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -23,6 +24,7 @@ function createCtx(principal?: Principal): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     db: {} as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},
@@ -119,6 +121,26 @@ describe("session index routes", () => {
     });
   });
 
+  it("passes validated status filters through to the store", async () => {
+    const response = await listSessions("?status=active&excludeStatus=archived");
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active", excludeStatus: "archived" })
+    );
+  });
+
+  it.each([
+    ["?status=unknown", "Invalid status"],
+    ["?excludeStatus=unknown", "Invalid excludeStatus"],
+  ])("rejects invalid status filters before querying the store", async (query, message) => {
+    const response = await listSessions(query);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: message });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
   it("passes validated creator filters through to the store", async () => {
     const response = await listSessions(
       "?createdBy=0123456789abcdef0123456789abcdef&createdBy=0123456789abcdef0123456789abcdef"
@@ -142,6 +164,7 @@ describe("session index routes", () => {
     });
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
@@ -151,6 +174,20 @@ describe("session index routes", () => {
       offset: 0,
       viewerUserId: "0123456789abcdef0123456789abcdef",
     });
+  });
+
+  it("does not mark service session lists as private viewer data", async () => {
+    const response = await listSessions("", {
+      kind: "service",
+      service: "linear-bot",
+      actor: null,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBeNull();
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.not.objectContaining({ viewerUserId: expect.anything() })
+    );
   });
 
   it("passes the automation-lineage exclusion through to the store", async () => {
@@ -229,17 +266,6 @@ describe("session index routes", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
     expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
-  });
-
-  it("requires a human user for read-state mutations", async () => {
-    const response = await patchReadState(JSON.stringify({ action: "mark_latest_message_read" }), {
-      kind: "service",
-      service: "linear-bot",
-      actor: null,
-    });
-
-    expect(response.status).toBe(403);
-    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
   });
 
   it("requires a session ID for read-state mutations", async () => {

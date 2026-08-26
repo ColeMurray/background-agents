@@ -1,7 +1,14 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
-import { error, parseJsonBody, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  parseJsonBody,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 async function handleSessionWsToken(
@@ -43,10 +50,10 @@ async function handleSessionWsToken(
   );
 }
 
-export const sessionWsTokenRoutes: Route[] = [
+export const sessionWsTokenRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/ws-token"),
     handler: handleSessionWsToken,
   }),
-];
+]);

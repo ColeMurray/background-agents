@@ -1,7 +1,7 @@
 /**
  * Unit tests for SessionWebSocketManagerImpl.
  *
- * Uses fake DurableObjectState and mock SessionRepository to test
+ * Uses fake DurableObjectState and mock repositories to test
  * all WebSocket mechanics in isolation from the full DO.
  */
 
@@ -10,7 +10,11 @@ import { SessionWebSocketManagerImpl } from "./websocket-manager";
 import type { WebSocketManagerConfig } from "./websocket-manager";
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { SessionRepository, WsClientMappingResult } from "./repository";
+import type { SandboxRepository } from "./sandbox-repository";
+import type {
+  WsClientMappingRepository,
+  WsClientMappingResult,
+} from "./ws-client-mapping-repository";
 import type { SandboxRow } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -89,7 +93,7 @@ function createMockLogger(): Logger {
   };
 }
 
-/** Create a mock SessionRepository with configurable return values. */
+/** Create mock repositories with configurable return values. */
 function createMockRepository() {
   const mappings = new Map<string, WsClientMappingResult>();
   let sandboxRow: SandboxRow | null = null;
@@ -120,7 +124,7 @@ function createMockRepository() {
         scm_login: null,
       });
     },
-  } as unknown as SessionRepository;
+  } as unknown as SandboxRepository;
 
   return {
     repo,
@@ -157,6 +161,8 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     modal_object_id: null,
     snapshot_id: null,
     snapshot_image_id: null,
+    snapshot_runtime_version: null,
+    runtime_version: null,
     auth_token: null,
     auth_token_hash: null,
     status: "ready",
@@ -167,6 +173,8 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
@@ -182,7 +190,13 @@ function createManager() {
   const mockRepo = createMockRepository();
   const log = createMockLogger();
 
-  const manager = new SessionWebSocketManagerImpl(fakeCtx.state, mockRepo.repo, log, TEST_CONFIG);
+  const manager = new SessionWebSocketManagerImpl(
+    fakeCtx.state,
+    mockRepo.repo,
+    mockRepo.repo as unknown as WsClientMappingRepository,
+    log,
+    TEST_CONFIG
+  );
 
   return { manager, sockets: fakeCtx.sockets, state: fakeCtx.state, mockRepo, log };
 }
@@ -331,6 +345,18 @@ describe("SessionWebSocketManagerImpl", () => {
       mockRepo.setSandbox(createSandboxRow("correct-id"));
 
       expect(manager.getSandboxSocket()).toBeNull();
+      expect(wrongWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
+    });
+
+    it("skips sockets without the expected sandbox ID tag during recovery", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const untaggedWs = createFakeWebSocket();
+
+      sockets.set(untaggedWs, ["sandbox"]);
+      mockRepo.setSandbox(createSandboxRow("correct-id"));
+
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(untaggedWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
     });
 
     it("returns null when cached socket is closed", () => {
@@ -351,6 +377,18 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(ws, ["sandbox", "sid:sb-1"]);
       const row = createSandboxRow("sb-1");
       row.status = "stopped";
+      mockRepo.setSandbox(row);
+
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox terminated");
+    });
+
+    it("checks persisted terminal status before returning a cached open socket", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      const row = createSandboxRow("sb-1");
+      row.status = "stale";
       mockRepo.setSandbox(row);
 
       expect(manager.getSandboxSocket()).toBeNull();
@@ -395,6 +433,22 @@ describe("SessionWebSocketManagerImpl", () => {
       // Close the socket so hibernation recovery also fails,
       // confirming the cached ref was cleared.
       Object.defineProperty(ws, "readyState", { value: WebSocket.CLOSED });
+      expect(manager.getSandboxSocket()).toBeNull();
+    });
+  });
+
+  describe("detachSandboxSocket", () => {
+    it("clears and closes the cached sandbox socket even after status becomes terminal", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      const row = createSandboxRow("sb-1");
+      row.status = "stale";
+      mockRepo.setSandbox(row);
+
+      manager.detachSandboxSocket(1011, "Stop confirmation timed out");
+
+      expect(ws.close).toHaveBeenCalledWith(1011, "Stop confirmation timed out");
       expect(manager.getSandboxSocket()).toBeNull();
     });
   });

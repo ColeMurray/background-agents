@@ -99,10 +99,23 @@ export function toRepositoryConfigPayload(
 }
 
 /** `SESSION_CONFIG` env var carrying the serialized {@link SessionConfigPayload}. */
-export const SESSION_CONFIG_ENV_VAR = "SESSION_CONFIG";
+const SESSION_CONFIG_ENV_VAR = "SESSION_CONFIG";
 /** Build-mode marker checked as `=== "true"` by the runtime entrypoint. */
 export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
 export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
+
+/**
+ * Every env var `BootMode.from_env` (sandbox_runtime/runtime_config.py) reads to
+ * decide how the runtime boots. Control-plane-owned: providers set these
+ * themselves when the mode applies, so they are stripped from the user layer.
+ * Keep in sync with that enum.
+ */
+export const BOOT_MODE_ENV_KEYS = [
+  IMAGE_BUILD_MODE_ENV_VAR,
+  "RESTORED_FROM_SNAPSHOT",
+  "FROM_REPO_IMAGE",
+  "REPO_IMAGE_SHA",
+] as const;
 
 /**
  * Env vars of the image-build callback contract, keyed by semantic name and
@@ -128,9 +141,9 @@ export interface ImageBuildCallbackEnvValues {
   failureCallbackUrl: string;
   token: string;
   /**
-   * Omitted from the returned map when absent: OpenComputer bakes the
+   * Omitted from the returned map when absent: OpenComputer and E2B bake the
    * callback env at create time, before the provider session id exists, and
-   * delivers the id separately at runtime start.
+   * deliver the id separately when starting the runtime.
    */
   providerSessionId?: string;
 }
@@ -224,6 +237,16 @@ export async function deriveCodeServerPassword(sandboxId: string, secret: string
   return digest.slice(0, 32);
 }
 
+/** Derive a deterministic VNC password in a domain distinct from code-server. */
+export async function deriveVncPassword(sandboxId: string, secret: string): Promise<string> {
+  const digest = await computeHmacHex(`vnc:${sandboxId}`, secret);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length: 8 }, (_, index) => {
+    const byte = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
+    return alphabet[byte % alphabet.length];
+  }).join("");
+}
+
 /** Provider-specific inputs to {@link buildSandboxEnvVars}. */
 export interface SandboxEnvVarsOptions {
   /** Resolved clone identity — {@link scmCloneIdentity} of the configured SCM provider. */
@@ -233,6 +256,8 @@ export interface SandboxEnvVarsOptions {
    * async). Providers derive it only when `codeServerEnabled`.
    */
   codeServerPassword?: string;
+  /** Precomputed VNC password, present only when VNC is enabled. */
+  vncPassword?: string;
   /**
    * Overrides `config.userEnvVars` as the user layer when a provider composes
    * it differently (OpenComputer layers provider LLM credentials underneath
@@ -256,6 +281,14 @@ export function buildSandboxEnvVars(
   options: SandboxEnvVarsOptions
 ): Record<string, string> {
   const envVars: Record<string, string> = { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
+  delete envVars.VNC_PASSWORD;
+  delete envVars.NOVNC_PORT;
+  // Boot mode is the control plane's to decide. These are applied by the caller
+  // after this returns (only when the corresponding mode is real), so unlike the
+  // system keys below they are not overlaid and a repo secret of the same name
+  // would otherwise survive into BootMode.from_env — letting a session claim it
+  // booted from a repo image, a snapshot, or an image build when it did not.
+  for (const marker of BOOT_MODE_ENV_KEYS) delete envVars[marker];
 
   const sessionConfig = buildSessionConfig(config);
 
@@ -276,6 +309,11 @@ export function buildSandboxEnvVars(
 
   if (options.codeServerPassword) {
     envVars.CODE_SERVER_PASSWORD = options.codeServerPassword;
+  }
+
+  if (config.vncEnabled && options.vncPassword) {
+    envVars.VNC_PASSWORD = options.vncPassword;
+    envVars.NOVNC_PORT = String(resolveServicePorts(config.sandboxSettings).vncPort);
   }
 
   if (config.agentSlackNotifyEnabled) {
@@ -304,22 +342,15 @@ export function buildSandboxEnvVars(
  * `sandboxName` is the per-attempt provider-object name — pass the trigger
  * timestamp (`Date.now()`) as `now` so the impure input is visible at the
  * call site and one config yields one name per trigger attempt;
- * `labels` identify the build sandbox on the provider (tags on Vercel,
- * labels on OpenComputer). Providers with extra label conventions spread and
- * extend `labels`.
+ * `labels` are the canonical build identity shared by providers (tags on
+ * Vercel, labels on OpenComputer). Providers with extra or legacy label
+ * conventions spread and extend `labels`.
  *
  * The `build-env-` prefix is deliberately scope-agnostic legacy: it predates
  * scoped builds and is kept verbatim so repo-scoped builds keep the same
  * `SANDBOX_ID`/name shape operators already query for.
  */
-export function imageBuildSandboxIdentity(
-  config: ImageBuildProviderTriggerConfig,
-  now: number
-): {
-  sandboxId: string;
-  sandboxName: string;
-  labels: Record<string, string>;
-} {
+export function imageBuildSandboxIdentity(config: ImageBuildProviderTriggerConfig, now: number) {
   return {
     sandboxId: `build-env-${config.scopeId}`,
     sandboxName: `build-env-${config.scopeId}-${now}`,
@@ -331,9 +362,6 @@ export function imageBuildSandboxIdentity(
       // packages/modal-infra/src/sandbox/build_session.py.
       openinspect_scope_kind: config.scopeKind,
       openinspect_scope_id: config.scopeId,
-      // Legacy label kept alongside the scope pair so existing operator
-      // label queries keep matching; builds are no longer environment-only.
-      openinspect_environment: config.scopeId,
     },
   };
 }

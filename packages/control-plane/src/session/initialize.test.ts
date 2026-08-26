@@ -31,9 +31,19 @@ describe("initializeSession", () => {
     spawnSource: "user",
     spawnDepth: 0,
     codeServerEnabled: false,
+    vncEnabled: true,
     sandboxSettings: {},
     automationId: null,
     automationRunId: null,
+    providerAuth: [
+      {
+        provider: "openai",
+        authMode: "provider_account",
+        providerAccountId: "1".repeat(32),
+        selectionSource: "installation_default",
+      },
+      { provider: "xai", authMode: "api_key", selectionSource: "fallback_api_key" },
+    ],
   };
 
   const ctx = {
@@ -190,6 +200,7 @@ describe("initializeSession", () => {
     expect(d1Entry.automationRunId).toBeNull();
     expect(d1Entry.scmLogin).toBe("acmedev");
     expect(d1Entry.userId).toBe("platform-user-1");
+    expect(d1Entry.providerAuth).toEqual(baseInput.providerAuth);
     expect(d1Entry.createdAt).toBeTypeOf("number");
     expect(d1Entry.updatedAt).toBeTypeOf("number");
   });
@@ -239,10 +250,12 @@ describe("initializeSession", () => {
     expect(body.scmTokenExpiresAt).toBe(1700000000000);
     expect(body.scmUserId).toBe("scm-1");
     expect(body.codeServerEnabled).toBe(false);
+    expect(body.vncEnabled).toBe(true);
     expect(body.sandboxSettings).toEqual({});
     expect(body.parentSessionId).toBeNull();
     expect(body.spawnSource).toBe("user");
     expect(body.spawnDepth).toBe(0);
+    expect(body).not.toHaveProperty("providerAuth");
   });
 
   it("sets correlation headers on the DO init request", async () => {

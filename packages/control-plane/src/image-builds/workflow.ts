@@ -537,7 +537,7 @@ export function createImageBuildWorkflowFromEnv(env: Env, db: SqlDatabase): Imag
     env,
     new ImageBuildStore(db),
     createImageBuildAdapterFactory(env),
-    provider ? { provider, planner: new ImageBuildPlanner(env, db, provider) } : null,
+    provider ? { provider, planner: new ImageBuildPlanner(env, db) } : null,
     finalizationQueue
   );
 }

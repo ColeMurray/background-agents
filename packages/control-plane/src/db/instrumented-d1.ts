@@ -17,7 +17,7 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 // ---------------------------------------------------------------------------
 
 /** Record of a single D1 query execution. */
-export interface D1QueryRecord {
+interface D1QueryRecord {
   /** Wall-clock time in ms (includes network round-trip from Worker to D1 primary). */
   query_ms: number;
   /** Engine-reported server-side execution time in ms (from meta.duration). */

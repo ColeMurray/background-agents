@@ -1,7 +1,13 @@
 import { BROWSER_AUTH_PROXY_ROUTES } from "@open-inspect/shared/browser-auth-routes";
 import { type BetterAuthRuntime, UserAuthConfigurationError } from "../auth/user/runtime";
 import { createLogger } from "../logger";
-import { error, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  parsePattern,
+  SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
+  type Route,
+} from "./shared";
 
 const logger = createLogger("browser-auth");
 
@@ -43,15 +49,6 @@ export async function forwardBrowserAuthRequest(
   return auth.handler(request);
 }
 
-function requireWebService(route: Route["handler"]): Route["handler"] {
-  return async (request, env, match, ctx) => {
-    if (ctx.principal?.kind !== "service" || ctx.principal.service !== "web") {
-      return error("Unauthorized", 401);
-    }
-    return route(request, env, match, ctx);
-  };
-}
-
 const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) => {
   try {
     if (!ctx.getUserAuth) {
@@ -84,8 +81,11 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
  * The browser can reach only this positive Better Auth allowlist, and only
  * through a freshly signed service:web proxy request.
  */
-export const browserAuthRoutes: Route[] = BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
-  method,
-  pattern: parsePattern(path),
-  handler: requireWebService(handleBrowserAuth),
-}));
+export const browserAuthRoutes: Route[] = defineRoutes(
+  SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
+  BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
+    method,
+    pattern: parsePattern(path),
+    handler: handleBrowserAuth,
+  }))
+);

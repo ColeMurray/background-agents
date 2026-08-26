@@ -1,17 +1,26 @@
 import type { Logger } from "../../../logger";
 import {
   createMediaArtifactRequestSchema,
-  sandboxEventSchema,
   type CreateMediaArtifactRequest,
-  type SessionArtifact,
-} from "@open-inspect/shared";
-import type { ParticipantRole, SandboxEvent } from "../../../types";
+} from "@open-inspect/shared/types/session-api";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
+import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
-import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
+import {
+  OpenAITokenNotConfiguredError,
+  OpenAITokenStorageError,
+  OpenAITokenUnauthorizedError,
+  OpenAITokenUpstreamError,
+  type OpenAIToken,
+} from "../../openai-token-refresh-service";
 import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
-import type { SessionRepository } from "../../repository";
+import type { MessageRepository } from "../../message-repository";
+import type { ArtifactRepository } from "../../artifact-repository";
+import type { EventRepository } from "../../event-repository";
+import type { ParticipantRepository } from "../../participant-repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
@@ -28,15 +37,15 @@ const addParticipantRequestSchema = z.object({
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    "createParticipant" | "createArtifact" | "createEvent" | "getProcessingMessage"
-  >;
+  messageRepository: MessageRepository;
+  eventRepository: EventRepository;
+  participantRepository: ParticipantRepository;
+  artifactRepository: ArtifactRepository;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
   getSession: () => SessionRow | null;
-  refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAITokenRefreshResult>;
+  refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>;
   refreshXaiToken: (session: SessionRow, log: Logger) => Promise<XaiTokenRefreshResult>;
   isManagedSecretsConfigured: () => boolean;
   getScmCredentials: (log: Logger) => Promise<ScmCredentialsResult>;
@@ -100,7 +109,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "artifactId and objectKey are required" }, { status: 400 });
       }
 
-      const processingMessage = deps.repository.getProcessingMessage();
+      const processingMessage = deps.messageRepository.getProcessingMessage();
       if (!processingMessage) {
         return Response.json({ error: "No active prompt" }, { status: 409 });
       }
@@ -117,7 +126,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         updatedAt: now,
       };
 
-      deps.repository.createArtifact({
+      deps.artifactRepository.createArtifact({
         id: artifact.id,
         type: artifact.type,
         url: artifact.url,
@@ -136,7 +145,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         timestamp: timestampSeconds,
       };
 
-      deps.repository.createEvent({
+      deps.eventRepository.createEvent({
         id: deps.generateId(),
         type: event.type,
         data: JSON.stringify(event),
@@ -168,7 +177,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       const id = deps.generateId();
       const now = deps.now();
 
-      deps.repository.createParticipant({
+      deps.participantRepository.createParticipant({
         id,
         userId: body.userId,
         scmLogin: body.scmLogin ?? null,
@@ -232,16 +241,30 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "Secrets not configured" }, { status: 500 });
       }
 
-      const result = await deps.refreshOpenAIToken(session, log);
-      if (!result.ok) {
-        return Response.json({ error: result.error }, { status: result.status });
+      let token: OpenAIToken;
+      try {
+        token = await deps.refreshOpenAIToken(session, log);
+      } catch (error) {
+        if (error instanceof OpenAITokenNotConfiguredError) {
+          return Response.json({ error: error.message }, { status: 404 });
+        }
+        if (error instanceof OpenAITokenUnauthorizedError) {
+          return Response.json({ error: error.message }, { status: 401 });
+        }
+        if (error instanceof OpenAITokenStorageError) {
+          return Response.json({ error: error.message }, { status: 500 });
+        }
+        if (error instanceof OpenAITokenUpstreamError) {
+          return Response.json({ error: error.message }, { status: 502 });
+        }
+        throw error;
       }
 
       return Response.json(
         {
-          access_token: result.accessToken,
-          expires_in: result.expiresIn,
-          account_id: result.accountId,
+          access_token: token.accessToken,
+          expires_in: token.expiresIn,
+          account_id: token.accountId,
         },
         { status: 200, headers: { "Cache-Control": "no-store" } }
       );

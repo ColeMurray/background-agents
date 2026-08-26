@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,7 @@ import { getUserAuth } from "../../src/auth/user/runtime";
 import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";
 import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
-import { handleRequest } from "../../src/router";
+import { handleRequest as routeRequest } from "../../src/router";
 import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
@@ -18,6 +18,13 @@ const GOOGLE_CLIENT_ID = "google-client-id";
 const GOOGLE_SUBJECT = "google-subject";
 const MS_PER_SECOND = 1000;
 const GOOGLE_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * MS_PER_SECOND;
+
+function handleRequest(
+  request: Request,
+  requestEnv: Parameters<typeof routeRequest>[1]
+): Promise<Response> {
+  return routeRequest(request, requestEnv, createExecutionContext());
+}
 
 let googleIdToken = "";
 let googlePublicKey: JsonWebKey;
@@ -196,16 +203,16 @@ describe("browser auth callback", () => {
 
     await expect(
       env.DB.prepare(
-        `SELECT accountId, providerId, userId
-         FROM auth_accounts
-         WHERE providerId = ?`
+        `SELECT provider_user_id, provider, user_id
+         FROM user_identities
+         WHERE provider = ?`
       )
         .bind("google")
         .first()
     ).resolves.toEqual({
-      accountId: GOOGLE_SUBJECT,
-      providerId: "google",
-      userId: session.user.id,
+      provider_user_id: GOOGLE_SUBJECT,
+      provider: "google",
+      user_id: session.user.id,
     });
     await expect(
       env.DB.prepare(
@@ -298,8 +305,8 @@ describe("browser auth callback", () => {
 
     const account = await env.DB.prepare(
       `SELECT id
-       FROM auth_accounts
-       WHERE userId = ?`
+       FROM user_identities
+       WHERE user_id = ?`
     )
       .bind(session.user.id)
       .first<{ id: string }>();
@@ -399,45 +406,17 @@ describe("browser auth callback", () => {
         "https://github.com"
       ),
       env.DB.prepare(
-        `INSERT INTO auth_users (
-           id, name, email, emailVerified, image, createdAt, updatedAt
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        canonicalUserId,
-        "Legacy User",
-        "octocat@example.com",
-        0,
-        null,
-        now.toISOString(),
-        now.toISOString()
-      ),
-      env.DB.prepare(
-        `INSERT INTO auth_accounts (
-           id, accountId, providerId, userId, accessToken, refreshToken,
-           idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope,
-           password, createdAt, updatedAt
-         ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
-      ).bind(
-        providerIdentityId,
-        "583231",
-        "github",
-        canonicalUserId,
-        now.toISOString(),
-        now.toISOString()
-      ),
-      env.DB.prepare(
-        `INSERT INTO auth_accounts (
-           id, accountId, providerId, userId, accessToken, refreshToken,
-           idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope,
-           password, createdAt, updatedAt
-         ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
+        `INSERT INTO user_identities (
+           id, user_id, provider, provider_user_id, provider_login,
+           provider_email, created_at, provider_issuer
+         ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)`
       ).bind(
         "33333333333333333333333333333333",
-        "google-subject",
-        "google",
         canonicalUserId,
-        now.toISOString(),
-        now.toISOString()
+        "google",
+        "google-subject",
+        now.getTime(),
+        "https://accounts.google.com"
       ),
     ]);
 
@@ -489,15 +468,16 @@ describe("browser auth callback", () => {
         .bind("octocat@example.com")
         .first<{ count: number }>()
     ).toEqual({ count: 1 });
+    // The claim minted verification from the completed OAuth proof.
     expect(
       await env.DB.prepare(
-        `SELECT emailVerified
-         FROM auth_users
+        `SELECT email_verified
+         FROM users
          WHERE id = ?`
       )
         .bind(canonicalUserId)
-        .first<{ emailVerified: number }>()
-    ).toEqual({ emailVerified: 1 });
+        .first<{ email_verified: number }>()
+    ).toEqual({ email_verified: 1 });
 
     const resourceResponse = await handleRequest(
       await signedWebRequest("/model-preferences", {

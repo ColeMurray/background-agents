@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { parsePrimaryBuildSha } from "@/lib/image-builds";
+import { formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
@@ -18,7 +18,7 @@ import { EnvironmentForm, type EnvironmentFormValues } from "./environment-form"
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { EnvironmentIntegrationSettings } from "./environment-integration-settings";
 import { EnvironmentSecretsImport } from "./environment-secrets-import";
-import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
+import { ImageBuildStatus } from "./image-build-status";
 import { SecretsEditor } from "@/components/secrets-editor";
 
 type View =

@@ -161,19 +161,21 @@ On any Linear issue:
 - Assign the issue to `OpenInspect` → agent picks it up
 - Agent status is visible directly in Linear (thinking, working, done)
 - Add a `model:<name>` label to override the model (e.g., `model:opus`, `model:sonnet`,
-  `model:opus-5`, `model:haiku`, `model:gpt-5.4`, `model:gpt-5.3-codex`)
+  `model:opus-5`, `model:sonnet-5`, `model:haiku`, `model:gpt-5.4`, `model:gpt-5.3-codex`)
 
 ## Repo Resolution
 
-When an issue is triggered, the agent resolves the session target using a 4-step cascade:
+When an issue is triggered, the agent resolves the session target using a 5-step cascade:
 
 1. **Project → target mapping** — static mapping from Linear project IDs to a repository or a saved
    environment (highest priority)
 2. **Team → target mapping** — static mapping from Linear team IDs to repositories or saved
    environments, with optional label filtering
-3. **Linear's `issueRepositorySuggestions` API** — Linear's built-in repo suggestion (>= 70%
+3. **Explicit `owner/repo` mention** — deterministically selects a single available repository named
+   in the trigger comment or clarification reply
+4. **Linear's `issueRepositorySuggestions` API** — Linear's built-in repo suggestion (>= 70%
    confidence)
-4. **LLM classifier** — uses Claude Haiku to classify based on issue content, labels, and available
+5. **LLM classifier** — uses Claude Haiku to classify based on issue content, labels, and available
    repo descriptions. Asks the user to clarify if confidence is low.
 
 Environment sessions clone the environment's full repository set; integration settings (model,

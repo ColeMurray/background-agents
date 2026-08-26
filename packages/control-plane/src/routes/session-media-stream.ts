@@ -1,7 +1,8 @@
 import { createLogger } from "../logger";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
+import type { NormalizedArtifactResponse } from "../session/artifacts";
 import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
-import type { ArtifactResponse, Env } from "../types";
+import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
 import {
   createPartialStoredObjectResponse,
@@ -9,14 +10,18 @@ import {
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
-import { error, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
-export { parseByteRangeHeader } from "./requests/byte-range";
-
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(
-  artifact: ArtifactResponse
+  artifact: NormalizedArtifactResponse
 ): "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | null {
   const mimeType = artifact.metadata?.mimeType;
   if (typeof mimeType !== "string") return null;
@@ -33,7 +38,7 @@ function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
 }
 
 function resolveMediaContentType(
-  artifact: ArtifactResponse,
+  artifact: NormalizedArtifactResponse,
   metadata: ObjectStorageMetadata
 ): string | null {
   const storedContentType = getStoredContentType(metadata);
@@ -136,10 +141,10 @@ async function handleMediaGet(
     : createStoredObjectResponse(body, metadata, contentType);
 }
 
-export const sessionMediaStreamRoutes: Route[] = [
+export const sessionMediaStreamRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/media/:artifactId"),
     handler: handleMediaGet,
   }),
-];
+]);

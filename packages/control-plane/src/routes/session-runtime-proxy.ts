@@ -2,12 +2,28 @@ import { applyIdentityEnforcement } from "../auth/identity-enforcement";
 import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
+import { SessionIndexStore } from "../db/session-index";
+import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
-import { error, parseJsonBody, parsePattern, type Route } from "./shared";
+import {
+  defineRoute,
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  parseJsonBody,
+  parsePattern,
+  SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
+  SCM_AGNOSTIC_SANDBOX_ROUTE,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  SCM_CREDENTIALS_ROUTE,
+  type Route,
+  type RoutePolicy,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const participantsResponseSchema = z.object({
@@ -20,6 +36,7 @@ const participantsResponseSchema = z.object({
 });
 
 type SimpleProxyRouteConfig = {
+  policy: RoutePolicy;
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
@@ -38,27 +55,56 @@ function isObjectBody(value: unknown): value is Record<string, unknown> {
 }
 
 function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
-  return sessionRoute({
-    method: config.method,
-    pattern: parsePattern(config.routePath),
-    handler: async (request, _env, match, ctx) => {
-      const sessionId = getSessionId(match);
-      if (sessionId instanceof Response) return sessionId;
+  return defineRoute(
+    config.policy,
+    sessionRoute({
+      method: config.method,
+      pattern: parsePattern(config.routePath),
+      handler: async (request, _env, match, ctx) => {
+        const sessionId = getSessionId(match);
+        if (sessionId instanceof Response) return sessionId;
 
-      const response = await ctx.sessionRuntime.fetch(
-        sessionId,
-        config.internalPath,
-        config.runtimeMethod ? { method: config.runtimeMethod } : undefined,
-        config.forwardSearch ? new URL(request.url).search : undefined
-      );
+        const response = await ctx.sessionRuntime.fetch(
+          sessionId,
+          config.internalPath,
+          config.runtimeMethod ? { method: config.runtimeMethod } : undefined,
+          config.forwardSearch ? new URL(request.url).search : undefined
+        );
 
-      if (config.notFoundMessage && response.status === 404) {
-        return error(config.notFoundMessage, 404);
-      }
+        if (config.notFoundMessage && response.status === 404) {
+          return error(config.notFoundMessage, 404);
+        }
 
-      return response;
-    },
-  });
+        return response;
+      },
+    })
+  );
+}
+
+function legacyTokenRefreshRoute(
+  provider: SubscriptionProviderId,
+  routePath: string,
+  internalPath: SessionInternalPath
+): Route {
+  return defineRoute(
+    SCM_AGNOSTIC_SANDBOX_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern(routePath),
+      handler: async (_request, _env, match, ctx) => {
+        const sessionId = getSessionId(match);
+        if (sessionId instanceof Response) return sessionId;
+        const binding = await new SessionIndexStore(ctx.db).getProviderAuthForProvider(
+          sessionId,
+          provider
+        );
+        if (binding?.authMode !== "legacy_scoped_oauth") {
+          return error("Session does not use legacy scoped OAuth for this provider", 409);
+        }
+        return ctx.sessionRuntime.fetch(sessionId, internalPath, { method: "POST" });
+      },
+    })
+  );
 }
 
 async function handleAddParticipant(
@@ -203,96 +249,120 @@ function lifecycleProxyRoute(
   routePath: string,
   internalPath: SessionInternalPath
 ): Route {
-  return sessionRoute({
-    method,
-    pattern: parsePattern(routePath),
-    handler: async (request, _env, match, ctx) => {
-      const sessionId = getSessionId(match);
-      if (sessionId instanceof Response) return sessionId;
+  return defineRoute(
+    GITHUB_USER_OR_SERVICE_ROUTE,
+    sessionRoute({
+      method,
+      pattern: parsePattern(routePath),
+      handler: async (request, _env, match, ctx) => {
+        const sessionId = getSessionId(match);
+        if (sessionId instanceof Response) return sessionId;
 
-      const { userId, title, rejection } = await readEnforcedLifecycleBody(request, ctx);
-      if (rejection) return rejection;
+        const { userId, title, rejection } = await readEnforcedLifecycleBody(request, ctx);
+        if (rejection) return rejection;
 
-      return ctx.sessionRuntime.fetch(sessionId, internalPath, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          internalPath === SessionInternalPaths.updateTitle ? { userId, title } : { userId }
-        ),
-      });
-    },
-  });
+        return ctx.sessionRuntime.fetch(sessionId, internalPath, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            internalPath === SessionInternalPaths.updateTitle ? { userId, title } : { userId }
+          ),
+        });
+      },
+    })
+  );
 }
 
 export const sessionRuntimeProxyRoutes: Route[] = [
   simpleProxyRoute({
+    policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    method: "GET",
+    routePath: "/sessions/:id/sandbox-access",
+    internalPath: SessionInternalPaths.sandboxAccess,
+  }),
+  simpleProxyRoute({
+    policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     method: "GET",
     routePath: "/sessions/:id",
-    internalPath: SessionInternalPaths.state,
+    internalPath: SessionInternalPaths.snapshot,
     notFoundMessage: "Session not found",
   }),
   simpleProxyRoute({
+    policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "POST",
     routePath: "/sessions/:id/stop",
     internalPath: SessionInternalPaths.stop,
     runtimeMethod: "POST",
   }),
   simpleProxyRoute({
+    policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "GET",
     routePath: "/sessions/:id/events",
     internalPath: SessionInternalPaths.events,
     forwardSearch: true,
   }),
   simpleProxyRoute({
+    policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "GET",
     routePath: "/sessions/:id/artifacts",
     internalPath: SessionInternalPaths.artifacts,
   }),
   simpleProxyRoute({
+    policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "GET",
     routePath: "/sessions/:id/participants",
     internalPath: SessionInternalPaths.participants,
   }),
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/participant-profiles"),
-    handler: handleParticipantProfiles,
-  }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/participants"),
-    handler: handleAddParticipant,
-  }),
+  defineRoute(
+    SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+    sessionRoute({
+      method: "GET",
+      pattern: parsePattern("/sessions/:id/participant-profiles"),
+      handler: handleParticipantProfiles,
+    })
+  ),
+  defineRoute(
+    GITHUB_USER_OR_SERVICE_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/participants"),
+      handler: handleAddParticipant,
+    })
+  ),
   simpleProxyRoute({
+    policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "GET",
     routePath: "/sessions/:id/messages",
     internalPath: SessionInternalPaths.messages,
     forwardSearch: true,
   }),
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/pr"),
-    handler: handleCreatePR,
-  }),
+  defineRoute(
+    GITHUB_SANDBOX_FALLBACK_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/pr"),
+      handler: handleCreatePR,
+    })
+  ),
+  legacyTokenRefreshRoute(
+    "openai",
+    "/sessions/:id/openai-token-refresh",
+    SessionInternalPaths.openaiTokenRefresh
+  ),
+  legacyTokenRefreshRoute(
+    "xai",
+    "/sessions/:id/xai-token-refresh",
+    SessionInternalPaths.xaiTokenRefresh
+  ),
   simpleProxyRoute({
-    method: "POST",
-    routePath: "/sessions/:id/openai-token-refresh",
-    internalPath: SessionInternalPaths.openaiTokenRefresh,
-    runtimeMethod: "POST",
-  }),
-  simpleProxyRoute({
-    method: "POST",
-    routePath: "/sessions/:id/xai-token-refresh",
-    internalPath: SessionInternalPaths.xaiTokenRefresh,
-    runtimeMethod: "POST",
-  }),
-  simpleProxyRoute({
+    policy: SCM_CREDENTIALS_ROUTE,
     method: "POST",
     routePath: "/sessions/:id/scm-credentials",
     internalPath: SessionInternalPaths.scmCredentials,
     runtimeMethod: "POST",
   }),
   simpleProxyRoute({
+    policy: SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
     method: "GET",
     routePath: "/sessions/:id/tunnel-urls",
     internalPath: SessionInternalPaths.tunnelUrls,

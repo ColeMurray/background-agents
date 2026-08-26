@@ -68,7 +68,7 @@ export default function AnalyticsPage() {
         </header>
       )}
 
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="relative z-10 mx-auto max-w-7xl space-y-6">
           <div className="relative overflow-hidden rounded-xl border border-border-muted bg-card px-5 py-5 sm:px-6 sm:py-6">
             <div className="pointer-events-none absolute inset-y-0 right-0 w-1/3 bg-[linear-gradient(135deg,var(--accent-muted),transparent)] opacity-70" />
@@ -79,7 +79,7 @@ export default function AnalyticsPage() {
                   Usage analytics
                 </div>
                 <div>
-                  <h1 className="text-3xl font-semibold text-foreground">Analytics</h1>
+                  <h1 className="text-2xl font-semibold text-foreground sm:text-3xl">Analytics</h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
                     Usage metrics across sessions, repositories, and users. PR counts currently
                     reflect pull requests created through the platform&apos;s built-in flow, and

@@ -20,6 +20,7 @@ describe("IntegrationsSettings", () => {
     expect(screen.getByRole("link", { name: /github bot/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /linear agent/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /code server/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /vnc desktop/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /slack/i })).toBeInTheDocument();
   });
 });

@@ -1,7 +1,7 @@
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { z } from "zod";
 
-export const browserAuthSessionUserSchema = z.object({
+const browserAuthSessionUserSchema = z.object({
   id: z.string().refine(isCanonicalUserId, "Browser session user id is not canonical"),
   name: z.string().nullable().optional(),
   email: z.string().nullable().optional(),

@@ -40,6 +40,13 @@ const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
   updated_at INTEGER NOT NULL
 );`;
 
+const SESSION_ALARM_STATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_alarm_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  pending_deadline INTEGER,
+  in_flight_deadline INTEGER,
+  cancelled INTEGER NOT NULL DEFAULT 0
+);`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -61,6 +68,7 @@ CREATE TABLE IF NOT EXISTS session (
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
+  vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
@@ -106,8 +114,11 @@ CREATE TABLE IF NOT EXISTS messages (
   reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
   callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
+  client_request_id TEXT,                           -- Web-client idempotency key
+  request_fingerprint TEXT,                         -- Participant-scoped canonical request hash
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
+  stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -146,9 +157,12 @@ CREATE TABLE IF NOT EXISTS sandbox (
   modal_object_id TEXT,                             -- Legacy provider object ID (Modal object ID or Daytona handle)
   snapshot_id TEXT,
   snapshot_image_id TEXT,                           -- Modal Image ID for filesystem snapshot restoration
+  snapshot_runtime_version TEXT,                    -- SANDBOX_VERSION that produced snapshot_image_id (restore compatibility floor)
+  runtime_version TEXT,                             -- SANDBOX_VERSION reported by the running sandbox
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
   auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
-  status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'syncing', 'ready', 'running', 'stale', 'snapshotting', 'stopped', 'failed'
+  -- Default must match DEFAULT_SANDBOX_STATUS (sandbox/sandbox-status.ts).
+  status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'ready', 'stale', 'snapshotting', 'stopped', 'failed'
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot
@@ -158,6 +172,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   last_spawn_failure INTEGER,                       -- Timestamp of last spawn failure
   code_server_url TEXT,                             -- Code-server tunnel URL (rotates on wake/restore)
   code_server_password TEXT,                        -- Code-server password (rotates on each wake/restore)
+  vnc_url TEXT,                                     -- noVNC tunnel URL (rotates on wake/restore)
+  vnc_password TEXT,                                -- VNC password (rotates on each wake/restore)
   tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
@@ -175,6 +191,9 @@ ${SESSION_REPOSITORIES_TABLE_SQL};
 -- Latest durable checkout diff bundle. Source patches live only in this bounded row.
 ${SESSION_DIFF_TABLE_SQL}
 
+-- Runtime alarm recovery source for hosts that can be adopted by another process.
+${SESSION_ALARM_STATE_TABLE_SQL}
+
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
   ws_id TEXT PRIMARY KEY,
@@ -183,13 +202,22 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   created_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
+`;
 
--- Indexes for common queries
+// Indexes run only after migrations so they can safely reference columns that
+// do not exist in legacy tables. Migration-specific index creation remains in
+// the relevant migration so partially applied upgrades stay idempotent.
+const INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
+ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
+ON messages(status) WHERE status = 'processing';
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
@@ -498,6 +526,66 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       );
     },
   },
+  {
+    id: 39,
+    description: "Add VNC fields",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN vnc_url TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN vnc_password TEXT`);
+      runMigration(sql, `ALTER TABLE session ADD COLUMN vnc_enabled INTEGER NOT NULL DEFAULT 0`);
+    },
+  },
+  {
+    id: 40,
+    description: "Add web prompt idempotency fields",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN client_request_id TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN request_fingerprint TEXT`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
+        ON messages(client_request_id) WHERE client_request_id IS NOT NULL`);
+    },
+  },
+  {
+    id: 41,
+    description: "Add dedicated stop confirmation deadline",
+    run: `ALTER TABLE messages ADD COLUMN stop_confirmation_deadline INTEGER`,
+  },
+  {
+    id: 42,
+    description: "Allow only one processing message per session",
+    run: (sql) => {
+      // Preserve the oldest claim as the likely active execution and requeue later claims.
+      const duplicateProcessingMessages = `SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            ORDER BY COALESCE(started_at, created_at), created_at, rowid
+          ) AS processing_order
+          FROM messages
+          WHERE status = 'processing'
+        ) WHERE processing_order > 1`;
+      sql.exec(`DELETE FROM events
+        WHERE type = 'user_message'
+          AND id = 'user_message:' || message_id
+          AND message_id IN (${duplicateProcessingMessages})`);
+      sql.exec(`UPDATE messages
+        SET status = 'pending', started_at = NULL
+        WHERE id IN (${duplicateProcessingMessages})`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
+        ON messages(status) WHERE status = 'processing'`);
+    },
+  },
+  {
+    id: 43,
+    description: "Persist session alarm scheduling state",
+    run: SESSION_ALARM_STATE_TABLE_SQL,
+  },
+  {
+    id: 44,
+    description: "Record sandbox runtime version and stamp it on snapshots",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN runtime_version TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_runtime_version TEXT`);
+    },
+  },
 ];
 
 /**
@@ -552,4 +640,5 @@ export function applyMigrations(sql: SqlStorage): void {
 export function initSchema(sql: SqlStorage): void {
   sql.exec(SCHEMA_SQL);
   applyMigrations(sql);
+  sql.exec(INDEXES_SQL);
 }

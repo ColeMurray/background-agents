@@ -5,7 +5,6 @@
 import type { TriggerSourceDefinition } from "../types";
 import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
-export type { GitHubAutomationEvent } from "../types";
 export { normalizeGitHubEvent } from "./normalizer";
 export { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 

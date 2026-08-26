@@ -1,7 +1,11 @@
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
+import type {
+  CreateMcpServerRequest,
+  McpServerMetadata,
+  UpdateMcpServerRequest,
+} from "@open-inspect/shared/types/integrations";
 
 const MCP_SERVERS_KEY = "/api/mcp-servers";
 
@@ -17,9 +21,7 @@ export function useMcpServers() {
   };
 }
 
-export async function createMcpServer(
-  config: Omit<McpServerConfig, "id">
-): Promise<McpServerMetadata> {
+export async function createMcpServer(config: CreateMcpServerRequest): Promise<McpServerMetadata> {
   const response = await browserApiFetch(MCP_SERVERS_KEY, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -34,7 +36,7 @@ export async function createMcpServer(
 
 export async function updateMcpServer(
   id: string,
-  patch: Partial<McpServerConfig>
+  patch: UpdateMcpServerRequest
 ): Promise<McpServerMetadata> {
   const response = await browserApiFetch(`${MCP_SERVERS_KEY}/${id}`, {
     method: "PUT",

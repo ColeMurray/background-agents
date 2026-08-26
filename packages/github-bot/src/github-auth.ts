@@ -1,6 +1,8 @@
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import { z } from "zod";
 
+export const GITHUB_API_REQUEST_TIMEOUT_MS = 10_000;
+
 const collaboratorPermissionResponseSchema = z.object({
   permission: z.string(),
 });
@@ -90,6 +92,7 @@ async function getInstallationToken(
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": userAgent,
     },
+    signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -140,6 +143,7 @@ export async function checkSenderPermission(
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": userAgent,
         },
+        signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
       }
     );
     if (!response.ok) return { hasPermission: false, error: true };
@@ -168,6 +172,7 @@ export async function postReaction(
         "User-Agent": userAgent,
       },
       body: JSON.stringify({ content }),
+      signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
     });
     return response.ok;
   } catch {

@@ -98,8 +98,13 @@ jobs:
         run: terraform validate -no-color
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Terraform Tests
+        id: test
+        run: terraform test -filter=tests/auth_provider_configuration.tftest.hcl
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Post Validation Results
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v8
         with:
           script: |
@@ -115,6 +120,7 @@ jobs:
             | Format | ${{ steps.fmt.outcome == 'success' && '✅' || '⚠️' }} |
             | Init | ${{ steps.init.outcome == 'success' && '✅' || '❌' }} |
             | Validate | ${{ steps.validate.outcome == 'success' && '✅' || '❌' }} |
+            | Tests | ${{ steps.test.outcome == 'success' && '✅' || '❌' }} |
             ${planNote}
 
             *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
@@ -174,6 +180,20 @@ jobs:
             -backend-config='endpoints={s3="https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Stage SchedulerDO deletion migration
+        run: |
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          if [ "$current_tag" = "v2" ]; then
+            printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
+          fi
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform Plan
         id: plan
         run: |
@@ -207,6 +227,7 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
+          TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
           TF_VAR_nextauth_secret: ${{ secrets.NEXTAUTH_SECRET }}
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
@@ -218,7 +239,6 @@ jobs:
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
           TF_VAR_app_name: "${{ secrets.APP_NAME || 'Open-Inspect' }}"
-          TF_VAR_app_short_name: ${{ secrets.APP_SHORT_NAME }}
           TF_VAR_app_icon_url: ${{ secrets.APP_ICON_URL }}
           TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
@@ -250,6 +270,8 @@ jobs:
           TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
           TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
           TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
+          TF_VAR_e2b_template_cpu: "${{ secrets.E2B_TEMPLATE_CPU || '2' }}"
+          TF_VAR_e2b_template_memory_mb: "${{ secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
 
       - name: Post Plan Results
         uses: actions/github-script@v8
@@ -335,6 +357,20 @@ jobs:
             -backend-config='endpoints={s3="https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Stage SchedulerDO deletion migration
+        run: |
+          set -euo pipefail
+          # Read state and parse it as separate steps: piping straight into jq
+          # turns a failed state read into an empty tag, which would silently
+          # skip the deletion migration and ship a worker whose class was never
+          # retired. An absent or empty state is still a valid "not v2" answer.
+          state="$(terraform state pull)"
+          current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
+          if [ "$current_tag" = "v2" ]; then
+            printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
+          fi
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform Apply
         run: terraform apply -auto-approve
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -362,6 +398,7 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
+          TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
           TF_VAR_nextauth_secret: ${{ secrets.NEXTAUTH_SECRET }}
           TF_VAR_modal_api_secret: ${{ secrets.MODAL_API_SECRET }}
           TF_VAR_allowed_users: ${{ secrets.ALLOWED_USERS }}
@@ -373,7 +410,6 @@ jobs:
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
           TF_VAR_github_bot_username: ${{ secrets.GH_BOT_USERNAME }}
           TF_VAR_app_name: "${{ secrets.APP_NAME || 'Open-Inspect' }}"
-          TF_VAR_app_short_name: ${{ secrets.APP_SHORT_NAME }}
           TF_VAR_app_icon_url: ${{ secrets.APP_ICON_URL }}
           TF_VAR_enable_linear_bot: "${{ secrets.ENABLE_LINEAR_BOT || 'false' }}"
           TF_VAR_linear_client_id: ${{ secrets.LINEAR_CLIENT_ID }}
@@ -405,6 +441,8 @@ jobs:
           TF_VAR_e2b_api_url: "${{ secrets.E2B_API_URL || 'https://api.e2b.app' }}"
           TF_VAR_e2b_sandbox_timeout_seconds: "${{ secrets.E2B_SANDBOX_TIMEOUT_SECONDS || '7200' }}"
           TF_VAR_e2b_auto_pause: "${{ secrets.E2B_AUTO_PAUSE || 'true' }}"
+          TF_VAR_e2b_template_cpu: "${{ secrets.E2B_TEMPLATE_CPU || '2' }}"
+          TF_VAR_e2b_template_memory_mb: "${{ secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

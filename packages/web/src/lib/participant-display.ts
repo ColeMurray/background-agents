@@ -1,4 +1,4 @@
-import type { SessionParticipantProfile } from "@open-inspect/shared";
+import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 
 export function resolveParticipantDisplay(
   fallback: { name: string; avatar?: string },

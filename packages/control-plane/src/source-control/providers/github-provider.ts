@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
-import type { PullRequestStatus } from "@open-inspect/shared";
+import type { PullRequestStatus } from "@open-inspect/shared/types/artifacts";
 import type {
   SourceControlProvider,
   SourceControlAuthContext,
@@ -23,8 +23,15 @@ import type {
   GitPushSpec,
   GitPushAuthContext,
   CredentialHelperAuth,
+  ResolvedCommit,
+  RepositoryTree,
 } from "../types";
-import { SourceControlProviderError, parseProviderResponse } from "../errors";
+import {
+  readResponseBytesWithinLimit,
+  SourceControlProviderError,
+  parseProviderResponse,
+} from "../errors";
+import { classifyGitTreeEntry } from "./git-tree";
 import {
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
@@ -116,6 +123,33 @@ const githubRepositoryInfoSchema = z.object({
 const githubBranchRefSchema = z.object({
   object: z.object({ sha: z.string().min(1) }),
 });
+
+/** Wire shape of GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1. */
+const githubTreeSchema = z.object({
+  truncated: z.boolean().optional(),
+  tree: z.array(
+    z.object({
+      path: z.string(),
+      mode: z.string(),
+      type: z.string(),
+      sha: z.string(),
+      size: z.number().int().nonnegative().optional(),
+    })
+  ),
+});
+
+/** Build a classified provider error from a non-OK GitHub response. */
+async function githubResponseError(
+  response: Response,
+  operation: string
+): Promise<SourceControlProviderError> {
+  const body = await response.text();
+  return SourceControlProviderError.fromFetchError(
+    `Failed to ${operation}: ${response.status} ${body}`,
+    new Error(body),
+    response.status
+  );
+}
 
 /** Parse a GitHub ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
@@ -249,6 +283,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
     // Add labels if requested
     if (config.labels && config.labels.length > 0) {
+      await this.ensureLabels(
+        auth.token,
+        config.repository.owner,
+        config.repository.name,
+        config.labels
+      );
       await this.addLabels(
         auth.token,
         config.repository.owner,
@@ -426,8 +466,8 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       }
       return {
         repoId: repo.id,
-        repoOwner: config.owner.toLowerCase(),
-        repoName: config.name.toLowerCase(),
+        repoOwner: repo.owner.toLowerCase(),
+        repoName: repo.name.toLowerCase(),
         defaultBranch: repo.defaultBranch,
       };
     } catch (error) {
@@ -539,6 +579,152 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
   }
 
+  async resolveCommit(
+    config: GetRepositoryConfig & { ref: string }
+  ): Promise<ResolvedCommit | null> {
+    try {
+      const response = await this.appFetch(
+        `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/commits/${encodeURIComponent(config.ref)}`,
+        "resolve commit",
+        "application/vnd.github.sha"
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) throw await githubResponseError(response, "resolve commit");
+      const sha = (await response.text()).trim();
+      if (!sha) throw new Error("GitHub returned an empty commit SHA");
+      return { sha };
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to resolve commit: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  async listTree(
+    config: GetRepositoryConfig & { commitSha: string; path?: string | null }
+  ): Promise<RepositoryTree> {
+    const scopedPath = config.path?.trim() || null;
+    let treeSha = config.commitSha;
+    if (scopedPath) {
+      for (const segment of scopedPath.split("/")) {
+        const parent = await this.appJsonRequired(
+          `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+            config.name
+          )}/git/trees/${encodeURIComponent(treeSha)}`,
+          githubTreeSchema,
+          "resolve repository subtree"
+        );
+        const child = parent.tree.find((entry) => entry.path === segment && entry.type === "tree");
+        if (!child) return { entries: [], truncated: false };
+        treeSha = child.sha;
+      }
+    }
+    const data = await this.appJsonRequired(
+      `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+        config.name
+      )}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`,
+      githubTreeSchema,
+      "list repository tree"
+    );
+    const prefix = scopedPath ? `${scopedPath}/` : "";
+    return {
+      truncated: data.truncated === true,
+      // GitHub reports blob sizes in the tree, so callers get a usable
+      // pre-download budget check from listTree alone.
+      entries: data.tree.map((entry) => ({
+        path: `${prefix}${entry.path}`,
+        type: classifyGitTreeEntry(entry.type, entry.mode),
+        blobId: entry.sha,
+        sizeBytes: entry.size ?? null,
+        executable: entry.mode === "100755",
+      })),
+    };
+  }
+
+  async readBlob(
+    config: GetRepositoryConfig & { blobId: string; maxBytes: number }
+  ): Promise<Uint8Array> {
+    try {
+      const response = await this.appFetch(
+        `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/git/blobs/${encodeURIComponent(config.blobId)}`,
+        "read blob",
+        "application/vnd.github.raw"
+      );
+      if (!response.ok) throw await githubResponseError(response, "read blob");
+      return await readResponseBytesWithinLimit(response, config.maxBytes, config.blobId);
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to read blob: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  /** Issue an installation-authenticated GitHub API request. */
+  private async appFetch(path: string, operation: string, accept: string): Promise<Response> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        `GitHub App not configured - cannot ${operation}`,
+        "permanent"
+      );
+    }
+    const token = await getCachedInstallationToken(this.appConfig, {
+      cacheStore: this.cacheStore,
+      userAgent: this.userAgent,
+    });
+    return fetchWithTimeout(`${GITHUB_API_BASE}${path}`, {
+      headers: {
+        Accept: accept,
+        Authorization: `Bearer ${token}`,
+        "User-Agent": this.userAgent,
+      },
+    });
+  }
+
+  /**
+   * Installation-authenticated GET returning parsed JSON. A confirmed 404 is
+   * absence only when the caller asks for it; otherwise it is an error.
+   */
+  private async appJson<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    operation: string,
+    notFoundIsAbsence: boolean
+  ): Promise<T | null> {
+    try {
+      const response = await this.appFetch(path, operation, "application/vnd.github+json");
+      if (notFoundIsAbsence && response.status === 404) return null;
+      if (!response.ok) throw await githubResponseError(response, operation);
+      return await parseProviderResponse(response, schema, `Failed to ${operation}`);
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to ${operation}: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  private async appJsonRequired<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    operation: string
+  ): Promise<T> {
+    const data = await this.appJson(path, schema, operation, false);
+    if (data === null) throw new SourceControlProviderError(`Failed to ${operation}`, "permanent");
+    return data;
+  }
+
   /**
    * Generate authentication for git push operations using GitHub App.
    */
@@ -619,6 +805,55 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       repoName: config.name,
       force,
     };
+  }
+
+  /** Ensure requested labels exist without generating repeated mutating 422 responses. */
+  private async ensureLabels(
+    accessToken: string,
+    owner: string,
+    repo: string,
+    labels: string[]
+  ): Promise<void> {
+    const encodedOwner = encodeURIComponent(owner);
+    const encodedRepo = encodeURIComponent(repo);
+    const headers = {
+      Accept: "application/vnd.github.v3+json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": this.userAgent,
+    };
+
+    for (const label of labels) {
+      const labelUrl = `${GITHUB_API_BASE}/repos/${encodedOwner}/${encodedRepo}/labels/${encodeURIComponent(label)}`;
+      try {
+        const existing = await fetchWithTimeout(labelUrl, { headers });
+        if (existing.ok) continue;
+        if (existing.status !== 404) {
+          console.warn(`Failed to check label "${label}" in ${owner}/${repo}: ${existing.status}`);
+          continue;
+        }
+
+        const created = await fetchWithTimeout(
+          `${GITHUB_API_BASE}/repos/${encodedOwner}/${encodedRepo}/labels`,
+          {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: label, color: "ededed" }),
+          }
+        );
+        if (created.ok) continue;
+
+        // A concurrent creator can win between the GET and POST. Confirm the
+        // label now exists rather than treating every validation failure as a duplicate.
+        if (created.status === 422) {
+          const raced = await fetchWithTimeout(labelUrl, { headers });
+          if (raced.ok) continue;
+        }
+
+        console.warn(`Failed to create label "${label}" in ${owner}/${repo}: ${created.status}`);
+      } catch (error) {
+        console.warn(`Failed to ensure label "${label}" in ${owner}/${repo}:`, error);
+      }
+    }
   }
 
   /**

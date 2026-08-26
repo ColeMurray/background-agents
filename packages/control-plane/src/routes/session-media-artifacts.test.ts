@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { SessionRouteContext } from "./session-route";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import {
   getSessionArtifactFromRuntime,
   listSessionArtifactsFromRuntime,
+  persistMediaArtifact,
 } from "./session-media-artifacts";
 
 function createContext(response: Response): SessionRouteContext {
@@ -16,6 +18,7 @@ function createContext(response: Response): SessionRouteContext {
     trace_id: "trace-1",
     request_id: "request-1",
     db: {} as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},
@@ -150,5 +153,41 @@ describe("session media artifact runtime parsing", () => {
 
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(500);
+  });
+
+  it("uses a valid runtime error message when media persistence fails", async () => {
+    const deleteObject = vi.fn(async () => {});
+    const result = await persistMediaArtifact({
+      sessionId: "session-1",
+      artifactId: "artifact-1",
+      artifactType: "screenshot",
+      objectKey: "objects/shot.png",
+      metadata: { objectKey: "objects/shot.png", mimeType: "image/png", sizeBytes: 123 },
+      storage: { put: vi.fn(), get: vi.fn(), head: vi.fn(), delete: deleteObject },
+      ctx: createContext(Response.json({ error: "runtime failed" }, { status: 400 })),
+      parseFallback: "Failed to parse screenshot metadata",
+    });
+
+    expect(deleteObject).toHaveBeenCalledWith("objects/shot.png");
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(400);
+    await expect((result as Response).json()).resolves.toEqual({ error: "runtime failed" });
+  });
+
+  it("falls back to raw runtime text when media persistence error JSON is malformed", async () => {
+    const result = await persistMediaArtifact({
+      sessionId: "session-1",
+      artifactId: "artifact-1",
+      artifactType: "screenshot",
+      objectKey: "objects/shot.png",
+      metadata: { objectKey: "objects/shot.png", mimeType: "image/png", sizeBytes: 123 },
+      storage: { put: vi.fn(), get: vi.fn(), head: vi.fn(), delete: vi.fn(async () => {}) },
+      ctx: createContext(Response.json({ error: 123 }, { status: 400 })),
+      parseFallback: "Failed to parse screenshot metadata",
+    });
+
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(400);
+    await expect((result as Response).json()).resolves.toEqual({ error: '{"error":123}' });
   });
 });

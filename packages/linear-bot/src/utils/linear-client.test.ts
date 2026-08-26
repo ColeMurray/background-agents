@@ -4,6 +4,8 @@ import {
   fetchIssueDetails,
   fetchUser,
   getRepoSuggestions,
+  LINEAR_GRAPHQL_TIMEOUT_MS,
+  linearGraphQL,
   postIssueComment,
 } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
@@ -23,6 +25,109 @@ function mockFetchResponse(data: unknown): void {
     })
   );
 }
+
+describe("linearGraphQL", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("rejects a GraphQL response that is not an object", async () => {
+    mockFetchResponse([]);
+
+    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toThrow(
+      "Linear GraphQL error: unexpected response shape"
+    );
+  });
+
+  it("rejects a null GraphQL response", async () => {
+    mockFetchResponse(null);
+
+    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toThrow(
+      "Linear GraphQL error: unexpected response shape"
+    );
+  });
+
+  it("returns the envelope for a well-formed GraphQL response", async () => {
+    mockFetchResponse({ data: { viewer: { id: "user-1" } } });
+
+    await expect(linearGraphQL(client, "query { viewer { id } }", {})).resolves.toEqual({
+      data: { viewer: { id: "user-1" } },
+    });
+  });
+
+  it("times out the first GraphQL attempt", async () => {
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        expect(init?.signal).toBe(timeoutSignal);
+        throw timeoutSignal.reason;
+      })
+    );
+
+    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    expect(timeoutSpy).toHaveBeenCalledWith(LINEAR_GRAPHQL_TIMEOUT_MS);
+  });
+
+  it("uses the same deadline for a renewed-token retry", async () => {
+    const deadline = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const renewAccessToken = vi.fn(async () => "renewed-token");
+    const retryClient: LinearApiClient = {
+      accessToken: "expired-token",
+      organizationId: "org-1",
+      renewAccessToken,
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal).toBe(deadline.signal);
+      if (fetchMock.mock.calls.length === 1) return new Response(null, { status: 401 });
+      deadline.abort(new DOMException("timed out", "TimeoutError"));
+      throw deadline.signal.reason;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(linearGraphQL(retryClient, "query { viewer { id } }", {})).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    expect(renewAccessToken).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the aggregate timeout while token renewal is stalled", async () => {
+    const deadline = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    let renewalStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      renewalStarted = resolve;
+    });
+    const renewAccessToken = vi.fn(
+      () =>
+        new Promise<string>(() => {
+          renewalStarted?.();
+        })
+    );
+    const renewalClient: LinearApiClient = {
+      accessToken: "expired-token",
+      organizationId: "org-1",
+      renewAccessToken,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 }))
+    );
+
+    const request = linearGraphQL(renewalClient, "query { viewer { id } }", {});
+    await started;
+    deadline.abort(new DOMException("timed out", "TimeoutError"));
+
+    await expect(request).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(renewAccessToken).toHaveBeenCalledOnce();
+  });
+});
 
 describe("fetchUser", () => {
   beforeEach(() => {
@@ -205,6 +310,7 @@ describe("emitAgentActivity", () => {
 describe("postIssueComment", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("returns success from a valid comment mutation response", async () => {
@@ -255,6 +361,22 @@ describe("postIssueComment", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: false,
+    });
+  });
+
+  it("returns false when the comment request times out", async () => {
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        expect(init?.signal).toBe(timeoutSignal);
+        throw timeoutSignal.reason;
       })
     );
 

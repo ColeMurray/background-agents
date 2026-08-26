@@ -18,6 +18,8 @@ const REASON_GUIDANCE = {
     "The message body was empty after sanitization. Try again with non-empty content.",
   rate_limited: "Slack rate-limited the request. Wait before retrying.",
   slack_api_error: "Slack returned an unexpected error. The post did not go through.",
+  delivery_unknown:
+    "Slack may have posted the notification, but confirmation timed out. Do not retry automatically; check the channel first to avoid posting it twice.",
   invalid_input: "The notification arguments were invalid; correct them and retry.",
   bridge_error: "Could not reach the control plane to post the notification.",
 };

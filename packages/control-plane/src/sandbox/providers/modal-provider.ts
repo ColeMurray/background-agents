@@ -11,6 +11,7 @@ import type { CorrelationContext } from "../../logger";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
+  createVncAccess,
   type ImageBuildProviderTriggerConfig,
   type SandboxProvider,
   type SandboxProviderCapabilities,
@@ -116,6 +117,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           timeoutSeconds: config.timeoutSeconds,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
+          vncEnabled: config.vncEnabled,
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
@@ -127,10 +129,10 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       return {
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
-        status: result.status,
         createdAt: result.createdAt,
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
+        vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
         ttydUrl: result.ttydUrl,
         tunnelUrls: result.tunnelUrls,
       };
@@ -159,6 +161,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
+          vncEnabled: config.vncEnabled,
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
@@ -174,6 +177,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           providerObjectId: result.modalObjectId,
           codeServerUrl: result.codeServerUrl,
           codeServerPassword: result.codeServerPassword,
+          vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
           ttydUrl: result.ttydUrl,
           tunnelUrls: result.tunnelUrls,
         };
@@ -379,18 +383,20 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Classify an error as transient or permanent for circuit breaker handling.
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
+    if (SandboxProviderError.isTransientNetworkError(error)) {
+      return new SandboxProviderError(
+        `${message}: ${error instanceof Error ? error.message : String(error)}`,
+        "transient",
+        error instanceof Error ? error : undefined
+      );
+    }
+
     // Check for fetch/network errors
     if (error instanceof Error) {
       const errorMessage = error.message.toLowerCase();
 
       // Transient network errors
       if (
-        errorMessage.includes("fetch failed") ||
-        errorMessage.includes("etimedout") ||
-        errorMessage.includes("econnreset") ||
-        errorMessage.includes("econnrefused") ||
-        errorMessage.includes("network") ||
-        errorMessage.includes("timeout") ||
         errorMessage.includes("502") ||
         errorMessage.includes("503") ||
         errorMessage.includes("504") ||

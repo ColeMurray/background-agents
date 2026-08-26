@@ -10,7 +10,7 @@
  */
 
 import type { AutomationEventSource } from "@open-inspect/shared/triggers";
-import type { SpawnSource } from "@open-inspect/shared";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { createLogger } from "./../logger";
 import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
@@ -95,7 +95,7 @@ export interface DerivedIdentity {
  * `applyIdentityEnforcement` gate; the type says so, sparing call sites a
  * null check the gate already performed.
  */
-export type EnforcedIdentity<R extends IdentityRoute> = R extends RequiresUserRoute
+type EnforcedIdentity<R extends IdentityRoute> = R extends RequiresUserRoute
   ? DerivedIdentity & { participantUserId: string }
   : DerivedIdentity;
 

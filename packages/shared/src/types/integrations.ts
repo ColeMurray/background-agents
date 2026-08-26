@@ -3,8 +3,7 @@
 import { escapeRegExp } from "../regex";
 import { z } from "zod";
 
-/** Third-party integrations, each surfaced as a card in the Integrations settings list. */
-export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
+export type IntegrationId = "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
 export interface IntegrationEntry<
@@ -36,12 +35,12 @@ export interface GitHubBotSettings {
 export interface ScmSettings {
   /** Always open pull/merge requests created by sessions as drafts. */
   alwaysUseDraftMode?: boolean;
+  /** Label applied to pull/merge requests created by sessions. */
+  pullRequestLabel?: string;
 }
 
-/** A repository override must choose an explicit value rather than inherit. */
-export interface ScmRepoSettings extends ScmSettings {
-  alwaysUseDraftMode: boolean;
-}
+/** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
+export type ScmRepoSettings = ScmSettings;
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
 export interface LinearBotSettings {
@@ -65,6 +64,11 @@ export interface CodeServerSettings {
   enabled?: boolean;
 }
 
+/** Overridable behavior settings for the VNC desktop integration. */
+export interface VncSettings {
+  enabled?: boolean;
+}
+
 /** Maximum number of tunnel ports a user can configure per sandbox. */
 export const MAX_TUNNEL_PORTS = 10;
 
@@ -74,6 +78,12 @@ export const MAX_TUNNEL_PORTS = 10;
  */
 export const DEFAULT_CODE_SERVER_PORT = 8080;
 
+/** Default public noVNC/websockify port inside the sandbox. */
+export const DEFAULT_VNC_PORT = 6080;
+
+/** Internal VNC server port. Reserved because noVNC proxies it. */
+export const INTERNAL_VNC_PORT = 5900;
+
 /**
  * Default port the web terminal (ttyd) proxy is exposed on. Mirrors
  * `TTYD_PROXY_PORT` in `packages/sandbox-runtime/src/sandbox_runtime/constants.py`.
@@ -82,7 +92,7 @@ export const DEFAULT_TERMINAL_PORT = 7680;
 
 /**
  * Internal ttyd port (localhost-only, behind the proxy). Reserved: it is never
- * exposed and cannot be chosen as a code-server, terminal, or tunnel port.
+ * exposed and cannot be chosen as a service or tunnel port.
  * Mirrors `TTYD_PORT` in `packages/sandbox-runtime/src/sandbox_runtime/constants.py`.
  */
 export const INTERNAL_TTYD_PORT = 7681;
@@ -100,9 +110,9 @@ export type SandboxPortConflict =
   | { kind: "duplicate"; port: number; label: string };
 
 /**
- * Find the first conflict across configured sandbox ports (code-server,
- * terminal, and tunnel ports): a port equal to the reserved internal ttyd port
- * ({@link INTERNAL_TTYD_PORT}), or a port used more than once. Returns null when
+ * Find the first conflict across configured sandbox ports: a port reserved for
+ * an internal service ({@link INTERNAL_TTYD_PORT} or
+ * {@link INTERNAL_VNC_PORT}), or a port used more than once. Returns null when
  * every port is usable.
  *
  * Enablement-independent — every configured port must be unique so none is
@@ -114,7 +124,9 @@ export function findSandboxPortConflict(
 ): SandboxPortConflict | null {
   const seen = new Set<number>();
   for (const { port, label } of ports) {
-    if (port === INTERNAL_TTYD_PORT) return { kind: "reserved", port, label };
+    if (port === INTERNAL_TTYD_PORT || port === INTERNAL_VNC_PORT) {
+      return { kind: "reserved", port, label };
+    }
     if (seen.has(port)) return { kind: "duplicate", port, label };
     seen.add(port);
   }
@@ -173,6 +185,11 @@ export interface SandboxSettings {
    * port for your own service on a tunnel.
    */
   codeServerPort?: number;
+  /**
+   * Port noVNC/websockify binds to inside the sandbox (only used when VNC is
+   * enabled). Unset → DEFAULT_VNC_PORT.
+   */
+  vncPort?: number;
   /**
    * Port the web terminal (ttyd) proxy is exposed on (only used when
    * `terminalEnabled`). Unset → DEFAULT_TERMINAL_PORT. Ignored by providers
@@ -357,7 +374,7 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
  * the trigger repo before a session exists, and slack is global/per-repo only.
  * The environment-level shape is the integration's repo (override) shape.
  */
-export const ENVIRONMENT_SETTINGS_INTEGRATION_IDS = ["sandbox", "code-server"] as const;
+export const ENVIRONMENT_SETTINGS_INTEGRATION_IDS = ["sandbox", "code-server", "vnc"] as const;
 
 export type EnvironmentSettingsIntegrationId =
   (typeof ENVIRONMENT_SETTINGS_INTEGRATION_IDS)[number];
@@ -367,6 +384,7 @@ export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
   linear: IntegrationEntry<LinearBotSettings>;
   "code-server": IntegrationEntry<CodeServerSettings>;
+  vnc: IntegrationEntry<VncSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
   scm: IntegrationEntry<ScmSettings>;
@@ -376,6 +394,7 @@ export interface IntegrationSettingsMap {
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
+export type VncGlobalConfig = IntegrationSettingsMap["vnc"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
 export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
@@ -393,9 +412,63 @@ export interface McpServerConfig {
   enabled: boolean;
 }
 
+export const DEFAULT_MCP_SERVER_ENABLED = true;
+
+const mcpServerCommonFields = {
+  name: z.string().trim().min(1),
+  repoScopes: z.array(z.string()).nullable().optional(),
+  enabled: z.boolean().optional(),
+};
+
+export const createMcpServerInputSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      ...mcpServerCommonFields,
+      type: z.literal("local"),
+      command: z.array(z.string()).min(1),
+      env: z.record(z.string(), z.string()).optional(),
+      enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
+    })
+    .strict(),
+  z
+    .object({
+      ...mcpServerCommonFields,
+      type: z.literal("remote"),
+      url: z.url(),
+      headers: z.record(z.string(), z.string()).optional(),
+      enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
+    })
+    .strict(),
+]);
+
+export const updateMcpServerInputSchema = z
+  .object({
+    ...mcpServerCommonFields,
+    revision: z.number().int().positive(),
+    type: z.enum(["local", "remote"]),
+    command: z.array(z.string()),
+    url: z.url(),
+    env: z.record(z.string(), z.string()),
+    headers: z.record(z.string(), z.string()),
+  })
+  .partial()
+  .strict();
+
+export type CreateMcpServerRequest = z.input<typeof createMcpServerInputSchema>;
+export type UpdateMcpServerRequest = Omit<
+  z.input<typeof updateMcpServerInputSchema>,
+  "revision"
+> & { revision: number };
+export type ValidatedCreateMcpServerInput = z.output<typeof createMcpServerInputSchema>;
+export type ValidatedUpdateMcpServerInput = Omit<
+  z.output<typeof updateMcpServerInputSchema>,
+  "revision"
+>;
+
 /** MCP server metadata for API responses — no decrypted credentials. */
 export interface McpServerMetadata {
   id: string;
+  revision: number;
   name: string;
   type: "local" | "remote";
   command?: string[];
@@ -425,6 +498,11 @@ export const INTEGRATION_DEFINITIONS: {
     id: "code-server",
     name: "Code Server",
     description: "Browser-based VS Code editor attached to sandbox sessions",
+  },
+  {
+    id: "vnc",
+    name: "VNC Desktop",
+    description: "Remote desktop access attached to sandbox sessions",
   },
   {
     id: "sandbox",

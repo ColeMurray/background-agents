@@ -1,4 +1,5 @@
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 
 /** An SWR cache key or key matcher to pass to `mutate`. */
@@ -22,21 +23,32 @@ export function swrKeysToRevalidate(
   switch (message.type) {
     case "artifact_created":
     case "artifact_updated":
-      return message.artifact.type === "pr" ? [isUnarchivedSessionListKey] : [];
+      return message.artifact.type === "pr" ? [isUnarchivedSessionListKey, isSessionInboxKey] : [];
 
     case "session_title":
-      return message.title ? [isUnarchivedSessionListKey] : [];
+      return message.title ? [isUnarchivedSessionListKey, isSessionInboxKey] : [];
 
     case "session_status":
       // Revalidate so the status change is reflected in the sidebar.
-      return [isUnarchivedSessionListKey];
+      return [isUnarchivedSessionListKey, isSessionInboxKey];
 
     case "child_session_update":
       // Child session spawned or changed status — revalidate child list and sidebar.
-      return [`/api/sessions/${sessionId}/children`, isUnarchivedSessionListKey];
+      return [`/api/sessions/${sessionId}/children`, isUnarchivedSessionListKey, isSessionInboxKey];
+
+    case "sandbox_event":
+      return message.event.type === "execution_complete" ? [isSessionInboxKey] : [];
 
     case "diff_state_changed":
       return [`/api/sessions/${sessionId}/diff`];
+
+    case "subscribed":
+      return [
+        `/api/sessions/${sessionId}/diff`,
+        `/api/sessions/${sessionId}/children`,
+        `/api/sessions/${sessionId}/participant-profiles`,
+        isSessionInboxKey,
+      ];
 
     default:
       return [];

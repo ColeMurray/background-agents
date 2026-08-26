@@ -1,6 +1,7 @@
-import { createSessionInputSchema, type CreateSessionInput } from "@open-inspect/shared";
-
-export type { CreateSessionInput };
+import {
+  createSessionInputSchema,
+  type CreateSessionInput,
+} from "@open-inspect/shared/types/session-api";
 
 export type CreateSessionInputParseResult =
   /**

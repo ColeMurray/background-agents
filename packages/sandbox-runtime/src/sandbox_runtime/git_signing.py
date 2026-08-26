@@ -34,6 +34,17 @@ UNSIGNED_GIT_USER = GitUser(name="OpenInspect", email="open-inspect@noreply.gith
 class GitSigningError(RuntimeError):
     """Bounded runtime error that never includes secret configuration values."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+
 
 class DisabledCommitSigningConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -111,12 +122,8 @@ class GitSigningRuntime:
             else Path(os.environ.get(BIN_INSTALL_DIR_ENV_VAR, DEFAULT_BIN_INSTALL_DIR))
             / GIT_SIGNER_COMMAND
         )
-        self._installed_signing_revision: tuple[str, ...] | None = None
-        self._installed_repository_paths: tuple[Path, ...] = ()
 
     async def initialize(self, author: GitUser | None) -> None:
-        self._installed_signing_revision = None
-        self._installed_repository_paths = ()
         await self.refresh(author)
 
     async def refresh(self, author: GitUser | None) -> None:
@@ -133,7 +140,18 @@ class GitSigningRuntime:
                 )
                 response.raise_for_status()
                 payload = response.json()
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPStatusError as error:
+            status_code = error.response.status_code
+            raise GitSigningError(
+                "Commit signing configuration unavailable",
+                status_code=status_code,
+                retryable=status_code in {408, 429} or status_code >= 500,
+            ) from None
+        except httpx.HTTPError:
+            raise GitSigningError(
+                "Commit signing configuration unavailable", retryable=True
+            ) from None
+        except ValueError:
             raise GitSigningError("Commit signing configuration unavailable") from None
 
         return parse_commit_signing_configuration(payload)
@@ -151,22 +169,13 @@ class GitSigningRuntime:
             repositories = read_repo_manifest(self.repo_manifest_path)
         except RepoConfigError:
             raise GitSigningError("Invalid repository manifest") from None
-        repository_paths = tuple(repository.path for repository in repositories)
-        signing_revision = self._signing_revision(configuration)
-        signing_state_changed = (
-            signing_revision != self._installed_signing_revision
-            or repository_paths != self._installed_repository_paths
-        )
 
         if isinstance(configuration, DisabledCommitSigningConfiguration):
             effective_author = author or UNSIGNED_GIT_USER
-            if signing_state_changed:
-                for repository in repositories:
-                    await self._remove_signing_git_config(repository.path)
             for repository in repositories:
+                await self._remove_signing_git_config(repository.path)
                 await self._set_git_config(repository.path, "user.name", effective_author.name)
                 await self._set_git_config(repository.path, "user.email", effective_author.email)
-            self._record_installed_state(signing_revision, repository_paths)
             return
 
         effective_author = author or GitUser(
@@ -188,38 +197,17 @@ class GitSigningRuntime:
             ("user.email", effective_author.email),
         )
         for repository in repositories:
-            if signing_state_changed:
-                for key, value in signing_values:
-                    await self._set_git_config(repository.path, key, value)
+            for key, value in signing_values:
+                await self._set_git_config(repository.path, key, value)
             for key, value in author_values:
                 await self._set_git_config(repository.path, key, value)
-        self._record_installed_state(signing_revision, repository_paths)
-
-    @staticmethod
-    def _signing_revision(configuration: CommitSigningConfiguration) -> tuple[str, ...]:
-        if isinstance(configuration, DisabledCommitSigningConfiguration):
-            return ("disabled",)
-        return (
-            "enabled",
-            configuration.committerName,
-            configuration.committerEmail,
-            configuration.publicKey,
-        )
-
-    def _record_installed_state(
-        self,
-        signing_revision: tuple[str, ...],
-        repository_paths: tuple[Path, ...],
-    ) -> None:
-        self._installed_signing_revision = signing_revision
-        self._installed_repository_paths = repository_paths
 
     async def _remove_signing_git_config(self, repository: Path) -> None:
         for key in SIGNING_CONFIG_KEYS:
             await self._run_git_config(repository, "--unset-all", key, allow_missing=True)
 
     async def _set_git_config(self, repository: Path, key: str, value: str) -> None:
-        await self._run_git_config(repository, key, value)
+        await self._run_git_config(repository, "--replace-all", key, value)
 
     async def _run_git_config(
         self,

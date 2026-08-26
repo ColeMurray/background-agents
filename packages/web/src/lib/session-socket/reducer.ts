@@ -1,10 +1,16 @@
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type {
+  ParticipantPresence,
+  PromptQueueItem,
+  ServerMessage,
+  SessionSnapshot,
+  SessionState,
+  SessionTimelineEvent,
+} from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 
-export interface HistoryCursor {
+interface HistoryCursor {
   timestamp: number;
   id: string;
   sequence?: number;
@@ -16,7 +22,8 @@ export interface HistoryCursor {
  * this reducer only turns already-normalized inputs into the next view state.
  */
 export interface SessionSocketState {
-  replaying: boolean;
+  ready: boolean;
+  presenceSynced: boolean;
   sessionState: SessionState | null;
   events: SandboxEvent[];
   participants: ParticipantPresence[];
@@ -25,10 +32,20 @@ export interface SessionSocketState {
   hasMoreHistory: boolean;
   loadingHistory: boolean;
   cursor: HistoryCursor | null;
+  promptQueue: PromptQueueItem[];
+  /**
+   * Why the sandbox last failed, as reported by the control plane — the
+   * provider's own message (quota, rate limit, bad config), not a status label.
+   * Set from `sandbox_error` and from the spawn error carried by the snapshot /
+   * `subscribed`, and cleared as soon as a fresh attempt starts or succeeds, so
+   * it never outlives the failure it explains.
+   */
+  sandboxError: string | null;
 }
 
 export const initialSessionSocketState: SessionSocketState = {
-  replaying: true,
+  ready: false,
+  presenceSynced: false,
   sessionState: null,
   events: [],
   participants: [],
@@ -37,6 +54,8 @@ export const initialSessionSocketState: SessionSocketState = {
   hasMoreHistory: false,
   loadingHistory: false,
   cursor: null,
+  promptQueue: [],
+  sandboxError: null,
 };
 
 export type SessionSocketAction =
@@ -46,17 +65,14 @@ export type SessionSocketAction =
   | { type: "events_appended"; events: SandboxEvent[] }
   /** A fetch_history request was sent. */
   | { type: "history_requested" }
-  /** A prompt was sent; optimistically mark the session as processing. */
-  | { type: "prompt_sent" }
   /** The socket closed (clean or not). */
   | { type: "socket_closed" };
 
-const CLEARED_SANDBOX_ACCESS_STATE = {
+const CLEARED_SANDBOX_RUNTIME_STATE = {
   codeServerUrl: undefined,
-  codeServerPassword: undefined,
+  vncUrl: undefined,
   tunnelUrls: undefined,
   ttydUrl: undefined,
-  ttydToken: undefined,
 } satisfies Partial<SessionState>;
 
 /** Replace an artifact in place by id, or prepend when it is new. */
@@ -66,6 +82,28 @@ function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact
     return [nextArtifact, ...artifacts];
   }
   return artifacts.map((artifact, index) => (index === existingIndex ? nextArtifact : artifact));
+}
+
+function renderTimelineEvents(items: SessionTimelineEvent[]): SandboxEvent[] {
+  return collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)));
+}
+
+export function createSessionSocketState(snapshot: SessionSnapshot): SessionSocketState {
+  const timelineEvents = snapshot.timeline.events;
+  return {
+    ...initialSessionSocketState,
+    sessionState: {
+      ...snapshot.session,
+      isProcessing: snapshot.session.isProcessing ?? false,
+      totalCost: snapshot.session.totalCost ?? 0,
+    },
+    artifacts: snapshot.artifacts.map(toUiArtifact),
+    events: renderTimelineEvents(timelineEvents),
+    hasMoreHistory: snapshot.timeline.hasMore,
+    cursor: snapshot.timeline.cursor,
+    promptQueue: snapshot.promptQueue,
+    sandboxError: snapshot.spawnError ?? null,
+  };
 }
 
 /**
@@ -136,42 +174,46 @@ function reduceServerMessage(
   message: Exclude<ServerMessage, { type: "sandbox_event" }>
 ): SessionSocketState {
   switch (message.type) {
-    case "subscribed":
+    case "subscribed": {
+      const timelineEvents = message.timeline.events;
       // Replace local artifacts and events with the subscribed snapshot so
       // reconnects still clear stale state instead of merging stale client
       // data.
       return {
         ...state,
-        replaying: false,
+        ready: true,
         sessionState: {
-          ...message.state,
-          // Backward-compatible defaults for older sessions that may omit these.
-          isProcessing: message.state.isProcessing ?? false,
-          totalCost: message.state.totalCost ?? 0,
+          ...message.session,
+          // Normalize optional snapshot fields for the view.
+          isProcessing: message.session.isProcessing ?? false,
+          totalCost: message.session.totalCost ?? 0,
         },
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
-        events: message.replay
-          ? collapseReplayTokenEvents(message.replay.events.map(toUiSandboxEvent))
-          : [],
-        hasMoreHistory: message.replay?.hasMore ?? false,
-        cursor: message.replay?.cursor ?? null,
+        events: renderTimelineEvents(timelineEvents),
+        hasMoreHistory: message.timeline.hasMore,
+        cursor: message.timeline.cursor,
         // A fetch_history dropped by a disconnect would otherwise leave this
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,
+        promptQueue: message.promptQueue,
+        sandboxError: message.spawnError ?? null,
       };
+    }
 
-    case "history_page":
-      // Prepend older events to the beginning.
+    case "history_page": {
       return {
         ...state,
-        events: [...message.items.map(toUiSandboxEvent), ...state.events],
-        hasMoreHistory: message.hasMore ?? false,
-        cursor: message.cursor ?? null,
+        events: [...message.items.map((item) => toUiSandboxEvent(item.event)), ...state.events],
+        hasMoreHistory: message.hasMore,
+        cursor: message.cursor,
         loadingHistory: false,
       };
+    }
 
     case "presence_sync":
+      return { ...state, presenceSynced: true, participants: message.participants };
+
     case "presence_update":
       return { ...state, participants: message.participants };
 
@@ -182,13 +224,17 @@ function reduceServerMessage(
       };
 
     case "sandbox_warming":
-      return updateSessionState(state, (prev) => ({ ...prev, sandboxStatus: "warming" }));
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+        ...prev,
+        sandboxStatus: "warming",
+      }));
 
     case "sandbox_spawning":
-      return updateSessionState(state, (prev) => ({
+      // A new attempt supersedes whatever the last one failed with.
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
         ...prev,
         sandboxStatus: "spawning",
-        ...CLEARED_SANDBOX_ACCESS_STATE,
+        ...CLEARED_SANDBOX_RUNTIME_STATE,
       }));
 
     case "sandbox_status": {
@@ -198,36 +244,28 @@ function reduceServerMessage(
         message.status === "stale" ||
         message.status === "stopped" ||
         message.status === "failed";
-      return updateSessionState(state, (prev) => ({
-        ...prev,
-        sandboxStatus: message.status,
-        ...(shouldClearAccessState && CLEARED_SANDBOX_ACCESS_STATE),
-        ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
-      }));
+      return updateSessionState(
+        message.status === "failed" ? state : { ...state, sandboxError: null },
+        (prev) => ({
+          ...prev,
+          sandboxStatus: message.status,
+          ...(shouldClearAccessState && CLEARED_SANDBOX_RUNTIME_STATE),
+          ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
+        })
+      );
     }
 
     case "sandbox_ready":
-      return updateSessionState(state, (prev) => ({ ...prev, sandboxStatus: "ready" }));
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+        ...prev,
+        sandboxStatus: "ready",
+      }));
 
     case "sandbox_error":
-      return updateSessionState(state, (prev) => ({
+      return updateSessionState({ ...state, sandboxError: message.error }, (prev) => ({
         ...prev,
         sandboxStatus: "failed",
-        ...CLEARED_SANDBOX_ACCESS_STATE,
-      }));
-
-    case "code_server_info":
-      return updateSessionState(state, (prev) => ({
-        ...prev,
-        codeServerUrl: message.url,
-        codeServerPassword: message.password,
-      }));
-
-    case "ttyd_info":
-      return updateSessionState(state, (prev) => ({
-        ...prev,
-        ttydUrl: message.url,
-        ttydToken: message.token,
+        ...CLEARED_SANDBOX_RUNTIME_STATE,
       }));
 
     case "tunnel_urls":
@@ -264,11 +302,14 @@ function reduceServerMessage(
         isProcessing: message.isProcessing,
       }));
 
+    case "prompt_queue_updated":
+      return { ...state, promptQueue: message.promptQueue };
+
     case "error":
       // Reset loading state if a fetch_history request was rejected.
       return { ...state, loadingHistory: false };
 
-    // pong, prompt_queued, child_session_update, snapshot_saved,
+    // pong, prompt_queued, prompt_cancelled, child_session_update, snapshot_saved,
     // sandbox_restored, sandbox_warning: no view-state change.
     default:
       return state;
@@ -305,11 +346,12 @@ export function sessionSocketReducer(
     case "history_requested":
       return { ...state, loadingHistory: true };
 
-    case "prompt_sent":
-      // Optimistic: the server confirms with a processing_status message.
-      return updateSessionState(state, (prev) => ({ ...prev, isProcessing: true }));
-
     case "socket_closed":
-      return { ...state, replaying: false };
+      return {
+        ...state,
+        ready: false,
+        presenceSynced: false,
+        participants: [],
+      };
   }
 }

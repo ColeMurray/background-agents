@@ -1,12 +1,14 @@
 /**
  * Environment bindings for the GitHub Bot Cloudflare Worker.
  */
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+
 export interface Env {
   /** KV namespace for deduplicating webhook deliveries. */
   GITHUB_KV: KVNamespace;
 
   /** Service binding to the control plane worker. */
-  CONTROL_PLANE: Fetcher;
+  CONTROL_PLANE: ControlPlaneFetcher;
 
   /** Deployment name for logging/identification. */
   DEPLOYMENT_NAME: string;

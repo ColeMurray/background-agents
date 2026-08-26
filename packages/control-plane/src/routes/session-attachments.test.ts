@@ -4,6 +4,7 @@ import type { Env } from "../types";
 import { sessionAttachmentRoutes } from "./session-attachments";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -12,6 +13,7 @@ function createContext(): RequestContext {
     trace_id: "trace-1",
     request_id: "request-1",
     db: {} as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},

@@ -1,16 +1,26 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
+import {
+  BLANK_PROMPT_MESSAGE,
+  isBlankPrompt,
+  promptContentSchema,
+} from "@open-inspect/shared/types/prompts";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
-const promptRequestSchema = z.strictObject({
-  content: z.string().min(1),
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-  attachments: sessionAttachmentReferencesSchema.optional(),
-});
+const promptRequestSchema = z
+  .strictObject({
+    content: promptContentSchema,
+    model: z.string().optional(),
+    reasoningEffort: z.string().optional(),
+    attachments: sessionAttachmentReferencesSchema.optional(),
+  })
+  .refine((prompt) => !isBlankPrompt(prompt), {
+    message: BLANK_PROMPT_MESSAGE,
+    path: ["content"],
+  });
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerAuthSession();

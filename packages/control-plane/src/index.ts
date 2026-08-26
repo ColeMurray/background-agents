@@ -9,12 +9,21 @@ import { createLogger } from "./logger";
 import type { Env } from "./types";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
+import {
+  ABANDONED_DRAFT_SWEEP_CRON,
+  AbandonedDraftSweep,
+  SessionDraftExpiryClient,
+} from "./session/abandoned-draft-sweep";
+import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/instrumented-d1";
+import { SessionIndexStore } from "./db/session-index";
+import type { SqlDatabase } from "./db/sql-database";
+import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
+import { Scheduler } from "./scheduler/scheduler";
 
 const logger = createLogger("worker");
 
 // Re-export Durable Objects for Cloudflare to discover
 export { SessionDO } from "./session/durable-object";
-export { SchedulerDO } from "./scheduler/durable-object";
 
 /**
  * Worker fetch handler.
@@ -26,17 +35,20 @@ export default {
     // WebSocket upgrade for session
     const upgradeHeader = request.headers.get("Upgrade");
     if (upgradeHeader?.toLowerCase() === "websocket") {
-      return handleWebSocket(request, env, url);
+      const metrics = createRequestMetrics();
+      // eslint-disable-next-line no-restricted-syntax -- composition root: construct the request-scoped database adapter
+      const db = instrumentD1(env.DB, metrics);
+      return handleWebSocket(request, env, url, db, metrics);
     }
 
     // Regular API request — logged by the router with requestId and timing
-    return handleRequest(request, env, ctx);
+    return handleRequest(request, env, createCloudflareBackgroundTasks(ctx));
   },
 
   /**
-   * Cron trigger handler — wakes the SchedulerDO to process overdue automations.
+   * Cron trigger handler — processes overdue automations.
    */
-  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     if (event.cron === IMAGE_BUILD_SCHEDULER_CRON) {
       const requestId = crypto.randomUUID();
       // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
@@ -46,21 +58,23 @@ export default {
       });
       return;
     }
+    if (event.cron === ABANDONED_DRAFT_SWEEP_CRON) {
+      await new AbandonedDraftSweep(
+        // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
+        new SessionIndexStore(env.DB),
+        new SessionDraftExpiryClient(env.SESSION),
+        logger
+      ).run(Date.now());
+      return;
+    }
     if (event.cron !== "* * * * *") {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
-    if (!env.SCHEDULER) {
-      logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
-      return;
-    }
-
-    // Always wake the SchedulerDO — it runs both the recovery sweep
-    // (orphaned/timed-out runs) and processes overdue automations.
-    const doId = env.SCHEDULER.idFromName("global-scheduler");
-    const stub = env.SCHEDULER.get(doId);
-
-    await stub.fetch("http://internal/internal/tick", { method: "POST" });
+    // The tick runs both the recovery sweep (orphaned/timed-out runs) and
+    // processes overdue automations.
+    // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: construct the scheduler's database dependency
+    await new Scheduler(env.DB, env, createCloudflareBackgroundTasks(ctx)).tick();
   },
 
   queue: consumeImageBuildFinalizations,
@@ -69,7 +83,13 @@ export default {
 /**
  * Handle WebSocket connections.
  */
-async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Response> {
+async function handleWebSocket(
+  request: Request,
+  env: Env,
+  url: URL,
+  db: SqlDatabase,
+  metrics: RequestMetrics
+): Promise<Response> {
   // Extract session ID from path: /sessions/:id/ws
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/ws$/);
 
@@ -79,10 +99,21 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
   }
 
   const sessionId = match[1];
+  if (!(await new SessionIndexStore(db).exists(sessionId))) {
+    logger.warn("WebSocket session not found", {
+      event: "ws.session_not_found",
+      http_path: url.pathname,
+      session_id: sessionId,
+      ...metrics.summarize(),
+    });
+    return new Response("Session not found", { status: 404 });
+  }
+
   logger.info("WebSocket upgrade", {
     event: "ws.connect",
     http_path: url.pathname,
     session_id: sessionId,
+    ...metrics.summarize(),
   });
 
   // Get Durable Object and forward WebSocket

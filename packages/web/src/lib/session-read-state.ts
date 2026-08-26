@@ -6,7 +6,7 @@ import {
   type SessionReadAction,
   type SessionReadResult,
   type SessionReadState,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
 
 export type SessionReadAttemptDisposition = "complete" | "retry" | "permanent_failure";
 

@@ -1,6 +1,10 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as SandboxProviderModuleNamespace from "@/lib/sandbox-provider";
+
+type SandboxProviderModule = typeof SandboxProviderModuleNamespace;
+
 const mocks = vi.hoisted(() => ({
   supportsRepoImagesValue: true,
 }));
@@ -13,12 +17,16 @@ vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-vi.mock("@/lib/sandbox-provider", () => ({
+// Only the provider probe is stubbed; the 501 copy comes from the real module so
+// the assertion below pins the message routes actually answer with.
+vi.mock("@/lib/sandbox-provider", async (importOriginal) => ({
+  ...(await importOriginal<SandboxProviderModule>()),
   supportsRepoImages: () => mocks.supportsRepoImagesValue,
 }));
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { REPO_IMAGES_UNSUPPORTED_MESSAGE } from "@/lib/sandbox-provider";
 import { GET as getFeed } from "./route";
 import { POST as triggerBuild } from "./repo/[owner]/[name]/trigger/route";
 import { PUT as toggleBuild } from "./repo/[owner]/[name]/toggle/route";
@@ -60,6 +68,9 @@ describe.each(routes)("$name", ({ call }) => {
     const response = await call();
 
     expect(response.status).toBe(501);
+    // Every image-build route answers with the one derived message, so adding a
+    // provider cannot leave a stale list behind on some subset of routes.
+    expect(await response.json()).toEqual({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE });
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
@@ -199,6 +210,34 @@ describe("GET /api/image-builds feed", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ units: [], enabledRepos: [], images: [] });
   });
+
+  it("returns 502 when the control-plane feed has an invalid shape", async () => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") {
+        return Response.json({ units: [{ scopeKind: "repo", scopeId: "acme/web" }] });
+      }
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
+      return Response.json({ images: [] });
+    });
+
+    const response = await getFeed();
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch image builds" });
+  });
+
+  it("returns 502 when the control-plane feed omits a required array", async () => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") return Response.json({});
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
+      return Response.json({ images: [] });
+    });
+
+    const response = await getFeed();
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch image builds" });
+  });
 });
 
 describe("proxied control-plane paths", () => {
@@ -217,6 +256,17 @@ describe("proxied control-plane paths", () => {
     });
   });
 
+  it("trigger preserves nested namespace owners as one encoded route segment", async () => {
+    await triggerBuild({} as NextRequest, {
+      params: Promise.resolve({ owner: "group/subgroup", name: "web" }),
+    });
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/image-builds/trigger/repo/group%2Fsubgroup/web",
+      { method: "POST" }
+    );
+  });
+
   it("toggle puts to the unified repo toggle route", async () => {
     await toggleBuild({ json: async () => ({ enabled: true }) } as NextRequest, params);
 
@@ -224,5 +274,19 @@ describe("proxied control-plane paths", () => {
       method: "PUT",
       body: JSON.stringify({ enabled: true }),
     });
+  });
+
+  it("toggle preserves nested namespace owners as one encoded route segment", async () => {
+    await toggleBuild({ json: async () => ({ enabled: false }) } as NextRequest, {
+      params: Promise.resolve({ owner: "group/subgroup", name: "web" }),
+    });
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/image-builds/toggle/repo/group%2Fsubgroup/web",
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled: false }),
+      }
+    );
   });
 });

@@ -67,6 +67,22 @@ describe("deliverWithRetry", () => {
     expect(send.mock.calls.every(([signal]) => signal instanceof AbortSignal)).toBe(true);
   });
 
+  it("does not arm an attempt timer when timeout handling is disabled", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await expect(
+      deliverWithRetry(
+        vi.fn().mockResolvedValue(new Response(null, { status: 204 })),
+        vi.fn(),
+        vi.fn(),
+        { attemptTimeoutMs: null }
+      )
+    ).resolves.toMatchObject({ delivered: true });
+
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    setTimeoutSpy.mockRestore();
+  });
+
   it("does not retain an HTTP status when the final attempt throws", async () => {
     const send = vi
       .fn()

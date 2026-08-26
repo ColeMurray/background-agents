@@ -5,8 +5,9 @@
 
 import {
   getPermalink,
-  postMessage,
+  postBlocks,
   sanitizeAgentText,
+  splitIntoSlackSections,
   SLACK_DENIAL_STATUS,
   type SlackNotifySuccessOutput,
   type SlackWireDenialReason,
@@ -20,9 +21,12 @@ import { error, json, type RequestContext } from "./shared";
 
 const logger = createLogger("slack-notify");
 
-/** Maximum text length before truncation; fits within Slack's section block. */
-const SLACK_TEXT_MAX_LENGTH = 2900;
-/** Hard cap on the raw text we accept and persist verbatim in event args. */
+/**
+ * Hard cap on the raw text we accept and persist verbatim in event args. Also
+ * the sanitizer's ceiling: text longer than one Slack section is split across
+ * consecutive sections rather than cut, so the section limit is not a limit on
+ * what an agent may post.
+ */
 const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 /** Channel name length cap (Slack max is 80). */
 const CHANNEL_INPUT_MAX_LENGTH = 80;
@@ -103,7 +107,7 @@ export async function handleSlackNotify(
 
   const sanitized = sanitizeAgentText(parsed.text, {
     mentionsPolicy,
-    maxLength: SLACK_TEXT_MAX_LENGTH,
+    maxLength: RAW_TEXT_INPUT_MAX_LENGTH,
   });
 
   if (sanitized.text.trim().length === 0) {
@@ -114,16 +118,17 @@ export async function handleSlackNotify(
     );
   }
 
+  const sections = splitIntoSlackSections(sanitized.text);
   const blocks = buildBlocks({
-    text: sanitized.text,
+    sections,
     sessionId,
     appName: env.APP_NAME ?? "Open-Inspect",
     webAppUrl: env.WEB_APP_URL,
   });
-
-  const post = await postMessage(token, parsed.channel, sanitized.text, {
+  // Without top-level text, Slack derives screen-reader text from the blocks.
+  const post = await postBlocks(token, parsed.channel, blocks, {
     thread_ts: parsed.threadTs,
-    blocks,
+    signal: request.signal,
   });
 
   if (!post.ok) {
@@ -134,7 +139,7 @@ export async function handleSlackNotify(
 
   const channelId = post.channel;
   const messageTs = post.ts;
-  const permalinkResp = await getPermalink(token, channelId, messageTs);
+  const permalinkResp = await getPermalink(token, channelId, messageTs, { signal: request.signal });
   const permalink = permalinkResp.ok ? permalinkResp.permalink : "";
 
   const result: SlackNotifySuccessOutput = {
@@ -143,6 +148,9 @@ export async function handleSlackNotify(
     channelId,
     messageTs,
     permalink,
+    // Only the raw-input cap can truncate now: the splitter's own ceiling
+    // (MAX_RESPONSE_SECTIONS sections) is far above RAW_TEXT_INPUT_MAX_LENGTH,
+    // and text that merely exceeds one section is split rather than cut.
     truncated: sanitized.truncated,
     strippedBroadcasts: sanitized.strippedBroadcasts,
     mentionsModified: sanitized.mentionsModified,
@@ -211,16 +219,16 @@ async function parseBody(request: Request): Promise<ParsedBody | Response> {
 }
 
 function buildBlocks(opts: {
-  text: string;
+  sections: string[];
   sessionId: string;
   appName: string;
   webAppUrl: string | undefined;
 }): unknown[] {
   const blocks: unknown[] = [
-    {
+    ...opts.sections.map((section) => ({
       type: "section",
-      text: { type: "mrkdwn", text: opts.text },
-    },
+      text: { type: "mrkdwn", text: section },
+    })),
     {
       type: "context",
       elements: [
@@ -258,6 +266,7 @@ function mapSlackError(slackError: string | undefined): SlackWireDenialReason {
     return "channel_not_found_or_forbidden";
   }
   if (slackError === "ratelimited") return "rate_limited";
+  if (slackError === "delivery_unknown") return "delivery_unknown";
   return "slack_api_error";
 }
 

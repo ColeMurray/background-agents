@@ -57,8 +57,6 @@ def _run_tool(tmp_path: Path, args: dict[str, str] | None = None) -> dict[str, A
         await tool.execute(JSON.parse(process.argv[2]));
       }
       process.stdout.write(JSON.stringify({
-        description: tool.description,
-        reasoningSchema: tool.args.reasoning,
         request: globalThis.capturedRequest,
       }));
     """
@@ -77,23 +75,6 @@ def _run_tool(tmp_path: Path, args: dict[str, str] | None = None) -> dict[str, A
         timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
     )
     return json.loads(result.stdout)
-
-
-def test_schema_exposes_optional_reasoning_override(tmp_path: Path) -> None:
-    result = _run_tool(tmp_path)
-
-    assert result["reasoningSchema"]["isOptional"] is True
-    assert "overrides" in result["reasoningSchema"]["description"].lower()
-    assert "parent" in result["reasoningSchema"]["description"].lower()
-
-
-def test_description_distinguishes_subtasks_from_child_sessions(tmp_path: Path) -> None:
-    description = _run_tool(tmp_path)["description"].lower()
-
-    assert "explicitly asks for a 'child session'" in description
-    assert "do not treat 'sub-agent'" in description
-    assert "'sub-task'" in description
-    assert "in-process task delegation" in description
 
 
 def test_serializes_reasoning_as_reasoning_effort(tmp_path: Path) -> None:

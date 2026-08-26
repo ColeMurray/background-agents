@@ -16,13 +16,13 @@ import {
   DEFAULT_MODEL,
   getReasoningConfig,
   isValidReasoningEffort,
+  resolveEnabledModel,
 } from "@open-inspect/shared/models";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
-import { resolveEnabledModel } from "@/lib/model-selection";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +51,11 @@ import { ConditionBuilder } from "./condition-builder";
 import { useAutomationTargets } from "./use-automation-targets";
 import { cn } from "@/lib/utils";
 import { NO_REPOSITORY_LABEL, formatRepositoriesLabel } from "@/lib/repo-label";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
+import { useProviderAccounts } from "@/hooks/use-provider-accounts";
+import { ProviderAuthControls } from "@/components/provider-auth-controls";
+import { EMPTY_PROVIDER_SELECTIONS, setProviderSelection } from "@/lib/provider-selection";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -120,6 +125,7 @@ export interface AutomationFormValues {
   eventType?: string;
   triggerConfig?: TriggerConfig;
   sentryClientSecret?: string;
+  providerSelections: ModelProviderSelections;
 }
 
 interface AutomationFormProps {
@@ -133,6 +139,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const { repos, loading: loadingRepos } = useRepos();
   const { environments, loading: loadingEnvironments } = useEnvironments();
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
+  const providerAccounts = useProviderAccounts();
   const initialRepositories = useMemo(
     () => initialValues?.repositories ?? [],
     [initialValues?.repositories]
@@ -158,6 +165,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     initialValues?.triggerConfig?.conditions ?? []
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
+  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
+    initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
+  );
 
   const isSchedule = triggerType === "schedule";
   // Multi-repository selections are schedule-only (the server rejects them for
@@ -209,7 +219,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   // is blocked — keeping display, reasoning, and the payload in agreement
   // without relying on a post-load effect.
   const resolvedModel = useMemo(
-    () => (loadingModels ? model : resolveEnabledModel(model, enabledModels)),
+    () =>
+      loadingModels
+        ? model
+        : resolveEnabledModel({ model, enabledModels, fallbackModel: DEFAULT_MODEL }),
     [loadingModels, model, enabledModels]
   );
 
@@ -295,6 +308,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       triggerType,
       // Always send the full selection — an empty list means repo-less.
       repositories: buildRepositoriesPayload(),
+      providerSelections,
     };
 
     if (!isSchedule) {
@@ -371,16 +385,25 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Trigger Type */}
       {mode === "create" ? (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+          <div
+            id="automation-trigger-type-label"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Trigger Type
+          </div>
           <FieldDescription className="my-1">
             Scheduled automations run on a repeating timer. Other types run when the connected
             service sends an event (for example a GitHub webhook or Sentry alert).
           </FieldDescription>
-          <TriggerTypeSelector value={triggerType} onChange={setTriggerType} />
+          <TriggerTypeSelector
+            value={triggerType}
+            onChange={setTriggerType}
+            labelledBy="automation-trigger-type-label"
+          />
         </div>
       ) : (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+          <div className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</div>
           <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
             {{
               schedule: "Schedule",
@@ -420,15 +443,20 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Repository Configuration */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">
+        <label
+          id="automation-repository-configuration-label"
+          htmlFor="automation-repository-configuration"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
           Repository Configuration
         </label>
         <Popover open={repoDropdownOpen} onOpenChange={setRepoDropdownOpen}>
           <PopoverTrigger asChild>
             <button
+              id="automation-repository-configuration"
               type="button"
               className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              aria-label="Repository selection"
+              aria-labelledby="automation-repository-configuration-label"
             >
               {selectedEnvironmentIds.length > 0 && selectedRepoNames.length === 0 ? (
                 <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -628,6 +656,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {usesSingleRepository && (
         <div>
           <label
+            id="automation-branch-label"
             htmlFor="automation-branch"
             className="block text-sm font-medium text-foreground mb-1.5"
           >
@@ -635,6 +664,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </label>
           <Combobox
             id="automation-branch"
+            labelId="automation-branch-label"
             value={baseBranch}
             onChange={setBaseBranch}
             items={branches.map((b) => ({
@@ -665,6 +695,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Model */}
       <div>
         <label
+          id="automation-model-label"
           htmlFor="automation-model"
           className="block text-sm font-medium text-foreground mb-1.5"
         >
@@ -672,6 +703,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </label>
         <Combobox
           id="automation-model"
+          labelId="automation-model-label"
           value={resolvedModel}
           onChange={(nextModel) => {
             setModel(nextModel);
@@ -702,7 +734,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Reasoning Effort</label>
+        <label
+          htmlFor="automation-reasoning-effort"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Reasoning Effort
+        </label>
         <Select
           value={reasoningConfig ? reasoningEffort || DEFAULT_REASONING_VALUE : ""}
           onValueChange={(value) =>
@@ -710,7 +747,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           }
           disabled={!reasoningConfig}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger id="automation-reasoning-effort" className="w-full">
             <SelectValue
               placeholder={reasoningConfig ? "Use model default" : "Not supported for this model"}
             />
@@ -730,20 +767,53 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </FieldDescription>
       </div>
 
+      <fieldset className="space-y-3 rounded-md border border-border-muted p-4">
+        <legend className="px-1 text-sm font-medium text-foreground">
+          Provider authentication
+        </legend>
+        <FieldDescription className="mb-3">
+          Unpinned providers use defaults when each run starts. Pins are retained when the
+          configured model changes and apply only to future sessions.
+        </FieldDescription>
+        {SUBSCRIPTION_PROVIDER_IDS.map((provider) => (
+          <ProviderAuthControls
+            key={provider}
+            provider={provider}
+            accounts={providerAccounts.accounts}
+            defaultValue={providerAccounts.defaults.find((item) => item.provider === provider)}
+            value={providerSelections[provider]}
+            policyLabel="Use defaults when each run starts"
+            unattended
+            disabled={submitting}
+            onChange={(selection) =>
+              setProviderSelections((current) => setProviderSelection(current, provider, selection))
+            }
+          />
+        ))}
+      </fieldset>
+
       {/* Schedule fields (only for schedule type) */}
       {isSchedule && (
         <>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Schedule</label>
+          <fieldset>
+            <legend className="block text-sm font-medium text-foreground mb-1.5">Schedule</legend>
             <CronPicker value={scheduleCron} onChange={setScheduleCron} timezone={scheduleTz} />
             <FieldDescription>
               How often this automation runs. Use a preset or a five-field cron expression (minute,
               hour, day of month, month, day of week).
             </FieldDescription>
-          </div>
+          </fieldset>
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Timezone</label>
+            <label
+              id="automation-timezone-label"
+              htmlFor="automation-timezone"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              Timezone
+            </label>
             <Combobox
+              id="automation-timezone"
+              labelId="automation-timezone-label"
               value={scheduleTz}
               onChange={setScheduleTz}
               items={TIMEZONE_GROUPS}
@@ -771,7 +841,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Event type selector (for trigger sources with event type support) */}
       {showEventTypeSelector && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Event Type</label>
+          <label
+            htmlFor="automation-event-type"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Event Type
+          </label>
           <Select
             value={eventType}
             onValueChange={(value) => {
@@ -779,7 +854,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               if (eventTypeError) setEventTypeError("");
             }}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger id="automation-event-type" className="w-full">
               <SelectValue placeholder={eventTypePlaceholder} />
             </SelectTrigger>
             <SelectContent>
@@ -824,11 +899,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Conditions (for non-schedule types) */}
       {!isSchedule && TRIGGER_TYPE_TO_SOURCE[triggerType] && (
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">
+        <fieldset className="m-0 min-w-0 border-0 p-0">
+          <legend className="block text-sm font-medium text-foreground mb-1.5">
             Conditions
             <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
-          </label>
+          </legend>
           <ConditionBuilder
             conditions={conditions}
             onChange={setConditions}
@@ -843,7 +918,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               Slack triggers require at least one Slack Channel condition.
             </p>
           )}
-        </div>
+        </fieldset>
       )}
 
       {/* Instructions */}

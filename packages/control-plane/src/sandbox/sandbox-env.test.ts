@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   applyScmCloneEnv,
+  BOOT_MODE_ENV_KEYS,
   buildImageBuildCallbackEnv,
   buildImageBuildEnvVars,
   buildSandboxEnvVars,
   buildSessionConfig,
+  deriveCodeServerPassword,
+  deriveVncPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
   imageBuildSandboxIdentity,
@@ -238,6 +241,51 @@ describe("buildSandboxEnvVars", () => {
     expect(enabled.CODE_SERVER_PASSWORD).toBe("pw");
   });
 
+  it("injects VNC credentials and port only when enabled", () => {
+    const disabled = buildSandboxEnvVars(
+      {
+        ...baseConfig,
+        userEnvVars: { VNC_PASSWORD: "user-password", NOVNC_PORT: "9999" },
+      },
+      { scmIdentity: scmCloneIdentity("github"), vncPassword: "derived-password" }
+    );
+    expect(disabled).not.toHaveProperty("VNC_PASSWORD");
+    expect(disabled).not.toHaveProperty("NOVNC_PORT");
+
+    const enabled = buildSandboxEnvVars(
+      { ...baseConfig, vncEnabled: true, sandboxSettings: { vncPort: 6099 } },
+      { scmIdentity: scmCloneIdentity("github"), vncPassword: "derived-password" }
+    );
+    expect(enabled.VNC_PASSWORD).toBe("derived-password");
+    expect(enabled.NOVNC_PORT).toBe("6099");
+  });
+
+  it("strips boot-mode markers from the user layer", () => {
+    // Providers add these after buildSandboxEnvVars returns, and only when the
+    // mode is real, so they are not part of the system overlay that shadows user
+    // vars. A repo secret of the same name would otherwise reach
+    // BootMode.from_env and let a plain session claim it booted from a repo
+    // image, a snapshot, or an image build.
+    const envVars = buildSandboxEnvVars(
+      {
+        ...baseConfig,
+        userEnvVars: {
+          FROM_REPO_IMAGE: "true",
+          REPO_IMAGE_SHA: "deadbeef",
+          RESTORED_FROM_SNAPSHOT: "true",
+          IMAGE_BUILD_MODE: "true",
+          LEGITIMATE_SECRET: "keep-me",
+        },
+      },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+
+    for (const marker of BOOT_MODE_ENV_KEYS) {
+      expect(envVars).not.toHaveProperty(marker);
+    }
+    expect(envVars.LEGITIMATE_SECRET).toBe("keep-me");
+  });
+
   it("sets the slack-notify flag only when enabled", () => {
     expect(
       buildSandboxEnvVars(baseConfig, { scmIdentity: scmCloneIdentity("github") })
@@ -263,6 +311,17 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars.LLM_KEY).toBe("sk-provider");
     expect(envVars.SANDBOX_ID).toBe("sandbox-456");
     expect(envVars).not.toHaveProperty("IGNORED");
+  });
+});
+
+describe("sandbox access passwords", () => {
+  it("uses deterministic, distinct HMAC domains for code-server and VNC", async () => {
+    const codePassword = await deriveCodeServerPassword("sandbox-456", "secret");
+    const vncPassword = await deriveVncPassword("sandbox-456", "secret");
+
+    expect(await deriveVncPassword("sandbox-456", "secret")).toBe(vncPassword);
+    expect(vncPassword).not.toBe(codePassword);
+    expect(vncPassword).toMatch(/^[A-Za-z0-9]{8}$/);
   });
 });
 
@@ -366,8 +425,6 @@ describe("imageBuildSandboxIdentity", () => {
         openinspect_build_id: "build-1",
         openinspect_scope_kind: "repo",
         openinspect_scope_id: "acme/web",
-        // Legacy label preserved for existing operator queries.
-        openinspect_environment: "acme/web",
       },
     });
   });

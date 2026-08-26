@@ -21,7 +21,16 @@ export type {
   TextMatchValue,
   TriggerConfig,
 } from "./types";
-export { TRIGGER_TYPE_TO_SOURCE, automationEventSchema } from "./types";
+export {
+  TRIGGER_TYPE_TO_SOURCE,
+  automationEventSchema,
+  githubAutomationEventSchema,
+  linearAutomationEventSchema,
+  sentryAutomationEventSchema,
+  webhookAutomationEventSchema,
+  slackAutomationEventSchema,
+  triggerConfigSchema,
+} from "./types";
 
 // Condition system
 export type { ConditionHandler, ConditionRegistry } from "./conditions";
@@ -66,6 +75,8 @@ export {
 export {
   slackSource,
   normalizeSlackEvent,
+  buildSlackContextBlock,
+  slackChannelLabel,
   SLACK_TEXT_MAX_LENGTH,
   REGEX_PATTERN_MAX_LENGTH,
   ALLOWED_REGEX_FLAGS,

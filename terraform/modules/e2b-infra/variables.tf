@@ -19,12 +19,26 @@ variable "template_cpu" {
   description = "vCPU count for the template"
   type        = number
   default     = 2
+
+  validation {
+    condition     = var.template_cpu == floor(var.template_cpu) && var.template_cpu >= 1
+    error_message = "template_cpu must be a positive whole vCPU count."
+  }
 }
 
 variable "template_memory_mb" {
   description = "Memory (MB, even number) for the template"
   type        = number
-  default     = 1024
+  default     = 4096
+
+  validation {
+    condition = (
+      var.template_memory_mb == floor(var.template_memory_mb) &&
+      var.template_memory_mb >= 2 &&
+      var.template_memory_mb % 2 == 0
+    )
+    error_message = "template_memory_mb must be a positive even number of MB."
+  }
 }
 
 variable "deploy_path" {

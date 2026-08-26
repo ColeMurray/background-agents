@@ -13,7 +13,7 @@ import { parseRepositoryShasJson } from "./provenance";
 export { ImageBuildFinalizationAttemptError } from "./finalization-error";
 
 /** Lease exceeds the provider deadline so overlapping creation attempts cannot run. */
-export const IMAGE_BUILD_FINALIZATION_LEASE_MS = 6 * 60 * 1000;
+const IMAGE_BUILD_FINALIZATION_LEASE_MS = 6 * 60 * 1000;
 
 /** Hard deadline for one provider snapshot or checkpoint attempt. */
 export const IMAGE_BUILD_PROVIDER_ATTEMPT_MS = 5 * 60 * 1000;

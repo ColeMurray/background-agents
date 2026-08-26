@@ -12,10 +12,10 @@
  * broadcast they prescribe.
  */
 
-import { toDisplayStatus, type SessionArtifact } from "@open-inspect/shared";
+import { toDisplayStatus, type SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { z } from "zod";
 import type { SessionPullRequestRecord } from "../db/session-pull-request-store";
-import type { UpdateArtifactData } from "./repository";
+import type { UpdateArtifactData } from "./artifact-repository";
 import type { ArtifactRow } from "./types";
 
 /**

@@ -1,21 +1,20 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { exchangeCodeForToken, refreshAccessToken } from "./github";
-import type { GitHubOAuthConfig } from "./github";
-import type { GitHubTokenResponse } from "../types";
+import { GITHUB_OAUTH_REQUEST_TIMEOUT_MS, refreshAccessToken } from "./github";
+import type { GitHubOAuthConfig, GitHubTokenResponse } from "./github";
 
 describe("github auth", () => {
   const originalFetch = globalThis.fetch;
   const config: GitHubOAuthConfig = {
     clientId: "client-id",
     clientSecret: "client-secret",
-    encryptionKey: "unused",
   };
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
-  describe("exchangeCodeForToken", () => {
+  describe("refreshAccessToken", () => {
     it("parses a valid token response", async () => {
       const tokenResponse: GitHubTokenResponse = {
         access_token: "gho_token",
@@ -29,7 +28,7 @@ describe("github auth", () => {
         json: () => Promise.resolve(tokenResponse),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).resolves.toEqual(tokenResponse);
+      await expect(refreshAccessToken("old-refresh", config)).resolves.toEqual(tokenResponse);
     });
 
     it("parses a valid token response with optional fields omitted", async () => {
@@ -43,7 +42,7 @@ describe("github auth", () => {
         json: () => Promise.resolve(tokenResponse),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).resolves.toEqual(tokenResponse);
+      await expect(refreshAccessToken("old-refresh", config)).resolves.toEqual(tokenResponse);
     });
 
     it("rejects a malformed token response", async () => {
@@ -51,7 +50,7 @@ describe("github auth", () => {
         json: () => Promise.resolve({ access_token: "gho_token", token_type: "bearer" }),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).rejects.toThrow(
+      await expect(refreshAccessToken("old-refresh", config)).rejects.toThrow(
         "Invalid GitHub token response"
       );
     });
@@ -65,36 +64,32 @@ describe("github auth", () => {
           }),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).rejects.toThrow(
+      await expect(refreshAccessToken("old-refresh", config)).rejects.toThrow(
         "The code passed is incorrect or expired."
       );
     });
-  });
 
-  describe("refreshAccessToken", () => {
-    it("parses a valid refresh response", async () => {
-      const tokenResponse: GitHubTokenResponse = {
-        access_token: "gho_new",
-        token_type: "bearer",
-        scope: "repo,user",
-        refresh_token: "ghr_new",
-        expires_in: 28800,
-      };
+    it("aborts a stalled token refresh at the request deadline", async () => {
+      const timeout = new AbortController();
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          })
+      );
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        json: () => Promise.resolve(tokenResponse),
-      } as unknown as Response);
+      const refreshPromise = refreshAccessToken("old-refresh", config);
+      const timeoutError = new DOMException("deadline exceeded", "TimeoutError");
+      timeout.abort(timeoutError);
 
-      await expect(refreshAccessToken("old-refresh", config)).resolves.toEqual(tokenResponse);
-    });
-
-    it("rejects a malformed refresh response", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        json: () => Promise.resolve({ access_token: "gho_new", token_type: "bearer" }),
-      } as unknown as Response);
-
-      await expect(refreshAccessToken("old-refresh", config)).rejects.toThrow(
-        "Invalid GitHub token response"
+      await expect(refreshPromise).rejects.toBe(timeoutError);
+      expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_OAUTH_REQUEST_TIMEOUT_MS);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "https://github.com/login/oauth/access_token",
+        expect.objectContaining({ signal: timeout.signal })
       );
     });
   });

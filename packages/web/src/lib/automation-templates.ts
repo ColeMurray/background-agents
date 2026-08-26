@@ -23,7 +23,7 @@ export type TemplateCategory =
  * required so every template is complete by construction — making these
  * invariants compile-time rather than test-only.
  */
-export type AutomationTemplatePrefill = Omit<
+type AutomationTemplatePrefill = Omit<
   Partial<AutomationFormValues>,
   "repositories" | "scheduleTz"
 > & {
@@ -291,15 +291,3 @@ export const automationTemplates: AutomationTemplate[] = [
     },
   },
 ];
-
-export function getTemplateById(id: string): AutomationTemplate | undefined {
-  return automationTemplates.find((t) => t.id === id);
-}
-
-export function getTemplatesForCategory(category: TemplateCategory): AutomationTemplate[] {
-  return automationTemplates.filter((t) => t.categories.includes(category));
-}
-
-export function getVisibleCategories(): Array<{ id: TemplateCategory; label: string }> {
-  return TEMPLATE_CATEGORIES.filter((c) => getTemplatesForCategory(c.id).length > 0);
-}

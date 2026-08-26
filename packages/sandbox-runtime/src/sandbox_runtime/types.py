@@ -13,9 +13,7 @@ class SandboxStatus(StrEnum):
     SPAWNING = "spawning"
     CONNECTING = "connecting"
     WARMING = "warming"
-    SYNCING = "syncing"
     READY = "ready"
-    RUNNING = "running"
     STALE = "stale"  # Heartbeat missed - sandbox may be unresponsive
     SNAPSHOTTING = "snapshotting"  # Taking filesystem snapshot
     STOPPED = "stopped"

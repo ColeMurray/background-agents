@@ -2,7 +2,7 @@ import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrati
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";
-import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
+import { prepareLegacyManagedProviderEnv } from "../sandbox/managed-provider-env";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -10,7 +10,7 @@ import {
   hashImageBuildCallbackToken,
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
-import type { ImageBuildProvider, ImageBuildScope } from "./model";
+import type { ImageBuildScope } from "./model";
 import {
   loadScopeBuildSecrets,
   resolveScopeSandboxSettings,
@@ -47,8 +47,7 @@ export type { ResolvedImageBuildTarget } from "./scope";
 export class ImageBuildPlanner {
   constructor(
     private readonly env: Env,
-    private readonly db: SqlDatabase,
-    private readonly provider: ImageBuildProvider
+    private readonly db: SqlDatabase
   ) {}
 
   async resolveTarget(scope: ImageBuildScope): Promise<ResolvedImageBuildTarget> {
@@ -91,7 +90,10 @@ export class ImageBuildPlanner {
       failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
       userEnvVars: userEnvVars
-        ? prepareManagedProviderEnv({ exposedSecrets: userEnvVars, brokerSecrets: userEnvVars })
+        ? prepareLegacyManagedProviderEnv({
+            exposedSecrets: userEnvVars,
+            brokerSecrets: userEnvVars,
+          })
         : undefined,
       correlation: {
         trace_id: params.correlation.trace_id,
@@ -101,7 +103,6 @@ export class ImageBuildPlanner {
 
     return {
       ...basePlan,
-      provider: this.provider,
       callbackToken: params.callbackAuth.token,
       cloneAuth,
     };

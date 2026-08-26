@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Env, Environment, RepoConfig, SlackSessionTarget } from "./types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
+import type { Env, SlackSessionTarget } from "./types";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 
 const { mockGetAvailableRepos, mockGetAvailableEnvironments, mockGetEnvironmentById } = vi.hoisted(

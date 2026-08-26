@@ -16,8 +16,11 @@
  * deletes them from storage.
  */
 
-import { readBodyCapped } from "@open-inspect/shared";
-import { sessionAttachmentIdSchema } from "@open-inspect/shared/types/session-attachments";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
+import {
+  sessionAttachmentIdSchema,
+  type SessionAttachmentUploadResponse,
+} from "@open-inspect/shared/types/session-attachments";
 import { generateId } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {
@@ -41,7 +44,15 @@ import {
   createRangeNotSatisfiableResponse,
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
-import { error, json, parsePattern, type Route } from "./shared";
+import {
+  defineRoute,
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  json,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
@@ -160,7 +171,12 @@ async function handleAttachmentPost(
     trace_id: ctx.trace_id,
   });
 
-  return json({ attachmentId, mimeType: detected.mimeType }, 201);
+  // Typed against the shared schema its clients parse with, so dropping or
+  // renaming a field here fails the build rather than the upload.
+  return json(
+    { attachmentId, mimeType: detected.mimeType } satisfies SessionAttachmentUploadResponse,
+    201
+  );
 }
 
 async function handleAttachmentGet(
@@ -222,14 +238,20 @@ async function handleAttachmentGet(
 }
 
 export const sessionAttachmentRoutes: Route[] = [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/attachments"),
-    handler: handleAttachmentPost,
-  }),
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/attachments/:attachmentId"),
-    handler: handleAttachmentGet,
-  }),
+  defineRoute(
+    GITHUB_USER_OR_SERVICE_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/attachments"),
+      handler: handleAttachmentPost,
+    })
+  ),
+  defineRoute(
+    GITHUB_SANDBOX_FALLBACK_ROUTE,
+    sessionRoute({
+      method: "GET",
+      pattern: parsePattern("/sessions/:id/attachments/:attachmentId"),
+      handler: handleAttachmentGet,
+    })
+  ),
 ];

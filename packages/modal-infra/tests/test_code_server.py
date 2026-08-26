@@ -101,7 +101,7 @@ class TestCreateSandboxCodeServer:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=("https://cs.example.com", None, None)),
+            AsyncMock(return_value=("https://cs.example.com", None, None, None)),
         )
 
         manager = SandboxManager()
@@ -142,7 +142,7 @@ class TestCreateSandboxCodeServer:
         fake_create.aio = fake_create_aio
         monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
 
-        tunnel_mock = AsyncMock(return_value=(None, None, None))
+        tunnel_mock = AsyncMock(return_value=(None, None, None, None))
         monkeypatch.setattr(SandboxManager, "_resolve_and_setup_tunnels", tunnel_mock)
 
         manager = SandboxManager()
@@ -192,7 +192,7 @@ class TestRestoreSandboxCodeServer:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=("https://cs-restored.example.com", None, None)),
+            AsyncMock(return_value=("https://cs-restored.example.com", None, None, None)),
         )
 
         manager = SandboxManager()
@@ -240,7 +240,7 @@ class TestRestoreSandboxCodeServer:
         fake_create.aio = fake_create_aio
         monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
         monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
-        tunnel_mock = AsyncMock(return_value=(None, None, None))
+        tunnel_mock = AsyncMock(return_value=(None, None, None, None))
         monkeypatch.setattr(SandboxManager, "_resolve_and_setup_tunnels", tunnel_mock)
 
         manager = SandboxManager()

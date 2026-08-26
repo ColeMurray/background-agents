@@ -2,7 +2,10 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { sessionReadActionSchema, type SessionReadAction } from "@open-inspect/shared";
+import {
+  sessionReadActionSchema,
+  type SessionReadAction,
+} from "@open-inspect/shared/types/sessions";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerAuthSession();

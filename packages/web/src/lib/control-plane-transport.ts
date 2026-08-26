@@ -13,7 +13,7 @@
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("control-plane-transport");
-export const CONTROL_PLANE_FETCH_TIMEOUT_MS = 15_000;
+const CONTROL_PLANE_FETCH_TIMEOUT_MS = 15_000;
 
 /**
  * Get the control plane base URL (no trailing slash) from environment.

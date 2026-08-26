@@ -11,7 +11,7 @@
  */
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
-import type { SpawnSource } from "@open-inspect/shared";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SqlDatabase, SqlResult } from "./sql-database";
 
 /** `now` anchors the open-inventory age computation. */

@@ -7,15 +7,22 @@ import type {
 
 export const ENVIRONMENTS_KEY = "/api/environments";
 
-export function useEnvironments(): { environments: Environment[]; loading: boolean } {
+export function useEnvironments(): {
+  environments: Environment[];
+  loading: boolean;
+  error: unknown;
+} {
   const { data: session, status } = useAuthSession();
 
-  const { data, isLoading } = useSWR<ListEnvironmentsResponse>(session ? ENVIRONMENTS_KEY : null);
+  const { data, isLoading, error } = useSWR<ListEnvironmentsResponse>(
+    session ? ENVIRONMENTS_KEY : null
+  );
 
   return {
     environments: data?.environments ?? [],
     // The fetch is gated on the auth session, so the list is still loading
     // while the session itself resolves — don't report an authoritative [].
     loading: status === "loading" || isLoading,
+    error,
   };
 }

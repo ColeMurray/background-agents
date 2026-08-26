@@ -1,11 +1,11 @@
 "use client";
 
+import type { ParticipantPresence } from "@open-inspect/shared/types/server-messages";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
   sessionParticipantProfilesResponseSchema,
-  type ParticipantPresence,
-  type SandboxEvent,
   type SessionParticipantProfile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
 import { useEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
 import { resolveParticipantDisplay } from "@/lib/participant-display";

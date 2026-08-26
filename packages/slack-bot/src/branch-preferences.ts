@@ -11,7 +11,7 @@ export const BRANCH_INPUT_ACTION_ID = "branch_value";
 export const REPO_BRANCH_SELECTOR_ACTION_ID = "select_repo_branch_override";
 export const CLEAR_REPO_BRANCH_ACTION_ID = "clear_repo_branch_override";
 
-export const INVALID_BRANCH_ERROR = "Enter a valid Git branch name.";
+const INVALID_BRANCH_ERROR = "Enter a valid Git branch name.";
 
 const BRANCH_NAME_SPECIAL_CHARS_REGEX = /[\s~^:?*[\\]/;
 
@@ -154,7 +154,7 @@ function hasControlCharacters(value: string): boolean {
   });
 }
 
-export function getBranchValidationError(branch: string): string | undefined {
+function getBranchValidationError(branch: string): string | undefined {
   if (branch.startsWith("-")) {
     return INVALID_BRANCH_ERROR;
   }

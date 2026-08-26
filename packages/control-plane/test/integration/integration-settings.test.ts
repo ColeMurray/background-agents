@@ -459,6 +459,31 @@ describe("Integration settings API", () => {
       expect(body.config.enabled).toBe(false);
       expect(body.config.enabledRepos).toEqual(["acme/widgets"]);
     });
+
+    it("returns VNC resolved config with merged settings", async () => {
+      await serviceFetch("https://test.local/integration-settings/vnc", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            enabledRepos: ["acme/widgets"],
+            defaults: { enabled: true },
+          },
+        }),
+      });
+      await serviceFetch("https://test.local/integration-settings/vnc/repos/acme/widgets", {
+        method: "PUT",
+        body: JSON.stringify({ settings: { enabled: false } }),
+      });
+
+      const res = await serviceFetch(
+        "https://test.local/integration-settings/vnc/resolved/acme/widgets"
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{
+        config: { enabled: boolean; enabledRepos: string[] };
+      }>();
+      expect(body.config).toEqual({ enabled: false, enabledRepos: ["acme/widgets"] });
+    });
   });
 
   describe("sandbox settings API", () => {

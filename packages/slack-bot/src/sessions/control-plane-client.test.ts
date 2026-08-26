@@ -1,15 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
-import type { Env } from "../types";
+import type { ControlPlaneEnv } from "../internal-auth";
 import { createSession, sendPrompt } from "./control-plane-client";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
-function makeEnv(fetch: ReturnType<typeof vi.fn>): Env {
+function makeEnv(fetch: ControlPlaneEnv["CONTROL_PLANE"]["fetch"]): ControlPlaneEnv {
   return {
-    CONTROL_PLANE: { fetch } as unknown as Fetcher,
+    CONTROL_PLANE: { fetch },
     SERVICE_AUTH_SECRET: "test-secret",
-    LOG_LEVEL: "error",
-  } as Env;
+  };
 }
 
 const target = {
@@ -205,11 +204,11 @@ describe("control plane client request payloads", () => {
 });
 
 describe("service credential headers", () => {
-  function makeServiceEnv(fetch: ReturnType<typeof vi.fn>): Env {
+  function makeServiceEnv(fetch: ControlPlaneEnv["CONTROL_PLANE"]["fetch"]): ControlPlaneEnv {
     return {
       ...makeEnv(fetch),
       SERVICE_AUTH_SECRET: "slack-service-secret",
-    } as Env;
+    };
   }
 
   function sentHeaders(fetch: ReturnType<typeof vi.fn>): Record<string, string> {
@@ -249,9 +248,8 @@ describe("service credential headers", () => {
   it("sends no request at all when SERVICE_AUTH_SECRET is unset", async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ messageId: "m1" })));
     const env = {
-      CONTROL_PLANE: { fetch } as unknown as Fetcher,
-      LOG_LEVEL: "error",
-    } as Env;
+      CONTROL_PLANE: { fetch },
+    };
 
     const result = await sendPrompt(env, {
       sessionId: "session-1",

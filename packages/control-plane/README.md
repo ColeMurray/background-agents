@@ -59,8 +59,9 @@ The control plane provides:
 | ------------------------------- | --------- | ------------------------------ |
 | `/sessions`                     | GET       | List user's sessions           |
 | `/sessions`                     | POST      | Create new session             |
-| `/sessions/:id`                 | GET       | Get session state              |
+| `/sessions/:id`                 | GET       | Get canonical session snapshot |
 | `/sessions/:id`                 | DELETE    | Delete session                 |
+| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection details |
 | `/sessions/:id/prompt`          | POST      | Enqueue prompt                 |
 | `/sessions/:id/stop`            | POST      | Stop execution                 |
 | `/sessions/:id/ws`              | WebSocket | Real-time connection           |
@@ -85,6 +86,12 @@ The control plane provides:
 
 When `headBranch` is omitted, control-plane resolves it from session state and finally falls back to
 the generated `open-inspect/<session>` branch.
+
+A session can hold multiple pull requests per repository — one open PR per head branch. Calling the
+endpoint again for a head branch that already carries an open PR force-pushes the branch and reuses
+that PR instead of creating a duplicate; the response marks this with `updated: true`. A merged or
+closed PR releases its head branch for a fresh PR. The success response is
+`{ prNumber, prUrl, state, headBranch, baseBranch, updated }`.
 
 ### SCM Credentials
 
@@ -344,19 +351,43 @@ runtime constructs Better Auth and the immutable provider list from the same con
 `GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
 requests so the React `/login` route can render them server-side.
 
-## Token Encryption
+## Credential Encryption
 
-GitHub OAuth tokens are encrypted at rest using AES-256-GCM:
+Three independent key domains protect stored credentials. Rotation guidance differs — never treat
+them as interchangeable during an incident:
 
-```typescript
-import { encryptToken, decryptToken } from "./auth/crypto";
+- **`TOKEN_ENCRYPTION_KEY`** — AES-256-GCM for the SCM enrichment tokens in `user_scm_tokens`:
 
-// Encrypt before storing
-const encrypted = await encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY);
+  ```typescript
+  import { encryptToken, decryptToken } from "./auth/crypto";
 
-// Decrypt when needed
-const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
-```
+  // Encrypt before storing
+  const encrypted = await encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY);
+
+  // Decrypt when needed
+  const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
+  ```
+
+  Rotating it invalidates stored SCM tokens; affected users re-link their SCM connection.
+
+- **`BROWSER_AUTH_SECRET`** — Better Auth's secret. It signs browser session cookies **and**
+  encrypts the sign-in OAuth credential columns on `user_identities` (`access_token`,
+  `refresh_token`, `id_token`, written at web sign-in and read via `auth.api.getAccessToken`).
+  Rotating it signs every browser session out and orphans those stored credentials — they
+  re-populate at each user's next sign-in. It does not affect `user_scm_tokens`.
+
+- **`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`** — dedicated AES-256-GCM key for subscription-provider
+  account credentials. Provider account mode stores only account references on sessions and brokers
+  short-lived access through `POST /sessions/:id/provider-auth/:provider/access-token`. Rotation
+  requires an explicit migration that can decrypt every credential with the old key and re-encrypt
+  it with the new key while both are available, then verifies the migrated data before changing the
+  Worker binding. Reconnecting accounts does not migrate already encrypted rows. If the old key is
+  lost, remove affected defaults and archive/recreate the accounts; sessions bound to the lost
+  credentials are unrecoverable and must be recreated.
+
+Legacy scoped OpenAI/xAI OAuth and provider accounts can coexist. Explicit choices and provider
+defaults apply to newly created sessions; sessions without either retain legacy scoped behavior.
+Existing sessions remain pinned to their stored authentication mode.
 
 ## Security Model
 
@@ -405,6 +436,10 @@ All secrets are configured via Terraform. Required secrets include:
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
 
 Optional variables:
+
+- `provider_accounts_encryption_key` - Existing Base64 AES-256-GCM key override for provider account
+  credentials. When blank, Terraform generates a key and persists it in state. In both cases,
+  Terraform supplies the required `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` Worker secret binding.
 
 - `SCM_PROVIDER` - Source control provider for this deployment (`github`, `bitbucket`, or `gitlab`,
   default: `github`). `bitbucket` returns explicit `501 Not Implemented` responses until
