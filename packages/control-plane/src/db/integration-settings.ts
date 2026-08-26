@@ -4,6 +4,7 @@ import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
+  GITHUB_AUTOFIX_DEFAULTS,
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
@@ -12,6 +13,7 @@ import {
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
+  type ResolvedGitHubAutofixSettings,
   type LinearBotSettings,
   type CodeServerSettings,
   type VncSettings,
@@ -362,6 +364,8 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
     }
 
+    let normalized = settings;
+
     if (settings.allowedTriggerUsers !== undefined) {
       if (
         !Array.isArray(settings.allowedTriggerUsers) ||
@@ -371,13 +375,91 @@ export class IntegrationSettingsStore {
           "allowedTriggerUsers must be an array of strings"
         );
       }
-      return {
+      normalized = {
         ...settings,
         allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.trim().toLowerCase()),
       };
     }
 
-    return settings;
+    if (settings.autofix !== undefined) {
+      normalized = {
+        ...normalized,
+        autofix: this.validateAndNormalizeGitHubAutofixSettings(settings.autofix),
+      };
+    }
+
+    return normalized;
+  }
+
+  private validateAndNormalizeGitHubAutofixSettings(value: unknown): ResolvedGitHubAutofixSettings {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new IntegrationSettingsValidationError("autofix must be an object");
+    }
+
+    const settings = value as Record<string, unknown>;
+    const booleanKeys = [
+      "enabled",
+      "reviewsEnabled",
+      "prCommentsEnabled",
+      "openInspectReviewsEnabled",
+    ] as const;
+    for (const key of booleanKeys) {
+      if (settings[key] !== undefined && typeof settings[key] !== "boolean") {
+        throw new IntegrationSettingsValidationError(`autofix.${key} must be a boolean`);
+      }
+    }
+
+    const allowedReviewBots = settings.allowedReviewBots;
+    if (
+      allowedReviewBots !== undefined &&
+      (!Array.isArray(allowedReviewBots) ||
+        !allowedReviewBots.every((login) => typeof login === "string"))
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "autofix.allowedReviewBots must be an array of strings"
+      );
+    }
+
+    const maxAttempts = settings.maxAttemptsPerPrPer24Hours;
+    if (
+      maxAttempts !== undefined &&
+      (typeof maxAttempts !== "number" ||
+        !Number.isInteger(maxAttempts) ||
+        maxAttempts < 1 ||
+        maxAttempts > 50)
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "autofix.maxAttemptsPerPrPer24Hours must be an integer from 1 to 50"
+      );
+    }
+
+    return {
+      enabled:
+        typeof settings.enabled === "boolean" ? settings.enabled : GITHUB_AUTOFIX_DEFAULTS.enabled,
+      reviewsEnabled:
+        typeof settings.reviewsEnabled === "boolean"
+          ? settings.reviewsEnabled
+          : GITHUB_AUTOFIX_DEFAULTS.reviewsEnabled,
+      prCommentsEnabled:
+        typeof settings.prCommentsEnabled === "boolean"
+          ? settings.prCommentsEnabled
+          : GITHUB_AUTOFIX_DEFAULTS.prCommentsEnabled,
+      openInspectReviewsEnabled:
+        typeof settings.openInspectReviewsEnabled === "boolean"
+          ? settings.openInspectReviewsEnabled
+          : GITHUB_AUTOFIX_DEFAULTS.openInspectReviewsEnabled,
+      allowedReviewBots: Array.from(
+        new Set(
+          Array.isArray(allowedReviewBots)
+            ? allowedReviewBots.map((login) => login.trim().toLowerCase()).filter(Boolean)
+            : GITHUB_AUTOFIX_DEFAULTS.allowedReviewBots
+        )
+      ),
+      maxAttemptsPerPrPer24Hours:
+        typeof maxAttempts === "number"
+          ? maxAttempts
+          : GITHUB_AUTOFIX_DEFAULTS.maxAttemptsPerPrPer24Hours,
+    };
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {

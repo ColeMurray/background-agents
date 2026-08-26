@@ -778,6 +778,7 @@ Now that the GitHub bot worker is deployed, configure the GitHub App for webhook
 4. Under **Subscribe to events**, check:
    - **Pull requests**
    - **Issue comments**
+   - **Pull request reviews**
    - **Pull request review comments**
 5. Click **Save changes**
 

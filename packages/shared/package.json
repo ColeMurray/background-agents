@@ -66,6 +66,10 @@
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
     },
+    "./types/github-autofix": {
+      "import": "./dist/types/github-autofix.js",
+      "types": "./dist/types/github-autofix.d.ts"
+    },
     "./types/image-builds": {
       "import": "./dist/types/image-builds.js",
       "types": "./dist/types/image-builds.d.ts"

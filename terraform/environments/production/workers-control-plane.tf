@@ -90,6 +90,7 @@ module "control_plane_worker" {
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
+      { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
       { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
     ],

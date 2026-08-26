@@ -15,6 +15,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
+import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -78,6 +79,9 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     callback_context: null,
     client_request_id: null,
     request_fingerprint: null,
+    autofix_feedback_key: null,
+    autofix_pr_key: null,
+    origin_context: null,
     status: "pending",
     error_message: null,
     stop_confirmation_deadline: null,
@@ -137,6 +141,12 @@ function buildQueue() {
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getMessageByClientRequestId: vi.fn(() => null as MessageRow | null),
+    admitAutofixMessage: vi.fn<MessageRepository["admitAutofixMessage"]>(() => ({
+      kind: "enqueued",
+      messageId: "msg-autofix",
+    })),
+    getAutofixMessageId: vi.fn(() => null as string | null),
+    getMessageStatus: vi.fn(() => "pending" as const),
     cancelPendingMessage: vi.fn(() => false),
     getUnfinishedMessagePosition: vi.fn((): number | null => 1),
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
@@ -261,6 +271,142 @@ function buildQueue() {
 }
 
 describe("SessionMessageQueue", () => {
+  it("admits Autofix feedback through the message repository", async () => {
+    const h = buildQueue();
+    const command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }> = {
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:1234",
+      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+      prompt: "Address the submitted review feedback.",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      },
+      attemptLimit: 10,
+    };
+
+    await expect(h.queue.enqueueAutofix(command)).resolves.toEqual({
+      kind: "enqueued",
+      messageId: "msg-autofix",
+    });
+    expect(h.participantService.getByUserId).toHaveBeenCalledWith("github:7");
+    expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+      scmUserId: "7",
+      scmLogin: "alice",
+      scmName: "alice",
+    });
+    expect(h.repository.admitAutofixMessage).toHaveBeenCalledWith({
+      message: expect.objectContaining({
+        authorId: "part-1",
+        content: command.prompt,
+        source: "github",
+        status: "pending",
+      }),
+      feedbackKey: command.feedbackKey,
+      pullRequestKey: "github:99:42",
+      originContext: JSON.stringify(command.origin),
+      attemptLimit: 10,
+      windowStart: expect.any(Number),
+      sessionClosed: false,
+    });
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+  });
+
+  it("re-drives duplicate pending Autofix work without admitting another message", async () => {
+    const h = buildQueue();
+    h.repository.admitAutofixMessage.mockReturnValue({
+      kind: "duplicate",
+      messageId: "msg-existing",
+    });
+
+    const result = await h.queue.enqueueAutofix({
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:1234",
+      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+      prompt: "Address the submitted review feedback.",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      },
+      attemptLimit: 10,
+    });
+
+    expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
+    expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+  });
+
+  it("passes closed-session state into atomic Autofix admission", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ status: "archived" }));
+    h.repository.admitAutofixMessage.mockReturnValue({
+      kind: "rejected",
+      reason: "session_closed",
+    });
+
+    const result = await h.queue.enqueueAutofix({
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:1234",
+      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+      prompt: "Address the submitted review feedback.",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      },
+      attemptLimit: 10,
+    });
+
+    expect(result).toEqual({ kind: "rejected", reason: "session_closed" });
+    expect(h.repository.admitAutofixMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionClosed: true })
+    );
+    expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+  });
+
+  it("returns a duplicate without re-driving it in a closed session", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ status: "archived" }));
+    h.repository.admitAutofixMessage.mockReturnValue({
+      kind: "duplicate",
+      messageId: "msg-existing",
+    });
+
+    const result = await h.queue.enqueueAutofix({
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:1234",
+      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+      prompt: "Address the submitted review feedback.",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      },
+      attemptLimit: 10,
+    });
+
+    expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
+    expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+  });
+
+  it("looks up and re-drives pending Autofix work", async () => {
+    const h = buildQueue();
+    h.repository.getAutofixMessageId.mockReturnValue("msg-existing");
+
+    await expect(h.queue.lookupAutofix("github:review:1234")).resolves.toEqual({
+      kind: "found",
+      messageId: "msg-existing",
+    });
+    expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+  });
+
   it("cancels a pending prompt and confirms it to the requester", async () => {
     const h = buildQueue();
     h.repository.cancelPendingMessage.mockReturnValue(true);
@@ -671,6 +817,25 @@ describe("SessionMessageQueue", () => {
     const event = h.repository.startMessageProcessing.mock.calls[0][2];
     expect(event).not.toHaveProperty("attachments");
     expect(event.timestamp * 1000).toBe(h.repository.startMessageProcessing.mock.calls[0][1]);
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("preserves Autofix origin on the canonical dispatch-time user event", async () => {
+    const h = buildQueue();
+    const origin = {
+      kind: "review",
+      authorType: "human",
+      feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+    } as const;
+    h.repository.getNextPendingMessage.mockReturnValue(
+      createMessage({ source: "github", origin_context: JSON.stringify(origin) })
+    );
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    const event = h.repository.startMessageProcessing.mock.calls[0][2];
+    expect(event).toEqual(expect.objectContaining({ origin }));
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
