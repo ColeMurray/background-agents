@@ -89,7 +89,7 @@ import { SessionTerminalMessageProjection } from "./terminal-message-projection"
 import { SessionEventStream } from "./event-stream";
 import { MessagesHandler } from "./http/handlers/messages.handler";
 import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
-import { createSandboxHandler } from "./http/handlers/sandbox.handler";
+import { SandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import {
@@ -507,40 +507,45 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageService
   );
 
-  const sandboxHandler = createSandboxHandler({
+  // Per-request adapters: each token/credential refresh constructs its
+  // service around the request-scoped log, so these stay functions.
+  const refreshOpenAIToken = async (sessionRow: SessionRow, requestLog: Logger) => {
+    const service = new OpenAITokenRefreshService(
+      db!,
+      repoSecretsEncryptionKey,
+      resolveRepoId,
+      requestLog
+    );
+    return service.refresh(sessionRow);
+  };
+  const refreshXaiToken = async (sessionRow: SessionRow, requestLog: Logger) => {
+    const service = new XaiTokenRefreshService(
+      db!,
+      repoSecretsEncryptionKey,
+      resolveRepoId,
+      requestLog
+    );
+    return service.refresh(sessionRow);
+  };
+  const getScmCredentials = (requestLog: Logger) =>
+    new ScmCredentialsService(sourceControlProvider(), requestLog).getCredentials();
+
+  const sandboxHandler = new SandboxHandler(
     messageRepository,
     eventRepository,
     participantRepository,
     artifactRepository,
-    processSandboxEvent: (event) => sandboxEventProcessor.processSandboxEvent(event),
-    getSandbox: () => sandboxRepository.getSandbox(),
-    isValidSandboxToken: (token, sandbox) => isValidSandboxToken(token, sandbox),
-    getSession: () => sessionCoreRepository.getSession(),
-    refreshOpenAIToken: async (sessionRow, requestLog) => {
-      const service = new OpenAITokenRefreshService(
-        db!,
-        repoSecretsEncryptionKey,
-        resolveRepoId,
-        requestLog
-      );
-      return service.refresh(sessionRow);
-    },
-    refreshXaiToken: async (sessionRow, requestLog) => {
-      const service = new XaiTokenRefreshService(
-        db!,
-        repoSecretsEncryptionKey,
-        resolveRepoId,
-        requestLog
-      );
-      return service.refresh(sessionRow);
-    },
-    isManagedSecretsConfigured: () => Boolean(db),
-    getScmCredentials: (requestLog) =>
-      new ScmCredentialsService(sourceControlProvider(), requestLog).getCredentials(),
+    sessionCoreRepository,
+    sandboxRepository,
+    sandboxEventProcessor,
     messenger,
-    generateId: () => generateId(),
-    now: () => Date.now(),
-  });
+    Boolean(db),
+    refreshOpenAIToken,
+    refreshXaiToken,
+    getScmCredentials,
+    isValidSandboxToken,
+    generateId
+  );
 
   const attachmentsHandler = new AttachmentsHandler(attachmentRepository, log);
 
