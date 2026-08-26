@@ -29,9 +29,15 @@ function createdOutput({
   draft?: boolean;
   url?: string;
 } = {}) {
-  return `Pull request created successfully!\n\nPR #42 (feature/creator -> main): ${url}\n\n${
-    draft ? "The pull request is in draft mode." : "The pull request is now ready for review."
-  }`;
+  return JSON.stringify({
+    kind: "created",
+    prNumber: 42,
+    prUrl: url,
+    state: draft ? "draft" : "open",
+    headBranch: "feature/creator",
+    baseBranch: "main",
+    agentMessage: "Pull request created successfully.",
+  });
 }
 
 function renderExpanded(overrides: Partial<ToolCallEvent> = {}) {
@@ -96,8 +102,15 @@ describe("CreatePullRequestEvent", () => {
 
   it("renders an updated pull request distinctly", () => {
     renderExpanded({
-      output:
-        "Pull request updated with your latest commits.\n\nPR #42 (feature/creator -> main): https://github.com/acme/web/pull/42",
+      output: JSON.stringify({
+        kind: "updated",
+        prNumber: 42,
+        prUrl: "https://github.com/acme/web/pull/42",
+        state: "open",
+        headBranch: "feature/creator",
+        baseBranch: "main",
+        agentMessage: "Pull request updated with your latest commits.",
+      }),
     });
 
     expect(screen.getByText("Updated pull request #42")).toBeInTheDocument();
@@ -106,7 +119,11 @@ describe("CreatePullRequestEvent", () => {
 
   it("renders completed textual failures as failures", () => {
     renderExpanded({
-      output: "Authentication failed: token expired. Please re-authenticate.",
+      output: JSON.stringify({
+        kind: "failure",
+        message: "Authentication failed: token expired. Please re-authenticate.",
+        agentMessage: "Authentication failed: token expired. Please re-authenticate.",
+      }),
     });
 
     expect(screen.getByText("Create pull request failed")).toBeInTheDocument();
@@ -117,8 +134,11 @@ describe("CreatePullRequestEvent", () => {
 
   it("renders the manual creation fallback", () => {
     renderExpanded({
-      output:
-        "Branch pushed successfully.\n\nCreate the pull request in GitHub:\nhttps://github.com/acme/web/compare/main...feature\n\nUse your logged-in GitHub account to finish creating the PR.",
+      output: JSON.stringify({
+        kind: "manual",
+        createPrUrl: "https://github.com/acme/web/compare/main...feature",
+        agentMessage: "Create the pull request in GitHub.",
+      }),
     });
 
     expect(screen.getByText("Branch pushed for pull request")).toBeInTheDocument();
@@ -137,11 +157,33 @@ describe("CreatePullRequestEvent", () => {
   });
 
   it("preserves unrecognized output instead of dropping result details", () => {
-    renderExpanded({ output: "Provider accepted the request with an unfamiliar response." });
+    const output = "  Provider accepted the request with an unfamiliar response.\n";
+    renderExpanded({ output });
 
     expect(screen.getByText("Create pull request completed")).toBeInTheDocument();
     expect(screen.getByText("Result details below")).toBeInTheDocument();
-    expect(screen.getByText(/unfamiliar response/i)).toBeInTheDocument();
+    expect(screen.getByText(/unfamiliar response/i).textContent).toBe(output);
+  });
+
+  it("keeps unrecognized running output pending", () => {
+    renderExpanded({ status: "running", output: "Pushing branch to the remote..." });
+
+    expect(screen.getByText("Creating pull request")).toBeInTheDocument();
+    expect(screen.getByText("Pushing branch to the remote...")).toBeInTheDocument();
+    expect(screen.queryByText("Create pull request completed")).not.toBeInTheDocument();
+  });
+
+  it("renders persisted prose output through the legacy fallback", () => {
+    renderExpanded({
+      output:
+        "Pull request created successfully!\n\nPR #42 (feature/creator -> main): https://github.com/acme/web/pull/42\n\nThe pull request is now ready for review.",
+    });
+
+    expect(screen.getByText("Opened pull request #42")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open pr/i })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/web/pull/42"
+    );
   });
 
   it("shows pending state before output arrives", () => {

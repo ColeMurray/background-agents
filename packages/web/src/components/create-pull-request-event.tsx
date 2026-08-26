@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import {
+  createPullRequestToolEnvelopeSchema,
+  type CreatePullRequestToolEnvelope,
+} from "@open-inspect/shared/pull-request-tool";
 import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
@@ -18,18 +22,20 @@ import { TimelineRowContent } from "./timeline-row-content";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
+type LegacyCompletedResult = {
+  kind: "created" | "updated";
+  prNumber: number;
+  prUrl: string;
+  state: "open" | "draft";
+  headBranch?: string;
+  baseBranch?: string;
+  agentMessage: string;
+};
+
 type PullRequestResult =
-  | {
-      kind: "created" | "updated";
-      number: number;
-      url: string;
-      head?: string;
-      base?: string;
-      state: "open" | "draft";
-    }
-  | { kind: "manual"; url: string }
-  | { kind: "failure"; message: string }
-  | { kind: "pending" }
+  | CreatePullRequestToolEnvelope
+  | LegacyCompletedResult
+  | { kind: "pending"; output?: string }
   | { kind: "unknown"; output: string };
 
 const FAILURE_PREFIX =
@@ -38,33 +44,70 @@ const PR_LINE = /PR #(\d+)(?: \((.+?) -> (.+?)\))?: (\S+)/;
 const MANUAL_URL = /Create the pull request in GitHub:\s*\n(\S+)/;
 
 function parseResult(event: ToolCallEvent): PullRequestResult {
-  const output = event.output?.trim();
+  const rawOutput = event.output;
+  const output = rawOutput?.trim();
   if (!output) {
     return event.status === "error"
-      ? { kind: "failure", message: "Pull request creation failed." }
+      ? {
+          kind: "failure",
+          message: "Pull request creation failed.",
+          agentMessage: "Pull request creation failed.",
+        }
       : { kind: "pending" };
   }
 
-  if (FAILURE_PREFIX.test(output)) return { kind: "failure", message: output };
+  try {
+    const envelope = createPullRequestToolEnvelopeSchema.safeParse(JSON.parse(output));
+    if (envelope.success) return envelope.data;
+    return unrecognizedResult(event, rawOutput ?? output, output);
+  } catch {
+    // Persisted events predating the structured envelope contain prose output.
+  }
+
+  return parseLegacyResult(event, rawOutput ?? output, output);
+}
+
+function parseLegacyResult(
+  event: ToolCallEvent,
+  rawOutput: string,
+  output: string
+): PullRequestResult {
+  if (FAILURE_PREFIX.test(output)) {
+    return { kind: "failure", message: output, agentMessage: output };
+  }
 
   const manualMatch = output.match(MANUAL_URL);
-  if (manualMatch) return { kind: "manual", url: manualMatch[1] };
+  if (manualMatch) {
+    return { kind: "manual", createPrUrl: manualMatch[1], agentMessage: output };
+  }
 
   const prMatch = output.match(PR_LINE);
   if (prMatch) {
     return {
       kind: output.startsWith("Pull request updated") ? "updated" : "created",
-      number: Number(prMatch[1]),
-      url: prMatch[4],
-      head: prMatch[2],
-      base: prMatch[3],
+      prNumber: Number(prMatch[1]),
+      prUrl: prMatch[4],
+      headBranch: prMatch[2],
+      baseBranch: prMatch[3],
       state: output.includes("in draft mode") ? "draft" : "open",
+      agentMessage: output,
     };
   }
 
+  return unrecognizedResult(event, rawOutput, output);
+}
+
+function unrecognizedResult(
+  event: ToolCallEvent,
+  rawOutput: string,
+  output: string
+): PullRequestResult {
+  if (["pending", "running", "in_progress"].includes(event.status ?? "")) {
+    return { kind: "pending", output: rawOutput };
+  }
   return event.status === "error"
-    ? { kind: "failure", message: output }
-    : { kind: "unknown", output };
+    ? { kind: "failure", message: output, agentMessage: output }
+    : { kind: "unknown", output: rawOutput };
 }
 
 function getStringArg(event: ToolCallEvent, key: string): string | undefined {
@@ -127,7 +170,7 @@ function BranchRoute({ head, base }: { head: string; base: string }) {
   );
 }
 
-function PullRequestLink({ href, manual = false }: { href: string; manual?: boolean }) {
+function PullRequestLink({ href, label }: { href: string; label: string }) {
   return (
     <a
       href={href}
@@ -135,65 +178,107 @@ function PullRequestLink({ href, manual = false }: { href: string; manual?: bool
       rel="noopener noreferrer"
       className="inline-flex shrink-0 items-center gap-1.5 bg-foreground px-2.5 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-80"
     >
-      {manual ? "Create PR" : "Open PR"}
+      {label}
       <LinkIcon className="h-3 w-3" />
     </a>
   );
 }
 
-function summaryForResult(result: PullRequestResult): string {
+type PresentationTone = "success" | "muted" | "danger";
+type PresentationIcon = "pull-request" | "draft" | "error";
+
+interface PullRequestPresentation {
+  summary: string;
+  status?: string;
+  footer?: string;
+  tone: PresentationTone;
+  icon: PresentationIcon;
+  action?: { label: string; url: string };
+  prNumber?: number;
+  headBranch?: string;
+  baseBranch?: string;
+  detail?: string;
+  rawOutput?: string;
+}
+
+function presentationForResult(result: PullRequestResult): PullRequestPresentation {
   switch (result.kind) {
-    case "created":
-      return `Opened pull request #${result.number}`;
-    case "updated":
-      return `Updated pull request #${result.number}`;
+    case "created": {
+      const draft = result.state === "draft";
+      return {
+        summary: `Opened pull request #${result.prNumber}`,
+        status: draft ? "Draft" : "Open",
+        footer: draft ? "Draft pull request" : "Ready for review",
+        tone: draft ? "muted" : "success",
+        icon: draft ? "draft" : "pull-request",
+        action: { label: "Open PR", url: result.prUrl },
+        prNumber: result.prNumber,
+        headBranch: result.headBranch,
+        baseBranch: result.baseBranch,
+      };
+    }
+    case "updated": {
+      const draft = result.state === "draft";
+      return {
+        summary: `Updated pull request #${result.prNumber}`,
+        status: draft ? "Draft" : "Updated",
+        footer: "Latest commits pushed",
+        tone: draft ? "muted" : "success",
+        icon: draft ? "draft" : "pull-request",
+        action: { label: "Open PR", url: result.prUrl },
+        prNumber: result.prNumber,
+        headBranch: result.headBranch,
+        baseBranch: result.baseBranch,
+      };
+    }
     case "manual":
-      return "Branch pushed for pull request";
+      return {
+        summary: "Branch pushed for pull request",
+        status: "Branch pushed",
+        footer: "Branch ready",
+        tone: "success",
+        icon: "pull-request",
+        action: { label: "Create PR", url: result.createPrUrl },
+      };
     case "failure":
-      return "Create pull request failed";
+      return {
+        summary: "Create pull request failed",
+        tone: "danger",
+        icon: "error",
+        detail: result.message,
+      };
     case "unknown":
-      return "Create pull request completed";
+      return {
+        summary: "Create pull request completed",
+        status: "Completed",
+        footer: "Result details below",
+        tone: "muted",
+        icon: "pull-request",
+        rawOutput: result.output,
+      };
     case "pending":
-      return "Creating pull request";
+      return {
+        summary: "Creating pull request",
+        status: "Creating",
+        footer: result.output ?? "Creating pull request...",
+        tone: "muted",
+        icon: "pull-request",
+      };
   }
 }
 
-function statusForResult(result: Exclude<PullRequestResult, { kind: "failure" }>): string {
-  switch (result.kind) {
-    case "created":
-      return result.state === "draft" ? "Draft" : "Open";
-    case "updated":
-      return "Updated";
-    case "manual":
-      return "Branch pushed";
-    case "unknown":
-      return "Completed";
-    case "pending":
-      return "Creating";
-  }
-}
-
-function footerForResult(result: Exclude<PullRequestResult, { kind: "failure" }>): string {
-  switch (result.kind) {
-    case "created":
-      return result.state === "draft" ? "Draft pull request" : "Ready for review";
-    case "updated":
-      return "Latest commits pushed";
-    case "manual":
-      return "Branch ready";
-    case "unknown":
-      return "Result details below";
-    case "pending":
-      return "Creating pull request...";
-  }
-}
-
-function PullRequestCard({ event, result }: { event: ToolCallEvent; result: PullRequestResult }) {
+function PullRequestCard({
+  event,
+  presentation,
+}: {
+  event: ToolCallEvent;
+  presentation: PullRequestPresentation;
+}) {
   const title = getStringArg(event, "title") ?? "Pull request";
   const rawBody = event.args?.body;
   const body = typeof rawBody === "string" && rawBody.trim() ? rawBody : undefined;
 
-  if (result.kind === "failure") {
+  if (presentation.detail) {
     return (
       <div className="border border-destructive-border bg-destructive-muted p-4 text-xs">
         <div className="flex items-start gap-2 text-destructive">
@@ -201,7 +286,7 @@ function PullRequestCard({ event, result }: { event: ToolCallEvent; result: Pull
           <div>
             <div className="font-medium">Couldn&apos;t create pull request</div>
             <div className="mt-1 text-muted-foreground [overflow-wrap:anywhere]">
-              {result.message}
+              {presentation.detail}
             </div>
           </div>
         </div>
@@ -209,12 +294,8 @@ function PullRequestCard({ event, result }: { event: ToolCallEvent; result: Pull
     );
   }
 
-  const pullRequest = result.kind === "created" || result.kind === "updated" ? result : null;
-  const resultUrl = pullRequest?.url ?? (result.kind === "manual" ? result.url : null);
-  const safeUrl = getSafeExternalUrl(resultUrl);
+  const safeUrl = getSafeExternalUrl(presentation.action?.url);
   const repository = getStringArg(event, "repo") ?? repositoryFromUrl(safeUrl);
-  const status = statusForResult(result);
-  const mutedStatus = result.kind === "pending" || result.kind === "unknown" || status === "Draft";
 
   return (
     <div className="overflow-hidden border border-border bg-card">
@@ -224,26 +305,28 @@ function PullRequestCard({ event, result }: { event: ToolCallEvent; result: Pull
             <GitPrIcon className="h-4 w-4 shrink-0 text-foreground" />
             <span className="truncate">{repository ?? "Pull request"}</span>
           </span>
-          <span
-            className={cn(
-              "shrink-0 border px-2 py-0.5 font-medium",
-              mutedStatus
-                ? "border-border bg-muted text-muted-foreground"
-                : "border-success/30 bg-success-muted text-success"
-            )}
-          >
-            {status}
-          </span>
+          {presentation.status && (
+            <span
+              className={cn(
+                "shrink-0 border px-2 py-0.5 font-medium",
+                presentation.tone === "success"
+                  ? "border-success/30 bg-success-muted text-success"
+                  : "border-border bg-muted text-muted-foreground"
+              )}
+            >
+              {presentation.status}
+            </span>
+          )}
         </div>
         <div className="font-semibold leading-snug text-foreground">
           {title}
-          {pullRequest && (
-            <span className="font-normal text-muted-foreground"> #{pullRequest.number}</span>
+          {presentation.prNumber && (
+            <span className="font-normal text-muted-foreground"> #{presentation.prNumber}</span>
           )}
         </div>
-        {pullRequest?.head && pullRequest.base && (
+        {presentation.headBranch && presentation.baseBranch && (
           <div className="mt-3">
-            <BranchRoute head={pullRequest.head} base={pullRequest.base} />
+            <BranchRoute head={presentation.headBranch} base={presentation.baseBranch} />
           </div>
         )}
       </div>
@@ -251,13 +334,17 @@ function PullRequestCard({ event, result }: { event: ToolCallEvent; result: Pull
       {body && <PullRequestBody body={body} />}
 
       <div className="flex items-center justify-between gap-3 border-t border-border-muted p-3">
-        <span className="text-[11px] text-muted-foreground">{footerForResult(result)}</span>
-        {safeUrl && <PullRequestLink href={safeUrl} manual={result.kind === "manual"} />}
+        <span className="min-w-0 text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+          {presentation.footer}
+        </span>
+        {safeUrl && presentation.action && (
+          <PullRequestLink href={safeUrl} label={presentation.action.label} />
+        )}
       </div>
 
-      {result.kind === "unknown" && (
+      {presentation.rawOutput !== undefined && (
         <pre className="max-h-48 overflow-auto border-t border-border-muted p-3 text-xs text-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {result.output}
+          {presentation.rawOutput}
         </pre>
       )}
     </div>
@@ -278,9 +365,8 @@ export function CreatePullRequestEvent({
   showTime = true,
 }: CreatePullRequestEventProps) {
   const result = parseResult(event);
+  const presentation = presentationForResult(result);
   const time = formatSessionEventTime(event.timestamp);
-  const failed = result.kind === "failure";
-  const draft = result.kind === "created" && result.state === "draft";
 
   return (
     <div className="min-w-0 max-w-full py-0.5">
@@ -295,27 +381,23 @@ export function CreatePullRequestEvent({
             isExpanded && "rotate-90"
           )}
         />
-        {failed ? (
+        {presentation.icon === "error" ? (
           <ErrorIcon className="mt-[3px] h-3.5 w-3.5 shrink-0 text-destructive" />
-        ) : draft ? (
+        ) : presentation.icon === "draft" ? (
           <GitPrDraftIcon className="mt-[3px] h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         ) : (
           <GitPrIcon className="mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground" />
         )}
         <TimelineRowContent time={showTime ? time : undefined}>
-          <span
-            className={cn(
-              (result.kind === "created" || result.kind === "updated") && "text-foreground"
-            )}
-          >
-            {summaryForResult(result)}
+          <span className={cn(presentation.tone === "success" && "text-foreground")}>
+            {presentation.summary}
           </span>
         </TimelineRowContent>
       </button>
 
       {isExpanded && (
         <div className="mt-2 min-w-0 w-full max-w-full sm:ml-5 sm:w-[calc(100%_-_1.25rem)]">
-          <PullRequestCard event={event} result={result} />
+          <PullRequestCard event={event} presentation={presentation} />
         </div>
       )}
     </div>

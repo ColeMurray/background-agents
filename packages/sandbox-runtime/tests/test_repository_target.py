@@ -149,10 +149,23 @@ def _format_success(tmp_path: Path, result_json: str) -> str:
 def test_formats_pull_request_state(tmp_path: Path, state: str, message: str) -> None:
     output = _format_success(
         tmp_path,
-        json.dumps({"prNumber": 42, "prUrl": "https://example.test/pull/42", "state": state}),
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "state": state,
+                "headBranch": "feature-x",
+                "baseBranch": "main",
+                "updated": False,
+            }
+        ),
     )
 
     assert message in output
+    envelope = json.loads(output)
+    assert envelope["kind"] == "created"
+    assert envelope["prNumber"] == 42
+    assert envelope["headBranch"] == "feature-x"
 
 
 def test_formats_updated_pull_request(tmp_path: Path) -> None:
