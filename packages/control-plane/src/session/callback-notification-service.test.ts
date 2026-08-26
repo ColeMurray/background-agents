@@ -959,21 +959,13 @@ describe("CallbackNotificationService", () => {
       );
     });
 
-    it("retries an explicitly retryable scheduler result", async () => {
-      const completeAutomationRun = vi
-        .fn()
-        .mockResolvedValueOnce({
-          outcome: "retryable_failure",
-          reason: "invalid_run_complete_callback",
-          error: "Invalid run-complete callback",
-        })
-        .mockResolvedValueOnce({ outcome: "ignored" });
+    it("rejects malformed persisted automation context before scheduler completion", async () => {
+      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
       const h = createTestHarness({ completeAutomationRun });
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({
           source: "automation",
           automationId: "auto-1",
-          runId: "run-1",
           automationName: "Daily sync",
         }),
         source: "automation",
@@ -981,18 +973,15 @@ describe("CallbackNotificationService", () => {
 
       await h.service.notifyComplete("msg-1", true);
 
-      expect(completeAutomationRun).toHaveBeenCalledTimes(2);
-      expect(h.log.warn).toHaveBeenCalledWith(
-        "callback.complete_delivery_attempt_failed",
-        expect.objectContaining({
-          source: "automation",
-          attempt: 1,
-          reject_reason: "invalid_run_complete_callback",
-        })
-      );
+      expect(completeAutomationRun).not.toHaveBeenCalled();
       expect(h.log.info).toHaveBeenCalledWith(
         "callback.complete_delivery",
-        expect.objectContaining({ source: "automation", attempts: 2, retries: 1 })
+        expect.objectContaining({
+          source: "automation",
+          outcome: "rejected",
+          reject_reason: "invalid_callback_context",
+          attempts: 0,
+        })
       );
     });
 

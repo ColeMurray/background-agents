@@ -120,12 +120,7 @@ export async function forwardAutomationEventToScheduler(
     return json({ ok: false, error: "Failed to reach scheduler" }, 502);
   }
 
-  if (result.outcome === "invalid") {
-    return json({ ok: true, error: result.error }, 400);
-  }
-
-  const { outcome: _, ...summary } = result;
-  return json({ ok: true, ...summary });
+  return json({ ok: true, ...result });
 }
 
 export function createAutomationEventRoute(opts: {

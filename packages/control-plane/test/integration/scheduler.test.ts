@@ -149,27 +149,6 @@ describe("Scheduler (integration)", () => {
     );
   });
 
-  // ─── Health check ─────────────────────────────────────────────────────────
-
-  describe("health", () => {
-    it("returns healthy with overdue count", async () => {
-      const store = new AutomationStore(env.DB);
-      const now = Date.now();
-      await store.create(makeAutomation({ id: "auto-h1", next_run_at: now - 60000, enabled: 1 }));
-      await store.create(makeAutomation({ id: "auto-h2", next_run_at: now + 60000, enabled: 1 }));
-
-      const result = await createScheduler().health();
-
-      expect(result).toEqual({ status: "healthy", overdueCount: 1 });
-    });
-
-    it("returns zero overdue when none are due", async () => {
-      const result = await createScheduler().health();
-
-      expect(result).toEqual({ status: "healthy", overdueCount: 0 });
-    });
-  });
-
   // ─── Run complete callback ────────────────────────────────────────────────
 
   describe("run completion", () => {
@@ -552,8 +531,8 @@ describe("Scheduler (integration)", () => {
       // not a thrown request — that is exactly what the removed Durable
       // Object used to guarantee by serializing every caller.
       const [triggerA, triggerB, tick] = await Promise.all([
-        schedulers[0]!.trigger({ automationId: "auto-concurrent-admission" }),
-        schedulers[1]!.trigger({ automationId: "auto-concurrent-admission" }),
+        schedulers[0]!.trigger("auto-concurrent-admission"),
+        schedulers[1]!.trigger("auto-concurrent-admission"),
         schedulers[2]!.tick(),
       ]);
 
@@ -641,13 +620,8 @@ describe("Scheduler (integration)", () => {
       expect((await store.getById("auto-slot-ownership"))!.next_run_at).toBe(winnerNext);
     });
 
-    it("returns invalid when automationId is missing", async () => {
-      const result = await createScheduler().trigger({});
-      expect(result).toEqual({ outcome: "invalid", error: "automationId required" });
-    });
-
     it("returns not_found when automation is not found", async () => {
-      const result = await createScheduler().trigger({ automationId: "nonexistent" });
+      const result = await createScheduler().trigger("nonexistent");
       expect(result).toEqual({ outcome: "not_found", error: "Automation not found" });
     });
 
@@ -665,7 +639,7 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const result = await createScheduler().trigger({ automationId: "auto-trig1" });
+      const result = await createScheduler().trigger("auto-trig1");
       expect(result).toEqual({ outcome: "blocked", error: "An active run already exists" });
     });
 
@@ -673,7 +647,7 @@ describe("Scheduler (integration)", () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-trig2" }));
 
-      const result = await createScheduler().trigger({ automationId: "auto-trig2" });
+      const result = await createScheduler().trigger("auto-trig2");
 
       // Trigger will attempt session creation. In test env it may start or fail
       // at prompt sending. Either way, a run record is created.

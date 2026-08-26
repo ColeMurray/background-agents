@@ -116,10 +116,7 @@ async function handleSentryWebhook(
 
   // 4. Process the event.
   const result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
-  if (result.outcome === "invalid") return json({ ok: true, error: result.error }, 400);
-
-  const { outcome: _, ...summary } = result;
-  return json({ ok: true, ...summary });
+  return json({ ok: true, ...result });
 }
 
 export const sentryWebhookRoute: Route = defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {

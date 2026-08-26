@@ -88,7 +88,7 @@ describe("Scheduler slack event handling (integration)", () => {
 
     const event = makeSlackEvent({ text: "please deploy the api" });
     const result = await sendEvent(event);
-    expect(result).toMatchObject({ outcome: "processed" });
+    expect(result.triggered).toBe(1);
 
     const runs = await fetchRuns(id);
     expect(runs.length).toBeGreaterThanOrEqual(1);
@@ -105,7 +105,7 @@ describe("Scheduler slack event handling (integration)", () => {
     const id = await seedSlackAutomation(store);
 
     const result = await sendEvent(makeSlackEvent({ text: "good morning team" }));
-    expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 0 });
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -123,7 +123,7 @@ describe("Scheduler slack event handling (integration)", () => {
         concurrencyKey: "slack:C2:1",
       })
     );
-    expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 0 });
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -160,7 +160,7 @@ describe("Scheduler slack event handling (integration)", () => {
     const result = await sendEvent(
       makeSlackEvent({ text: "deploy", concurrencyKey, triggerKey: "slack:msg:C1:second" })
     );
-    expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 1, steered: 0 });
+    expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
 
     // The skip is a childless invocation carrying the message coordinates.
     const invocations = await fetchInvocations(store, id);
@@ -183,7 +183,7 @@ describe("Scheduler slack event handling (integration)", () => {
     const rootResult = await sendEvent(
       makeSlackEvent({ text: "deploy the api", concurrencyKey, triggerKey: "slack:msg:C1:root" })
     );
-    expect(rootResult).toMatchObject({ outcome: "processed", triggered: 1 });
+    expect(rootResult.triggered).toBe(1);
 
     // A follow-up reply in the same thread (same concurrency key, new message)
     // is routed to the running session as a steering turn — not skipped.
@@ -194,7 +194,7 @@ describe("Scheduler slack event handling (integration)", () => {
         triggerKey: "slack:msg:C1:reply",
       })
     );
-    expect(followResult).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 1 });
+    expect(followResult).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
     // No concurrency-skip invocation recorded — the follow-up was steered.
     const invocations = await fetchInvocations(store, id);
@@ -216,7 +216,7 @@ describe("Scheduler slack event handling (integration)", () => {
         triggerKey: "slack:msg:C1:root-done",
       })
     );
-    expect(rootResult).toMatchObject({ outcome: "processed", triggered: 1 });
+    expect(rootResult.triggered).toBe(1);
 
     // Simulate the run finishing. Its session stays steerable within the window,
     // just like an @mention thread after a turn completes.
@@ -237,7 +237,6 @@ describe("Scheduler slack event handling (integration)", () => {
       })
     );
     expect(followResult).toEqual({
-      outcome: "processed",
       triggered: 0,
       skipped: 0,
       steered: 1,

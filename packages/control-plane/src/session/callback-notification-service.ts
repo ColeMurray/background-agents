@@ -9,12 +9,13 @@
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import {
+  automationCallbackContextSchema,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
-import { CALLBACK_ATTEMPTS, CALLBACK_RETRY_DELAY_MS, deliverWithRetry } from "./callback-delivery";
+import { deliverWithRetry, retryDelivery } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
@@ -198,7 +199,17 @@ export class CallbackNotificationService {
 
       // Route automation callbacks to the scheduler's completion function.
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(rawContext, success, error, messageId);
+        const automationContext = automationCallbackContextSchema.safeParse(rawContext);
+        if (!automationContext.success) {
+          result.rejectReason = "invalid_callback_context";
+          return;
+        }
+        result = await this.notifyAutomationComplete(
+          automationContext.data,
+          success,
+          error,
+          messageId
+        );
         return;
       }
 
@@ -295,7 +306,8 @@ export class CallbackNotificationService {
     error: string | undefined,
     messageId: string
   ): Promise<CallbackDeliveryResult> {
-    if (!this.completeAutomationRun) {
+    const completeAutomationRun = this.completeAutomationRun;
+    if (!completeAutomationRun) {
       return { delivered: false, attempts: 0, rejectReason: "no_binding" };
     }
 
@@ -310,22 +322,13 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    let rejectReason: string | undefined;
-    for (let attempt = 1; attempt <= CALLBACK_ATTEMPTS; attempt++) {
-      let result: SchedulerRunCompleteResult | undefined;
-      let deliveryError: unknown;
-      try {
-        result = await this.completeAutomationRun(payload);
-        if (result.outcome !== "retryable_failure") {
-          return { delivered: true, attempts: attempt };
-        }
-        rejectReason = result.reason;
-      } catch (error) {
-        deliveryError = error;
-        rejectReason = undefined;
-      }
-
-      try {
+    const delivery = await retryDelivery<SchedulerRunCompleteResult, never>(
+      async () => ({
+        outcome: "delivered",
+        value: await completeAutomationRun(payload),
+      }),
+      this.sleep,
+      ({ attempt, error: deliveryError }) => {
         this.log.warn("callback.complete_delivery_attempt_failed", {
           message_id: messageId,
           session_id: this.getSessionId(),
@@ -333,22 +336,19 @@ export class CallbackNotificationService {
           automation_id: context.automationId,
           run_id: context.runId,
           attempt,
-          ...(result?.outcome === "retryable_failure" ? { reject_reason: result.reason } : {}),
           ...(deliveryError !== undefined
             ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
             : {}),
         });
-      } catch {
-        // Observability must not alter the delivery retry policy.
-      }
-
-      if (attempt < CALLBACK_ATTEMPTS) await this.sleep(CALLBACK_RETRY_DELAY_MS);
-    }
+      },
+      // D1 operations do not accept AbortSignals. A fake timeout would retry
+      // while the first in-process completion can still be running.
+      { attemptTimeoutMs: null }
+    );
 
     return {
-      delivered: false,
-      attempts: CALLBACK_ATTEMPTS,
-      ...(rejectReason ? { rejectReason } : {}),
+      delivered: delivery.outcome === "delivered",
+      attempts: delivery.attempts,
     };
   }
 

@@ -1093,9 +1093,7 @@ async function handleTriggerAutomation(
   if (!automation) return error("Automation not found", 404);
 
   // The scheduler performs the authoritative D1-backed concurrency check.
-  const triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger({
-    automationId: id,
-  });
+  const triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
 
   if (triggerResult.outcome !== "started") {
     logger.error("automation.trigger_failed", {

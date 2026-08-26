@@ -11,6 +11,7 @@ import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
+import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -438,7 +439,7 @@ const sampleSlackAutomation = {
 const sampleSlackPermalink = "https://example.slack.com/archives/C1/p1700000000000200";
 const sampleSlackContextBlock = `A message was posted in #ops.\nPermalink: ${sampleSlackPermalink}`;
 
-function makeSlackEvent(overrides?: Record<string, unknown>) {
+function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomationEvent {
   const ts = "1700000000.000200";
   return {
     source: "slack",
@@ -482,17 +483,6 @@ describe("Scheduler", () => {
       repoOwner: "acme",
       repoName: "web-app",
       defaultBranch: "main",
-    });
-  });
-
-  describe("health", () => {
-    it("returns healthy status with overdue count", async () => {
-      mockStore.countOverdue.mockResolvedValue(5);
-
-      const scheduler = createScheduler();
-      const result = await scheduler.health();
-
-      expect(result).toEqual({ status: "healthy", overdueCount: 5 });
     });
   });
 
@@ -1853,30 +1843,6 @@ describe("Scheduler", () => {
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
     });
 
-    it("returns a retryable failure for malformed run-complete callbacks", async () => {
-      const scheduler = createScheduler();
-
-      const result = await scheduler.runComplete(runCompletion({ success: "true" }));
-
-      expect(result).toEqual({
-        outcome: "retryable_failure",
-        reason: "invalid_run_complete_callback",
-        error: "Invalid run-complete callback",
-      });
-      expect(mockStore.getRunById).not.toHaveBeenCalled();
-      expect(mockStore.updateRun).not.toHaveBeenCalled();
-    });
-
-    it("requires a message id for run-complete callbacks", async () => {
-      const scheduler = createScheduler();
-
-      const { messageId: _, ...input } = runCompletion();
-      const result = await scheduler.runComplete(input);
-
-      expect(result.outcome).toBe("retryable_failure");
-      expect(mockStore.getRunById).not.toHaveBeenCalled();
-    });
-
     it("reads slack coordinates from the invocation and labels from the run snapshot", async () => {
       mockStore.getRunById.mockResolvedValue(
         sampleRunRow({
@@ -2041,27 +2007,11 @@ describe("Scheduler", () => {
   });
 
   describe("trigger", () => {
-    it("returns invalid when automationId is missing", async () => {
-      const scheduler = createScheduler();
-      expect(await scheduler.trigger({})).toEqual({
-        outcome: "invalid",
-        error: "automationId required",
-      });
-    });
-
-    it("returns invalid when automationId is not a string", async () => {
-      const scheduler = createScheduler();
-      const result = await scheduler.trigger({ automationId: 123 });
-
-      expect(result.outcome).toBe("invalid");
-      expect(mockStore.getById).not.toHaveBeenCalled();
-    });
-
     it("returns not_found when automation is missing", async () => {
       mockStore.getById.mockResolvedValue(null);
 
       const scheduler = createScheduler();
-      expect(await scheduler.trigger({ automationId: "nonexistent" })).toEqual({
+      expect(await scheduler.trigger("nonexistent")).toEqual({
         outcome: "not_found",
         error: "Automation not found",
       });
@@ -2072,7 +2022,7 @@ describe("Scheduler", () => {
       mockStore.getActiveRunForAutomation.mockResolvedValue({ id: "run-active" });
 
       const scheduler = createScheduler();
-      expect(await scheduler.trigger({ automationId: "auto-1" })).toEqual({
+      expect(await scheduler.trigger("auto-1")).toEqual({
         outcome: "blocked",
         error: "An active run already exists",
       });
@@ -2086,7 +2036,7 @@ describe("Scheduler", () => {
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
 
       const scheduler = createScheduler();
-      const result = await scheduler.trigger({ automationId: "auto-1" });
+      const result = await scheduler.trigger("auto-1");
 
       expect(result.outcome).toBe("started");
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
@@ -2129,7 +2079,7 @@ describe("Scheduler", () => {
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const result = await scheduler.trigger({ automationId: "auto-1" });
+      const result = await scheduler.trigger("auto-1");
 
       expect(result).toEqual({ outcome: "failed", error: "Failed to trigger automation" });
 
@@ -2142,25 +2092,6 @@ describe("Scheduler", () => {
   });
 
   describe("event", () => {
-    it("returns invalid for malformed automation events", async () => {
-      const scheduler = createScheduler();
-      const result = await scheduler.event({
-        source: "slack",
-        eventType: "message.posted",
-        triggerKey: "slack:msg:C1:1700000000.000200",
-        concurrencyKey: "slack:C1:thread-root",
-        contextBlock: "A message was posted in #ops.",
-        meta: {},
-        channelId: "C1",
-        ts: "1700000000.000200",
-        actorUserId: "U1",
-      });
-
-      expect(result).toEqual({ outcome: "invalid", error: "Invalid automation event" });
-      expect(mockGetSlackAutomationsForChannel).not.toHaveBeenCalled();
-      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
-    });
-
     describe("lazy thread context", () => {
       /** A slack-bot binding that records thread-context calls. */
       function threadContextEnv(threadContext = "<thread_context>[]</thread_context>") {
@@ -2190,7 +2121,7 @@ describe("Scheduler", () => {
         // Fails the automation's text condition, so no run is admitted.
         expect(
           await createScheduler(env).event(makeSlackEvent({ text: "unrelated chatter" }))
-        ).toMatchObject({ outcome: "processed" });
+        ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2204,7 +2135,7 @@ describe("Scheduler", () => {
 
         expect(
           await createScheduler(env).event(makeSlackEvent({ text: "also update the changelog" }))
-        ).toMatchObject({ outcome: "processed" });
+        ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2215,8 +2146,10 @@ describe("Scheduler", () => {
         mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
         const { slackFetch, env } = threadContextEnv();
 
-        expect(await createScheduler(env).event(makeSlackEvent())).toMatchObject({
-          outcome: "processed",
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -2230,8 +2163,10 @@ describe("Scheduler", () => {
         );
         const { slackFetch, env } = threadContextEnv();
 
-        expect(await createScheduler(env).event(makeSlackEvent())).toMatchObject({
-          outcome: "processed",
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -2243,8 +2178,10 @@ describe("Scheduler", () => {
         const { slackFetch, env } = threadContextEnv();
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
 
-        expect(await createScheduler(env).event(makeSlackEvent())).toMatchObject({
-          outcome: "processed",
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(1);
@@ -2269,8 +2206,10 @@ describe("Scheduler", () => {
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
-        expect(await createScheduler(env).event(makeSlackEvent())).toMatchObject({
-          outcome: "processed",
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 2,
+          skipped: 0,
+          steered: 0,
         });
 
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(2);
@@ -2288,8 +2227,10 @@ describe("Scheduler", () => {
         } as Partial<Env>);
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
 
-        expect(await createScheduler(env).event(makeSlackEvent())).toMatchObject({
-          outcome: "processed",
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
         });
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -2310,8 +2251,10 @@ describe("Scheduler", () => {
         } as Partial<Env>);
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
 
-        expect(await createScheduler(env).event(makeSlackEvent())).toMatchObject({
-          outcome: "processed",
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
         });
 
         // The run still launches — a slow Slack read must not strand children.
@@ -2333,7 +2276,11 @@ describe("Scheduler", () => {
           new Error("prompt provider failed")
         );
 
-        expect(await scheduler.event(makeSlackEvent())).toMatchObject({ outcome: "processed" });
+        expect(await scheduler.event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
+        });
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
@@ -2350,9 +2297,11 @@ describe("Scheduler", () => {
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
-        expect(
-          await createScheduler(env).event(makeSlackEvent({ threadTs: undefined }))
-        ).toMatchObject({ outcome: "processed" });
+        expect(await createScheduler(env).event(makeSlackEvent({ threadTs: undefined }))).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
+        });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2375,7 +2324,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "thanks — also update the changelog" })
       );
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
       // The continuity lookup is scoped to the thread's concurrency key and a
       // 7-day window measured from now.
@@ -2429,7 +2378,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "actually, can you also bump the version?" })
       );
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.source).toBe("slack");
@@ -2462,7 +2411,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "thanks — also check the rollout" })
       );
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.callbackContext).toMatchObject({
@@ -2483,8 +2432,10 @@ describe("Scheduler", () => {
 
       const scheduler = createScheduler(env);
       // No threadTs → the follow-up should anchor to its own ts.
-      expect(await scheduler.event(makeSlackEvent({ threadTs: undefined }))).toMatchObject({
-        outcome: "processed",
+      expect(await scheduler.event(makeSlackEvent({ threadTs: undefined }))).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 1,
       });
 
       const promptBody = await getPromptBody(fetchMock);
@@ -2504,7 +2455,7 @@ describe("Scheduler", () => {
       // Matching text so the trigger conditions pass.
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ outcome: "processed", triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
 
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
       expect(params.invocation).toMatchObject({
@@ -2536,7 +2487,7 @@ describe("Scheduler", () => {
 
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result.outcome).toBe("processed");
+      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
         `${sampleSlackContextBlock}\n---\n\nRun tests\n\n` +
@@ -2553,7 +2504,11 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const scheduler = createScheduler(env);
 
-      expect(await scheduler.event(makeSlackEvent())).toMatchObject({ outcome: "processed" });
+      expect(await scheduler.event(makeSlackEvent())).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+      });
 
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
@@ -2570,7 +2525,7 @@ describe("Scheduler", () => {
 
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ outcome: "processed", triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
     });
@@ -2592,7 +2547,7 @@ describe("Scheduler", () => {
       const scheduler = createScheduler(env);
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
       // The skip is a childless invocation carrying the message coordinates
       // but never the dedup trigger_key (a skip must not consume the slot).
       expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
@@ -2623,7 +2578,7 @@ describe("Scheduler", () => {
       const scheduler = createScheduler();
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
       // Dedup is a silent no-op — no skip row, no schedule advance.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
       expect(mockStore.update).not.toHaveBeenCalled();
@@ -2655,7 +2610,7 @@ describe("Scheduler", () => {
 
       // Steer failed → fell through → matched conditions → invocation created
       // but its only child failed to launch, so triggered stays 0.
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
         expect.objectContaining({
           invocation: expect.objectContaining({ automation_id: "auto-slack", source: "event" }),

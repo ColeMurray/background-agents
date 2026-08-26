@@ -101,7 +101,7 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeSentryEvent(automationId);
       const result = await sendEvent(event);
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(1);
@@ -144,8 +144,6 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeWebhookEvent(automationId);
       const result = await sendEvent(event);
 
-      expect(result).toMatchObject({ outcome: "processed" });
-      if (result.outcome !== "processed") throw new Error(result.error);
       expect(result.triggered + result.skipped).toBeLessThanOrEqual(1);
 
       const runs = await fetchRuns(automationId);
@@ -181,7 +179,7 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeSentryEvent(automationId, { sentryProject: "frontend" });
       const result = await sendEvent(event);
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       // Verify no run was created
       const runs = await fetchRuns(automationId);
@@ -207,7 +205,7 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeSentryEvent(automationId, { sentryProject: "backend" });
       const result = await sendEvent(event);
 
-      expect(result).toMatchObject({ outcome: "processed" });
+      expect(result.steered).toBe(0);
 
       // A run should be created (even though session creation fails)
       const runs = await fetchRuns(automationId);
@@ -236,7 +234,7 @@ describe("Scheduler event handling (integration)", () => {
 
       // First event — should create a run
       const result1 = await sendEvent(event);
-      expect(result1).toMatchObject({ outcome: "processed" });
+      expect(result1.steered).toBe(0);
 
       const runs1 = await fetchRuns(automationId);
       expect(runs1).toHaveLength(1);
@@ -249,7 +247,7 @@ describe("Scheduler event handling (integration)", () => {
         ...event,
         concurrencyKey: `sentry_issue:redelivery-${Date.now()}`,
       });
-      expect(result2).toEqual({ outcome: "processed", triggered: 0, skipped: 1, steered: 0 });
+      expect(result2).toEqual({ triggered: 0, skipped: 1, steered: 0 });
 
       const runs2 = await fetchRuns(automationId);
       expect(runs2).toHaveLength(1);
@@ -310,7 +308,7 @@ describe("Scheduler event handling (integration)", () => {
       });
       const result = await sendEvent(event);
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
 
       // Only the original run exists; the skip is a childless invocation.
       const runs = await fetchRuns(automationId);
@@ -357,7 +355,7 @@ describe("Scheduler event handling (integration)", () => {
       });
       const result = await sendEvent(event);
 
-      expect(result).toMatchObject({ outcome: "processed" });
+      expect(result.steered).toBe(0);
       // A new run was created despite the unrelated active run.
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(2);
@@ -384,7 +382,7 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeSentryEvent(automationId);
       const result = await sendEvent(event);
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       // No runs created
       const runs = await fetchRuns(automationId);
@@ -408,7 +406,7 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeWebhookEvent(automationId);
       const result = await sendEvent(event);
 
-      expect(result).toEqual({ outcome: "processed", triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(0);

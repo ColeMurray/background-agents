@@ -84,10 +84,7 @@ async function handleAutomationWebhook(
   // 6. Normalize and process the event.
   const event = normalizeWebhookEvent(automationId, body, idempotencyKey);
   const result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
-  if (result.outcome === "invalid") return json({ ok: true, error: result.error }, 400);
-
-  const { outcome: _, ...summary } = result;
-  return json({ ok: true, ...summary });
+  return json({ ok: true, ...result });
 }
 
 export const automationWebhookRoute: Route = defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {

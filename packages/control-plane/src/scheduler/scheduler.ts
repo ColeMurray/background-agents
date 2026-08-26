@@ -9,11 +9,11 @@
  */
 
 import {
-  automationEventSchema,
   matchesConditions,
   conditionRegistry,
   buildSlackContextBlock,
   slackChannelLabel,
+  type AutomationEvent,
   type SlackAutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
@@ -151,24 +151,18 @@ function appendSlackSessionInstructions(prompt: string, instructions: string | u
   return instructions ? `${prompt}\n\n## Additional Instructions\n\n${instructions}` : prompt;
 }
 
-const manualTriggerBodySchema = z.object({
-  automationId: z.string().min(1),
-});
-
 const slackThreadContextResponseSchema = z.object({
   threadContext: z.string(),
 });
 
-const runCompleteBodySchema = z.object({
-  automationId: z.string(),
-  runId: z.string(),
-  sessionId: z.string(),
-  messageId: z.string().min(1),
-  success: z.boolean(),
-  error: z.string().optional(),
-});
-
-export type AutomationRunCompletion = z.infer<typeof runCompleteBodySchema>;
+export interface AutomationRunCompletion {
+  automationId: string;
+  runId: string;
+  sessionId: string;
+  messageId: string;
+  success: boolean;
+  error?: string;
+}
 
 export interface SchedulerTickResult {
   processed: number;
@@ -176,30 +170,19 @@ export interface SchedulerTickResult {
   failed: number;
 }
 
-export type SchedulerEventResult =
-  | { outcome: "processed"; triggered: number; skipped: number; steered: number }
-  | { outcome: "invalid"; error: "Invalid automation event" };
+export interface SchedulerEventResult {
+  triggered: number;
+  skipped: number;
+  steered: number;
+}
 
 export type SchedulerTriggerResult =
   | { outcome: "started"; invocationId: string; runs: AutomationRun[] }
-  | { outcome: "invalid"; error: "automationId required" }
   | { outcome: "not_found"; error: "Automation not found" }
   | { outcome: "blocked"; error: "An active run already exists" }
   | { outcome: "failed"; error: "Failed to trigger automation" };
 
-export type SchedulerRunCompleteResult =
-  | { outcome: "completed" }
-  | { outcome: "ignored" }
-  | {
-      outcome: "retryable_failure";
-      reason: "invalid_run_complete_callback";
-      error: "Invalid run-complete callback";
-    };
-
-export interface SchedulerHealthResult {
-  status: "healthy";
-  overdueCount: number;
-}
+export type SchedulerRunCompleteResult = { outcome: "completed" } | { outcome: "ignored" };
 
 interface StartInvocationParams {
   automation: AutomationRow;
@@ -867,13 +850,7 @@ export class Scheduler {
 
   // ─── Event handler ───────────────────────────────────────────────────────
 
-  async event(input: unknown): Promise<SchedulerEventResult> {
-    const parsedEvent = automationEventSchema.safeParse(input);
-    if (!parsedEvent.success) {
-      return { outcome: "invalid", error: "Invalid automation event" };
-    }
-
-    const event = parsedEvent.data;
+  async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
 
     // 1. Find matching automations
@@ -1034,17 +1011,12 @@ export class Scheduler {
       candidates: candidates.length,
     });
 
-    return { outcome: "processed", triggered, skipped, steered };
+    return { triggered, skipped, steered };
   }
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
-  async trigger(input: unknown): Promise<SchedulerTriggerResult> {
-    const parsedBody = manualTriggerBodySchema.safeParse(input);
-    if (!parsedBody.success) return { outcome: "invalid", error: "automationId required" };
-
-    const { automationId } = parsedBody.data;
-
+  async trigger(automationId: string): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
@@ -1086,18 +1058,7 @@ export class Scheduler {
 
   // ─── Run complete callback ───────────────────────────────────────────────
 
-  async runComplete(input: unknown): Promise<SchedulerRunCompleteResult> {
-    const parsedBody = runCompleteBodySchema.safeParse(input);
-    if (!parsedBody.success) {
-      return {
-        outcome: "retryable_failure",
-        reason: "invalid_run_complete_callback",
-        error: "Invalid run-complete callback",
-      };
-    }
-
-    const body = parsedBody.data;
-
+  async runComplete(body: AutomationRunCompletion): Promise<SchedulerRunCompleteResult> {
     const store = new AutomationStore(this.db);
 
     const run = await store.getRunById(body.automationId, body.runId);
@@ -1325,15 +1286,6 @@ export class Scheduler {
         error: e instanceof Error ? e : new Error(String(e)),
       });
     }
-  }
-
-  // ─── Health check ────────────────────────────────────────────────────────
-
-  async health(): Promise<SchedulerHealthResult> {
-    const store = new AutomationStore(this.db);
-    const overdueCount = await store.countOverdue(Date.now());
-
-    return { status: "healthy", overdueCount };
   }
 
   // ─── Session creation ────────────────────────────────────────────────────
