@@ -88,7 +88,7 @@ import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
 import { MessagesHandler } from "./http/handlers/messages.handler";
-import { createChildSessionsHandler } from "./http/handlers/child-sessions.handler";
+import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
 import { createSandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
@@ -494,18 +494,18 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Tier 8 — internal HTTP handlers.
   const messagesHandler = new MessagesHandler(messageService);
 
-  const childSessionsHandler = createChildSessionsHandler({
+  const childSessionsHandler = new ChildSessionsHandler(
     messageRepository,
     eventRepository,
     participantRepository,
     artifactRepository,
-    getSession: () => sessionCoreRepository.getSession(),
-    getSandbox: () => sandboxRepository.getSandbox(),
-    getPublicSessionId: (sessionRow) => resolvePublicSessionId(sessionRow, durableObjectId),
-    parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
+    sessionCoreRepository,
+    sandboxRepository,
+    durableObjectId,
+    log,
     messenger,
-    messageService,
-  });
+    messageService
+  );
 
   const sandboxHandler = createSandboxHandler({
     messageRepository,
