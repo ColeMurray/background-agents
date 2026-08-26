@@ -208,3 +208,22 @@ def test_formats_branches_on_creation(tmp_path: Path) -> None:
     assert "created successfully" in output
     assert "feature-x" in output
     assert "release-1.0" in output
+
+
+def test_formats_schema_valid_success_without_optional_metadata(tmp_path: Path) -> None:
+    output = _format_success(
+        tmp_path,
+        json.dumps(
+            {
+                "prNumber": 42,
+                "prUrl": "https://example.test/pull/42",
+                "updated": False,
+            }
+        ),
+    )
+
+    envelope = json.loads(output)
+    assert envelope["kind"] == "created"
+    assert envelope["state"] == "open"
+    assert "headBranch" not in envelope
+    assert "baseBranch" not in envelope

@@ -44,4 +44,18 @@ describe("createPullRequestToolEnvelopeSchema", () => {
       }).success
     ).toBe(false);
   });
+
+  it("defaults state and accepts omitted branch metadata", () => {
+    const result = createPullRequestToolEnvelopeSchema.safeParse({
+      kind: "created",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/web/pull/42",
+      agentMessage: "Pull request ready.",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({ kind: "created", state: "open" });
+    }
+  });
 });

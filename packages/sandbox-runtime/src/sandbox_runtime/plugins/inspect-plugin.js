@@ -96,6 +96,7 @@ export function resolveRepositoryTarget(repo, repositories) {
 // This sandbox-shipped file cannot import the workspace package at runtime.
 // Keep these envelopes symmetric with @open-inspect/shared/pull-request-tool.
 export function formatPullRequestSuccess(result) {
+  const state = result?.state === "draft" ? "draft" : "open";
   const branches =
     result?.headBranch && result?.baseBranch
       ? ` (${result.headBranch} -> ${result.baseBranch})`
@@ -105,7 +106,7 @@ export function formatPullRequestSuccess(result) {
     agentMessage = `Pull request updated with your latest commits.\n\nPR #${result.prNumber}${branches}: ${result.prUrl}`;
   } else {
     const status =
-      result?.state === "draft"
+      state === "draft"
         ? "The pull request is in draft mode."
         : "The pull request is now ready for review.";
     agentMessage = `Pull request created successfully!\n\nPR #${result.prNumber}${branches}: ${result.prUrl}\n\n${status}`;
@@ -115,7 +116,7 @@ export function formatPullRequestSuccess(result) {
     kind: result.updated ? "updated" : "created",
     prNumber: result.prNumber,
     prUrl: result.prUrl,
-    state: result.state,
+    state,
     headBranch: result.headBranch,
     baseBranch: result.baseBranch,
     agentMessage,

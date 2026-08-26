@@ -79,6 +79,25 @@ describe("CreatePullRequestEvent", () => {
     );
   });
 
+  it("keeps the PR action when optional success metadata is absent", () => {
+    renderExpanded({
+      output: JSON.stringify({
+        kind: "created",
+        prNumber: 42,
+        prUrl: "https://github.com/acme/web/pull/42",
+        agentMessage: "Pull request created successfully.",
+      }),
+    });
+
+    expect(screen.getByText("Opened pull request #42")).toBeInTheDocument();
+    expect(screen.getByText("Open")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open pr/i })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/web/pull/42"
+    );
+    expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+  });
+
   it("does not invent sections for a freeform body", () => {
     renderExpanded({
       args: {
