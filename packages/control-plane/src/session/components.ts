@@ -94,6 +94,8 @@ import { SessionEventStream } from "./event-stream";
 import { AutofixHandler } from "./http/handlers/autofix.handler";
 import { MessagesHandler } from "./http/handlers/messages.handler";
 import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
+import { ChildSummaryHandler } from "./http/handlers/child-summary.handler";
+import { SessionInitHandler } from "./http/handlers/session-init.handler";
 import { SandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
@@ -528,15 +530,19 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const childSessionsHandler = new ChildSessionsHandler(
     messageRepository,
-    eventRepository,
     participantRepository,
-    artifactRepository,
     sessionCoreRepository,
-    sandboxRepository,
-    durableObjectId,
-    log,
     messenger,
     messageService
+  );
+  const childSummaryHandler = new ChildSummaryHandler(
+    sessionCoreRepository,
+    sandboxRepository,
+    messageRepository,
+    eventRepository,
+    artifactRepository,
+    durableObjectId,
+    log
   );
 
   // Per-request adapters: each token/credential refresh constructs its
@@ -584,6 +590,18 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const wsTokenHandler = new WsTokenHandler(participantRepository, generateId, hashToken);
 
   const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
+  const sessionInitHandler = new SessionInitHandler(
+    sessionCoreRepository,
+    sandboxRepository,
+    participantRepository,
+    durableObjectId,
+    () =>
+      backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
+        name: "sandbox.warm",
+      }),
+    (token) => encryptToken(token, tokenEncryptionKey),
+    generateId
+  );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
     sessionCoreRepository,
     sandboxRepository,
@@ -593,16 +611,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     titleService,
     lifecycleWsManager,
     durableObjectId,
-    tokenEncryptionKey,
-    () =>
-      backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
-        name: "sandbox.warm",
-      }),
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
-    },
-    encryptToken,
-    generateId
+    }
   );
 
   const prCreationClaims = new PullRequestCreationClaims();
@@ -678,7 +689,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Internal HTTP route table (transport wiring only).
   const routes = createSessionInternalRoutes({
-    init: (request, _url, requestLog) => sessionLifecycleHandler.init(request, requestLog),
+    init: (request, _url, requestLog) => sessionInitHandler.init(request, requestLog),
     state: () => sessionLifecycleHandler.getState(),
     snapshot: () => snapshotReader.handleSnapshot(),
     sandboxAccess: () => accessReader.handleSandboxAccess(),
@@ -717,7 +728,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),
     spawnContext: () => childSessionsHandler.getSpawnContext(),
     activePromptAuthor: () => childSessionsHandler.getActivePromptAuthor(),
-    childSummary: (_request, url) => childSessionsHandler.getChildSummary(url),
+    childSummary: (_request, url) => childSummaryHandler.getChildSummary(url),
     parentPrompt: (request) => childSessionsHandler.parentPrompt(request),
     cancel: () => sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => childSessionsHandler.childSessionUpdate(request),

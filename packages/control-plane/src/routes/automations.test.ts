@@ -800,6 +800,46 @@ describe("automation route handlers", () => {
       });
     });
 
+    it("rejects conditions that do not apply to the GitHub event type", async () => {
+      const response = await callRoute("POST", "/automations", {
+        body: {
+          name: "PR workflow filter",
+          instructions: "Review the pull request.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+          triggerConfig: {
+            conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+          },
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Condition "workflow_name" does not apply to GitHub event pull_request.opened',
+      });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [undefined, "eventType is required for github_event triggers"],
+      ["workflow_run.typo", "Unsupported eventType for github_event: workflow_run.typo"],
+    ])("rejects an invalid GitHub event type without conditions", async (eventType, message) => {
+      const response = await callRoute("POST", "/automations", {
+        body: {
+          name: "GitHub watcher",
+          instructions: "Inspect the event.",
+          triggerType: "github_event",
+          eventType,
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: message });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
     it("stores the user principal's canonical id without consulting the user store", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
@@ -1044,6 +1084,173 @@ describe("automation route handlers", () => {
       await expect(response.json()).resolves.toMatchObject({
         error: expect.stringContaining("triggerConfig.conditions"),
       });
+    });
+
+    it("rejects an event type change that would leave incompatible conditions", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "workflow_run.completed",
+        trigger_config: JSON.stringify({
+          conditions: [{ type: "workflow_name", operator: "eq", value: "CI" }],
+        }),
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { eventType: "pull_request.opened" },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Condition "workflow_name" does not apply to GitHub event pull_request.opened',
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
+    it.each([null, "", "   "])("rejects an invalid explicit event type: %j", async (eventType) => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "workflow_run.completed",
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { eventType },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "eventType must be a non-empty string",
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unsupported explicit event type", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "workflow_run.completed",
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { eventType: "workflow_run.typo" },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Unsupported eventType for github_event: workflow_run.typo",
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
+    it("allows an unchanged legacy condition on an unrelated edit", async () => {
+      const legacyTriggerConfig = {
+        conditions: [{ type: "path_glob", operator: "any_match", value: ["src/**"] }],
+      } as const;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "pull_request.opened",
+        trigger_config: JSON.stringify(legacyTriggerConfig),
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { name: "Updated", triggerConfig: legacyTriggerConfig },
+      });
+
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({
+          name: "Updated",
+          trigger_config: JSON.stringify(legacyTriggerConfig),
+        })
+      );
+    });
+
+    it("allows resubmitting the same event type without a legacy trigger config", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "pull_request.opened",
+        trigger_config: JSON.stringify({
+          conditions: [{ type: "path_glob", operator: "any_match", value: ["src/**"] }],
+        }),
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { eventType: "pull_request.opened" },
+      });
+
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith("auto-1", {
+        event_type: "pull_request.opened",
+      });
+    });
+
+    it("rejects modifying a grandfathered incompatible condition", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "pull_request.opened",
+        trigger_config: JSON.stringify({
+          conditions: [{ type: "path_glob", operator: "any_match", value: ["src/**"] }],
+        }),
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          triggerConfig: {
+            conditions: [{ type: "path_glob", operator: "any_match", value: ["packages/**"] }],
+          },
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Condition "path_glob" does not apply to github triggers',
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rejects appending a duplicate grandfathered condition", async () => {
+      const legacyCondition = {
+        type: "path_glob",
+        operator: "any_match",
+        value: ["src/**"],
+      } as const;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "pull_request.opened",
+        trigger_config: JSON.stringify({ conditions: [legacyCondition] }),
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          triggerConfig: { conditions: [legacyCondition, legacyCondition] },
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Condition "path_glob" does not apply to github triggers',
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
     });
 
     it("updates reasoning effort when valid for the selected model", async () => {

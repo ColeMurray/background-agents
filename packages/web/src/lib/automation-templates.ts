@@ -217,7 +217,7 @@ export const automationTemplates: AutomationTemplate[] = [
       eventType: "check_suite.completed",
       // Only fire on failed suites — avoids spawning a run on every green build.
       triggerConfig: {
-        conditions: [{ type: "check_conclusion", operator: "eq", value: "failure" }],
+        conditions: [{ type: "conclusion", operator: "eq", value: "failure" }],
       },
       instructions:
         "A CI check suite failed on this repository; the failing branch and commit are shown above.\n\n" +

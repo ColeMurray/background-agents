@@ -4,8 +4,11 @@
 
 import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
+  triggerConfigSchema,
   validateConditions,
   conditionRegistry,
+  isGitHubConditionSupported,
+  triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
@@ -106,6 +109,8 @@ function formatAutomationRequestError(parseError: z.ZodError, rawBody: unknown):
     return `repositories${index}: ${issue.message}`;
   }
 
+  if (field === "eventType") return "eventType must be a non-empty string";
+
   if (field === "triggerConfig") {
     if (issue.path.length === 2 && issue.path[1] === "conditions") {
       return "triggerConfig.conditions must be an array";
@@ -135,6 +140,68 @@ function formatAutomationRequestError(parseError: z.ZodError, rawBody: unknown):
   }
 
   return "Invalid automation request";
+}
+
+interface TriggerConditionError {
+  condition: TriggerConfig["conditions"][number];
+  code: "event_incompatible" | "invalid";
+  message: string;
+}
+
+function getTriggerConditionErrors(
+  triggerType: AutomationTriggerType,
+  triggerConfig: TriggerConfig,
+  eventType?: string
+): TriggerConditionError[] {
+  const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
+  if (!source) return [];
+  return triggerConfig.conditions.flatMap((condition) => {
+    const code =
+      source === "github" &&
+      eventType !== undefined &&
+      !isGitHubConditionSupported(eventType, condition.type)
+        ? "event_incompatible"
+        : "invalid";
+    return validateConditions([condition], source, conditionRegistry, eventType).map((message) => ({
+      condition,
+      code,
+      message,
+    }));
+  });
+}
+
+function consumeCondition(
+  triggerConfig: TriggerConfig,
+  condition: TriggerConditionError["condition"],
+  consumedIndexes: Set<number>
+): boolean {
+  const serialized = JSON.stringify(condition);
+  const index = triggerConfig.conditions.findIndex(
+    (existing, candidateIndex) =>
+      !consumedIndexes.has(candidateIndex) && JSON.stringify(existing) === serialized
+  );
+  if (index === -1) return false;
+  consumedIndexes.add(index);
+  return true;
+}
+
+function getTriggerEventTypeError(
+  triggerType: AutomationTriggerType,
+  eventType: unknown
+): string | null {
+  if (eventType !== undefined && (typeof eventType !== "string" || eventType.trim().length === 0)) {
+    return "eventType must be a non-empty string";
+  }
+
+  const source = triggerSources.find((candidate) => candidate.triggerType === triggerType);
+  if (!source?.supportsEventTypes) return null;
+  if (typeof eventType !== "string" || eventType.trim().length === 0) {
+    return `eventType is required for ${triggerType} triggers`;
+  }
+  if (!source.eventTypes.some((candidate) => candidate.eventType === eventType)) {
+    return `Unsupported eventType for ${triggerType}: ${eventType}`;
+  }
+  return null;
 }
 
 /** Warn if next run is more than 31 days away. */
@@ -521,23 +588,18 @@ async function handleCreateAutomation(
     }
   }
 
-  // Event-type validation for sentry triggers
-  if (triggerType === "sentry" && !body.eventType) {
-    return error("eventType is required for sentry triggers", 400);
-  }
+  const eventTypeError = getTriggerEventTypeError(triggerType, body.eventType);
+  if (eventTypeError) return error(eventTypeError, 400);
 
   // Validate conditions
-  if (body.triggerConfig?.conditions) {
-    const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
-    if (source) {
-      const conditionErrors = validateConditions(
-        body.triggerConfig.conditions,
-        source,
-        conditionRegistry
-      );
-      if (conditionErrors.length > 0) {
-        return error(conditionErrors.join("; "), 400);
-      }
+  if (body.triggerConfig) {
+    const conditionErrors = getTriggerConditionErrors(
+      triggerType,
+      body.triggerConfig,
+      body.eventType
+    );
+    if (conditionErrors.length > 0) {
+      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
     }
   }
 
@@ -856,38 +918,71 @@ async function handleUpdateAutomation(
     updateFields.event_type = body.eventType;
   }
 
-  // Validate trigger config (conditions) — only for non-schedule types
-  if (body.triggerConfig !== undefined) {
-    if (body.triggerConfig === null) {
-      // A slack_event's trigger_config holds its required scoping (channel +
-      // text_match) and the watched-channel index is derived from it. Clearing
-      // it would leave the automation enabled but untriggerable, so reject null
-      // — pause or delete instead. (Other sources may clear conditions to a
-      // match-all, so null stays allowed for them.)
-      if (existing.trigger_type === "slack_event") {
-        return error(
-          "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
-          400
-        );
-      }
-    } else {
-      if (existing.trigger_type === "slack_event") {
-        const slackError = validateSlackTriggerConfig(body.triggerConfig);
-        if (slackError) return error(slackError, 400);
-      }
-      if (body.triggerConfig.conditions) {
-        const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type as AutomationTriggerType];
-        if (source) {
-          const conditionErrors = validateConditions(
-            body.triggerConfig.conditions,
-            source,
-            conditionRegistry
-          );
-          if (conditionErrors.length > 0) {
-            return error(conditionErrors.join("; "), 400);
-          }
+  const effectiveEventType =
+    body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
+  const eventTypeError = getTriggerEventTypeError(
+    existing.trigger_type as AutomationTriggerType,
+    effectiveEventType
+  );
+  if (eventTypeError) return error(eventTypeError, 400);
+
+  let triggerConfigToValidate = body.triggerConfig;
+  if (
+    body.eventType !== undefined &&
+    triggerConfigToValidate === undefined &&
+    existing.trigger_config
+  ) {
+    // This column was written through parseTriggerConfig, so a failure here is a
+    // corrupt row, not user input — parseTriggerConfig's per-condition messages
+    // would have no one to help.
+    try {
+      triggerConfigToValidate = triggerConfigSchema.parse(JSON.parse(existing.trigger_config));
+    } catch {
+      return error("Stored triggerConfig is invalid", 500);
+    }
+  }
+
+  // A slack_event's trigger_config holds its required channel scope. Clearing it
+  // would leave the automation enabled but untriggerable.
+  if (body.triggerConfig === null && existing.trigger_type === "slack_event") {
+    return error(
+      "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
+      400
+    );
+  }
+  if (body.triggerConfig && existing.trigger_type === "slack_event") {
+    const slackError = validateSlackTriggerConfig(body.triggerConfig);
+    if (slackError) return error(slackError, 400);
+  }
+
+  if (triggerConfigToValidate) {
+    let conditionErrors = getTriggerConditionErrors(
+      existing.trigger_type as AutomationTriggerType,
+      triggerConfigToValidate,
+      effectiveEventType
+    );
+
+    // Existing source-wide GitHub conditions predate event-scoped validation.
+    // Preserve an unchanged condition on unrelated edits, but validate strictly
+    // when its value or the selected event changes.
+    const eventTypeChanged = body.eventType !== undefined && body.eventType !== existing.event_type;
+    if (existing.trigger_type === "github_event" && !eventTypeChanged && existing.trigger_config) {
+      try {
+        const parsedExisting = triggerConfigSchema.safeParse(JSON.parse(existing.trigger_config));
+        if (parsedExisting.success) {
+          const consumedIndexes = new Set<number>();
+          conditionErrors = conditionErrors.filter(({ code, condition }) => {
+            if (code !== "event_incompatible") return true;
+            return !consumeCondition(parsedExisting.data, condition, consumedIndexes);
+          });
         }
+      } catch {
+        // A valid replacement should be able to repair malformed stored JSON.
       }
+    }
+
+    if (conditionErrors.length > 0) {
+      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
     }
   }
 
