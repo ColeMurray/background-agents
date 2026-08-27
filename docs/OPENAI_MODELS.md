@@ -66,6 +66,58 @@ choice for future runs.
 
 ---
 
+## Spilling over before the subscription runs out
+
+A ChatGPT subscription that hits its Codex quota fails the session outright:
+`Execution failed: The usage limit has been reached...`. Two optional secrets let a deployment keep
+working on a per-token key, and cap how much of the subscription sandboxes may take in the first
+place:
+
+| Secret Name                       | Value                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `OPENAI_API_KEY_FALLBACK`         | A platform API key, used only as a spillover                              |
+| `OPENAI_SUBSCRIPTION_MAX_PERCENT` | Optional share of a rate-limit window sandboxes may consume (default 100) |
+
+`OPENAI_API_KEY_FALLBACK` is deliberately a separate name from `OPENAI_API_KEY`: the latter selects
+metered billing for the whole session and is stripped from sessions routed to a subscription, while
+this one rides along unused until the subscription cannot answer. Set
+`OPENAI_SUBSCRIPTION_MAX_PERCENT` to `80` to reserve the last fifth of each window for whoever else
+uses that ChatGPT account.
+
+A sandbox sends OpenAI traffic to the subscription until one of these happens, then latches to a
+successful fallback path for the rest of its life:
+
+- when `OPENAI_SUBSCRIPTION_MAX_PERCENT` is below `100`, usage is already at or above that ceiling
+  before the first turn. The percentage comes from `GET /backend-api/wham/usage`, which reports both
+  windows without consuming either
+- a Codex response reports either window at or above the ceiling. On a successful response the
+  in-flight reply is kept and only the next request moves over, because a started stream cannot be
+  replayed
+- Codex answers `429` with a quota signal: a recognized primary/secondary
+  `x-codex-rate-limit-reached-type`, a specific usage-limit-reached message, or a window at or above
+  the ceiling. That request is retried on the fallback key immediately
+- the control plane reports that the subscription credential is unusable or requires reconnection.
+  Sandbox-auth, transient broker, network, timeout, configuration, and storage failures do not spend
+  the fallback key
+
+A plain `429` with no quota signal is passed through untouched, so short-window throttling does not
+spend money. Codex tracks a short (roughly 5-hour) and a weekly window, and the higher usage of the
+two decides. An unparseable ceiling is ignored with a log line and treated as 100. If the usage
+probe fails, the sandbox stays on the subscription and relies on response headers instead.
+
+`gpt-5.3-codex-spark` is subscription-only, so its platform fallback uses `gpt-5.3-codex`. Other
+allowed models are sent unchanged. If the platform rejects a fallback request, the latch is cleared
+and the next turn retries the subscription instead of remaining on a permanently failing paid path.
+
+Every switch is logged in the sandbox logs as
+`[codex-auth-plugin] spilling OpenAI traffic over to OPENAI_API_KEY_FALLBACK: <reason>`.
+
+One caveat: after a successful spillover, the latch lasts as long as the sandbox even if the
+subscription window resets under it. OpenCode also reports OpenAI token costs as `0` because the
+Codex proxy zeroes them at startup.
+
+---
+
 ## How It Works
 
 The OpenAI device authorization result is encrypted with `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` in the
@@ -102,6 +154,13 @@ Open-Inspect.
 
 Confirm that the selected/default OpenAI account is active and the account is verified. If the
 session explicitly uses API-key mode, confirm `OPENAI_API_KEY` is available in its secret scope.
+
+### "The usage limit has been reached"
+
+The ChatGPT subscription hit its Codex quota. Wait for the window to reset, switch the session to
+another provider's model, or configure a spillover key
+([Spilling over](#spilling-over-before-the-subscription-runs-out)) so sessions continue on metered
+billing.
 
 ### "Token refresh failed" errors
 
