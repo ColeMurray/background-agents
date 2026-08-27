@@ -5,7 +5,7 @@ import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/t
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
-import { BoxIcon, RightSidebarIcon } from "@/components/ui/icons";
+import { BoxIcon, RightSidebarIcon, RightSidebarOpenIcon } from "@/components/ui/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
@@ -242,7 +242,11 @@ export function SessionHeader({
               aria-controls="session-details-sidebar"
               aria-expanded={isDesktopDetailsOpen}
             >
-              <RightSidebarIcon className="h-4 w-4" />
+              {isDesktopDetailsOpen ? (
+                <RightSidebarOpenIcon className="h-4 w-4" />
+              ) : (
+                <RightSidebarIcon className="h-4 w-4" />
+              )}
             </button>
           )}
         </div>
