@@ -1,3 +1,12 @@
+export class ProviderTokenBrokerError extends Error {
+  constructor(message, { kind, status = null }) {
+    super(message);
+    this.name = "ProviderTokenBrokerError";
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_EXPIRES_IN_SECONDS = 3600;
@@ -21,7 +30,9 @@ function validateBrokerResponse(result, providerLabel) {
         !Number.isFinite(result.expiresIn) ||
         result.expiresIn <= 0))
   ) {
-    throw new Error(`Invalid ${providerLabel} token broker response`);
+    throw new ProviderTokenBrokerError(`Invalid ${providerLabel} token broker response`, {
+      kind: "invalid_response",
+    });
   }
 }
 
@@ -39,7 +50,9 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
     const authToken = process.env.SANDBOX_AUTH_TOKEN;
     const sessionId = getSessionId();
     if (!controlPlaneUrl || !authToken || !sessionId) {
-      throw new Error(`Missing environment for ${providerLabel} token refresh`);
+      throw new ProviderTokenBrokerError(`Missing environment for ${providerLabel} token refresh`, {
+        kind: "configuration",
+      });
     }
 
     const response = await fetch(
@@ -52,7 +65,10 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
     );
     if (!response.ok) {
       const body = (await response.text()).slice(0, 200);
-      throw new Error(`${providerLabel} token refresh failed (${response.status}): ${body}`);
+      throw new ProviderTokenBrokerError(
+        `${providerLabel} token refresh failed (${response.status}): ${body}`,
+        { kind: "http", status: response.status }
+      );
     }
 
     const result = await response.json();
