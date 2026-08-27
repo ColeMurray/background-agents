@@ -132,6 +132,12 @@ variable "new_sqlite_classes" {
   default     = []
 }
 
+variable "deleted_classes" {
+  description = "DO class names deleted in this migration step. Requires a new migration tag; surviving bindings remain enabled."
+  type        = list(string)
+  default     = []
+}
+
 variable "cron_triggers" {
   description = "List of cron expressions for the worker's scheduled() handler"
   type        = list(string)

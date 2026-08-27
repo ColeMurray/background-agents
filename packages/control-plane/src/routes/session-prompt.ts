@@ -159,14 +159,15 @@ async function handleSessionPrompt(
 
   const store = new SessionIndexStore(ctx.db);
   ctx.executionCtx.submit(
-    store.touchUpdatedAt(sessionId).catch((error) => {
-      logger.error("session_index.touch_updated_at.background_error", {
-        session_id: sessionId,
-        trace_id: ctx.trace_id,
-        request_id: ctx.request_id,
-        error,
-      });
-    }),
+    () =>
+      store.touchUpdatedAt(sessionId).catch((error) => {
+        logger.error("session_index.touch_updated_at.background_error", {
+          session_id: sessionId,
+          trace_id: ctx.trace_id,
+          request_id: ctx.request_id,
+          error,
+        });
+      }),
     {
       name: "session_index.touch_updated_at",
       context: { session_id: sessionId, trace_id: ctx.trace_id, request_id: ctx.request_id },

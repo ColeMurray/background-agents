@@ -105,6 +105,9 @@ export interface MessageRow {
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
   client_request_id: string | null;
   request_fingerprint: string | null;
+  autofix_feedback_key: string | null;
+  autofix_pr_key: string | null;
+  origin_context: string | null;
   status: MessageStatus;
   error_message: string | null;
   stop_confirmation_deadline: number | null;
@@ -150,6 +153,8 @@ export interface SandboxRow {
   modal_object_id: string | null; // Legacy column: provider object ID (Modal object ID or Daytona handle)
   snapshot_id: string | null;
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
+  snapshot_runtime_version: string | null; // SANDBOX_VERSION that produced snapshot_image_id
+  runtime_version: string | null; // SANDBOX_VERSION reported by the running sandbox
   auth_token: string | null;
   auth_token_hash: string | null; // SHA-256 hash of sandbox auth token
   status: SandboxStatus;

@@ -44,7 +44,8 @@ export type IssueStartTransitionResult =
 /** Move an issue forward to the team's first started workflow state. */
 export async function transitionIssueToStarted(
   client: LinearApiClient,
-  issueId: string
+  issueId: string,
+  signal?: AbortSignal
 ): Promise<IssueStartTransitionResult> {
   const contextResponse = transitionContextSchema.parse(
     await linearGraphQL(
@@ -61,7 +62,8 @@ export async function transitionIssueToStarted(
         }
       }
     `,
-      { issueId }
+      { issueId },
+      signal
     )
   );
 
@@ -94,7 +96,8 @@ export async function transitionIssueToStarted(
         }
       }
     `,
-      { issueId, stateId: target.id }
+      { issueId, stateId: target.id },
+      signal
     )
   );
 

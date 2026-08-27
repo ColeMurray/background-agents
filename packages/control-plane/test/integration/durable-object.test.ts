@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { MIGRATIONS } from "../../src/session/schema";
 
@@ -67,8 +68,8 @@ describe("SessionDO Durable Object", () => {
       }),
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      const tables = instance.ctx.storage.sql
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      const tables = state.storage.sql
         .exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .toArray();
 
@@ -99,8 +100,8 @@ describe("SessionDO Durable Object", () => {
       }),
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      const rows = instance.ctx.storage.sql
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      const rows = state.storage.sql
         .exec("SELECT id FROM _schema_migrations ORDER BY id")
         .toArray() as Array<{ id: number }>;
 

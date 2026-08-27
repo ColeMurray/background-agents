@@ -12,20 +12,14 @@ import { environmentScope, getRow, seedEnvironment } from "./image-build-helpers
 describe("image build scheduler integration", () => {
   beforeEach(cleanD1Tables);
 
-  it("routes the image-build cron to maintenance instead of the automation Durable Object", async () => {
-    const schedulerNamespace = {
-      idFromName: vi.fn(() => {
-        throw new Error("automation scheduler should not run");
-      }),
-    };
-
-    await worker.scheduled(
-      { cron: IMAGE_BUILD_SCHEDULER_CRON } as ScheduledEvent,
-      { DB: env.DB, SCHEDULER: schedulerNamespace } as unknown as Env,
-      createExecutionContext()
-    );
-
-    expect(schedulerNamespace.idFromName).not.toHaveBeenCalled();
+  it("routes the image-build cron to maintenance instead of the automation scheduler", async () => {
+    await expect(
+      worker.scheduled(
+        { cron: IMAGE_BUILD_SCHEDULER_CRON } as ScheduledEvent,
+        { DB: env.DB } as unknown as Env,
+        createExecutionContext()
+      )
+    ).resolves.toBeUndefined();
   });
 
   it("republishes an old accepted completion without stale-failing it in the same tick", async () => {

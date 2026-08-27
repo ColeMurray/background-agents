@@ -29,6 +29,7 @@ function createEnv() {
   return {
     fetch,
     idFromName,
+    statement,
     env: {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
@@ -65,7 +66,14 @@ describe("SCM credentials router provider gate", () => {
   );
 
   it("allows a matching sandbox token to reach the xAI broker", async () => {
-    const { env, fetch } = createEnv();
+    const { env, fetch, statement } = createEnv();
+    statement.first.mockResolvedValue({
+      provider: "xai",
+      auth_mode: "legacy_scoped_oauth",
+      provider_account_id: null,
+      selection_source: "legacy_migration",
+      inherited_from_session_id: null,
+    } as never);
     const response = await handleRequest(
       new Request("https://test.local/sessions/session-1/xai-token-refresh", {
         method: "POST",

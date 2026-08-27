@@ -2,13 +2,14 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
-import type {
-  GitHubBotSettings,
-  GitHubGlobalConfig,
+import {
+  GITHUB_AUTOFIX_DEFAULTS,
+  type GitHubBotSettings,
+  type GitHubGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
@@ -139,6 +140,78 @@ afterEach(() => {
 });
 
 describe("GitHubIntegrationSettings", () => {
+  it("renders the default-off Autofix block and persists one complete global policy", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: { defaults: { autoReviewOnOpen: true } } });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    expect(screen.getByRole("switch", { name: "Enable Autofix" })).toHaveAttribute(
+      "aria-checked",
+      "false"
+    );
+    expect(screen.getByRole("switch", { name: "Submitted reviews" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+    expect(
+      screen.getByText(/reviews from the configured Open Inspect App, regardless of workflow/i)
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("switch", { name: "Enable Autofix" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: true,
+              autofix: {
+                enabled: true,
+                reviewsEnabled: true,
+                prCommentsEnabled: true,
+                openInspectReviewsEnabled: true,
+                allowedReviewBots: [],
+                maxAttemptsPerPrPer24Hours: 10,
+              },
+            },
+          },
+        }),
+      })
+    );
+  });
+
+  it("accepts more than one exact review-bot username", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: { defaults: { autoReviewOnOpen: true } } });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    const input = screen.getByRole("textbox", { name: "Exact third-party review bots" });
+    fireEvent.change(input, { target: { value: "coderabbitai[bot], renovate[bot]" } });
+    expect(input).toHaveValue("coderabbitai[bot], renovate[bot]");
+    expect(screen.getByText(/bot-authored feedback is untrusted input/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Attempts per PR per 24 hours" }), {
+      target: { value: "20" },
+    });
+    expect(screen.getByText(/higher attempt caps increase autonomous work/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        body: expect.stringContaining('"allowedReviewBots":["coderabbitai[bot]","renovate[bot]"]'),
+      })
+    );
+  });
+
   it("renders and preserves global model and reasoning defaults", async () => {
     const user = userEvent.setup();
     setupSWR({
@@ -147,6 +220,7 @@ describe("GitHubIntegrationSettings", () => {
           autoReviewOnOpen: true,
           model: "anthropic/claude-sonnet-4-6",
           reasoningEffort: "high",
+          autofix: { enabled: true, reviewsEnabled: false },
         },
       },
     });
@@ -176,6 +250,11 @@ describe("GitHubIntegrationSettings", () => {
               autoReviewOnOpen: false,
               model: "anthropic/claude-sonnet-4-6",
               reasoningEffort: "high",
+              autofix: {
+                ...GITHUB_AUTOFIX_DEFAULTS,
+                enabled: true,
+                reviewsEnabled: false,
+              },
             },
           },
         }),
@@ -243,7 +322,7 @@ describe("GitHubIntegrationSettings", () => {
     const user = userEvent.setup();
     setupSWR({
       global: { defaults: { autoReviewOnOpen: false } },
-      repos: [{ repo: "acme/web", settings: {} }],
+      repos: [{ repo: "acme/web", settings: { autofix: { enabled: true } } }],
       availableRepos: [repo("acme/web")],
     });
     fetchMock.mockResolvedValue(okJson({}));
@@ -264,7 +343,12 @@ describe("GitHubIntegrationSettings", () => {
       "/api/integration-settings/github/repos/acme/web",
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ settings: { autoReviewOnOpen: false } }),
+        body: JSON.stringify({
+          settings: {
+            autoReviewOnOpen: false,
+            autofix: { ...GITHUB_AUTOFIX_DEFAULTS, enabled: true },
+          },
+        }),
       })
     );
   });

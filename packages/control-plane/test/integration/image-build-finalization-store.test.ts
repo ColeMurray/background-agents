@@ -243,10 +243,14 @@ describe("ImageBuildStore finalization state", () => {
       completionHash,
     };
 
-    await expect(finalizer.process(job, { request_id: "queue-failed-1" })).resolves.toEqual({
+    await expect(
+      finalizer.process(job, { trace_id: "trace-failed-1", request_id: "queue-failed-1" })
+    ).resolves.toEqual({
       type: "completed",
     });
-    await expect(finalizer.process(job, { request_id: "queue-failed-2" })).resolves.toEqual({
+    await expect(
+      finalizer.process(job, { trace_id: "trace-failed-2", request_id: "queue-failed-2" })
+    ).resolves.toEqual({
       type: "completed",
     });
 

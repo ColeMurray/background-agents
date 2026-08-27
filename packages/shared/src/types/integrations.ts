@@ -18,6 +18,42 @@ export interface IntegrationEntry<
 }
 
 /** Overridable behavior settings for the GitHub bot. Used at both global (defaults) and per-repo (overrides) levels. */
+export interface GitHubAutofixSettings {
+  enabled?: boolean;
+  reviewsEnabled?: boolean;
+  prCommentsEnabled?: boolean;
+  openInspectReviewsEnabled?: boolean;
+  allowedReviewBots?: string[];
+  maxAttemptsPerPrPer24Hours?: number;
+}
+
+export interface ResolvedGitHubAutofixSettings {
+  enabled: boolean;
+  reviewsEnabled: boolean;
+  prCommentsEnabled: boolean;
+  openInspectReviewsEnabled: boolean;
+  allowedReviewBots: string[];
+  maxAttemptsPerPrPer24Hours: number;
+}
+
+export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
+  enabled: false,
+  reviewsEnabled: true,
+  prCommentsEnabled: true,
+  openInspectReviewsEnabled: true,
+  allowedReviewBots: [],
+  maxAttemptsPerPrPer24Hours: 10,
+};
+
+export const githubAutofixSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  reviewsEnabled: z.boolean().optional(),
+  prCommentsEnabled: z.boolean().optional(),
+  openInspectReviewsEnabled: z.boolean().optional(),
+  allowedReviewBots: z.array(z.string()).optional(),
+  maxAttemptsPerPrPer24Hours: z.number().optional(),
+});
+
 export const githubBotSettingsSchema = z.object({
   autoReviewOnOpen: z.boolean().optional(),
   model: z.string().optional(),
@@ -25,6 +61,7 @@ export const githubBotSettingsSchema = z.object({
   allowedTriggerUsers: z.array(z.string()).optional(),
   codeReviewInstructions: z.string().optional(),
   commentActionInstructions: z.string().optional(),
+  autofix: githubAutofixSettingsSchema.optional(),
 });
 
 export type GitHubBotSettings = z.infer<typeof githubBotSettingsSchema>;

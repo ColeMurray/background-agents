@@ -30,6 +30,7 @@ import {
   type HandlerResult,
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { toAutofixEnvelope } from "./autofix-ingress";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -98,6 +99,25 @@ app.post("/webhooks/github", async (c) => {
       : undefined,
     action,
   });
+
+  const autofixEnvelope = toAutofixEnvelope({
+    event,
+    payload,
+    deliveryId: deliveryId ?? `missing:${traceId}`,
+    botUsername: c.env.GITHUB_BOT_USERNAME,
+    receivedAt: new Date(),
+  });
+  if (autofixEnvelope) {
+    try {
+      await c.env.AUTOFIX_QUEUE.send(autofixEnvelope);
+    } catch (err) {
+      log.error("webhook.autofix_queue_failed", {
+        trace_id: traceId,
+        delivery_id: deliveryId,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  }
 
   c.executionCtx.waitUntil(
     handleWebhook(c.env, log, event, payload, traceId, deliveryId)
@@ -168,37 +188,40 @@ async function handleWebhook(
   };
 
   const start = Date.now();
-  let result: HandlerResult;
+  let result: HandlerResult | undefined;
+  let dispatchFailure: { error: unknown } | undefined;
 
   try {
     result = await dispatchHandler(env, log, event, p, payload, traceId);
   } catch (err) {
+    dispatchFailure = { error: err };
     log.info("webhook.handled", {
       ...wideEventBase,
       outcome: "error",
       duration_ms: Date.now() - start,
       error: err instanceof Error ? err : new Error(String(err)),
     });
-    throw err;
   }
 
-  const wideEvent: Record<string, unknown> = {
-    ...wideEventBase,
-    outcome: result.outcome,
-    duration_ms: Date.now() - start,
-  };
-  if (result.outcome === "skipped") {
-    wideEvent.skip_reason = result.skip_reason;
-  } else {
-    wideEvent.session_id = result.session_id;
-    wideEvent.message_id = result.message_id;
-    wideEvent.handler_action = result.handler_action;
+  if (result !== undefined) {
+    const wideEvent: Record<string, unknown> = {
+      ...wideEventBase,
+      outcome: result.outcome,
+      duration_ms: Date.now() - start,
+    };
+    if (result.outcome === "skipped") {
+      wideEvent.skip_reason = result.skip_reason;
+    } else {
+      wideEvent.session_id = result.session_id;
+      wideEvent.message_id = result.message_id;
+      wideEvent.handler_action = result.handler_action;
+    }
+    log.info("webhook.handled", wideEvent);
   }
-  log.info("webhook.handled", wideEvent);
 
-  // Forward normalized event to control-plane for automation triggering.
-  // Use the passthrough parse so nested lifecycle fields are not stripped by
-  // the summary schema used for logging and bot dispatch.
+  // Forwarding and built-in dispatch are independent; both must run before a
+  // failure reaches the waitUntil cleanup path. Use the passthrough parse so
+  // nested lifecycle fields are not stripped by the summary schema.
   if (event) {
     const normalizationPayload = actionResult.success ? actionResult.data : {};
     const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
@@ -225,6 +248,8 @@ async function handleWebhook(
       }
     }
   }
+
+  if (dispatchFailure !== undefined) throw dispatchFailure.error;
 }
 
 function dispatchHandler(

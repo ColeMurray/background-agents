@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import {
   AttachmentClaimConflictError,
   SessionAttachmentRepository,
@@ -155,9 +156,142 @@ describe("MessageRepository", () => {
       '{"channel":"C123"}',
       null,
       null,
+      null,
+      null,
+      null,
       "pending",
       1000,
     ]);
+  });
+
+  it("atomically deduplicates Autofix feedback before other admission checks", () => {
+    mock.setData(`SELECT id FROM messages WHERE autofix_feedback_key = ? LIMIT 1`, [
+      { id: "msg-existing" },
+    ]);
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: true,
+      })
+    ).toEqual({ kind: "duplicate", messageId: "msg-existing" });
+    expect(transactionSyncCalls).toBe(1);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it("rejects new Autofix feedback for a closed session", () => {
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: true,
+      })
+    ).toEqual({ kind: "rejected", reason: "session_closed" });
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it("rejects Autofix admission when the rolling PR cap is reached", () => {
+    mock.setOne({ count: 3 });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "attempt_limit" });
+    expect(mock.calls).toHaveLength(3);
+  });
+
+  it("rejects Autofix admission when the session queue is full", () => {
+    mock.setOne({ count: MAX_UNFINISHED_PROMPTS });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 50,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "queue_full" });
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  it("admits Autofix metadata without creating an admission-time event", () => {
+    mock.setOne({ count: 2 });
+    const originContext = JSON.stringify({
+      kind: "review",
+      authorType: "human",
+      feedbackUrl: "https://github.com/acme/repo/pull/42#pullrequestreview-1",
+    });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext,
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "enqueued", messageId: "msg-new" });
+    const insert = mock.calls.find(({ query }) => query.includes("INSERT INTO messages"));
+    expect(insert?.params).toEqual(
+      expect.arrayContaining(["github:review:1", "github:99:42", originContext])
+    );
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO events"))).toBe(false);
   });
 
   it("atomically claims attachments and creates a message", () => {

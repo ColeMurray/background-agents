@@ -161,6 +161,8 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     modal_object_id: null,
     snapshot_id: null,
     snapshot_image_id: null,
+    snapshot_runtime_version: null,
+    runtime_version: null,
     auth_token: null,
     auth_token_hash: null,
     status: "ready",
@@ -343,6 +345,18 @@ describe("SessionWebSocketManagerImpl", () => {
       mockRepo.setSandbox(createSandboxRow("correct-id"));
 
       expect(manager.getSandboxSocket()).toBeNull();
+      expect(wrongWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
+    });
+
+    it("skips sockets without the expected sandbox ID tag during recovery", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const untaggedWs = createFakeWebSocket();
+
+      sockets.set(untaggedWs, ["sandbox"]);
+      mockRepo.setSandbox(createSandboxRow("correct-id"));
+
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(untaggedWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
     });
 
     it("returns null when cached socket is closed", () => {
