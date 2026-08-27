@@ -74,14 +74,24 @@ const automationCompleteSchema = z.looseObject({
   signature: z.string(),
 });
 
-const automationSkipSchema = z.looseObject({
-  channel: z.string(),
-  user: z.string(),
-  threadTs: z.string(),
-  signature: z.string(),
-});
+/** Payload for a concurrency-skip ephemeral notice. */
+interface AutomationSkipPayload {
+  channel: string;
+  user: string;
+  threadTs: string;
+  signature: string;
+}
 
-type AutomationSkipPayload = z.infer<typeof automationSkipSchema>;
+function isValidAutomationSkipPayload(payload: unknown): payload is AutomationSkipPayload {
+  if (!isPlainRecord(payload)) return false;
+  const p = payload;
+  return (
+    typeof p.channel === "string" &&
+    typeof p.user === "string" &&
+    typeof p.threadTs === "string" &&
+    typeof p.signature === "string"
+  );
+}
 
 /**
  * Shared rejection guard for signed callback routes: validate the payload shape,
@@ -350,20 +360,18 @@ callbacksRouter.post("/automation-skip", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  const parsed = automationSkipSchema.safeParse(payload);
-  if (!parsed.success) {
+  if (!isValidAutomationSkipPayload(payload)) {
     return rejectInvalidPayload(c, "/callbacks/automation-skip", traceId, startTime);
   }
-  const valid = parsed.data;
 
-  const rejection = await rejectInvalidCallback(c, valid, {
+  const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/automation-skip",
     traceId,
     startTime,
   });
   if (rejection) return rejection;
 
-  c.executionCtx.waitUntil(handleAutomationSkip(valid, c.env, traceId));
+  c.executionCtx.waitUntil(handleAutomationSkip(payload as AutomationSkipPayload, c.env, traceId));
 
   return c.json({ ok: true });
 });
