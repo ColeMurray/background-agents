@@ -6,6 +6,7 @@ export interface ServiceKeyEnv {
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_MCP?: string;
 }
 
 /** Resolve the verification key for one authenticated service. */
@@ -19,5 +20,7 @@ export function serviceAuthSecret(env: ServiceKeyEnv, service: ServiceName): str
       return env.SERVICE_AUTH_SECRET_GITHUB_BOT;
     case "linear-bot":
       return env.SERVICE_AUTH_SECRET_LINEAR_BOT;
+    case "mcp":
+      return env.SERVICE_AUTH_SECRET_MCP;
   }
 }

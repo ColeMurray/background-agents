@@ -50,4 +50,7 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   "slack-bot": "slack",
   "github-bot": "github",
   "linear-bot": "linear",
+  // Read-only inspection tooling. Asserts nothing: it must never be able to
+  // act as a person, so every route it reaches sees a bare service principal.
+  mcp: null,
 };

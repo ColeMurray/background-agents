@@ -18,6 +18,7 @@ const SECRETS = {
   SERVICE_AUTH_SECRET_SLACK_BOT: "slack-secret",
   SERVICE_AUTH_SECRET_GITHUB_BOT: "github-secret",
   SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-secret",
+  SERVICE_AUTH_SECRET_MCP: "mcp-secret",
 };
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -25,6 +26,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "slack-bot": SECRETS.SERVICE_AUTH_SECRET_SLACK_BOT,
   "github-bot": SECRETS.SERVICE_AUTH_SECRET_GITHUB_BOT,
   "linear-bot": SECRETS.SERVICE_AUTH_SECRET_LINEAR_BOT,
+  mcp: SECRETS.SERVICE_AUTH_SECRET_MCP,
 };
 
 function createCtx(identityRow: Record<string, unknown> | null = null): RequestContext {
