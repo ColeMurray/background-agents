@@ -362,11 +362,12 @@ describe("automation cron submission", () => {
   });
 
   it("drops and restores conclusions based on event-specific values", () => {
-    render(
+    const onSubmit = vi.fn();
+    const { container } = render(
       <AutomationForm
         mode="edit"
         submitting={false}
-        onSubmit={vi.fn()}
+        onSubmit={onSubmit}
         initialValues={{
           name: "Check suite watcher",
           repositories: singleRepository,
@@ -389,11 +390,28 @@ describe("automation cron submission", () => {
       "Removed Conclusion — not available for this event type."
     );
 
+    fireEvent.click(screen.getByText("Add condition..."));
+    fireEvent.click(screen.getByRole("option", { name: "Conclusion" }));
+    const conclusionSelect = screen
+      .getAllByRole("combobox")
+      .find((element) => element.textContent?.includes("success"));
+    expect(conclusionSelect).toBeDefined();
+    fireEvent.click(conclusionSelect!);
+    fireEvent.click(screen.getByRole("option", { name: "failure" }));
+
     fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
     fireEvent.click(screen.getByRole("option", { name: /Check Suite Completed/ }));
 
-    expect(screen.getAllByText("startup_failure").length).toBeGreaterThan(0);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      eventType: "check_suite.completed",
+      triggerConfig: {
+        conditions: [{ type: "conclusion", operator: "eq", value: "failure" }],
+      },
+    });
   });
 
   it("clears active and dropped conditions when changing trigger source", () => {

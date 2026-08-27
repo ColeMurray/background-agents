@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isGitHubConditionCompatible, matchesConditions, validateConditions } from "./conditions";
+import {
+  dedupeConditionsBySemanticKey,
+  isGitHubConditionCompatible,
+  matchesConditions,
+  validateConditions,
+} from "./conditions";
 import { conditionRegistry } from "./registry";
 import { CHECK_SUITE_CONCLUSIONS, WORKFLOW_RUN_CONCLUSIONS } from "./github";
 import { buildMockEvent } from "./testing";
@@ -341,5 +346,16 @@ describe("isGitHubConditionCompatible", () => {
 
     expect(isGitHubConditionCompatible("check_suite.completed", startupFailure)).toBe(true);
     expect(isGitHubConditionCompatible("workflow_run.completed", startupFailure)).toBe(false);
+  });
+
+  it("prefers the active condition over a parked semantic alias", () => {
+    const active = { type: "conclusion" as const, operator: "eq" as const, value: "failure" };
+    const parked = {
+      type: "check_conclusion" as const,
+      operator: "eq" as const,
+      value: "startup_failure",
+    };
+
+    expect(dedupeConditionsBySemanticKey([active, parked])).toEqual([active]);
   });
 });

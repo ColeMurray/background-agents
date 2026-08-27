@@ -9,6 +9,7 @@ import type {
 import {
   conditionRegistry,
   DEFAULT_GITHUB_CONCLUSION,
+  getConditionSemanticKey,
   getGitHubConclusionOptions,
   getGitHubEventConditionTypes,
 } from "@open-inspect/shared/triggers";
@@ -60,6 +61,9 @@ export function ConditionBuilder({
   triggerSource,
   eventType,
 }: ConditionBuilderProps) {
+  const configuredKeys = new Set(
+    conditions.map((condition) => getConditionSemanticKey(condition.type))
+  );
   const availableTypes =
     triggerSource === "github"
       ? eventType
@@ -68,6 +72,9 @@ export function ConditionBuilder({
       : Object.entries(conditionRegistry)
           .filter(([_, handler]) => handler.appliesTo.includes(triggerSource))
           .map(([type]) => type);
+  const unconfiguredTypes = availableTypes.filter(
+    (type) => !configuredKeys.has(getConditionSemanticKey(type as TriggerCondition["type"]))
+  );
 
   const addCondition = (type: string) => {
     let newCondition: TriggerCondition;
@@ -119,7 +126,11 @@ export function ConditionBuilder({
       default:
         return;
     }
-    onChange([...conditions, newCondition]);
+    const semanticKey = getConditionSemanticKey(newCondition.type);
+    onChange([
+      ...conditions.filter((condition) => getConditionSemanticKey(condition.type) !== semanticKey),
+      newCondition,
+    ]);
   };
 
   const removeCondition = (index: number) => {
@@ -161,13 +172,13 @@ export function ConditionBuilder({
         </div>
       ))}
 
-      {availableTypes.length > 0 && (
+      {unconfiguredTypes.length > 0 && (
         <Select onValueChange={addCondition}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder="Add condition..." />
           </SelectTrigger>
           <SelectContent>
-            {availableTypes.map((type) => (
+            {unconfiguredTypes.map((type) => (
               <SelectItem key={type} value={type}>
                 {CONDITION_LABELS[type] || type}
               </SelectItem>

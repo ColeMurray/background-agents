@@ -33,6 +33,22 @@ export type ConditionRegistry = {
   [K in ConditionType]: ConditionHandler<K>;
 };
 
+export function getConditionSemanticKey(type: ConditionType): ConditionType {
+  return type === "check_conclusion" ? "conclusion" : type;
+}
+
+export function dedupeConditionsBySemanticKey(
+  conditions: readonly TriggerCondition[]
+): TriggerCondition[] {
+  const seen = new Set<ConditionType>();
+  return conditions.filter((condition) => {
+    const key = getConditionSemanticKey(condition.type);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function isGitHubConditionCompatible(
   eventType: string,
   condition: TriggerCondition

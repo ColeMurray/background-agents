@@ -34,7 +34,13 @@ export {
 
 // Condition system
 export type { ConditionHandler, ConditionRegistry } from "./conditions";
-export { isGitHubConditionCompatible, matchesConditions, validateConditions } from "./conditions";
+export {
+  dedupeConditionsBySemanticKey,
+  getConditionSemanticKey,
+  isGitHubConditionCompatible,
+  matchesConditions,
+  validateConditions,
+} from "./conditions";
 
 // Registry
 export { conditionRegistry, triggerSources } from "./registry";

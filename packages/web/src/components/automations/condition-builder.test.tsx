@@ -203,4 +203,16 @@ describe("ConditionBuilder — GitHub workflow editors", () => {
     expect(screen.getByText("Check Conclusion")).toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("does not offer the conclusion alias when a legacy conclusion exists", () => {
+    renderBuilder(
+      [{ type: "check_conclusion", operator: "eq", value: "failure" }],
+      "github",
+      "check_suite.completed"
+    );
+
+    fireEvent.click(screen.getByText("Add condition..."));
+
+    expect(screen.queryByRole("option", { name: "Conclusion" })).not.toBeInTheDocument();
+  });
 });

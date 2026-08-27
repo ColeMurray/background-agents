@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { isValidCron } from "@open-inspect/shared/cron";
 import {
+  dedupeConditionsBySemanticKey,
   triggerSources,
   isGitHubConditionCompatible,
   TRIGGER_TYPE_TO_SOURCE,
@@ -868,7 +869,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
                 setDroppedConditions([]);
                 return;
               }
-              const candidates = [...conditions, ...droppedConditions];
+              const candidates = dedupeConditionsBySemanticKey([
+                ...conditions,
+                ...droppedConditions,
+              ]);
               const kept = candidates.filter((condition) =>
                 isGitHubConditionCompatible(value, condition)
               );
