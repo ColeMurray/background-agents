@@ -11,7 +11,10 @@
 
 import { z } from "zod";
 import { issueSessionSchema, projectTargetSchema, teamTargetsSchema } from "./types";
-import type { UserPreferences } from "@open-inspect/shared/types/session-api";
+import {
+  userPreferencesSchema,
+  type UserPreferences,
+} from "@open-inspect/shared/types/session-api";
 import type { Env, TeamRepoMapping, ProjectRepoMapping, IssueSession } from "./types";
 import { createLogger } from "./logger";
 
@@ -82,7 +85,8 @@ export async function getUserPreferences(
 ): Promise<UserPreferences | null> {
   try {
     const data = await env.LINEAR_KV.get(`user_prefs:${userId}`, "json");
-    if (data && typeof data === "object") return data as UserPreferences;
+    const parsed = userPreferencesSchema.safeParse(data);
+    if (parsed.success) return parsed.data;
   } catch (e) {
     log.debug("kv.get_user_preferences_failed", {
       userId,

@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionSandboxEventProcessor } from "./sandbox-events";
-import type { GitPushSpec } from "../source-control";
+import { createTestBackgroundTasks } from "../../background-tasks.test-support";
+import { SessionSandboxEventProcessor } from "./processor";
+import { SandboxArtifactEventHandler } from "./artifact.handler";
+import { SandboxExecutionEventHandler } from "./execution.handler";
+import { SandboxRuntimeEventHandler } from "./runtime.handler";
+import { SandboxPushService } from "../sandbox-push-service";
+import { SandboxStreamingEventHandler } from "./streaming.handler";
+import type { GitPushSpec } from "../../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
-import type { CallbackNotificationService } from "./callback-notification-service";
-import type { SessionDiffService } from "./diffs/service";
-import type { SessionCoreRepository } from "./session-core-repository";
-import type { SandboxRepository } from "./sandbox-repository";
-import type { ArtifactRepository } from "./artifact-repository";
-import type { EventRepository } from "./event-repository";
-import type { MessageRepository } from "./message-repository";
-import type { SessionStatusService } from "./session-status-service";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { CallbackNotificationService } from "../callback-notification-service";
+import type { SessionDiffService } from "../diffs/service";
+import type { SessionCoreRepository } from "../session-core-repository";
+import type { SandboxRepository } from "../sandbox-repository";
+import type { ArtifactRepository } from "../artifact-repository";
+import type { EventRepository } from "../event-repository";
+import type { MessageRepository } from "../message-repository";
+import type { SessionStatusService } from "../session-status-service";
+import type { SessionWebSocketManager } from "../websocket-manager";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -82,35 +88,58 @@ function createProcessor() {
     error: vi.fn(),
     child: vi.fn(),
   };
-  const waitUntil = vi.fn((task: Promise<unknown>) =>
-    task.catch((error) => log.error("background_task.failed", { error }))
-  );
-  const backgroundTasks = { submit: waitUntil };
+  const backgroundTasks = createTestBackgroundTasks();
 
+  // The real family composition, mirroring components.ts, so the suite keeps
+  // pinning end-to-end processSandboxEvent behavior across the split.
+  const pushService = new SandboxPushService(log, wsManager as unknown as SessionWebSocketManager);
   const processor = new SessionSandboxEventProcessor(
-    backgroundTasks,
-    () => log,
-    repository as unknown as SessionCoreRepository,
-    repository as unknown as SandboxRepository,
+    log,
     repository as unknown as MessageRepository,
-    eventRepository,
-    artifactRepository,
-    callbackService as unknown as CallbackNotificationService,
     wsManager as unknown as SessionWebSocketManager,
-    messenger,
-    diffService as unknown as SessionDiffService,
-    applySessionTitleUpdate,
-    triggerSnapshot,
-    projectTerminalMessage,
-    statusService as unknown as SessionStatusService,
-    updateLastActivity,
-    scheduleInactivityCheck,
-    processMessageQueue,
-    broadcastPromptQueue
+    new SandboxStreamingEventHandler(
+      backgroundTasks,
+      repository as unknown as SessionCoreRepository,
+      eventRepository,
+      callbackService as unknown as CallbackNotificationService,
+      messenger,
+      updateLastActivity
+    ),
+    new SandboxArtifactEventHandler(
+      artifactRepository,
+      eventRepository,
+      messenger,
+      updateLastActivity
+    ),
+    new SandboxExecutionEventHandler(
+      backgroundTasks,
+      log,
+      repository as unknown as MessageRepository,
+      callbackService as unknown as CallbackNotificationService,
+      messenger,
+      projectTerminalMessage,
+      statusService as unknown as SessionStatusService,
+      triggerSnapshot,
+      updateLastActivity,
+      scheduleInactivityCheck,
+      processMessageQueue,
+      broadcastPromptQueue
+    ),
+    new SandboxRuntimeEventHandler(
+      repository as unknown as SessionCoreRepository,
+      repository as unknown as SandboxRepository,
+      eventRepository,
+      messenger,
+      diffService as unknown as SessionDiffService,
+      applySessionTitleUpdate,
+      updateLastActivity
+    ),
+    pushService
   );
 
   return {
     processor,
+    pushService,
     artifactRepository,
     repository,
     eventRepository,
@@ -126,7 +155,7 @@ function createProcessor() {
     broadcastPromptQueue,
     updateLastActivity,
     applySessionTitleUpdate,
-    waitUntil,
+    backgroundTasks,
     log,
   };
 }
@@ -161,11 +190,9 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2000,
     });
 
-    const settled = await Promise.allSettled(h.waitUntil.mock.results.map(({ value }) => value));
-    expect(settled.every(({ status }) => status === "fulfilled")).toBe(true);
-    expect(h.log.error).toHaveBeenCalledWith("background_task.failed", {
-      error: expect.any(Error),
-    });
+    await h.backgroundTasks.settle();
+    // The failed snapshot is absorbed by the boundary, not thrown at the caller.
+    expect(h.backgroundTasks.failures).toEqual([expect.any(Error)]);
   });
 
   it("updates heartbeat without broadcasting", async () => {
@@ -469,7 +496,7 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
     expect(h.processMessageQueue).toHaveBeenCalledTimes(1);
-    expect(h.waitUntil).toHaveBeenCalled();
+    expect(h.backgroundTasks.submissions).not.toHaveLength(0);
   });
 
   it("waits for terminal projection before snapshot, queue drain, and acknowledgement", async () => {
@@ -546,7 +573,7 @@ describe("SessionSandboxEventProcessor", () => {
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    const pushPromise = h.processor.pushBranchToRemote(
+    const pushPromise = h.pushService.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")
     );
 
@@ -576,10 +603,10 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.processor.pushBranchToRemote(
+      const webPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "open-inspect/session-1")
       );
-      const backendPush = h.processor.pushBranchToRemote(
+      const backendPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "backend", "open-inspect/session-1")
       );
 
@@ -610,7 +637,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -628,7 +655,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -651,7 +678,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -681,8 +708,8 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.processor.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
-      const backendPush = h.processor.pushBranchToRemote(
+      const webPush = h.pushService.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
+      const backendPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "backend", "feature/b")
       );
 
@@ -783,7 +810,7 @@ describe("SessionSandboxEventProcessor", () => {
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
     });
 
-    it("does not reset activity timer on heartbeat", async () => {
+    it("does not reset activity timer on heartbeat while idle", async () => {
       const h = createProcessor();
       await h.processor.processSandboxEvent({
         type: "heartbeat",
@@ -793,6 +820,20 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.updateLastActivity).not.toHaveBeenCalled();
+    });
+
+    it("resets activity timer on heartbeat while a message is processing", async () => {
+      const h = createProcessor();
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+
+      await h.processor.processSandboxEvent({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        status: "ready",
+        timestamp: 1000,
+      });
+
+      expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
     });
 
     it("does not reset activity timer on token", async () => {
@@ -894,7 +935,7 @@ describe("SessionSandboxEventProcessor", () => {
       expect(h.wsManager.send).not.toHaveBeenCalled();
     });
 
-    it("sends ACK on already_stopped path for execution_complete", async () => {
+    it("ACKs duplicate completions while safely repeating lifecycle reconciliation", async () => {
       const h = createProcessor();
       const sandboxWs = {} as WebSocket;
       h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
@@ -917,6 +958,10 @@ describe("SessionSandboxEventProcessor", () => {
         ackId: "execution_complete:msg-1",
       });
       expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+      expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
+      expect(h.updateLastActivity).toHaveBeenCalledOnce();
+      expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
+      expect(h.processMessageQueue).toHaveBeenCalledOnce();
     });
 
     it("does not send ACK for non-critical events even with ackId", async () => {

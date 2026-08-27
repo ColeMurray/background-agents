@@ -627,6 +627,60 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     });
   });
 
+  it("uses a validated parent spawn-context error response", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json({ error: "Parent session is busy" }, { status: 409 })),
+    } as never;
+
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: "Parent session is busy" });
+  });
+
+  it("keeps the generic spawn-context error for malformed error payloads", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(["Parent session is busy"], { status: 409 })),
+    } as never;
+
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "Failed to get parent session context",
+    });
+  });
+
   it("uses configured concurrent child session limit", async () => {
     const store = makeStore();
     store.acquireChildAdmissionLease.mockResolvedValue(null);

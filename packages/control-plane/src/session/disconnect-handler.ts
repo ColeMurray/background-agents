@@ -8,7 +8,7 @@ import type {
 } from "./ports";
 
 export interface SessionDisconnectHandlerDeps<Connection, Client extends ConnectedClient> {
-  getLogger: () => Logger;
+  log: Logger;
   sockets: SocketRegistry<Connection, Client>;
   sandbox: SandboxDisconnectMonitor;
   broadcaster: SessionBroadcaster;
@@ -30,7 +30,7 @@ export class SessionDisconnectHandler<Connection, Client extends ConnectedClient
       if (classified.kind === "sandbox") {
         if (!this.deps.sockets.clearSandboxIfMatch(connection)) {
           // A newer sandbox socket is active; this close must not schedule its termination.
-          this.deps.getLogger().debug("Ignoring close for replaced sandbox socket", { code });
+          this.deps.log.debug("Ignoring close for replaced sandbox socket", { code });
           return;
         }
 
@@ -38,7 +38,7 @@ export class SessionDisconnectHandler<Connection, Client extends ConnectedClient
         const reconnectBlocked =
           sandboxStatus !== undefined && isSandboxReconnectBlockedStatus(sandboxStatus);
         if (!reconnectBlocked) {
-          this.deps.getLogger().warn("Sandbox WebSocket disconnected; awaiting reconnect", {
+          this.deps.log.warn("Sandbox WebSocket disconnected; awaiting reconnect", {
             event: "sandbox.disconnected",
             code,
             reason,
@@ -66,7 +66,7 @@ export class SessionDisconnectHandler<Connection, Client extends ConnectedClient
   }
 
   handleError(connection: Connection, error: Error): void {
-    this.deps.getLogger().error("WebSocket error", { error });
+    this.deps.log.error("WebSocket error", { error });
     this.deps.sockets.close(connection, 1011, "Internal error");
   }
 }

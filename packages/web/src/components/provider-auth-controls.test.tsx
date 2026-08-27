@@ -41,7 +41,7 @@ describe("ProviderAuthControls menu", () => {
       name: "OpenAI authentication options, Team ChatGPT",
     });
     expect(trigger).toHaveAttribute("title", "OpenAI authentication");
-    expect(trigger).toHaveTextContent("");
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 
     expect(await screen.findByText("Session options")).toBeInTheDocument();
@@ -58,6 +58,25 @@ describe("ProviderAuthControls menu", () => {
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No account" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
+  });
+
+  it("uses the Grok logo for xAI authentication", () => {
+    render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="xai"
+        accounts={[{ ...account, provider: "xai", displayName: "SuperGrok" }]}
+        value={{ mode: "provider_account", accountId: account.id }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "xAI authentication options, SuperGrok",
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("Grok")).toBeInTheDocument();
   });
 
   it("keeps the effective default in the compact trigger's accessible label", () => {
@@ -83,7 +102,8 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Team ChatGPT",
       })
-    ).toHaveTextContent("");
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
   });
 
   it("identifies an unavailable default account in the compact trigger's accessible label", () => {
@@ -109,7 +129,8 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Unavailable account",
       })
-    ).toHaveTextContent("");
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
   });
 
   it("shows the effective unattended API-key default", () => {

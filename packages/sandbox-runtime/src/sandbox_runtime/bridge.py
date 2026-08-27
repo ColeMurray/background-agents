@@ -350,7 +350,9 @@ class AgentBridge:
                 except Exception as e:
                     error_str = str(e)
                     # Check for fatal HTTP errors that shouldn't trigger retry
-                    if self._is_fatal_connection_error(error_str):
+                    if (
+                        isinstance(e, GitSigningError) and not e.retryable
+                    ) or self._is_fatal_connection_error(error_str):
                         run_outcome = "fatal_error"
                         self.shutdown_event.set()
                         break

@@ -13,6 +13,7 @@ import type { Principal } from "../auth/principal";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { AutomationTriggerBlockedError } from "../scheduler/scheduler";
 
 const mockProviderAdapterGet = vi.hoisted(() => vi.fn());
 
@@ -75,8 +76,18 @@ vi.mock("../db/model-provider-accounts", () => ({
 /** Shared D1 batch spy — createEnv wires it as env.DB.batch. */
 const mockBatch = vi.fn();
 const mockSchedulerTrigger = vi.hoisted(() => vi.fn());
+const MockAutomationTriggerBlockedError = vi.hoisted(
+  () =>
+    class AutomationTriggerBlockedError extends Error {
+      constructor() {
+        super("An active run already exists");
+        this.name = "AutomationTriggerBlockedError";
+      }
+    }
+);
 
 vi.mock("../scheduler/scheduler", () => ({
+  AutomationTriggerBlockedError: MockAutomationTriggerBlockedError,
   Scheduler: vi.fn().mockImplementation(function () {
     return { trigger: mockSchedulerTrigger };
   }),
@@ -254,9 +265,10 @@ describe("automation route handlers", () => {
     mockProviderAuthStore.bindInserts.mockReturnValue([{ sql: "insert-provider-auth" }]);
     mockProviderAuthStore.bindReplace.mockReturnValue([{ sql: "replace-provider-auth" }]);
     mockBatch.mockResolvedValue([]);
-    mockSchedulerTrigger.mockResolvedValue(
-      Response.json({ run: { id: "run-1" } }, { status: 201 })
-    );
+    mockSchedulerTrigger.mockResolvedValue({
+      invocationId: "inv-1",
+      runs: [{ id: "run-1" }],
+    });
     mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
     mockProviderAccountStore.getById.mockResolvedValue({
       id: "0123456789abcdef0123456789abcdef",
@@ -372,6 +384,17 @@ describe("automation route handlers", () => {
       expect(mockBatch).toHaveBeenCalledWith(
         expect.arrayContaining([{ sql: "insert-automation" }, { sql: "insert-repositories" }])
       );
+    });
+
+    it("rejects partial create payloads before persistence", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: { instructions: "Run tests" },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: "Invalid automation request" });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("persists a complete provider pin map in the create batch", async () => {
@@ -1050,7 +1073,7 @@ describe("automation route handlers", () => {
       }
     );
 
-    it("rejects trigger config on schedule automations before shape validation", async () => {
+    it("validates trigger config shape before schedule automation semantics", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const response = await callRoute("PUT", "/automations/auto-1", {
@@ -1058,8 +1081,8 @@ describe("automation route handlers", () => {
       });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "Cannot set triggerConfig on schedule automations",
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining("triggerConfig.conditions"),
       });
     });
 
@@ -1242,6 +1265,33 @@ describe("automation route handlers", () => {
         "auto-1",
         expect.objectContaining({ reasoning_effort: "high" })
       );
+    });
+
+    it("accepts nullable reasoning effort in update payloads", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { reasoningEffort: null },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ reasoning_effort: null })
+      );
+    });
+
+    it("rejects malformed update payloads before persistence", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { reasoningEffort: 123 },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: "Invalid automation request" });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("clears incompatible reasoning effort when model changes", async () => {
@@ -1566,6 +1616,23 @@ describe("automation route handlers", () => {
     });
   });
 
+  describe("POST /automations/:id/regenerate-key", () => {
+    it.each([123, "  "])(
+      "rejects malformed sentry secret payloads before persistence",
+      async (sentryClientSecret) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "sentry" });
+
+        const res = await callRoute("POST", "/automations/auto-1/regenerate-key", {
+          body: { sentryClientSecret },
+        });
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toEqual({ error: "sentryClientSecret is required" });
+        expect(mockStore.update).not.toHaveBeenCalled();
+      }
+    );
+  });
+
   describe("POST /automations/:id/trigger", () => {
     it("triggers automation via the scheduler", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
@@ -1573,6 +1640,10 @@ describe("automation route handlers", () => {
 
       const res = await callRoute("POST", "/automations/auto-1/trigger");
       expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({
+        invocationId: "inv-1",
+        runs: [{ id: "run-1" }],
+      });
     });
 
     it("returns 404 when automation not found", async () => {
@@ -1586,9 +1657,7 @@ describe("automation route handlers", () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const env = createEnv();
-      mockSchedulerTrigger.mockResolvedValue(
-        Response.json({ error: "concurrent_run_active" }, { status: 409 })
-      );
+      mockSchedulerTrigger.mockRejectedValue(new AutomationTriggerBlockedError());
 
       const { handler, match } = getHandler("POST", "/automations/auto-1/trigger");
       const request = new Request("https://test.local/automations/auto-1/trigger", {
@@ -1596,6 +1665,19 @@ describe("automation route handlers", () => {
       });
       const res = await handler(request, env, match, createCtx());
       expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "A run is already active for this automation",
+      });
+    });
+
+    it("returns 500 when the scheduler cannot launch the automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockSchedulerTrigger.mockRejectedValue(new Error("launch failed"));
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "Failed to trigger automation" });
     });
   });
 

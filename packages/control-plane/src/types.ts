@@ -16,6 +16,10 @@ export interface Env {
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
   LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
 
+  // GitHub Autofix queue bindings used for read-only metrics.
+  AUTOFIX_QUEUE?: Queue<unknown>;
+  AUTOFIX_DLQ?: Queue<unknown>;
+
   // D1 database
   DB: D1Database;
 
@@ -63,6 +67,7 @@ export interface Env {
   // Variables
   DEPLOYMENT_NAME: string;
   APP_NAME?: string; // Display name for user-visible UI, PR footers, and HTTP User-Agent headers
+  GITHUB_BOT_USERNAME: string; // GitHub App bot login used for self-origin checks
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)

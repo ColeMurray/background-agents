@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isSessionInactive, isTurnSettled } from "./session-activity";
+import { isSessionInactive, isSessionPromptable, isTurnSettled } from "./session-activity";
 import { sessionStatusSchema, type SessionStatus } from "./sessions";
 
 const ALL_STATUSES = sessionStatusSchema.options;
@@ -49,5 +49,18 @@ describe("isTurnSettled", () => {
       (status: SessionStatus) => isTurnSettled(status) !== isSessionInactive(status)
     );
     expect(divergent).toEqual(["archived"]);
+  });
+});
+
+describe("isSessionPromptable", () => {
+  it.each([
+    ["created", true],
+    ["active", true],
+    ["completed", true],
+    ["failed", true],
+    ["archived", false],
+    ["cancelled", false],
+  ] as const)("treats %s as promptable=%s", (status, expected) => {
+    expect(isSessionPromptable(status)).toBe(expected);
   });
 });

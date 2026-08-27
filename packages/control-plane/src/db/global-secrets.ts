@@ -20,7 +20,7 @@ export class GlobalSecretsStore {
     private readonly encryptionKey: string
   ) {}
 
-  async setSecrets(secrets: Record<string, string>): Promise<SecretsWriteResult> {
+  async setSecrets(secrets: Record<string, unknown>): Promise<SecretsWriteResult> {
     const now = Date.now();
     const normalized = prepareSecretsForWrite(secrets);
 

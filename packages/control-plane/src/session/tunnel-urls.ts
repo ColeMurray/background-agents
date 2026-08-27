@@ -1,3 +1,5 @@
+import type { Logger } from "../logger";
+
 /**
  * Parse a stored `sandbox.tunnel_urls` blob into a `{ [port]: url }` map.
  *
@@ -21,9 +23,27 @@ export function parseTunnelUrls(raw: string): Record<string, string> | null {
     return null;
   }
 
-  if (!Object.values(parsed).every((value) => typeof value === "string")) {
-    return null;
+  const urls: Record<string, string> = {};
+  for (const [port, url] of Object.entries(parsed)) {
+    if (typeof url !== "string") return null;
+    urls[port] = url;
   }
 
-  return parsed as Record<string, string>;
+  return urls;
+}
+
+/**
+ * {@link parseTunnelUrls} for the read paths that fall open on corrupt data:
+ * logs the malformed blob and returns null, so the session state read still
+ * succeeds with no tunnel URLs rather than failing.
+ */
+export function safeParseTunnelUrls(
+  raw: string,
+  log: Pick<Logger, "warn">
+): Record<string, string> | null {
+  const urls = parseTunnelUrls(raw);
+  if (!urls) {
+    log.warn("Invalid sandbox tunnel_urls JSON");
+  }
+  return urls;
 }

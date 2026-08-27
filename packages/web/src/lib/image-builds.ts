@@ -11,6 +11,7 @@ import {
   type ImageBuildRecordView,
   type ImageBuildScopeKind,
   type ImageBuildStatus,
+  type RepositoryShaEntry,
 } from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
 
@@ -118,9 +119,9 @@ export function foldImageBuildStatusByScope(
   );
   const statusByScope = new Map<string, ImageBuildStatus>();
   for (const image of images) {
-    const key = imageBuildScopeKey(image.scope_kind, image.scope_id);
+    const key = imageBuildScopeKey(image.scopeKind, image.scopeId);
     const currentFingerprint = currentFingerprintByScope.get(key);
-    if (currentFingerprint !== undefined && image.repositories_fingerprint !== currentFingerprint) {
+    if (currentFingerprint !== undefined && image.repositoriesFingerprint !== currentFingerprint) {
       continue;
     }
     const current = statusByScope.get(key);
@@ -132,22 +133,10 @@ export function foldImageBuildStatusByScope(
 }
 
 /**
- * The primary repository's baseSha out of a build's provenance document
- * (`repository_shas`, the JSON-encoded RepositoryShaEntry[] column value).
+ * The primary repository's baseSha out of a build's decoded provenance.
  */
-export function parsePrimaryBuildSha(repositoryShas: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(repositoryShas);
-    if (!Array.isArray(parsed)) return null;
-    const primary: unknown = parsed[0];
-    if (primary && typeof primary === "object" && "baseSha" in primary) {
-      const sha = (primary as { baseSha?: unknown }).baseSha;
-      return typeof sha === "string" ? sha : null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+export function parsePrimaryBuildSha(repositoryShas: RepositoryShaEntry[] | null): string | null {
+  return repositoryShas?.[0]?.baseSha ?? null;
 }
 
 /** Formats the ready-details line shared by both image families. */
