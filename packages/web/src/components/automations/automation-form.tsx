@@ -265,6 +265,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   const handleTriggerTypeChange = (value: AutomationTriggerType) => {
     setTriggerType(value);
+    setConditions([]);
     setDroppedConditions([]);
   };
 

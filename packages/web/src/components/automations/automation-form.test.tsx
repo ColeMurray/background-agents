@@ -396,7 +396,7 @@ describe("automation cron submission", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("clears dropped-condition feedback when leaving GitHub", () => {
+  it("clears active and dropped conditions when changing trigger source", () => {
     render(
       <AutomationForm
         mode="create"
@@ -416,12 +416,11 @@ describe("automation cron submission", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Event Type" }));
-    fireEvent.click(screen.getByRole("option", { name: /PR Opened/ }));
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Exact workflow name/)).toHaveValue("CI");
 
     fireEvent.click(screen.getByRole("radio", { name: /^Sentry / }));
 
+    expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
