@@ -82,7 +82,7 @@ type InitRequest = z.infer<typeof initRequestSchema>;
  * member set, pending sandbox row, owner participant) in one transaction,
  * then schedules the warm spawn. Single caller: `session/initialize.ts`,
  * after the D1 index insert succeeds. Split from `SessionLifecycleHandler`
- * because bootstrap owned five collaborators no lifecycle route touches
+ * because bootstrap owned collaborators no lifecycle route touches
  * (token encryption, id generation, the warm-spawn trigger, the clock).
  */
 export class SessionInitHandler {
@@ -91,9 +91,9 @@ export class SessionInitHandler {
     private readonly sandboxRepository: SandboxRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly durableObjectId: string,
-    private readonly tokenEncryptionKey: string,
     private readonly scheduleWarmSandbox: () => void,
-    private readonly encryptToken: (token: string, encryptionKey: string) => Promise<string>,
+    /** Bound to the deployment's token key by the composition root. */
+    private readonly encryptScmToken: (token: string) => Promise<string>,
     private readonly generateId: (bytes?: number) => string,
     private readonly now: () => number = Date.now
   ) {}
@@ -135,7 +135,7 @@ export class SessionInitHandler {
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {
       try {
-        encryptedToken = await this.encryptToken(body.scmToken, this.tokenEncryptionKey);
+        encryptedToken = await this.encryptScmToken(body.scmToken);
         log.debug("Encrypted SCM token for storage");
       } catch (error) {
         log.error("Failed to encrypt SCM token", {

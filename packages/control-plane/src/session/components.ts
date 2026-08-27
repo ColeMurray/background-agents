@@ -595,12 +595,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sandboxRepository,
     participantRepository,
     durableObjectId,
-    tokenEncryptionKey,
     () =>
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
         name: "sandbox.warm",
       }),
-    encryptToken,
+    (token) => encryptToken(token, tokenEncryptionKey),
     generateId
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
