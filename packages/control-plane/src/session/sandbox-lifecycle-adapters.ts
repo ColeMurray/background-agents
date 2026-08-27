@@ -14,6 +14,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { UserEnvResolver } from "./user-env-resolver";
 import type { SessionRow } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 /** The session-context reads owned by the session repositories and resolver. */
 export class LifecycleSessionContext implements SessionContextReader {
@@ -30,7 +31,7 @@ export class LifecycleSessionContext implements SessionContextReader {
     return this.sessions.getSessionRepositories().map((entry) => ({
       repoOwner: entry.repoOwner,
       repoName: entry.repoName,
-      baseBranch: entry.baseBranch ?? "main",
+      baseBranch: entry.baseBranch ?? DEFAULT_BASE_BRANCH,
       baseSha: entry.row?.base_sha ?? null,
     }));
   }

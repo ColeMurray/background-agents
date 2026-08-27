@@ -86,6 +86,7 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
+import { AutofixHandler } from "./http/handlers/autofix.handler";
 import { MessagesHandler } from "./http/handlers/messages.handler";
 import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
 import { SandboxHandler } from "./http/handlers/sandbox.handler";
@@ -95,6 +96,7 @@ import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handl
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
+import { SessionAutofixService } from "./services/autofix.service";
 import { createAlarmHandler } from "./alarm/handler";
 import {
   createEarliestAlarmScheduler,
@@ -423,6 +425,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     stopExecution: () => messageQueue.stopExecution(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
   });
+  const autofixHandler = new AutofixHandler(new SessionAutofixService(messageQueue));
 
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     backgroundTasks,
@@ -647,6 +650,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshot: () => snapshotReader.handleSnapshot(),
     sandboxAccess: () => accessReader.handleSandboxAccess(),
     prompt: (request, _url, requestLog) => messagesHandler.enqueuePrompt(request, requestLog),
+    autofix: (request, _url, requestLog) => autofixHandler.handle(request, requestLog),
     stop: () => messagesHandler.stop(),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => sandboxHandler.createMediaArtifact(request),

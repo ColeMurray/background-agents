@@ -705,6 +705,21 @@ function makeJsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
+function makeReviewComment(index: number) {
+  const id = 9_000 + index;
+  return {
+    id,
+    body: `Comment ${index}`,
+    html_url: `https://github.com/acme/web/pull/7#discussion_r${id}`,
+    path: "src/input.ts",
+    line: index + 1,
+    start_line: null,
+    side: "RIGHT",
+    start_side: null,
+    diff_hunk: "@@ -1 +1 @@",
+  };
+}
+
 const basePullResponse = {
   number: 7,
   html_url: "https://github.com/acme/web/pull/7",
@@ -938,6 +953,309 @@ describe("getPullRequest", () => {
     expect(err).toBeInstanceOf(SourceControlProviderError);
     expect((err as SourceControlProviderError).httpStatus).toBe(404);
     expect(mockFetchWithTimeout).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("getPullRequestFeedback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+  });
+
+  it("reads a pull request conversation comment authoritatively", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({
+        id: 1234,
+        body: "Please handle the null case.",
+        html_url: "https://github.com/acme/web/pull/7#issuecomment-1234",
+        issue_url: "https://api.github.com/repos/acme/web/issues/7",
+        user: { id: 77, login: "alice", type: "User" },
+      })
+    );
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const feedback = await provider.getPullRequestFeedback({
+      owner: "acme",
+      name: "web",
+      pullRequestNumber: 7,
+      providerObject: { kind: "pr_comment", id: "1234" },
+    });
+
+    expect(feedback).toEqual({
+      kind: "pr_comment",
+      id: "1234",
+      body: "Please handle the null case.",
+      url: "https://github.com/acme/web/pull/7#issuecomment-1234",
+      author: { id: "77", login: "alice", type: "User" },
+    });
+    expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/web/issues/comments/1234",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer installation-token" }),
+      })
+    );
+  });
+
+  it("rejects a conversation comment from another pull request", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({
+        id: 1234,
+        body: "Unrelated feedback.",
+        html_url: "https://github.com/acme/web/pull/8#issuecomment-1234",
+        issue_url: "https://api.github.com/repos/acme/web/issues/8",
+        user: { id: 77, login: "alice", type: "User" },
+      })
+    );
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    await expect(
+      provider.getPullRequestFeedback({
+        owner: "acme",
+        name: "web",
+        pullRequestNumber: 7,
+        providerObject: { kind: "pr_comment", id: "1234" },
+      })
+    ).rejects.toMatchObject({
+      errorType: "permanent",
+      message: "Pull request comment does not belong to the requested pull request",
+    });
+  });
+
+  it("reads one submitted review with all of its inline comments", async () => {
+    mockFetchWithTimeout
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          id: 5678,
+          body: "Two issues to address.",
+          state: "CHANGES_REQUESTED",
+          html_url: "https://github.com/acme/web/pull/7#pullrequestreview-5678",
+          pull_request_url: "https://api.github.com/repos/acme/web/pulls/7",
+          user: { id: 77, login: "alice", type: "User" },
+        })
+      )
+      .mockResolvedValueOnce(
+        makeJsonResponse([
+          {
+            id: 9001,
+            body: "Handle null here.",
+            html_url: "https://github.com/acme/web/pull/7#discussion_r9001",
+            path: "src/input.ts",
+            line: 12,
+            start_line: null,
+            side: "RIGHT",
+            start_side: null,
+            diff_hunk: "@@ -10,2 +10,3 @@",
+          },
+          {
+            id: 9002,
+            body: "Add a regression test.",
+            html_url: "https://github.com/acme/web/pull/7#discussion_r9002",
+            path: "test/input.test.ts",
+            line: 24,
+            start_line: 20,
+            side: "RIGHT",
+            start_side: "RIGHT",
+            diff_hunk: "@@ -18,2 +18,8 @@",
+          },
+        ])
+      );
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const feedback = await provider.getPullRequestFeedback({
+      owner: "acme",
+      name: "web",
+      pullRequestNumber: 7,
+      providerObject: { kind: "review", id: "5678" },
+    });
+
+    expect(feedback).toMatchObject({
+      kind: "review",
+      id: "5678",
+      body: "Two issues to address.",
+      state: "CHANGES_REQUESTED",
+      author: { id: "77", login: "alice", type: "User" },
+      comments: [
+        {
+          id: "9001",
+          body: "Handle null here.",
+          path: "src/input.ts",
+          line: 12,
+        },
+        {
+          id: "9002",
+          body: "Add a regression test.",
+          path: "test/input.test.ts",
+          startLine: 20,
+        },
+      ],
+    });
+    expect(mockFetchWithTimeout).toHaveBeenNthCalledWith(
+      2,
+      "https://api.github.com/repos/acme/web/pulls/7/reviews/5678/comments?per_page=100&page=1",
+      expect.anything()
+    );
+  });
+
+  it("fetches the next review-comment page when the first page is full", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => makeReviewComment(index));
+    mockFetchWithTimeout
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          id: 5678,
+          body: "Large review.",
+          state: "CHANGES_REQUESTED",
+          html_url: "https://github.com/acme/web/pull/7#pullrequestreview-5678",
+          pull_request_url: "https://api.github.com/repos/acme/web/pulls/7",
+          user: { id: 77, login: "alice", type: "User" },
+        })
+      )
+      .mockResolvedValueOnce(makeJsonResponse(firstPage))
+      .mockResolvedValueOnce(makeJsonResponse([]));
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const feedback = await provider.getPullRequestFeedback({
+      owner: "acme",
+      name: "web",
+      pullRequestNumber: 7,
+      providerObject: { kind: "review", id: "5678" },
+    });
+
+    expect(feedback.kind === "review" ? feedback.comments : []).toHaveLength(100);
+    expect(mockFetchWithTimeout).toHaveBeenNthCalledWith(
+      3,
+      "https://api.github.com/repos/acme/web/pulls/7/reviews/5678/comments?per_page=100&page=2",
+      expect.anything()
+    );
+  });
+
+  it("rejects a review from another pull request", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({
+        id: 5678,
+        body: "Unrelated review.",
+        state: "CHANGES_REQUESTED",
+        html_url: "https://github.com/acme/web/pull/8#pullrequestreview-5678",
+        pull_request_url: "https://api.github.com/repos/acme/web/pulls/8",
+        user: { id: 77, login: "alice", type: "User" },
+      })
+    );
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    await expect(
+      provider.getPullRequestFeedback({
+        owner: "acme",
+        name: "web",
+        pullRequestNumber: 7,
+        providerObject: { kind: "review", id: "5678" },
+      })
+    ).rejects.toMatchObject({
+      errorType: "permanent",
+      message: "Pull request review does not belong to the requested pull request",
+    });
+    expect(mockFetchWithTimeout).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an oversized review instead of dispatching partial feedback", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => makeReviewComment(index));
+    mockFetchWithTimeout
+      .mockResolvedValueOnce(
+        makeJsonResponse({
+          id: 5678,
+          body: "Oversized review.",
+          state: "CHANGES_REQUESTED",
+          html_url: "https://github.com/acme/web/pull/7#pullrequestreview-5678",
+          pull_request_url: "https://api.github.com/repos/acme/web/pulls/7",
+          user: { id: 77, login: "alice", type: "User" },
+        })
+      )
+      .mockResolvedValueOnce(makeJsonResponse(firstPage))
+      .mockResolvedValueOnce(makeJsonResponse([makeReviewComment(100)]));
+
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+    const error = await provider
+      .getPullRequestFeedback({
+        owner: "acme",
+        name: "web",
+        pullRequestNumber: 7,
+        providerObject: { kind: "review", id: "5678" },
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SourceControlProviderError);
+    expect((error as SourceControlProviderError).errorType).toBe("permanent");
+    expect((error as Error).message).toContain("100");
+  });
+});
+
+describe("hasPullRequestWritePermission", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+  });
+
+  it.each(["write", "maintain", "admin"] as const)(
+    "accepts GitHub %s permission",
+    async (permission) => {
+      mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ permission }));
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      await expect(
+        provider.hasPullRequestWritePermission({
+          owner: "acme",
+          name: "web",
+          authorLogin: "alice",
+        })
+      ).resolves.toBe(true);
+      expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+        "https://api.github.com/repos/acme/web/collaborators/alice/permission",
+        expect.anything()
+      );
+    }
+  );
+
+  it.each(["none", "read", "triage"] as const)(
+    "rejects GitHub %s permission",
+    async (permission) => {
+      mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ permission }));
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      await expect(
+        provider.hasPullRequestWritePermission({
+          owner: "acme",
+          name: "web",
+          authorLogin: "alice",
+        })
+      ).resolves.toBe(false);
+    }
+  );
+
+  it("treats a missing collaborator as lacking write permission", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ message: "Not Found" }, 404));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.hasPullRequestWritePermission({
+        owner: "acme",
+        name: "web",
+        authorLogin: "alice",
+      })
+    ).resolves.toBe(false);
+  });
+
+  it("encodes repository and collaborator path segments", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ permission: "write" }));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await provider.hasPullRequestWritePermission({
+      owner: "acme org",
+      name: "web api",
+      authorLogin: "alice/bob",
+    });
+
+    expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme%20org/web%20api/collaborators/alice%2Fbob/permission",
+      expect.anything()
+    );
   });
 });
 
