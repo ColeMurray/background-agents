@@ -48,15 +48,14 @@ import {
   error,
   extractRepoParams,
   json,
+  parseJsonBody,
   parsePattern,
 } from "./shared";
 
 const logger = createLogger("router:image-builds");
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
 
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const toggleRepoImageBuildsBodySchema = z.object({ enabled: z.boolean() });
 
 /**
  * Build-complete callback body. Every field is required: all providers bind a
@@ -338,16 +337,13 @@ async function handleToggleRepoImageBuilds(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-
-  if (!isJsonRecord(body) || typeof body.enabled !== "boolean") {
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  const parsedBody = toggleRepoImageBuildsBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
     return error("enabled must be a boolean", 400);
   }
+  const body = parsedBody.data;
 
   const scope = repoImageBuildScope(owner, name);
 
