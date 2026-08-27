@@ -36,6 +36,7 @@ function skill(id: string, name: string): SkillSummary {
     lastEditorDisplayName: "User One",
     revisionAuthorDisplayName: "User One",
     assignments: [],
+    source: null,
     createdBy: "user-1",
     updatedBy: "user-1",
     createdAt: 1,
@@ -87,6 +88,27 @@ describe("SkillsCatalog", () => {
 
     expect(screen.getByText("first-skill")).toBeInTheDocument();
     expect(useSkillCatalogPageMock).toHaveBeenLastCalledWith(null);
+  });
+
+  it("shows the skill creator with an ID fallback", () => {
+    const withDisplayName = skill("1", "first-skill");
+    const withIdFallback = {
+      ...skill("2", "second-skill"),
+      creatorDisplayName: "",
+      createdBy: "user-2",
+    };
+    useSkillCatalogPageMock.mockReturnValue({
+      skills: [withDisplayName, withIdFallback],
+      hasMore: false,
+      nextCursor: null,
+      loading: false,
+      error: undefined,
+    });
+
+    render(<SkillsCatalog />);
+
+    expect(screen.getByText("· Created by User One")).toBeInTheDocument();
+    expect(screen.getByText("· Created by user-2")).toBeInTheDocument();
   });
 
   it.each([

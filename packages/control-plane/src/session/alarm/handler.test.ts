@@ -36,7 +36,7 @@ function createHandler() {
     messageQueue,
     lifecycleManager,
     alarmScheduler,
-    executionTimeoutMs: 1000,
+    getExecutionTimeoutMs: () => 1000,
     now,
     log,
   });
@@ -127,7 +127,7 @@ describe("createAlarmHandler", () => {
       messageQueue,
       lifecycleManager,
       alarmScheduler,
-      executionTimeoutMs: 1000,
+      getExecutionTimeoutMs: () => 1000,
       now: () => 2000,
       log: createHandler().log,
     });

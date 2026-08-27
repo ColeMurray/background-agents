@@ -45,7 +45,7 @@ import { generateId } from "../auth/crypto";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import { Scheduler } from "../scheduler/scheduler";
+import { AutomationTriggerBlockedError, Scheduler } from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
 import {
   automationRepositoriesInputSchema,
@@ -1093,28 +1093,22 @@ async function handleTriggerAutomation(
   if (!automation) return error("Automation not found", 404);
 
   // The scheduler performs the authoritative D1-backed concurrency check.
-  const triggerResponse = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger({
-    automationId: id,
-  });
-
-  if (!triggerResponse.ok) {
-    const text = await triggerResponse.text().catch(() => "");
+  let triggerResult;
+  try {
+    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
+  } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",
       automation_id: id,
-      status: triggerResponse.status,
-      response: text.slice(0, 500),
+      error: triggerError instanceof Error ? triggerError : new Error(String(triggerError)),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    // Forward 409 (concurrent run) with descriptive message; wrap others as 500
-    if (triggerResponse.status === 409) {
+    if (triggerError instanceof AutomationTriggerBlockedError) {
       return error("A run is already active for this automation", 409);
     }
     return error("Failed to trigger automation", 500);
   }
-
-  const triggerResult = await triggerResponse.json();
 
   logger.info("automation.triggered", {
     event: "automation.triggered",
@@ -1123,7 +1117,7 @@ async function handleTriggerAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json(triggerResult, 201);
+  return json({ invocationId: triggerResult.invocationId, runs: triggerResult.runs }, 201);
 }
 
 function parseRunListParams(request: Request): { limit: number; offset: number } {

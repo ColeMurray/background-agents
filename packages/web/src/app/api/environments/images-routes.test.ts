@@ -94,16 +94,16 @@ describe("unified route consumption", () => {
   it("status reads the per-scope unified status and filters superseded rows", async () => {
     const readyRow = {
       id: "build-1",
-      scope_kind: "environment",
-      scope_id: "env-1",
+      scopeKind: "environment",
+      scopeId: "env-1",
       provider: "modal",
       status: "ready",
-      repositories_fingerprint: "fp-env",
-      repository_shas: "[]",
-      runtime_version: "60",
-      build_duration_seconds: 10,
-      error_message: null,
-      created_at: 1700000000000,
+      repositoriesFingerprint: "fp-env",
+      repositoryShas: [],
+      runtimeVersion: "60",
+      buildDurationSeconds: 10,
+      errorMessage: null,
+      createdAt: 1700000000000,
     };
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ images: [readyRow, { ...readyRow, id: "build-0", status: "superseded" }] })

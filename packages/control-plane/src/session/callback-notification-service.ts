@@ -9,12 +9,13 @@
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import {
+  automationCallbackContextSchema,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
-import { deliverWithRetry } from "./callback-delivery";
+import { deliverWithRetry, retryDelivery } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
@@ -41,9 +42,7 @@ export interface CallbackServiceEnv {
   LINEAR_BOT?: FetchClient;
 }
 
-export type AutomationRunCompletionHandler = (
-  completion: AutomationRunCompletion
-) => Promise<Response>;
+export type AutomationRunCompletionHandler = (completion: AutomationRunCompletion) => Promise<void>;
 
 /**
  * Dependencies injected into CallbackNotificationService.
@@ -198,7 +197,17 @@ export class CallbackNotificationService {
 
       // Route automation callbacks to the scheduler's completion function.
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(rawContext, success, error, messageId);
+        const automationContext = automationCallbackContextSchema.safeParse(rawContext);
+        if (!automationContext.success) {
+          result.rejectReason = "invalid_callback_context";
+          return;
+        }
+        result = await this.notifyAutomationComplete(
+          automationContext.data,
+          success,
+          error,
+          messageId
+        );
         return;
       }
 
@@ -295,7 +304,8 @@ export class CallbackNotificationService {
     error: string | undefined,
     messageId: string
   ): Promise<CallbackDeliveryResult> {
-    if (!this.completeAutomationRun) {
+    const completeAutomationRun = this.completeAutomationRun;
+    if (!completeAutomationRun) {
       return { delivered: false, attempts: 0, rejectReason: "no_binding" };
     }
 
@@ -310,10 +320,13 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    return deliverWithRetry(
-      () => this.completeAutomationRun!(payload),
+    const delivery = await retryDelivery<void, never>(
+      async () => ({
+        outcome: "delivered",
+        value: await completeAutomationRun(payload),
+      }),
       this.sleep,
-      ({ attempt, response, error: deliveryError }) => {
+      ({ attempt, error: deliveryError }) => {
         this.log.warn("callback.complete_delivery_attempt_failed", {
           message_id: messageId,
           session_id: this.getSessionId(),
@@ -321,7 +334,6 @@ export class CallbackNotificationService {
           automation_id: context.automationId,
           run_id: context.runId,
           attempt,
-          ...(response ? { http_status: response.status } : {}),
           ...(deliveryError !== undefined
             ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
             : {}),
@@ -331,6 +343,11 @@ export class CallbackNotificationService {
       // while the first in-process completion can still be running.
       { attemptTimeoutMs: null }
     );
+
+    return {
+      delivered: delivery.outcome === "delivered",
+      attempts: delivery.attempts,
+    };
   }
 
   /**

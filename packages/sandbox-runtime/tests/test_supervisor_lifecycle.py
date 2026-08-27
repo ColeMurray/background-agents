@@ -9,6 +9,8 @@ from sandbox_runtime.repository_boot import RepositoryBootResult
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
 
+TEST_ASYNC_TIMEOUT_SECONDS = 1.0
+
 
 def _supervisor(tmp_path, events):
     config = RuntimeConfig.from_env(
@@ -111,10 +113,10 @@ async def test_boot_progress_runs_during_boot_and_is_awaited_before_bridge(tmp_p
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
 
     run_task = asyncio.create_task(supervisor.run())
-    await progress_started.wait()
+    await asyncio.wait_for(progress_started.wait(), timeout=TEST_ASYNC_TIMEOUT_SECONDS)
     assert not supervisor._boot_progress_task.done()
     release_boot.set()
-    assert await run_task is True
+    assert await asyncio.wait_for(run_task, timeout=TEST_ASYNC_TIMEOUT_SECONDS) is True
 
     supervisor._report_boot_progress.assert_awaited()
     assert progress_cancelled.is_set()

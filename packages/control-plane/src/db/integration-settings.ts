@@ -11,6 +11,7 @@ import {
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
+  type GitHubAutofixSettings,
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
@@ -253,7 +254,17 @@ export class IntegrationSettingsStore {
     for (const overrides of [repoSettings ?? {}, environmentSettings ?? {}]) {
       for (const [key, value] of Object.entries(overrides)) {
         if (value !== undefined) {
-          settings[key] = value;
+          settings[key] =
+            integrationId === "github" &&
+            key === "autofix" &&
+            typeof settings[key] === "object" &&
+            settings[key] !== null &&
+            !Array.isArray(settings[key]) &&
+            typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value)
+              ? { ...(settings[key] as Record<string, unknown>), ...value }
+              : value;
         }
       }
     }
@@ -362,6 +373,8 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
     }
 
+    let normalized = settings;
+
     if (settings.allowedTriggerUsers !== undefined) {
       if (
         !Array.isArray(settings.allowedTriggerUsers) ||
@@ -371,13 +384,77 @@ export class IntegrationSettingsStore {
           "allowedTriggerUsers must be an array of strings"
         );
       }
-      return {
+      normalized = {
         ...settings,
         allowedTriggerUsers: settings.allowedTriggerUsers.map((u) => u.trim().toLowerCase()),
       };
     }
 
-    return settings;
+    if (settings.autofix !== undefined) {
+      normalized = {
+        ...normalized,
+        autofix: this.validateAndNormalizeGitHubAutofixSettings(settings.autofix),
+      };
+    }
+
+    return normalized;
+  }
+
+  private validateAndNormalizeGitHubAutofixSettings(value: unknown): GitHubAutofixSettings {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new IntegrationSettingsValidationError("autofix must be an object");
+    }
+
+    const settings = value as Record<string, unknown>;
+    const booleanKeys = [
+      "enabled",
+      "reviewsEnabled",
+      "prCommentsEnabled",
+      "openInspectReviewsEnabled",
+    ] as const;
+    for (const key of booleanKeys) {
+      if (settings[key] !== undefined && typeof settings[key] !== "boolean") {
+        throw new IntegrationSettingsValidationError(`autofix.${key} must be a boolean`);
+      }
+    }
+
+    const allowedReviewBots = settings.allowedReviewBots;
+    if (
+      allowedReviewBots !== undefined &&
+      (!Array.isArray(allowedReviewBots) ||
+        !allowedReviewBots.every((login) => typeof login === "string"))
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "autofix.allowedReviewBots must be an array of strings"
+      );
+    }
+
+    const maxAttempts = settings.maxAttemptsPerPrPer24Hours;
+    if (
+      maxAttempts !== undefined &&
+      (typeof maxAttempts !== "number" ||
+        !Number.isInteger(maxAttempts) ||
+        maxAttempts < 1 ||
+        maxAttempts > 50)
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "autofix.maxAttemptsPerPrPer24Hours must be an integer from 1 to 50"
+      );
+    }
+
+    const normalized: GitHubAutofixSettings = {};
+    for (const key of booleanKeys) {
+      if (typeof settings[key] === "boolean") normalized[key] = settings[key];
+    }
+    if (Array.isArray(allowedReviewBots)) {
+      normalized.allowedReviewBots = Array.from(
+        new Set(allowedReviewBots.map((login) => login.trim().toLowerCase()).filter(Boolean))
+      );
+    }
+    if (typeof maxAttempts === "number") {
+      normalized.maxAttemptsPerPrPer24Hours = maxAttempts;
+    }
+    return normalized;
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {

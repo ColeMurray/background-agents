@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 import { encryptToken } from "../../src/auth/crypto";
 import {
   collectMessages,
@@ -89,8 +90,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
         sandboxId: SANDBOX_ID,
         status: "ready",
       });
-      await runInDurableObject(stub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      await runInSessionDO(stub, (instance: SessionDO, state) => {
+        state.storage.sql.exec("UPDATE session SET status = ?", status);
       });
 
       const { ws, response } = await openSandboxWs(name, {
@@ -113,8 +114,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
         sandboxId: SANDBOX_ID,
         status: "connecting",
       });
-      await runInDurableObject(stub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      await runInSessionDO(stub, (instance: SessionDO, state) => {
+        state.storage.sql.exec("UPDATE session SET status = ?", status);
       });
 
       const { ws, response } = await openSandboxWs(name, {
@@ -130,6 +131,32 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     }
   );
 
+  /**
+   * Queue SQL mutations from the pre-authentication sandbox read so they land
+   * inside the token-hash await: the read runs to completion — so anything
+   * checked against its returned row sees the pre-mutation state — before the
+   * microtask fires, guaranteeing the mutation falls inside the
+   * `crypto.subtle.digest` suspension rather than before or after it.
+   */
+  async function mutateSandboxDuringAuth(
+    stub: DurableObjectStub,
+    ...statements: string[]
+  ): Promise<void> {
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      const repository = componentsOf(instance).sandboxRepository;
+      const readSandbox = repository.getSandbox.bind(repository);
+      vi.spyOn(repository, "getSandbox").mockImplementation(() => {
+        const sandbox = readSandbox();
+        queueMicrotask(() => {
+          for (const statement of statements) {
+            state.storage.sql.exec(statement);
+          }
+        });
+        return sandbox;
+      });
+    });
+  }
+
   it("revalidates terminal state after asynchronous authentication", async () => {
     const name = `ws-session-auth-race-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -143,17 +170,11 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     // does not hold other events back while it runs. Cancelling mid-hash is the
     // real race: a status read taken before the await is already stale by the
     // time the upgrade is accepted.
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      const authenticating = instance as unknown as {
-        isValidSandboxToken: () => Promise<boolean>;
-      };
-      vi.spyOn(authenticating, "isValidSandboxToken").mockImplementation(async () => {
-        instance.ctx.storage.sql.exec("UPDATE session SET status = 'cancelled'");
-        instance.ctx.storage.sql.exec("UPDATE sandbox SET status = 'stopped'");
-        await Promise.resolve();
-        return true;
-      });
-    });
+    await mutateSandboxDuringAuth(
+      stub,
+      "UPDATE session SET status = 'cancelled'",
+      "UPDATE sandbox SET status = 'stopped'"
+    );
 
     const { ws, response } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,
@@ -161,11 +182,90 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
 
     expect(response.status).toBe(410);
+    // Pin the branch: after authentication the session guard runs before the
+    // sandbox guard, so the fresh session read must be what rejected this.
+    expect(await response.text()).toBe("Session is terminal");
     expect(ws).toBeNull();
     // The rejected upgrade must not flip the sandbox back to `ready`.
     expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
       { status: "stopped" },
     ]);
+  });
+
+  it("revalidates sandbox lifecycle state after asynchronous authentication", async () => {
+    const name = `ws-sandbox-stop-race-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "ready",
+    });
+
+    // Only the sandbox stops mid-hash; the session stays promptable, so only
+    // a fresh post-authentication sandbox read can reject this upgrade.
+    await mutateSandboxDuringAuth(stub, "UPDATE sandbox SET status = 'stopped'");
+
+    const { ws, response } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+
+    expect(response.status).toBe(410);
+    expect(await response.text()).toBe("Sandbox is stopped");
+    expect(ws).toBeNull();
+    // The rejected upgrade must not flip the sandbox back to `ready`.
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
+      { status: "stopped" },
+    ]);
+  });
+
+  it("rejects credentials rotated during asynchronous authentication", async () => {
+    const name = `ws-sandbox-rotate-race-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "ready",
+    });
+
+    // A respawn rotates the auth token mid-hash. The presented token still
+    // matches the pre-rotation row captured before the await, so token
+    // validation alone would admit a bridge the current row no longer trusts.
+    await mutateSandboxDuringAuth(
+      stub,
+      "UPDATE sandbox SET auth_token_hash = 'rotated-token-hash'"
+    );
+
+    const { ws, response } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe("Forbidden: Sandbox credentials changed");
+    expect(ws).toBeNull();
+  });
+
+  it("returns 401, not 410, for a stopped sandbox with an invalid token (auth precedes state checks)", async () => {
+    const name = `ws-sandbox-stopped-badtoken-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "stopped",
+    });
+
+    // Contract change ported from prod: lifecycle state is only revealed to
+    // authenticated callers. An unauthenticated caller used to see 410 from
+    // the pre-auth stopped-sandbox guard; it now gets 401.
+    const { ws, response } = await openSandboxWs(name, {
+      authToken: "wrong-token",
+      sandboxId: SANDBOX_ID,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("Unauthorized: Invalid auth token");
+    expect(ws).toBeNull();
   });
 
   it("sandbox connect sets status to ready", async () => {
@@ -203,12 +303,12 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       status: "connecting",
     });
     const [codePassword, vncPassword, terminalToken] = await Promise.all([
-      encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
-      encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
-      encryptToken("terminal-token", env.REPO_SECRETS_ENCRYPTION_KEY),
+      encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
+      encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
+      encryptToken("terminal-token", env.REPO_SECRETS_ENCRYPTION_KEY!),
     ]);
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         `UPDATE sandbox
          SET code_server_url = ?, code_server_password = ?, vnc_url = ?, vnc_password = ?,
              ttyd_url = ?, ttyd_token = ?`,
@@ -257,12 +357,10 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       sandboxId: SANDBOX_ID,
       status: "spawning",
     });
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      const lifecycleManager = (
-        instance as unknown as {
-          lifecycleManager: { providerStartupPending: boolean };
-        }
-      ).lifecycleManager;
+    await runInSessionDO(stub, (instance: SessionDO) => {
+      const lifecycleManager = componentsOf(instance).lifecycleManager as unknown as {
+        providerStartupPending: boolean;
+      };
       lifecycleManager.providerStartupPending = true;
     });
     const { ws: clientWs } = await openClientWs(name, { subscribe: true });
@@ -354,8 +452,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     await closed;
 
     const oldHeartbeat = Date.now() - 10 * 60 * 1000;
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
     });
 
     const { ws: reconnectedWs, response } = await openSandboxWs(name, {
@@ -372,7 +470,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     );
     expect(sandboxAfterReconnect[0].last_heartbeat).toBeGreaterThan(oldHeartbeat);
 
-    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+    await runInSessionDO(stub, (instance: SessionDO) => instance.alarm());
 
     const sandboxAfterAlarm = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
     expect(sandboxAfterAlarm[0].status).toBe("ready");
@@ -458,10 +556,11 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     sandboxWs!.accept();
 
     const collector = collectMessages(clientWs, {
-      until: (message) =>
-        message.type === "sandbox_event" &&
-        message.event.type === "token" &&
-        message.event.content === "After compaction",
+      until: (message) => {
+        if (message.type !== "sandbox_event") return false;
+        const event = message.event as { type?: string; content?: string };
+        return event.type === "token" && event.content === "After compaction";
+      },
     });
     const before = {
       type: "token",

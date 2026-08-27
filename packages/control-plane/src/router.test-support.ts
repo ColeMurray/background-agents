@@ -8,10 +8,11 @@
 
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { BackgroundTasks } from "./platform-ports";
+import { createTestBackgroundTasks } from "./background-tasks.test-support";
 
-export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTasks = {
-  submit: () => {},
-};
+// The single contract-faithful double lives in background-tasks.test-support;
+// this shared instance's recordings are unused by the router suites.
+export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTasks = createTestBackgroundTasks();
 
 /** Per-service secrets for unit-test env fixtures, mirrored by signedServiceRequest. */
 export const TEST_SERVICE_SECRETS = {
