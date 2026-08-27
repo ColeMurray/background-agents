@@ -358,6 +358,27 @@ describe("ProviderAccountsSettings", () => {
     expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
       "Use default: Team ChatGPT"
     );
+    expect(screen.getByText("Default for automation")).toBeInTheDocument();
+  });
+
+  it("does not label the stored account as the automation default in API key mode", () => {
+    defaultsResult = [
+      {
+        provider: "openai",
+        providerAccountId: account.id,
+        unattendedMode: "api_key",
+        createdBy: null,
+        updatedBy: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
+      "No account (API key)"
+    );
+    expect(screen.queryByText("Default for automation")).not.toBeInTheDocument();
   });
 
   it("sets the provider default from the account row", async () => {

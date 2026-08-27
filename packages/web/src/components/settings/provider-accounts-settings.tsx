@@ -294,6 +294,8 @@ export function ProviderAccountsSettings() {
                     (item) => item.provider === account.provider
                   );
                   const isDefault = providerDefault?.providerAccountId === account.id;
+                  const isDefaultForAutomation =
+                    isDefault && providerDefault.unattendedMode === "provider_account";
                   const externalAccountId = account.externalAccountId;
                   return (
                     <div key={account.id} className="p-4">
@@ -326,7 +328,7 @@ export function ProviderAccountsSettings() {
                               >
                                 {accountStatusLabel(account.status)}
                               </span>
-                              {isDefault && (
+                              {isDefaultForAutomation && (
                                 <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
                                   Default for automation
                                 </span>
