@@ -35,6 +35,16 @@ describe("Global secrets API", () => {
       expect(response.status).toBe(400);
     });
 
+    it("rejects non-string secret values with the shared request error", async () => {
+      const response = await serviceFetch("https://test.local/secrets", {
+        method: "PUT",
+        body: JSON.stringify({ secrets: { TOKEN: 123 } }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Request body must include secrets object" });
+    });
+
     it("returns 401 without auth", async () => {
       const response = await SELF.fetch("https://test.local/secrets", {
         method: "PUT",

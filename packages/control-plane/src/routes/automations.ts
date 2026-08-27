@@ -4,15 +4,15 @@
 
 import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
-  triggerConfigSchema,
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
-import type {
-  CreateAutomationRequest,
-  UpdateAutomationRequest,
+import {
+  createAutomationRequestSchema,
+  sentryClientSecretSchema,
+  updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { listChannels } from "@open-inspect/shared/slack";
@@ -47,11 +47,7 @@ import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/
 import { createLogger } from "../logger";
 import { AutomationTriggerBlockedError, Scheduler } from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
-import {
-  automationRepositoriesInputSchema,
-  MAX_AUTOMATION_REPOSITORIES,
-} from "@open-inspect/shared/types/automations";
-import { isEnvironmentId } from "@open-inspect/shared/types/environments";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import {
   type Route,
   type RequestContext,
@@ -81,40 +77,64 @@ const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
 const RECENT_EXECUTION_COUNT = 10;
 
-type ParseTriggerConfigResult =
-  | { ok: true; triggerConfig: TriggerConfig }
-  | { ok: false; error: string };
+const createAutomationBodySchema = createAutomationRequestSchema.extend({
+  // Bot-asserted actor display fields are cosmetic only; identity enforcement
+  // still runs against the raw pre-Zod body before these parsed values are used.
+  actorDisplayName: z.string().optional(),
+  actorEmail: z.string().optional(),
+  actorAvatarUrl: z.string().optional(),
+});
 
-function parseTriggerConfig(value: unknown): ParseTriggerConfigResult {
-  const parsed = triggerConfigSchema.safeParse(value);
-  if (parsed.success) return { ok: true, triggerConfig: parsed.data };
+type CreateAutomationBody = z.infer<typeof createAutomationBodySchema>;
 
-  const issue = parsed.error.issues[0];
-  if (issue?.path.length === 1 && issue.path[0] === "conditions") {
-    return { ok: false, error: "triggerConfig.conditions must be an array" };
+const regenerateSentrySecretBodySchema = z.object({
+  sentryClientSecret: sentryClientSecretSchema,
+});
+
+function formatAutomationRequestError(parseError: z.ZodError, rawBody: unknown): string {
+  const issue = parseError.issues[0];
+  const field = issue?.path[0];
+
+  if (field === "environmentIds") {
+    return issue.message === "must not contain duplicates"
+      ? "environmentIds must not contain duplicates"
+      : "environmentIds must be an array of environment ids (env_…)";
   }
 
-  const path = ["triggerConfig", ...(issue?.path ?? [])].map(String).join(".");
-  const conditionIndex = issue?.path[0] === "conditions" ? issue.path[1] : undefined;
-  const rawConditions =
-    typeof value === "object" && value !== null && "conditions" in value
-      ? (value as { conditions?: unknown }).conditions
-      : undefined;
-  const rawCondition =
-    typeof conditionIndex === "number" && Array.isArray(rawConditions)
-      ? rawConditions[conditionIndex]
-      : undefined;
-  const conditionType =
-    typeof rawCondition === "object" &&
-    rawCondition !== null &&
-    "type" in rawCondition &&
-    typeof rawCondition.type === "string"
-      ? `${rawCondition.type}: `
-      : "";
-  return {
-    ok: false,
-    error: `${path}: ${conditionType}${issue?.message ?? "invalid trigger config"}`,
-  };
+  if (field === "repositories") {
+    const index = typeof issue.path[1] === "number" ? `[${String(issue.path[1])}]` : "";
+    return `repositories${index}: ${issue.message}`;
+  }
+
+  if (field === "triggerConfig") {
+    if (issue.path.length === 2 && issue.path[1] === "conditions") {
+      return "triggerConfig.conditions must be an array";
+    }
+
+    const path = issue.path.map(String).join(".");
+    const conditionIndex = issue.path[1] === "conditions" ? issue.path[2] : undefined;
+    const conditions =
+      rawBody &&
+      typeof rawBody === "object" &&
+      "triggerConfig" in rawBody &&
+      rawBody.triggerConfig &&
+      typeof rawBody.triggerConfig === "object" &&
+      "conditions" in rawBody.triggerConfig &&
+      Array.isArray(rawBody.triggerConfig.conditions)
+        ? rawBody.triggerConfig.conditions
+        : undefined;
+    const condition = typeof conditionIndex === "number" ? conditions?.[conditionIndex] : undefined;
+    const conditionType =
+      condition &&
+      typeof condition === "object" &&
+      "type" in condition &&
+      typeof condition.type === "string"
+        ? `${condition.type}: `
+        : "";
+    return `${path}: ${conditionType}${issue.message}`;
+  }
+
+  return "Invalid automation request";
 }
 
 /** Warn if next run is more than 31 days away. */
@@ -128,21 +148,15 @@ function resolveReasoningEffort(
   return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
 }
 
-interface NormalizedRepositoryInput {
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string | null;
-}
+type NormalizedRepositoryInput = NonNullable<CreateAutomationBody["repositories"]>[number];
 
 type RepositorySelectionRequest =
   | { kind: "unchanged" }
   | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
- * Thrown by {@link parseRepositorySelection} and {@link parseEnvironmentBinding}
- * when the session-target payload is invalid. Route handlers catch it and answer
- * 400 — the parsers stay free of HTTP concerns (mirrors
- * normalizeOptionalRepositoryPair / RepositoryPairValidationError).
+ * Thrown when selection semantics cannot be satisfied. Route handlers catch it
+ * and answer 400 while request shape validation remains in the shared schemas.
  */
 class TargetSelectionError extends Error {
   constructor(message: string) {
@@ -152,20 +166,14 @@ class TargetSelectionError extends Error {
 }
 
 /**
- * Parse the repository selection from a create/update body. `unchanged` means
- * the body did not touch the selection (create treats that as empty).
- *
- * @throws TargetSelectionError when the `repositories` payload is invalid.
+ * Select the repositories from an already-parsed create/update body. `unchanged`
+ * means the body did not touch the selection (create treats that as empty).
  */
-function parseRepositorySelection(body: { repositories?: unknown }): RepositorySelectionRequest {
+function getRepositorySelection(body: {
+  repositories?: NormalizedRepositoryInput[];
+}): RepositorySelectionRequest {
   if (body.repositories === undefined) return { kind: "unchanged" };
-  const parsed = automationRepositoriesInputSchema.safeParse(body.repositories);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
-    throw new TargetSelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
-  }
-  return { kind: "replace", repositories: parsed.data };
+  return { kind: "replace", repositories: body.repositories };
 }
 
 /**
@@ -203,27 +211,13 @@ type EnvironmentSelectionRequest =
   | { kind: "replace"; environmentIds: string[] };
 
 /**
- * Parse the environment selection from a create/update body (design §13.3).
- * `unchanged` means the body did not touch the selection (create treats that
- * as empty); an array replaces it wholesale (empty clears).
- *
- * @throws TargetSelectionError when the `environmentIds` payload is malformed.
+ * Select the environments from an already-parsed create/update body (design
+ * §13.3). `unchanged` means the body did not touch the selection (create treats
+ * that as empty); an array replaces it wholesale (empty clears).
  */
-function parseEnvironmentSelection(body: {
-  environmentIds?: unknown;
-}): EnvironmentSelectionRequest {
+function getEnvironmentSelection(body: { environmentIds?: string[] }): EnvironmentSelectionRequest {
   if (body.environmentIds === undefined) return { kind: "unchanged" };
-  if (
-    !Array.isArray(body.environmentIds) ||
-    body.environmentIds.some((id) => typeof id !== "string" || !isEnvironmentId(id))
-  ) {
-    throw new TargetSelectionError("environmentIds must be an array of environment ids (env_…)");
-  }
-  const environmentIds = body.environmentIds as string[];
-  if (new Set(environmentIds).size !== environmentIds.length) {
-    throw new TargetSelectionError("environmentIds must not contain duplicates");
-  }
-  return { kind: "replace", environmentIds };
+  return { kind: "replace", environmentIds: body.environmentIds };
 }
 
 /**
@@ -444,27 +438,21 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<
-    CreateAutomationRequest & {
-      // Bot-asserted actor display fields — cosmetic, never identity.
-      actorDisplayName?: string;
-      actorEmail?: string;
-      actorAvatarUrl?: string;
-    }
-  >(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
-    const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-    body.triggerConfig = parsedTriggerConfig.triggerConfig;
-  }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
 
   // Automation attribution comes from the verified principal. The stored
   // values are replayed by the scheduler as session identity at fire time,
   // so this is where they become trustworthy.
-  const enforcement = applyIdentityEnforcement(ctx, "automation-create", body);
+  const enforcement = applyIdentityEnforcement(ctx, "automation-create", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
+
+  const parsedBody = createAutomationBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
+  }
+  const body: CreateAutomationBody = parsedBody.data;
 
   // Validate required fields
   if (!body.name || typeof body.name !== "string" || body.name.trim().length === 0) {
@@ -484,13 +472,7 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  let selection: RepositorySelectionRequest;
-  try {
-    selection = parseRepositorySelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
+  const selection = getRepositorySelection(body);
   const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
 
   // Validate trigger type
@@ -508,7 +490,7 @@ async function handleCreateAutomation(
   }
   let requestedEnvironmentIds: string[];
   try {
-    const environmentSelection = parseEnvironmentSelection(body);
+    const environmentSelection = getEnvironmentSelection(body);
     requestedEnvironmentIds =
       environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
     validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
@@ -733,17 +715,16 @@ async function handleUpdateAutomation(
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
-  const body = await parseJsonBody<UpdateAutomationRequest>(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
-    if (existing.trigger_type === "schedule") {
-      return error("Cannot set triggerConfig on schedule automations", 400);
-    }
-    if (body.triggerConfig !== null) {
-      const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-      if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-      body.triggerConfig = parsedTriggerConfig.triggerConfig;
-    }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  const parsedBody = updateAutomationRequestSchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
+  }
+  const body = parsedBody.data;
+
+  if (body.triggerConfig !== undefined && existing.trigger_type === "schedule") {
+    return error("Cannot set triggerConfig on schedule automations", 400);
   }
 
   let replacementProviderSelections: ModelProviderSelections | null = null;
@@ -829,21 +810,8 @@ async function handleUpdateAutomation(
   // active-invocation guard. In-flight invocations already materialized their
   // children from their firing-time snapshot, so an edit cannot corrupt them;
   // it simply applies from the next invocation.
-  let selection: RepositorySelectionRequest;
-  try {
-    selection = parseRepositorySelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
-
-  let environmentSelection: EnvironmentSelectionRequest;
-  try {
-    environmentSelection = parseEnvironmentSelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
+  const selection = getRepositorySelection(body);
+  const environmentSelection = getEnvironmentSelection(body);
 
   // The count rules span both selections, so when EITHER is replaced they are
   // validated against the automation's FINAL state (the replacement plus the
@@ -1184,16 +1152,17 @@ async function handleRegenerateKey(
 
   if (automation.trigger_type === "sentry") {
     // Sentry: user provides a new client secret
-    const body = await parseJsonBody<{ sentryClientSecret?: string }>(request);
-    if (body instanceof Response) return body;
-    if (!body.sentryClientSecret || typeof body.sentryClientSecret !== "string") {
+    const rawBody = await parseJsonBody<unknown>(request);
+    if (rawBody instanceof Response) return rawBody;
+    const parsedBody = regenerateSentrySecretBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
       return error("sentryClientSecret is required", 400);
     }
     if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
       return error("Encryption key not configured", 503);
     }
     const encrypted = await encryptSentrySecret(
-      body.sentryClientSecret,
+      parsedBody.data.sentryClientSecret,
       env.REPO_SECRETS_ENCRYPTION_KEY
     );
     await store.update(id, { trigger_auth_data: encrypted } as Record<string, unknown>);

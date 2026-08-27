@@ -386,6 +386,17 @@ describe("automation route handlers", () => {
       );
     });
 
+    it("rejects partial create payloads before persistence", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: { instructions: "Run tests" },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: "Invalid automation request" });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it("persists a complete provider pin map in the create batch", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       const providerSelections = {
@@ -1022,7 +1033,7 @@ describe("automation route handlers", () => {
       }
     );
 
-    it("rejects trigger config on schedule automations before shape validation", async () => {
+    it("validates trigger config shape before schedule automation semantics", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const response = await callRoute("PUT", "/automations/auto-1", {
@@ -1030,8 +1041,8 @@ describe("automation route handlers", () => {
       });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "Cannot set triggerConfig on schedule automations",
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining("triggerConfig.conditions"),
       });
     });
 
@@ -1047,6 +1058,33 @@ describe("automation route handlers", () => {
         "auto-1",
         expect.objectContaining({ reasoning_effort: "high" })
       );
+    });
+
+    it("accepts nullable reasoning effort in update payloads", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, reasoning_effort: "high" });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { reasoningEffort: null },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ reasoning_effort: null })
+      );
+    });
+
+    it("rejects malformed update payloads before persistence", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { reasoningEffort: 123 },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: "Invalid automation request" });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("clears incompatible reasoning effort when model changes", async () => {
@@ -1369,6 +1407,23 @@ describe("automation route handlers", () => {
       const body = await res.json<{ error: string }>();
       expect(body.error).toContain("no cron schedule");
     });
+  });
+
+  describe("POST /automations/:id/regenerate-key", () => {
+    it.each([123, "  "])(
+      "rejects malformed sentry secret payloads before persistence",
+      async (sentryClientSecret) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "sentry" });
+
+        const res = await callRoute("POST", "/automations/auto-1/regenerate-key", {
+          body: { sentryClientSecret },
+        });
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toEqual({ error: "sentryClientSecret is required" });
+        expect(mockStore.update).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe("POST /automations/:id/trigger", () => {

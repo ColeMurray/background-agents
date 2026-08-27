@@ -135,6 +135,34 @@ describe("applyMigrations", () => {
     expect(recordedIds).toEqual(expectedIds);
   });
 
+  it("validates PRAGMA rows in the earliest column-aware migration", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 7);
+    if (!migration || typeof migration.run !== "function") {
+      throw new Error("Expected migration 7 to be a function");
+    }
+    const run = migration.run;
+    mock.setData("PRAGMA table_info(participants)", [{ name: 123 }]);
+
+    expect(() => run(mock.sql)).toThrow("Invalid SQLite column metadata at row 0");
+  });
+
+  it("does not record a migration when PRAGMA metadata is malformed", () => {
+    mock.setData(
+      "SELECT id FROM _schema_migrations",
+      MIGRATIONS.filter(({ id }) => id < 23).map(({ id }) => ({ id }))
+    );
+    mock.setData("PRAGMA table_info(session)", [{ name: "id" }, null]);
+
+    expect(() => applyMigrations(mock.sql)).toThrow("Invalid SQLite column metadata at row 1");
+
+    expect(
+      mock.calls.some(
+        ({ query, params }) =>
+          query.includes("INSERT OR IGNORE INTO _schema_migrations") && params[0] === 23
+      )
+    ).toBe(false);
+  });
+
   it("rethrows non-duplicate-column errors from string migrations", () => {
     // Make the exec throw a non-duplicate-column error for ALTER statements
     const originalExec = mock.sql.exec.bind(mock.sql);
