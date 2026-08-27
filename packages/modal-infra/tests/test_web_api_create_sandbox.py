@@ -642,7 +642,12 @@ async def test_restore_sandbox_forwards_session_config_verbatim(monkeypatch):
         "repo_owner": "acme",
         "repo_name": "frontend",
         "repositories": [
-            {"repo_owner": "acme", "repo_name": "frontend", "branch": "main"},
+            {
+                "repo_owner": "acme",
+                "repo_name": "frontend",
+                "branch": "main",
+                "future_repository_field": {"nested": True},
+            },
             {"repo_owner": "acme", "repo_name": "backend", "branch": "develop"},
         ],
         "working_branch_name": "open-inspect/sess-1",

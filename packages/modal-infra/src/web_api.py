@@ -99,6 +99,10 @@ class InteractiveRepositoryRequest(_ModalRequestModel):
     base_sha: str | None = None
 
 
+class RestoreRepositoryRequest(InteractiveRepositoryRequest):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+
 class _RepositoryContextModel(_ModalRequestModel):
     repo_owner: str | None = None
     repo_name: str | None = None
@@ -146,7 +150,7 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
     provider: str | None = None
     model: str | None = None
     mcp_servers: list[dict[str, Any]] | None = None
-    repositories: list[InteractiveRepositoryRequest] | None = None
+    repositories: list[RestoreRepositoryRequest] | None = None
     working_branch_name: str | None = None
 
 
