@@ -176,13 +176,17 @@ export interface SchedulerEventResult {
   steered: number;
 }
 
-export type SchedulerTriggerResult =
-  | { outcome: "started"; invocationId: string; runs: AutomationRun[] }
-  | { outcome: "not_found"; error: "Automation not found" }
-  | { outcome: "blocked"; error: "An active run already exists" }
-  | { outcome: "failed"; error: "Failed to trigger automation" };
+export interface SchedulerTriggerResult {
+  invocationId: string;
+  runs: AutomationRun[];
+}
 
-export type SchedulerRunCompleteResult = { outcome: "completed" } | { outcome: "ignored" };
+export class AutomationTriggerBlockedError extends Error {
+  constructor() {
+    super("An active run already exists");
+    this.name = "AutomationTriggerBlockedError";
+  }
+}
 
 interface StartInvocationParams {
   automation: AutomationRow;
@@ -1020,14 +1024,14 @@ export class Scheduler {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
-      return { outcome: "not_found", error: "Automation not found" };
+      throw new Error("Automation not found");
     }
 
     const result = await this.startInvocation(store, { automation, source: "manual" });
 
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing.
-      return { outcome: "blocked", error: "An active run already exists" };
+      throw new AutomationTriggerBlockedError();
     }
 
     const runs = result.runs.map((run) =>
@@ -1043,7 +1047,7 @@ export class Scheduler {
         error: result.runs[0]?.failure_reason ?? "unknown",
       });
 
-      return { outcome: "failed", error: "Failed to trigger automation" };
+      throw new Error("Failed to trigger automation");
     }
 
     this.log.info("Manual trigger succeeded", {
@@ -1053,12 +1057,12 @@ export class Scheduler {
       launched: result.launched,
     });
 
-    return { outcome: "started", invocationId: result.invocationId, runs };
+    return { invocationId: result.invocationId, runs };
   }
 
   // ─── Run complete callback ───────────────────────────────────────────────
 
-  async runComplete(body: AutomationRunCompletion): Promise<SchedulerRunCompleteResult> {
+  async runComplete(body: AutomationRunCompletion): Promise<void> {
     const store = new AutomationStore(this.db);
 
     const run = await store.getRunById(body.automationId, body.runId);
@@ -1069,7 +1073,7 @@ export class Scheduler {
         run_id: body.runId,
         current_status: "not_found",
       });
-      return { outcome: "ignored" };
+      return;
     }
 
     // SQL-guarded transition: only an active run may go terminal. When the
@@ -1094,7 +1098,7 @@ export class Scheduler {
         run_id: body.runId,
         current_status: run.status,
       });
-      return { outcome: "ignored" };
+      return;
     }
 
     // Invocation-level accounting: one CAS-guarded strike per invocation on
@@ -1136,8 +1140,6 @@ export class Scheduler {
         reasoningEffort: automation?.reasoning_effort ?? undefined,
       });
     }
-
-    return { outcome: "completed" };
   }
 
   /**

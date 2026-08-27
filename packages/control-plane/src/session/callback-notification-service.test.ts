@@ -843,7 +843,7 @@ describe("CallbackNotificationService", () => {
 
   describe("notifyComplete — automation callback", () => {
     it("routes automation callbacks to the injected completion function", async () => {
-      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
+      const completeAutomationRun = vi.fn(async () => undefined);
       const h = createTestHarness({
         completeAutomationRun,
       });
@@ -873,7 +873,7 @@ describe("CallbackNotificationService", () => {
     });
 
     it("sends failure details for failed automation runs", async () => {
-      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
+      const completeAutomationRun = vi.fn(async () => undefined);
       const h = createTestHarness({
         completeAutomationRun,
       });
@@ -935,7 +935,7 @@ describe("CallbackNotificationService", () => {
       const completeAutomationRun = vi
         .fn()
         .mockRejectedValueOnce(new Error("network error"))
-        .mockResolvedValueOnce({ outcome: "completed" });
+        .mockResolvedValueOnce(undefined);
       const h = createTestHarness({
         completeAutomationRun,
       });
@@ -960,7 +960,7 @@ describe("CallbackNotificationService", () => {
     });
 
     it("rejects malformed persisted automation context before scheduler completion", async () => {
-      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
+      const completeAutomationRun = vi.fn(async () => undefined);
       const h = createTestHarness({ completeAutomationRun });
       vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
         callback_context: JSON.stringify({
@@ -986,7 +986,7 @@ describe("CallbackNotificationService", () => {
     });
 
     it("does not route automation callbacks to SLACK_BOT", async () => {
-      const completeAutomationRun = vi.fn(async () => ({ outcome: "completed" as const }));
+      const completeAutomationRun = vi.fn(async () => undefined);
       const h = createTestHarness({
         completeAutomationRun,
       });

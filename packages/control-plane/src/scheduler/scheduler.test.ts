@@ -1807,7 +1807,7 @@ describe("Scheduler", () => {
       const scheduler = createScheduler();
       const result = await scheduler.runComplete(runCompletion());
 
-      expect(result).toEqual({ outcome: "completed" });
+      expect(result).toBeUndefined();
       expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
         status: "completed",
         completed_at: expect.any(Number),
@@ -1822,7 +1822,7 @@ describe("Scheduler", () => {
       );
 
       const scheduler = createScheduler();
-      expect(await scheduler.runComplete(runCompletion())).toEqual({ outcome: "completed" });
+      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
 
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
@@ -1837,7 +1837,7 @@ describe("Scheduler", () => {
       mockStore.tryMarkInvocationFailureCounted.mockResolvedValue(false);
 
       const scheduler = createScheduler();
-      expect(await scheduler.runComplete(runCompletion())).toEqual({ outcome: "completed" });
+      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
 
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
@@ -1879,7 +1879,7 @@ describe("Scheduler", () => {
 
       const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
 
-      expect(result.outcome).toBe("completed");
+      expect(result).toBeUndefined();
       expect(slackFetch).toHaveBeenCalledOnce();
       const [, init] = slackFetch.mock.calls[0];
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -1936,7 +1936,7 @@ describe("Scheduler", () => {
 
       const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
 
-      expect(result.outcome).toBe("completed");
+      expect(result).toBeUndefined();
       expect(slackFetch).toHaveBeenCalledOnce();
       const [, init] = slackFetch.mock.calls[0];
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -1957,7 +1957,7 @@ describe("Scheduler", () => {
         runCompletion({ success: false, error: "Sandbox crashed" })
       );
 
-      expect(result.outcome).toBe("completed");
+      expect(result).toBeUndefined();
       expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
         status: "failed",
         failure_reason: "Sandbox crashed",
@@ -1977,7 +1977,7 @@ describe("Scheduler", () => {
       const scheduler = createScheduler();
       const result = await scheduler.runComplete(runCompletion());
 
-      expect(result).toEqual({ outcome: "ignored" });
+      expect(result).toBeUndefined();
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
     });
@@ -1989,9 +1989,9 @@ describe("Scheduler", () => {
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
 
       const scheduler = createScheduler();
-      expect(
-        await scheduler.runComplete(runCompletion({ success: false, error: "Third failure" }))
-      ).toEqual({ outcome: "completed" });
+      await expect(
+        scheduler.runComplete(runCompletion({ success: false, error: "Third failure" }))
+      ).resolves.toBeUndefined();
 
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
     });
@@ -2007,25 +2007,19 @@ describe("Scheduler", () => {
   });
 
   describe("trigger", () => {
-    it("returns not_found when automation is missing", async () => {
+    it("rejects when automation is missing", async () => {
       mockStore.getById.mockResolvedValue(null);
 
       const scheduler = createScheduler();
-      expect(await scheduler.trigger("nonexistent")).toEqual({
-        outcome: "not_found",
-        error: "Automation not found",
-      });
+      await expect(scheduler.trigger("nonexistent")).rejects.toThrow("Automation not found");
     });
 
-    it("returns blocked when active run exists, recording nothing", async () => {
+    it("rejects when active run exists, recording nothing", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
       mockStore.getActiveRunForAutomation.mockResolvedValue({ id: "run-active" });
 
       const scheduler = createScheduler();
-      expect(await scheduler.trigger("auto-1")).toEqual({
-        outcome: "blocked",
-        error: "An active run already exists",
-      });
+      await expect(scheduler.trigger("auto-1")).rejects.toThrow("An active run already exists");
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
@@ -2038,7 +2032,10 @@ describe("Scheduler", () => {
       const scheduler = createScheduler();
       const result = await scheduler.trigger("auto-1");
 
-      expect(result.outcome).toBe("started");
+      expect(result).toEqual({
+        invocationId: expect.any(String),
+        runs: [expect.objectContaining({ status: "running" })],
+      });
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
       expect(params.invocation).toMatchObject({
         automation_id: "auto-1",
@@ -2051,14 +2048,9 @@ describe("Scheduler", () => {
         expect.any(String),
         expect.any(Number)
       );
-
-      if (result.outcome !== "started") throw new Error("Expected trigger to start");
-      expect(result.invocationId).toEqual(expect.any(String));
-      expect(result.runs[0].status).toBe("running");
-      expect(result.runs).toHaveLength(1);
     });
 
-    it("returns failed when every launch fails, still recording the failed children", async () => {
+    it("rejects when every launch fails, still recording the failed children", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
@@ -2079,9 +2071,7 @@ describe("Scheduler", () => {
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const result = await scheduler.trigger("auto-1");
-
-      expect(result).toEqual({ outcome: "failed", error: "Failed to trigger automation" });
+      await expect(scheduler.trigger("auto-1")).rejects.toThrow("Failed to trigger automation");
 
       const failTrackCall = errorSpy.mock.calls.find(
         ([, data]) =>

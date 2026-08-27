@@ -174,7 +174,7 @@ describe("Scheduler (integration)", () => {
         success: true,
       });
 
-      expect(result).toEqual({ outcome: "completed" });
+      expect(result).toBeUndefined();
 
       // Verify run status
       const run = await store.getRunById("auto-rc1", "run-rc1");
@@ -209,7 +209,7 @@ describe("Scheduler (integration)", () => {
         error: "Sandbox crashed",
       });
 
-      expect(result).toEqual({ outcome: "completed" });
+      expect(result).toBeUndefined();
 
       const run = await store.getRunById("auto-rc2", "run-rc2");
       expect(run!.status).toBe("failed");
@@ -248,7 +248,7 @@ describe("Scheduler (integration)", () => {
         success: false,
         error: "Third consecutive failure",
       });
-      expect(result).toEqual({ outcome: "completed" });
+      expect(result).toBeUndefined();
 
       const automation = await store.getById("auto-rc3");
       expect(automation!.consecutive_failures).toBe(3);
@@ -278,7 +278,7 @@ describe("Scheduler (integration)", () => {
         success: false,
         error: "Second failure",
       });
-      expect(result).toEqual({ outcome: "completed" });
+      expect(result).toBeUndefined();
 
       const automation = await store.getById("auto-rc4");
       expect(automation!.consecutive_failures).toBe(2);
@@ -526,27 +526,35 @@ describe("Scheduler (integration)", () => {
         createScheduler(schedulerEnv),
       ];
 
-      // Not allSettled: a rejected entry point is itself a failure of this
-      // gate. Losing the admission race must degrade to a blocked outcome,
-      // not a thrown request — that is exactly what the removed Durable
-      // Object used to guarantee by serializing every caller.
-      const [triggerA, triggerB, tick] = await Promise.all([
+      const [triggerA, triggerB, tick] = await Promise.allSettled([
         schedulers[0]!.trigger("auto-concurrent-admission"),
         schedulers[1]!.trigger("auto-concurrent-admission"),
         schedulers[2]!.tick(),
       ]);
 
-      const triggerOutcomes = [triggerA.outcome, triggerB.outcome].sort();
-
       // Exactly one admission across all three entry points: either a trigger
-      // won (the other is blocked and the tick found nothing to process) or
-      // the tick won (both triggers are blocked).
-      if (triggerOutcomes.includes("started")) {
-        expect(triggerOutcomes).toEqual(["blocked", "started"]);
-        expect(tick.processed).toBe(0);
-      } else {
-        expect(triggerOutcomes).toEqual(["blocked", "blocked"]);
-        expect(tick.processed).toBe(1);
+      // fulfills or the tick processes the firing. Every losing trigger rejects
+      // as blocked.
+      expect(tick.status).toBe("fulfilled");
+      if (tick.status !== "fulfilled") throw tick.reason;
+
+      const triggers = [triggerA, triggerB];
+      const successfulTriggers = triggers.filter((result) => result.status === "fulfilled");
+      const blockedTriggers = triggers.filter((result) => result.status === "rejected");
+      expect(successfulTriggers).toHaveLength(tick.value.processed === 1 ? 0 : 1);
+      expect(successfulTriggers.length + tick.value.processed).toBe(1);
+      for (const successful of successfulTriggers) {
+        expect(successful).toMatchObject({
+          status: "fulfilled",
+          value: { invocationId: expect.any(String), runs: [expect.any(Object)] },
+        });
+      }
+      expect(blockedTriggers).toHaveLength(2 - successfulTriggers.length);
+      for (const blocked of blockedTriggers) {
+        expect(blocked).toMatchObject({
+          status: "rejected",
+          reason: expect.objectContaining({ message: "An active run already exists" }),
+        });
       }
 
       const runs = await fetchRuns("auto-concurrent-admission");
@@ -620,12 +628,13 @@ describe("Scheduler (integration)", () => {
       expect((await store.getById("auto-slot-ownership"))!.next_run_at).toBe(winnerNext);
     });
 
-    it("returns not_found when automation is not found", async () => {
-      const result = await createScheduler().trigger("nonexistent");
-      expect(result).toEqual({ outcome: "not_found", error: "Automation not found" });
+    it("rejects when automation is not found", async () => {
+      await expect(createScheduler().trigger("nonexistent")).rejects.toThrow(
+        "Automation not found"
+      );
     });
 
-    it("returns blocked when active run exists", async () => {
+    it("rejects when active run exists", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-trig1" }));
@@ -639,22 +648,41 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      const result = await createScheduler().trigger("auto-trig1");
-      expect(result).toEqual({ outcome: "blocked", error: "An active run already exists" });
+      await expect(createScheduler().trigger("auto-trig1")).rejects.toThrow(
+        "An active run already exists"
+      );
     });
 
     it("creates a run record when triggered", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-trig2" }));
 
-      const result = await createScheduler().trigger("auto-trig2");
+      const sessionFetch = vi.fn(async (input: RequestInfo | URL) => {
+        const path = new URL(
+          typeof input === "string" ? input : input instanceof Request ? input.url : input.href
+        ).pathname;
+        if (path === "/internal/init") return Response.json({ status: "ok" });
+        if (path === "/internal/prompt") {
+          return Response.json({ messageId: "msg-trigger", status: "queued" });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+      const schedulerEnv = {
+        ...(env as Env),
+        SESSION: {
+          idFromName: vi.fn((name: string) => name),
+          get: vi.fn(() => ({ fetch: sessionFetch })),
+        } as unknown as DurableObjectNamespace,
+      };
 
-      // Trigger will attempt session creation. In test env it may start or fail
-      // at prompt sending. Either way, a run record is created.
-      expect(["started", "failed"]).toContain(result.outcome);
+      const result = await createScheduler(schedulerEnv).trigger("auto-trig2");
+      expect(result).toEqual({
+        invocationId: expect.any(String),
+        runs: [expect.objectContaining({ status: "running" })],
+      });
 
       const runs = await fetchRuns("auto-trig2");
-      expect(runs.length).toBeGreaterThanOrEqual(1);
+      expect(runs).toHaveLength(1);
       expect(runs[0]!.invocation_id).not.toBeNull();
     });
   });

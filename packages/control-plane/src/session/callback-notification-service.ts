@@ -20,7 +20,7 @@ import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
-import type { AutomationRunCompletion, SchedulerRunCompleteResult } from "../scheduler/scheduler";
+import type { AutomationRunCompletion } from "../scheduler/scheduler";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
@@ -42,9 +42,7 @@ export interface CallbackServiceEnv {
   LINEAR_BOT?: FetchClient;
 }
 
-export type AutomationRunCompletionHandler = (
-  completion: AutomationRunCompletion
-) => Promise<SchedulerRunCompleteResult>;
+export type AutomationRunCompletionHandler = (completion: AutomationRunCompletion) => Promise<void>;
 
 /**
  * Dependencies injected into CallbackNotificationService.
@@ -322,7 +320,7 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    const delivery = await retryDelivery<SchedulerRunCompleteResult, never>(
+    const delivery = await retryDelivery<void, never>(
       async () => ({
         outcome: "delivered",
         value: await completeAutomationRun(payload),
