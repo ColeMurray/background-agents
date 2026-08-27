@@ -5,7 +5,8 @@ import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/t
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
-import { BoxIcon, RightSidebarIcon, RightSidebarOpenIcon } from "@/components/ui/icons";
+import { BoxIcon, RightSidebarIcon } from "@/components/ui/icons";
+import { RightSidebarOpenIcon } from "@/components/ui/right-sidebar-open-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
