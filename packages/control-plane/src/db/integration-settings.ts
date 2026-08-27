@@ -61,8 +61,8 @@ function parseSettings<TSchema extends z.ZodType<object>>(
   if (!result.success) {
     const issue = result.error.issues[0];
     const detail =
-      issue?.code === "invalid_type" && issue.expected === "boolean" && issue.path.length > 0
-        ? `${issue.path.join(".")} must be a boolean`
+      issue?.code === "invalid_type" && issue.path.length > 0
+        ? `${issue.path.join(".")} must be ${issue.expected === "array" ? "an" : "a"} ${issue.expected}`
         : (issue?.message ?? "invalid shape");
     throw new IntegrationSettingsValidationError(`${description} are invalid: ${detail}`);
   }
