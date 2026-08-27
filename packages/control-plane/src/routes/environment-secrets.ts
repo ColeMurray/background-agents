@@ -24,7 +24,10 @@ import {
   parseJsonBody,
   resolveRepoOrError,
 } from "./shared";
-import { environmentSecretsImportBodySchema } from "./secret-request-schemas";
+import {
+  environmentSecretsImportBodySchema,
+  secretsRequestBodySchema,
+} from "./secret-request-schemas";
 import type { Env } from "../types";
 
 const logger = createLogger("router:environment-secrets");
@@ -128,11 +131,13 @@ async function handleSetEnvironmentSecrets(
   const environment = await store.getById(id);
   if (!environment) return error("Environment not found", 404);
 
-  const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
-  if (body instanceof Response) return body;
-  if (!body?.secrets || typeof body.secrets !== "object") {
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
     return error("Request body must include secrets object", 400);
   }
+  const body = parsedBody.data;
 
   const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
   try {
@@ -244,8 +249,8 @@ async function handleImportEnvironmentSecrets(
   }
   const body = parsedBody.data;
 
-  const srcOwner = body.repoOwner.trim().toLowerCase();
-  const srcName = body.repoName.trim().toLowerCase();
+  const srcOwner = body.repoOwner;
+  const srcName = body.repoName;
 
   // Authorization: the source repo must be one of the environment's repositories.
   const envRepos = await store.getRepositoriesForEnvironment(id);

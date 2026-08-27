@@ -19,13 +19,15 @@ describe("secret request schemas", () => {
 
   it("parses a valid environment secret import body with optional keys", () => {
     const parsed = environmentSecretsImportBodySchema.safeParse({
-      repoOwner: "acme",
-      repoName: "app",
+      repoOwner: " Acme ",
+      repoName: " App ",
       keys: ["TOKEN"],
     });
 
     expect(parsed.success).toBe(true);
-    if (parsed.success) expect(parsed.data.keys).toEqual(["TOKEN"]);
+    if (parsed.success) {
+      expect(parsed.data).toEqual({ repoOwner: "acme", repoName: "app", keys: ["TOKEN"] });
+    }
   });
 
   it("parses an environment secret import body without keys", () => {
@@ -40,6 +42,9 @@ describe("secret request schemas", () => {
 
   it("rejects malformed environment secret import bodies", () => {
     expect(environmentSecretsImportBodySchema.safeParse({ repoOwner: "acme" }).success).toBe(false);
+    expect(
+      environmentSecretsImportBodySchema.safeParse({ repoOwner: "   ", repoName: "app" }).success
+    ).toBe(false);
     expect(
       environmentSecretsImportBodySchema.safeParse({
         repoOwner: "acme",

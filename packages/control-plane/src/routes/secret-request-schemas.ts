@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { repositoryPairInputSchema } from "@open-inspect/shared/types/repositories";
 
 export const secretsRequestBodySchema = z.object({
   secrets: z.record(z.string(), z.string()),
@@ -6,9 +7,7 @@ export const secretsRequestBodySchema = z.object({
 
 export type SecretsRequestBody = z.infer<typeof secretsRequestBodySchema>;
 
-export const environmentSecretsImportBodySchema = z.object({
-  repoOwner: z.string().min(1),
-  repoName: z.string().min(1),
+export const environmentSecretsImportBodySchema = repositoryPairInputSchema.extend({
   keys: z.array(z.string()).optional(),
 });
 
