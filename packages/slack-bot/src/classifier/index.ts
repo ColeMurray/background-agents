@@ -7,13 +7,13 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import type { Env, ThreadContext, ClassificationResult } from "../types";
 import { buildRepoDescriptions } from "./repos";
 import { buildEnvironmentDescriptions } from "./environments";
 import { loadTargetCatalog, type TargetCatalog } from "./catalog";
 import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
-import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_MODEL,
@@ -26,7 +26,11 @@ import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
-const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium", "low"];
+const CONFIDENCE_LEVELS = [
+  "high",
+  "medium",
+  "low",
+] as const satisfies readonly ClassificationResult["confidence"][];
 
 const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
   name: CLASSIFY_TARGET_TOOL_NAME,
@@ -130,59 +134,36 @@ Respond with a JSON object with these fields:
 - alternatives: other possible targets when confidence is not high`;
 }
 
-/**
- * Parse the LLM response into a structured result.
- */
-interface LLMResponse {
-  targetId: string | null;
-  confidence: ConfidenceLevel;
-  reasoning: string;
-  alternatives: string[];
-}
+const llmResponseSchema = z.object({
+  targetId: z
+    .union([z.string(), z.null()])
+    .transform((value) => (typeof value === "string" && value.trim() ? value.trim() : null)),
+  confidence: z
+    .string()
+    .transform((value) => value.trim().toLowerCase())
+    .pipe(z.enum(CONFIDENCE_LEVELS)),
+  reasoning: z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(z.string().min(1)),
+  alternatives: z
+    .array(
+      z
+        .string()
+        .transform((value) => value.trim())
+        .pipe(z.string().min(1))
+    )
+    .transform((values) => [...new Set(values)]),
+});
+
+type LLMResponse = z.infer<typeof llmResponseSchema>;
 
 function normalizeModelResponse(raw: unknown): LLMResponse {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("LLM response was not an object");
+  const parsed = llmResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Invalid LLM response");
   }
-
-  const input = raw as Record<string, unknown>;
-  const rawTargetId = input.targetId;
-  const targetId =
-    rawTargetId === null
-      ? null
-      : typeof rawTargetId === "string" && rawTargetId.trim().length > 0
-        ? rawTargetId.trim()
-        : null;
-
-  const rawConfidence = typeof input.confidence === "string" ? input.confidence.trim() : "";
-  const confidence = rawConfidence.toLowerCase();
-  if (!CONFIDENCE_LEVELS.includes(confidence as ClassificationResult["confidence"])) {
-    throw new Error(`Invalid confidence value: ${rawConfidence || String(input.confidence)}`);
-  }
-
-  if (typeof input.reasoning !== "string" || input.reasoning.trim().length === 0) {
-    throw new Error("Missing reasoning in LLM response");
-  }
-
-  if (!Array.isArray(input.alternatives)) {
-    throw new Error("Alternatives must be an array");
-  }
-
-  const alternatives = input.alternatives
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
-  if (alternatives.length !== input.alternatives.length) {
-    throw new Error("Invalid alternatives in LLM response");
-  }
-
-  return {
-    targetId,
-    confidence: confidence as ClassificationResult["confidence"],
-    reasoning: input.reasoning.trim(),
-    alternatives: [...new Set(alternatives)],
-  };
+  return parsed.data;
 }
 
 function extractStructuredResponse(response: Anthropic.Messages.Message): LLMResponse {
