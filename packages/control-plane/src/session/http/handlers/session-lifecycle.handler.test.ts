@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { SessionLifecycleHandler } from "./session-lifecycle.handler";
+import { SessionInitHandler } from "./session-init.handler";
 import type { SessionTitleService } from "../../title-service";
 import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatusService } from "../../session-status-service";
@@ -134,6 +135,17 @@ function createHandler() {
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
 
+  const sessionInitHandler = new SessionInitHandler(
+    repository as unknown as SessionCoreRepository,
+    sandboxRepository,
+    repository as unknown as ParticipantRepository,
+    "session-do-id",
+    "encryption-key",
+    scheduleWarmSandbox,
+    encryptToken,
+    generateId,
+    now
+  );
   const lifecycleHandler = new SessionLifecycleHandler(
     repository as unknown as SessionCoreRepository,
     sandboxRepository,
@@ -148,18 +160,14 @@ function createHandler() {
       getConnectedClientCount: vi.fn(() => 0),
     } as unknown as WebSocketManager,
     "session-do-id",
-    "encryption-key",
-    scheduleWarmSandbox,
-    cancelSession,
-    encryptToken,
-    generateId,
-    now
+    cancelSession
   );
 
   // Bind the request-scoped log so call sites exercise the threading without
-  // repeating it at every invocation.
+  // repeating it at every invocation. Init routes to its own handler, exactly
+  // as the composition root wires it.
   const handler = {
-    init: (request: Request) => lifecycleHandler.init(request, log),
+    init: (request: Request) => sessionInitHandler.init(request, log),
     getState: () => lifecycleHandler.getState(),
     updateTitle: (request: Request) => lifecycleHandler.updateTitle(request),
     archive: (request: Request) => lifecycleHandler.archive(request),

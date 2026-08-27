@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared/types/session-api";
 import { ChildSessionsHandler } from "./child-sessions.handler";
+import { ChildSummaryHandler } from "./child-summary.handler";
 import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
@@ -174,18 +175,31 @@ function createHandler() {
   const messageService = { enqueuePrompt };
   const log = { warn: vi.fn() } as unknown as Logger;
 
-  const handler = new ChildSessionsHandler(
+  // Both classes composed as in components.ts; the bound object keeps every
+  // test calling one `handler` while routing summary reads to the split class.
+  const childSessionsHandler = new ChildSessionsHandler(
     repository as unknown as MessageRepository,
-    repository as unknown as EventRepository,
     repository as unknown as ParticipantRepository,
-    artifactRepository as unknown as ArtifactRepository,
     { getSession } as unknown as SessionCoreRepository,
-    { getSandbox } as unknown as SandboxRepository,
-    "durable-object-id",
-    log,
     messenger,
     messageService
   );
+  const childSummaryHandler = new ChildSummaryHandler(
+    { getSession } as unknown as SessionCoreRepository,
+    { getSandbox } as unknown as SandboxRepository,
+    repository as unknown as MessageRepository,
+    repository as unknown as EventRepository,
+    artifactRepository as unknown as ArtifactRepository,
+    "durable-object-id",
+    log
+  );
+  const handler = {
+    getSpawnContext: () => childSessionsHandler.getSpawnContext(),
+    getActivePromptAuthor: () => childSessionsHandler.getActivePromptAuthor(),
+    getChildSummary: (url?: URL) => childSummaryHandler.getChildSummary(url),
+    parentPrompt: (request: Request) => childSessionsHandler.parentPrompt(request),
+    childSessionUpdate: (request: Request) => childSessionsHandler.childSessionUpdate(request),
+  };
 
   return {
     handler,
