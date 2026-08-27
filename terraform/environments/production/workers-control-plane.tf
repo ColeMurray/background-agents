@@ -178,6 +178,7 @@ module "control_plane_worker" {
       { name = "SERVICE_AUTH_SECRET_SLACK_BOT", value = random_password.service_auth_secret_slack_bot.result },
       { name = "SERVICE_AUTH_SECRET_GITHUB_BOT", value = random_password.service_auth_secret_github_bot.result },
       { name = "SERVICE_AUTH_SECRET_LINEAR_BOT", value = random_password.service_auth_secret_linear_bot.result },
+      { name = "SERVICE_AUTH_SECRET_MCP", value = random_password.service_auth_secret_mcp.result },
       # GitHub App credentials for /repos endpoint (listInstallationRepositories)
       { name = "GITHUB_APP_ID", value = var.github_app_id },
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },

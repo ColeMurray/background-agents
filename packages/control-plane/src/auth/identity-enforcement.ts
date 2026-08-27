@@ -120,6 +120,12 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
         // calls carry a web session token and resolve as user principals.
         return { participantUserId: null, canonicalUserId: null, actor: null, spawnSource: "user" };
       }
+      if (principal.service === "mcp") {
+        // Read-only inspection tooling: it asserts no actor and spawns
+        // nothing, so it has no identity to derive and no SpawnSource to
+        // record. Identity routes reject it, which is the intent.
+        return null;
+      }
       return {
         participantUserId: principal.actor?.participantUserId ?? null,
         canonicalUserId: principal.actor?.canonicalUserId ?? null,
