@@ -135,23 +135,32 @@ describe("applyMigrations", () => {
     expect(recordedIds).toEqual(expectedIds);
   });
 
-  it("does not trust malformed PRAGMA rows as column names", () => {
-    const migration = MIGRATIONS.find((entry) => entry.id === 20);
-    expect(typeof migration?.run).toBe("function");
-    mock.setData("PRAGMA table_info(participants)", [
-      { name: "github_user_id" },
-      { name: 123 },
-      null,
-    ]);
+  it("validates PRAGMA rows in the earliest column-aware migration", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 7);
+    if (!migration || typeof migration.run !== "function") {
+      throw new Error("Expected migration 7 to be a function");
+    }
+    const run = migration.run;
+    mock.setData("PRAGMA table_info(participants)", [{ name: 123 }]);
 
-    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+    expect(() => run(mock.sql)).toThrow("Invalid SQLite column metadata at row 0");
+  });
 
-    const alterCalls = mock.calls.filter((c) => c.query.includes("ALTER TABLE participants"));
-    expect(alterCalls).toEqual([
-      expect.objectContaining({
-        query: "ALTER TABLE participants RENAME COLUMN github_user_id TO scm_user_id",
-      }),
-    ]);
+  it("does not record a migration when PRAGMA metadata is malformed", () => {
+    mock.setData(
+      "SELECT id FROM _schema_migrations",
+      MIGRATIONS.filter(({ id }) => id < 23).map(({ id }) => ({ id }))
+    );
+    mock.setData("PRAGMA table_info(session)", [{ name: "id" }, null]);
+
+    expect(() => applyMigrations(mock.sql)).toThrow("Invalid SQLite column metadata at row 1");
+
+    expect(
+      mock.calls.some(
+        ({ query, params }) =>
+          query.includes("INSERT OR IGNORE INTO _schema_migrations") && params[0] === 23
+      )
+    ).toBe(false);
   });
 
   it("rethrows non-duplicate-column errors from string migrations", () => {

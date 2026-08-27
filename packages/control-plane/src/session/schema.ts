@@ -245,10 +245,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseSqlColumnNames(rows: unknown[]): string[] {
-  return rows.flatMap((row) => {
-    if (!isRecord(row)) return [];
-    const name = row.name;
-    return typeof name === "string" ? [name] : [];
+  return rows.map((row, index) => {
+    if (!isRecord(row) || typeof row.name !== "string") {
+      throw new TypeError(
+        `Invalid SQLite column metadata at row ${index}: expected an object with a string name`
+      );
+    }
+    return row.name;
   });
 }
 
@@ -295,10 +298,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 7,
     description: "Add refresh_token_encrypted to participants",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
-        name: string;
-      }>;
-      const names = new Set(columns.map((c) => c.name));
+      const names = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(participants)").toArray())
+      );
       // Fresh DOs (post-rename) already have scm_refresh_token_encrypted from SCHEMA_SQL.
       // Only add the old column name on pre-rename DOs that need migration 20 to rename it.
       if (
