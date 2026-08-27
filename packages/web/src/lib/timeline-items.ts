@@ -172,12 +172,17 @@ export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimeli
     }
     const userMessage = item.event;
 
-    const completionIndex = items.findIndex(
-      (candidate, candidateIndex) =>
-        candidateIndex > index &&
+    let completionIndex = index + 1;
+    while (completionIndex < items.length) {
+      const candidate = items[completionIndex];
+      if (
         candidate.type === "single" &&
         (candidate.event.type === "user_message" || candidate.event.type === "execution_complete")
-    );
+      ) {
+        break;
+      }
+      completionIndex += 1;
+    }
     const completion = items[completionIndex];
     if (
       completion?.type !== "single" ||
