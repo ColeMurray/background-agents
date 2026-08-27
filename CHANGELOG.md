@@ -322,7 +322,7 @@ agent-browser, `gh`, `ttyd`, and `bun`, selectable from the web UI.
 **Slack watched-channel automations.** A new automation event source: messages posted in watched
 Slack channels can auto-trigger coding sessions, with text-match, channel, and actor conditions,
 per-automation hourly rate limits, per-thread concurrency guards, and results posted back into the
-originating thread. Opt-in behind `SLACK_TRIGGERS_ENABLED`.
+originating thread.
 
 **Multi-email allowlist sign-in.** GitHub sign-in now checks all of a user's verified emails against
 the configured email allowlists instead of only the primary one, unblocking users with private

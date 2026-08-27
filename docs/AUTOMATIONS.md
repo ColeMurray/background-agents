@@ -220,11 +220,9 @@ A **Slack Message** automation starts a session when someone posts a matching me
 Slack channel. Unlike `@mention` sessions (which are explicit, interactive requests), these triggers
 fire on ambient channel messages that match the conditions you define.
 
-This source is opt-in per deployment and ships **disabled by default**. Enabling it requires the
-operator to set the `SLACK_TRIGGERS_ENABLED` flag and configure the Slack app — see
+The Slack app must be configured to deliver channel messages. See
 [the Slack integration guide](integrations/SLACK.md#channel-message-triggers) for setup and the
-threat model. The web form and these conditions are always available to author; messages are only
-ingested once the flag is on.
+threat model.
 
 ### Conditions
 

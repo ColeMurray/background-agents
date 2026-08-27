@@ -294,10 +294,6 @@ in a watched channel — without `@mentioning` the bot. This is distinct from th
 `@mention` flow: it is driven by [automations](../AUTOMATIONS.md#slack-message-triggers) with
 keyword, substring, or regex conditions.
 
-The feature is **disabled by default** and gated by the `SLACK_TRIGGERS_ENABLED` deployment flag.
-When the flag is off, the bot ignores channel messages and forwards nothing; authoring a Slack
-automation in the web app is still allowed, but it will not run until the flag is enabled.
-
 Slack Message automations ingest message text only. A message that carries an attachment does start
 an automation, but on its text alone — the attachment itself is not forwarded, so an image-only
 message with no text starts nothing. Attachments on automation thread replies are likewise not
@@ -357,7 +353,8 @@ condition to filter by content. See
 
 ### Threat model
 
-Channel triggers widen who can start a coding session, so weigh the following before enabling them:
+Channel triggers widen who can start a coding session, so weigh the following before configuring
+them:
 
 - **Any member of a watched channel can trigger a run** simply by posting a matching message. Treat
   every watched channel as a list of people authorized to start sessions against the automation's
@@ -369,10 +366,7 @@ Channel triggers widen who can start a coding session, so weigh the following be
   the same GitHub App installation limits used elsewhere apply here too.
 - **Regex conditions run untimed.** Conditions are evaluated with the native regex engine and no
   per-match timeout; a pathological pattern is an operator-authored risk. Patterns are length-capped
-  and validated at save time, and the `SLACK_TRIGGERS_ENABLED` flag is the kill switch if a bad
-  pattern degrades automation dispatch.
-- **The kill switch is immediate.** Setting `SLACK_TRIGGERS_ENABLED` back to `false` stops the bot
-  from ingesting or forwarding channel messages right away.
+  and validated at save time.
 
 ---
 
