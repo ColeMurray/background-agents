@@ -3,6 +3,7 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 import {
   D1AutomationAggregateWriter,
   type CreateAutomationCommand,
+  type UpdateAutomationCommand,
 } from "./automation-aggregate-writer";
 
 const mocks = vi.hoisted(() => ({
@@ -45,7 +46,11 @@ function statement(name: string): SqlStatement {
   return { name } as unknown as SqlStatement;
 }
 
-const createCommand: CreateAutomationCommand = {
+function resolvedCommand<T>(command: Omit<T, symbol>): T {
+  return command as T;
+}
+
+const createCommand = resolvedCommand<CreateAutomationCommand>({
   id: "auto-1",
   name: "Daily review",
   instructions: "Review open changes",
@@ -66,7 +71,7 @@ const createCommand: CreateAutomationCommand = {
   environmentIds: ["env_1"],
   providerSelections: { openai: { mode: "api_key" } },
   now: 123,
-};
+});
 
 describe("D1AutomationAggregateWriter", () => {
   const batch = vi.fn();
@@ -120,17 +125,19 @@ describe("D1AutomationAggregateWriter", () => {
   });
 
   it("replaces only explicitly supplied update selections and Slack indexes", async () => {
-    await new D1AutomationAggregateWriter(db).update({
-      id: "auto-1",
-      triggerType: "slack_event",
-      name: "Renamed",
-      triggerConfig: {
-        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C999"] }],
-      },
-      repositories: [],
-      providerSelections: {},
-      now: 456,
-    });
+    await new D1AutomationAggregateWriter(db).update(
+      resolvedCommand<UpdateAutomationCommand>({
+        id: "auto-1",
+        triggerType: "slack_event",
+        name: "Renamed",
+        triggerConfig: {
+          conditions: [{ type: "slack_channel", operator: "any_of", value: ["C999"] }],
+        },
+        repositories: [],
+        providerSelections: {},
+        now: 456,
+      })
+    );
 
     expect(mocks.automation.bindAutomationUpdate).toHaveBeenCalledWith(
       "auto-1",
@@ -152,11 +159,13 @@ describe("D1AutomationAggregateWriter", () => {
   it("does not write an update when every field is omitted", async () => {
     mocks.automation.bindAutomationUpdate.mockReturnValue(null);
 
-    await new D1AutomationAggregateWriter(db).update({
-      id: "auto-1",
-      triggerType: "schedule",
-      now: 456,
-    });
+    await new D1AutomationAggregateWriter(db).update(
+      resolvedCommand<UpdateAutomationCommand>({
+        id: "auto-1",
+        triggerType: "schedule",
+        now: 456,
+      })
+    );
 
     expect(mocks.automation.bindReplaceRepositories).not.toHaveBeenCalled();
     expect(mocks.automation.bindReplaceEnvironments).not.toHaveBeenCalled();
@@ -166,12 +175,14 @@ describe("D1AutomationAggregateWriter", () => {
   });
 
   it("distinguishes an omitted trigger config from an explicit clear", async () => {
-    await new D1AutomationAggregateWriter(db).update({
-      id: "auto-1",
-      triggerType: "webhook",
-      triggerConfig: null,
-      now: 456,
-    });
+    await new D1AutomationAggregateWriter(db).update(
+      resolvedCommand<UpdateAutomationCommand>({
+        id: "auto-1",
+        triggerType: "webhook",
+        triggerConfig: null,
+        now: 456,
+      })
+    );
 
     expect(mocks.automation.bindAutomationUpdate).toHaveBeenCalledWith(
       "auto-1",

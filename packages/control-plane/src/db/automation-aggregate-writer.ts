@@ -1,52 +1,17 @@
-import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
-import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
-import {
-  AutomationStore,
-  type AutomationRepositoryInsert,
-  type AutomationRow,
-} from "./automation-store";
+import type { TriggerConfig } from "@open-inspect/shared/triggers";
+import { AutomationStore, type AutomationRow } from "./automation-store";
 import { AutomationModelProviderAuthStore } from "./automation-model-provider-auth";
 import { SlackChannelStore } from "./slack-channel-store";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import type {
+  CreateAutomationCommand,
+  UpdateAutomationCommand,
+} from "../automation/automation-command-resolver";
 
-export interface UpdateAutomationCommand {
-  id: string;
-  triggerType: AutomationTriggerType;
-  name?: string;
-  instructions?: string;
-  scheduleCron?: string;
-  scheduleTz?: string;
-  model?: string;
-  reasoningEffort?: string | null;
-  nextRunAt?: number | null;
-  eventType?: string | null;
-  triggerConfig?: TriggerConfig | null;
-  repositories?: AutomationRepositoryInsert[];
-  environmentIds?: string[];
-  providerSelections?: ModelProviderSelections;
-  now: number;
-}
-
-export interface CreateAutomationCommand {
-  id: string;
-  name: string;
-  instructions: string;
-  triggerType: AutomationTriggerType;
-  scheduleCron: string | null;
-  scheduleTz: string;
-  model: string;
-  reasoningEffort: string | null;
-  nextRunAt: number | null;
-  createdBy: string;
-  userId: string;
-  eventType: string | null;
-  triggerConfig: TriggerConfig | null;
-  triggerAuthData: string | null;
-  repositories: AutomationRepositoryInsert[];
-  environmentIds: string[];
-  providerSelections: ModelProviderSelections;
-  now: number;
-}
+export type {
+  CreateAutomationCommand,
+  UpdateAutomationCommand,
+} from "../automation/automation-command-resolver";
 
 function extractSlackChannels(triggerConfig: TriggerConfig | null): string[] {
   for (const condition of triggerConfig?.conditions ?? []) {

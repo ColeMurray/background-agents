@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  automationRepositoriesInputSchema,
   createAutomationRequestSchema,
   updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
@@ -9,20 +8,13 @@ import { modelProviderSelectionsSchema } from "@open-inspect/shared/types/provid
 
 const automationTriggerTypeSchema = createAutomationRequestSchema.shape.triggerType.unwrap();
 
-const createAutomationMutationSchema = z
-  .object({
-    name: createAutomationRequestSchema.shape.name,
-    instructions: createAutomationRequestSchema.shape.instructions,
+const createAutomationMutationSchema = createAutomationRequestSchema
+  .extend({
     triggerType: automationTriggerTypeSchema.nullable().optional(),
     scheduleCron: createAutomationRequestSchema.shape.scheduleCron.nullable(),
     scheduleTz: createAutomationRequestSchema.shape.scheduleTz.nullable(),
     model: createAutomationRequestSchema.shape.model.nullable(),
-    reasoningEffort: createAutomationRequestSchema.shape.reasoningEffort,
     eventType: createAutomationRequestSchema.shape.eventType.nullable(),
-    triggerConfig: triggerConfigSchema.optional(),
-    sentryClientSecret: createAutomationRequestSchema.shape.sentryClientSecret,
-    repositories: automationRepositoriesInputSchema.optional(),
-    environmentIds: z.array(z.string()).optional(),
     providerSelections: modelProviderSelectionsSchema.nullable().optional(),
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
@@ -34,18 +26,9 @@ const createAutomationMutationSchema = z
     ...(providerSelections ? { providerSelections } : {}),
   }));
 
-const updateAutomationMutationSchema = z.object({
-  name: updateAutomationRequestSchema.shape.name,
-  instructions: updateAutomationRequestSchema.shape.instructions,
-  scheduleCron: updateAutomationRequestSchema.shape.scheduleCron,
-  scheduleTz: updateAutomationRequestSchema.shape.scheduleTz,
-  model: updateAutomationRequestSchema.shape.model,
-  reasoningEffort: updateAutomationRequestSchema.shape.reasoningEffort,
+const updateAutomationMutationSchema = updateAutomationRequestSchema.extend({
   eventType: z.string().nullable().optional(),
   triggerConfig: triggerConfigSchema.nullable().optional(),
-  repositories: automationRepositoriesInputSchema.optional(),
-  environmentIds: z.array(z.string()).optional(),
-  providerSelections: modelProviderSelectionsSchema.optional(),
 });
 
 export type CreateAutomationMutation = z.output<typeof createAutomationMutationSchema>;
