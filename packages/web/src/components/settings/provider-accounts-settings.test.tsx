@@ -472,6 +472,16 @@ describe("ProviderAccountsSettings", () => {
     ).toBeInTheDocument();
   });
 
+  it("surfaces enable as the primary action when an account is disabled", () => {
+    accountsResult = [{ ...account, status: "disabled" }];
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByRole("button", { name: "Enable" })).toBeInTheDocument();
+    expect(
+      screen.getByText("This account is disabled and is not available for new sessions.")
+    ).toBeInTheDocument();
+  });
+
   it("confirms disable and runs the lifecycle action", async () => {
     render(<ProviderAccountsSettings />);
     fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
