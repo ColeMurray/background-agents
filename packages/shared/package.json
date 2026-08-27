@@ -22,6 +22,10 @@
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
     },
+    "./classification": {
+      "import": "./dist/classification.js",
+      "types": "./dist/classification.d.ts"
+    },
     "./logger": {
       "import": "./dist/logger.js",
       "types": "./dist/logger.d.ts"
@@ -66,6 +70,10 @@
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
     },
+    "./types/github-autofix": {
+      "import": "./dist/types/github-autofix.js",
+      "types": "./dist/types/github-autofix.d.ts"
+    },
     "./types/image-builds": {
       "import": "./dist/types/image-builds.js",
       "types": "./dist/types/image-builds.d.ts"
@@ -93,6 +101,10 @@
     "./slack": {
       "import": "./dist/slack/index.js",
       "types": "./dist/slack/index.d.ts"
+    },
+    "./pull-request-tool": {
+      "import": "./dist/pull-request-tool.js",
+      "types": "./dist/pull-request-tool.d.ts"
     },
     "./completion/extractor": {
       "import": "./dist/completion/extractor.js",

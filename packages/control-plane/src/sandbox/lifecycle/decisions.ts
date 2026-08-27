@@ -269,10 +269,10 @@ export function evaluateSpawnDecision(
 ): SpawnAction {
   const timeSinceLastSpawn = now - state.createdAt;
 
-  // In-memory flag first: it is set synchronously when a spawn/restore starts,
-  // but the persisted "spawning" status lands only after the first await. A
-  // second evaluation in that window must not pick resume/restore again, or
-  // concurrent prompts launch duplicate sandboxes.
+  // In-memory flag first: it is set synchronously when a spawn/restore starts
+  // and stays up until the provider call resolves. A second evaluation in
+  // that window must not pick resume/restore again, or concurrent prompts
+  // launch duplicate sandboxes.
   if (isSpawningInMemory) {
     return { action: "skip", reason: "spawn already in progress (in-memory flag)" };
   }

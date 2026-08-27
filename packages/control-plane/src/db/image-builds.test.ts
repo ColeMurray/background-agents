@@ -2,22 +2,22 @@ import { describe, expect, it } from "vitest";
 import { ImageBuildStore } from "./image-builds";
 
 /**
- * The exact `ImageBuildRecordView` wire columns. The status reads must project
- * these and only these — never the internal callback-token or provider-id
+ * The exact public-safe storage columns. The status reads must project these
+ * and only these — never the internal callback-token or provider-id
  * columns the `image_builds` table also carries.
  */
-const WIRE_KEYS = [
+const PUBLIC_KEYS = [
   "id",
-  "scope_kind",
-  "scope_id",
+  "scopeKind",
+  "scopeId",
   "provider",
   "status",
-  "repositories_fingerprint",
-  "repository_shas",
-  "runtime_version",
-  "build_duration_seconds",
-  "error_message",
-  "created_at",
+  "repositoriesFingerprint",
+  "repositoryShas",
+  "runtimeVersion",
+  "buildDurationSeconds",
+  "errorMessage",
+  "createdAt",
 ].sort();
 
 const INTERNAL_KEYS = [
@@ -36,7 +36,7 @@ const FULL_ROW: Record<string, unknown> = {
   provider: "vercel",
   status: "ready",
   repositories_fingerprint: "fp",
-  repository_shas: "[]",
+  repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
   runtime_version: "v53",
   build_duration_seconds: 12,
   error_message: null,
@@ -53,37 +53,64 @@ const FULL_ROW: Record<string, unknown> = {
  * columns named in the SELECT list, so a `SELECT *` regression surfaces as a
  * leaked internal column rather than being masked by a canned row.
  */
-function projectRow(query: string): Record<string, unknown> {
+function projectRow(query: string, source: Record<string, unknown>): Record<string, unknown> {
   const normalized = query.replace(/\s+/g, " ").trim();
   const match = /SELECT (.+?) FROM /.exec(normalized);
   if (!match) throw new Error(`Unexpected query: ${query}`);
   const columns = match[1].split(",").map((c) => c.trim());
-  if (columns.length === 1 && columns[0] === "*") return { ...FULL_ROW };
+  if (columns.length === 1 && columns[0] === "*") return { ...source };
   const projected: Record<string, unknown> = {};
-  for (const column of columns) projected[column] = FULL_ROW[column];
+  for (const column of columns) projected[column] = source[column];
   return projected;
 }
 
-function fakeDb(): D1Database {
+function fakeDb(overrides: Record<string, unknown> = {}): D1Database {
+  const source = { ...FULL_ROW, ...overrides };
   const statement = (query: string) => ({
     bind: () => statement(query),
-    all: async () => ({ results: [projectRow(query)] }),
-    first: async () => projectRow(query),
+    all: async () => ({ results: [projectRow(query, source)] }),
+    first: async () => projectRow(query, source),
     run: async () => ({ meta: { changes: 0 } }),
   });
   return { prepare: (query: string) => statement(query) } as unknown as D1Database;
 }
 
 describe("ImageBuildStore status projection", () => {
-  it("getStatus returns exactly the wire columns", async () => {
+  it("getStatus maps storage fields and decoded provenance to the public model", async () => {
     const rows = await new ImageBuildStore(fakeDb()).getStatus({
       kind: "environment",
       id: "env_1",
     });
 
-    expect(rows).toHaveLength(1);
-    expect(Object.keys(rows[0]).sort()).toEqual(WIRE_KEYS);
+    expect(rows).toEqual([
+      {
+        id: "b1",
+        scopeKind: "environment",
+        scopeId: "env_1",
+        provider: "vercel",
+        status: "ready",
+        repositoriesFingerprint: "fp",
+        repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+        runtimeVersion: "v53",
+        buildDurationSeconds: 12,
+        errorMessage: null,
+        createdAt: 1000,
+      },
+    ]);
     for (const key of INTERNAL_KEYS) expect(rows[0]).not.toHaveProperty(key);
+  });
+
+  it.each([
+    ["empty", "[]", []],
+    ["malformed JSON", "not-json", null],
+    ["invalid entry", JSON.stringify([{ repoOwner: "acme", repoName: "web" }]), null],
+  ])("maps %s stored provenance safely", async (_description, stored, expected) => {
+    const rows = await new ImageBuildStore(fakeDb({ repository_shas: stored })).getStatus({
+      kind: "environment",
+      id: "env_1",
+    });
+
+    expect(rows[0].repositoryShas).toEqual(expected);
   });
 
   it("getStatusForEnabledScopes returns exactly the wire columns", async () => {
@@ -92,7 +119,7 @@ describe("ImageBuildStore status projection", () => {
     ]);
 
     expect(rows).toHaveLength(1);
-    expect(Object.keys(rows[0]).sort()).toEqual(WIRE_KEYS);
+    expect(Object.keys(rows[0]).sort()).toEqual(PUBLIC_KEYS);
     for (const key of INTERNAL_KEYS) expect(rows[0]).not.toHaveProperty(key);
   });
 });

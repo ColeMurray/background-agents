@@ -46,14 +46,10 @@ export interface UserEnvResolverDeps {
   resolveRepoId: (session: SessionRow) => Promise<number>;
   /** The owning Durable Object's id; the resolvePublicSessionId fallback. */
   durableObjectId: string;
-  repoSecretsEncryptionKey: string | undefined;
+  repoSecretsEncryptionKey: string;
   secretsCapEnforcement: string | undefined;
-  /**
-   * Thunk, deliberately: the owner replaces its logger with a session-scoped
-   * one during initialization, so a by-value capture would pin whichever
-   * logger existed at construction.
-   */
-  log: () => Logger;
+  /** The session-scoped logger; the composition root creates it before this class. */
+  log: Logger;
 }
 
 interface UserEnvContext {
@@ -66,9 +62,9 @@ export class UserEnvResolver {
   private readonly sessionCoreRepository: SessionCoreRepository;
   private readonly resolveRepoId: (session: SessionRow) => Promise<number>;
   private readonly durableObjectId: string;
-  private readonly repoSecretsEncryptionKey: string | undefined;
+  private readonly repoSecretsEncryptionKey: string;
   private readonly secretsCapEnforcement: string | undefined;
-  private readonly log: () => Logger;
+  private readonly log: Logger;
 
   constructor(deps: UserEnvResolverDeps) {
     this.db = deps.db;
@@ -103,7 +99,7 @@ export class UserEnvResolver {
       context.providerAuthModes
     );
     if (!issue) return null;
-    this.log().error("provider_auth.unavailable", {
+    this.log.error("provider_auth.unavailable", {
       event: "provider_auth.unavailable",
       provider: issue.provider,
       auth_mode: context.providerAuthModes[issue.provider],
@@ -114,7 +110,7 @@ export class UserEnvResolver {
   private async loadUserEnvContext(): Promise<UserEnvContext | null> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
-      this.log().warn("Cannot load secrets: no session");
+      this.log.warn("Cannot load secrets: no session");
       return null;
     }
 
@@ -126,18 +122,6 @@ export class UserEnvResolver {
     const providerAuthModes = Object.fromEntries(
       providerAuth.map(({ provider, authMode }) => [provider, authMode])
     ) as Record<SubscriptionProviderId, SessionProviderAuthMode>;
-
-    if (!this.repoSecretsEncryptionKey) {
-      this.log().debug("Ordinary secrets not configured, skipping secret loading", {
-        has_encryption_key: !!this.repoSecretsEncryptionKey,
-      });
-      const sandboxEnv = prepareManagedProviderEnv({
-        exposedSecrets: {},
-        brokerSecrets: {},
-        providerAuthModes,
-      });
-      return { sandboxEnv, providerAuthModes };
-    }
 
     // Fail hard on secret loading — sandboxes must not silently lose secrets
     const encryptionKey = this.repoSecretsEncryptionKey;
@@ -160,13 +144,13 @@ export class UserEnvResolver {
     auditSecretsMerge({
       merge,
       mode: parseSecretsCapMode(this.secretsCapEnforcement),
-      log: this.log(),
+      log: this.log,
       context: { session_id: session.id },
     });
 
     const mergedCount = Object.keys(merge.merged).length;
     if (mergedCount > 0) {
-      this.log().info("Secrets merged for sandbox", {
+      this.log.info("Secrets merged for sandbox", {
         source_count: sources.length,
         merged_count: mergedCount,
         payload_bytes: merge.totalBytes,

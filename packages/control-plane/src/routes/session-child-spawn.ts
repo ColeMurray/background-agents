@@ -36,6 +36,7 @@ import {
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 const logger = createLogger("router:session-child-spawn");
 const MAX_SPAWN_DEPTH = 2;
@@ -220,7 +221,9 @@ async function handleSpawnChild(
     repoId: spawnContext.repoId,
     environmentId: parentEnvironmentId,
     branch:
-      spawnContext.repoOwner && spawnContext.repoName ? (spawnContext.baseBranch ?? "main") : null,
+      spawnContext.repoOwner && spawnContext.repoName
+        ? (spawnContext.baseBranch ?? DEFAULT_BASE_BRANCH)
+        : null,
     title: body.title,
     model,
     reasoningEffort,

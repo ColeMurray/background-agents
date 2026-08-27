@@ -1,5 +1,5 @@
+import { runInSessionDO } from "./session-do-access";
 import { beforeEach, describe, expect, it } from "vitest";
-import { runInDurableObject } from "cloudflare:test";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/sandbox/lifecycle/manager";
 import type { SessionDO } from "../../src/session/durable-object";
 import { cleanD1Tables } from "./cleanup";
@@ -15,8 +15,8 @@ const CONNECTING_TIMEOUT_BUFFER_MS = 1_000;
  */
 async function parkSandboxPastConnectingTimeout(stub: DurableObjectStub): Promise<void> {
   await waitForSandboxStatus(stub, "failed");
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       // modal_object_id stays null, so terminating never calls the provider.
       "UPDATE sandbox SET status = 'connecting', modal_object_id = NULL, created_at = ?",
       Date.now() -
@@ -54,7 +54,7 @@ describe("SessionDO lifecycle alarm recovery", () => {
       startedAt: Date.now() - 500,
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+    await runInSessionDO(stub, (instance: SessionDO) => instance.alarm());
 
     const [message] = await queryDO<{ status: string; error_message: string | null }>(
       stub,

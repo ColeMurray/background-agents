@@ -24,6 +24,19 @@ export type {
   SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
+export {
+  githubAutofixEnvelopeSchema,
+  githubAutofixOriginSchema,
+  githubAutofixSessionCommandSchema,
+  githubAutofixSessionResponseSchema,
+} from "./github-autofix";
+export type {
+  GitHubAutofixEnvelope,
+  GitHubAutofixOrigin,
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "./github-autofix";
+
 export { clientMessageSchema, clientRequestIdSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
@@ -235,6 +248,7 @@ export type {
   RepositoryShaEntry,
   ImageBuildRecordView,
 } from "./image-builds";
+export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {

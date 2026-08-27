@@ -1,6 +1,7 @@
 import type { AutomationRepositoryInsert } from "../db/automation-store";
 import type { Env } from "../types";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 /** A repository resolved for one firing: access checked, branch defaulted. */
 interface ResolvedAutomationRepository {
@@ -58,7 +59,8 @@ export async function resolveAutomationRepositories(
             repoOwner: access.repoOwner,
             repoName: access.repoName,
             repoId: access.repoId,
-            baseBranch: requested.base_branch?.trim() || access.defaultBranch || "main",
+            baseBranch:
+              requested.base_branch?.trim() || access.defaultBranch || DEFAULT_BASE_BRANCH,
           },
           error: null,
         };
