@@ -16,6 +16,7 @@ export function RightSidebarOpenIcon({ className }: IconProps) {
       strokeLinejoin="round"
     >
       <rect x="3" y="3" width="18" height="18" rx="2" />
+      <line x1="15" y1="3" x2="15" y2="21" />
       <rect x="15" y="3" width="6" height="18" fill="currentColor" stroke="none" />
     </svg>
   );
