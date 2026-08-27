@@ -1,4 +1,3 @@
-import { escapeRegExp } from "@open-inspect/shared/regex";
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import {
   createSessionResponseSchema,
@@ -30,6 +29,7 @@ import { resolveSessionTarget, type SessionTargetFields } from "./session-target
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { claimReviewGeneration, sweepStaleReviews } from "./review-supersession";
+import { containsBotMention, stripBotMention } from "./github-mention";
 
 export type HandlerResult =
   | {
@@ -123,10 +123,6 @@ async function sendPrompt(
     throw new Error("Prompt delivery failed: invalid response");
   }
   return result.data.messageId;
-}
-
-function stripMention(body: string, botUsername: string): string {
-  return body.replace(new RegExp(`@${escapeRegExp(botUsername)}`, "gi"), "").trim();
 }
 
 async function withReaction<T>(
@@ -667,7 +663,7 @@ export async function handleIssueComment(
     return { outcome: "skipped", skip_reason: "not_a_pr" };
   }
 
-  if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
+  if (!containsBotMention(comment.body, env.GITHUB_BOT_USERNAME)) {
     log.debug("handler.no_mention", {
       trace_id: traceId,
       issue_number: issue.number,
@@ -701,7 +697,7 @@ export async function handleIssueComment(
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
   const { ghToken } = gating;
 
-  const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const commentBody = stripBotMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: issue.number };
   return withReaction(
@@ -775,7 +771,7 @@ export async function handleReviewComment(
   const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName });
   const repoFullName = `${owner}/${repoName}`.toLowerCase();
 
-  if (!comment.body.toLowerCase().includes(`@${env.GITHUB_BOT_USERNAME.toLowerCase()}`)) {
+  if (!containsBotMention(comment.body, env.GITHUB_BOT_USERNAME)) {
     log.debug("handler.no_mention", {
       trace_id: traceId,
       pull_number: pr.number,
@@ -809,7 +805,7 @@ export async function handleReviewComment(
   if (!gating.allowed) return { outcome: "skipped", skip_reason: gating.reason };
   const { ghToken } = gating;
 
-  const commentBody = stripMention(comment.body, env.GITHUB_BOT_USERNAME);
+  const commentBody = stripBotMention(comment.body, env.GITHUB_BOT_USERNAME);
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   return withReaction(

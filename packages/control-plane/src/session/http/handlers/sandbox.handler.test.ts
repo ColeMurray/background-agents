@@ -7,13 +7,16 @@ import {
   OpenAITokenUpstreamError,
 } from "../../openai-token-refresh-service";
 import type { SandboxRow, SessionRow } from "../../types";
-import { createSandboxHandler } from "./sandbox.handler";
+import { SandboxHandler } from "./sandbox.handler";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { EventRepository } from "../../event-repository";
 import type { MessageRepository } from "../../message-repository";
+import type { SessionCoreRepository } from "../../session-core-repository";
+import type { SandboxRepository } from "../../sandbox-repository";
+import type { SessionSandboxEventProcessor } from "../../sandbox-events";
 
-function createHandler() {
+function createHandler({ managedSecretsConfigured = true } = {}) {
   const repository = {
     createParticipant: vi.fn(),
     createEvent: vi.fn(),
@@ -26,7 +29,6 @@ function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
   const refreshXaiToken = vi.fn();
-  const isManagedSecretsConfigured = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
@@ -41,28 +43,30 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const sandboxHandler = createSandboxHandler({
-    messageRepository: repository as unknown as MessageRepository,
-    eventRepository: repository as unknown as EventRepository,
-    participantRepository: repository as unknown as ParticipantRepository,
+  const sandboxHandler = new SandboxHandler(
+    repository as unknown as MessageRepository,
+    repository as unknown as EventRepository,
+    repository as unknown as ParticipantRepository,
     artifactRepository,
-    processSandboxEvent,
-    getSandbox,
-    isValidSandboxToken,
-    getSession,
+    { getSession } as unknown as SessionCoreRepository,
+    { getSandbox } as unknown as SandboxRepository,
+    { processSandboxEvent } as unknown as SessionSandboxEventProcessor,
+    messenger,
+    managedSecretsConfigured,
     refreshOpenAIToken,
     refreshXaiToken,
-    isManagedSecretsConfigured,
     getScmCredentials,
-    messenger,
+    isValidSandboxToken,
     generateId,
-    now,
-  });
+    now
+  );
 
   // Bind the request-scoped log so call sites exercise the threading without
   // repeating it at every invocation.
   const handler = {
-    ...sandboxHandler,
+    sandboxEvent: (request: Request) => sandboxHandler.sandboxEvent(request),
+    createMediaArtifact: (request: Request) => sandboxHandler.createMediaArtifact(request),
+    addParticipant: (request: Request) => sandboxHandler.addParticipant(request),
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
     openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
     xaiTokenRefresh: () => sandboxHandler.xaiTokenRefresh(log),
@@ -80,7 +84,6 @@ function createHandler() {
     getSession,
     refreshOpenAIToken,
     refreshXaiToken,
-    isManagedSecretsConfigured,
     getScmCredentials,
     broadcast,
     generateId,
@@ -89,7 +92,7 @@ function createHandler() {
   };
 }
 
-describe("createSandboxHandler", () => {
+describe("SandboxHandler", () => {
   it("processes sandbox event and returns ok response", async () => {
     const { handler, processSandboxEvent } = createHandler();
     const event = {
@@ -486,9 +489,8 @@ describe("createSandboxHandler", () => {
   });
 
   it("returns 500 when openai secrets are not configured", async () => {
-    const { handler, getSession, isManagedSecretsConfigured } = createHandler();
+    const { handler, getSession } = createHandler({ managedSecretsConfigured: false });
     getSession.mockReturnValue({} as SessionRow);
-    isManagedSecretsConfigured.mockReturnValue(false);
 
     const response = await handler.openaiTokenRefresh();
 
@@ -507,9 +509,8 @@ describe("createSandboxHandler", () => {
     ],
     [OpenAITokenUpstreamError, 502, "OpenAI token refresh failed"],
   ])("maps %s to status %i", async (ErrorType, status, message) => {
-    const { handler, getSession, isManagedSecretsConfigured, refreshOpenAIToken } = createHandler();
+    const { handler, getSession, refreshOpenAIToken } = createHandler();
     getSession.mockReturnValue({ id: "session-1" } as SessionRow);
-    isManagedSecretsConfigured.mockReturnValue(true);
     refreshOpenAIToken.mockRejectedValue(new ErrorType(message));
 
     const response = await handler.openaiTokenRefresh();
@@ -519,9 +520,8 @@ describe("createSandboxHandler", () => {
   });
 
   it("does not mask unexpected OpenAI token refresh failures", async () => {
-    const { handler, getSession, isManagedSecretsConfigured, refreshOpenAIToken } = createHandler();
+    const { handler, getSession, refreshOpenAIToken } = createHandler();
     getSession.mockReturnValue({ id: "session-1" } as SessionRow);
-    isManagedSecretsConfigured.mockReturnValue(true);
     const unexpected = new Error("unexpected refresh failure");
     refreshOpenAIToken.mockRejectedValue(unexpected);
 
@@ -529,11 +529,9 @@ describe("createSandboxHandler", () => {
   });
 
   it("returns openai access token payload on success", async () => {
-    const { handler, getSession, isManagedSecretsConfigured, refreshOpenAIToken, log } =
-      createHandler();
+    const { handler, getSession, refreshOpenAIToken, log } = createHandler();
     const session = { id: "session-1" } as SessionRow;
     getSession.mockReturnValue(session);
-    isManagedSecretsConfigured.mockReturnValue(true);
     refreshOpenAIToken.mockResolvedValue({
       accessToken: "access-token",
       expiresIn: 3600,
@@ -553,11 +551,9 @@ describe("createSandboxHandler", () => {
   });
 
   it("returns xAI access token payload on success", async () => {
-    const { handler, getSession, isManagedSecretsConfigured, refreshXaiToken, log } =
-      createHandler();
+    const { handler, getSession, refreshXaiToken, log } = createHandler();
     const session = { id: "session-1" } as SessionRow;
     getSession.mockReturnValue(session);
-    isManagedSecretsConfigured.mockReturnValue(true);
     refreshXaiToken.mockResolvedValue({ ok: true, accessToken: "xai-access", expiresIn: 3600 });
 
     const response = await handler.xaiTokenRefresh();
@@ -579,9 +575,8 @@ describe("createSandboxHandler", () => {
   });
 
   it("returns 500 when managed secrets are not configured for xAI", async () => {
-    const { handler, getSession, isManagedSecretsConfigured } = createHandler();
+    const { handler, getSession } = createHandler({ managedSecretsConfigured: false });
     getSession.mockReturnValue({} as SessionRow);
-    isManagedSecretsConfigured.mockReturnValue(false);
 
     const response = await handler.xaiTokenRefresh();
 
@@ -590,9 +585,8 @@ describe("createSandboxHandler", () => {
   });
 
   it("returns mapped service error from xAI token refresh", async () => {
-    const { handler, getSession, isManagedSecretsConfigured, refreshXaiToken } = createHandler();
+    const { handler, getSession, refreshXaiToken } = createHandler();
     getSession.mockReturnValue({ id: "session-1" } as SessionRow);
-    isManagedSecretsConfigured.mockReturnValue(true);
     refreshXaiToken.mockResolvedValue({ ok: false, status: 401, error: "xAI unauthorized" });
 
     const response = await handler.xaiTokenRefresh();

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { initSession, queryDO, seedMessage } from "./helpers";
+import { runInSessionDO } from "./session-do-access";
 
 describe("POST /internal/sandbox-event", () => {
   it("stores token event", async () => {
@@ -166,10 +167,14 @@ describe("POST /internal/sandbox-event", () => {
     });
   });
 
-  it("heartbeat updates last_heartbeat without storing event", async () => {
+  it("heartbeat counts as activity only while a message is processing", async () => {
     const { stub } = await initSession();
+    const previousActivity = 123;
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET last_activity = ?", previousActivity);
+    });
 
-    const res = await stub.fetch("http://internal/internal/sandbox-event", {
+    const idleHeartbeat = await stub.fetch("http://internal/internal/sandbox-event", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -180,13 +185,47 @@ describe("POST /internal/sandbox-event", () => {
       }),
     });
 
-    expect(res.status).toBe(200);
+    expect(idleHeartbeat.status).toBe(200);
 
-    const sandbox = await queryDO<{ last_heartbeat: number }>(
+    const idleSandbox = await queryDO<{ last_heartbeat: number; last_activity: number }>(
       stub,
-      "SELECT last_heartbeat FROM sandbox"
+      "SELECT last_heartbeat, last_activity FROM sandbox"
     );
-    expect(sandbox[0].last_heartbeat).toEqual(expect.any(Number));
+    expect(idleSandbox[0].last_heartbeat).toEqual(expect.any(Number));
+    expect(idleSandbox[0].last_activity).toBe(previousActivity);
+
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    await seedMessage(stub, {
+      id: "msg-processing",
+      authorId: participants[0].id,
+      content: "Run a long build",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1000,
+      startedAt: Date.now() - 500,
+    });
+
+    const processingHeartbeat = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        status: "running",
+        timestamp: Date.now() / 1000,
+      }),
+    });
+
+    expect(processingHeartbeat.status).toBe(200);
+    const processingSandbox = await queryDO<{ last_heartbeat: number; last_activity: number }>(
+      stub,
+      "SELECT last_heartbeat, last_activity FROM sandbox"
+    );
+    expect(processingSandbox[0].last_activity).toBe(processingSandbox[0].last_heartbeat);
+    expect(processingSandbox[0].last_activity).toBeGreaterThan(previousActivity);
 
     // Heartbeats should NOT be stored as events
     const events = await queryDO<{ type: string }>(

@@ -35,7 +35,7 @@ import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
   type SandboxStorage,
-  type WebSocketManager,
+  type SessionContextReader,
   type IdGenerator,
   type ImageBuildLookup,
   type McpServerLookup,
@@ -46,6 +46,7 @@ import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integratio
 import { SessionIndexStore } from "../db/session-index";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
+import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -59,13 +60,14 @@ import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 import { createLatchedPublicSessionIdResolver, resolvePublicSessionId } from "./public-session-id";
 import { resolveScmSettings } from "./scm-settings-resolution";
-import { validateReasoningEffort } from "./reasoning-effort";
 import {
   isValidSandboxToken,
   resolveSandboxDashboardUrl,
   type SandboxDashboardSettings,
 } from "./sandbox-access";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { LifecycleSessionContext, LifecycleSocketAdapter } from "./sandbox-lifecycle-adapters";
+import { SessionClientCommandFacade } from "./client-command-facade";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
@@ -84,18 +86,17 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
-import { createMessagesHandler } from "./http/handlers/messages.handler";
-import { createChildSessionsHandler } from "./http/handlers/child-sessions.handler";
-import { createSandboxHandler } from "./http/handlers/sandbox.handler";
+import { AutofixHandler } from "./http/handlers/autofix.handler";
+import { MessagesHandler } from "./http/handlers/messages.handler";
+import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
+import { SandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
-import { createWsTokenHandler } from "./http/handlers/ws-token.handler";
-import {
-  createSessionLifecycleHandler,
-  type SessionLifecycleHandler,
-} from "./http/handlers/session-lifecycle.handler";
-import { createPullRequestHandler } from "./http/handlers/pull-request.handler";
-import { createParticipantsHandler } from "./http/handlers/participants.handler";
+import { WsTokenHandler } from "./http/handlers/ws-token.handler";
+import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
+import { PullRequestHandler } from "./http/handlers/pull-request.handler";
+import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
+import { SessionAutofixService } from "./services/autofix.service";
 import { createAlarmHandler } from "./alarm/handler";
 import {
   createEarliestAlarmScheduler,
@@ -106,7 +107,7 @@ import {
 import { createSessionInternalRoutes } from "./http/routes";
 import { SessionServer } from "./server";
 import { SessionHttpDispatcher } from "./http/dispatcher";
-import { SessionMessageRouter, type SessionClientCommands } from "./message-router";
+import { SessionMessageRouter } from "./message-router";
 import { SessionDisconnectHandler } from "./disconnect-handler";
 import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
 import { SessionConnectionAuthenticator } from "./connection-authenticator";
@@ -219,6 +220,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sessionCoreRepository = new SessionCoreRepository(sql, transaction);
   const alarmDeadlines = new PersistedAlarmDeadlineStore(sql);
 
+  // Secrets-at-rest encryption is not optional. Every consumer below takes
+  // the validated key, so no fallback path can persist a secret in plaintext.
+  const repoSecretsEncryptionKey = requireRepoSecretsEncryptionKey(env);
+  const tokenEncryptionKey = requireTokenEncryptionKey(env);
+
   // The session-scoped logger, created before anything can capture a logger
   // at all. Its `session_id` is injected per emit through the latched
   // resolver: before `init` writes the session row it is the Durable Object
@@ -232,10 +238,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)),
     getPublicSessionId
   );
-  const backgroundTasks = createCloudflareBackgroundTasks(ctx, () => log);
+  const backgroundTasks = createCloudflareBackgroundTasks(ctx, log);
   // The sandbox repository validates the status it reads and warns on anything
-  // unmodelled, so it needs the session logger.
-  const sandboxRepository = new SandboxRepository(sql, log);
+  // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
+  // for access secrets, so it takes the key.
+  const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
 
   // Tier 2 — sockets and alarm scheduling.
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
@@ -286,7 +293,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     resolveRepoId,
     durableObjectId,
-    repoSecretsEncryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
+    repoSecretsEncryptionKey,
     secretsCapEnforcement: env.SECRETS_CAP_ENFORCEMENT,
     log,
   });
@@ -310,8 +317,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       terminalMessageCompletedAt: completedAt,
     });
 
-  const userScmTokenStore =
-    db && env.TOKEN_ENCRYPTION_KEY ? new UserScmTokenStore(db, env.TOKEN_ENCRYPTION_KEY) : null;
+  const userScmTokenStore = db ? new UserScmTokenStore(db, tokenEncryptionKey) : null;
   const participantService = new ParticipantService({
     repository: participantRepository,
     getProcessingMessageAuthor: () => messageRepository.getProcessingMessageAuthor(),
@@ -368,9 +374,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     env,
     db,
     getSessionId: getPublicSessionId,
-    sessionCoreRepository,
-    sandboxRepository,
-    userEnvResolver,
+    storage: sandboxRepository,
+    sessionContext: new LifecycleSessionContext(sessionCoreRepository, userEnvResolver),
+    repoSecretsEncryptionKey,
     messenger,
     wsManager,
     alarmScheduler,
@@ -419,10 +425,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     stopExecution: () => messageQueue.stopExecution(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
   });
+  const autofixHandler = new AutofixHandler(new SessionAutofixService(messageQueue));
 
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     backgroundTasks,
-    () => log,
+    log,
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
@@ -484,110 +491,99 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 
   // Tier 8 — internal HTTP handlers.
-  const messagesHandler = createMessagesHandler({
-    messageService,
-  });
+  const messagesHandler = new MessagesHandler(messageService);
 
-  const childSessionsHandler = createChildSessionsHandler({
+  const childSessionsHandler = new ChildSessionsHandler(
     messageRepository,
     eventRepository,
     participantRepository,
     artifactRepository,
-    getSession: () => sessionCoreRepository.getSession(),
-    getSandbox: () => sandboxRepository.getSandbox(),
-    getPublicSessionId: (sessionRow) => resolvePublicSessionId(sessionRow, durableObjectId),
-    parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
+    sessionCoreRepository,
+    sandboxRepository,
+    durableObjectId,
+    log,
     messenger,
-    messageService,
-  });
+    messageService
+  );
 
-  const sandboxHandler = createSandboxHandler({
+  // Per-request adapters: each token/credential refresh constructs its
+  // service around the request-scoped log, so these stay functions.
+  const refreshOpenAIToken = async (sessionRow: SessionRow, requestLog: Logger) => {
+    const service = new OpenAITokenRefreshService(
+      db!,
+      repoSecretsEncryptionKey,
+      resolveRepoId,
+      requestLog
+    );
+    return service.refresh(sessionRow);
+  };
+  const refreshXaiToken = async (sessionRow: SessionRow, requestLog: Logger) => {
+    const service = new XaiTokenRefreshService(
+      db!,
+      repoSecretsEncryptionKey,
+      resolveRepoId,
+      requestLog
+    );
+    return service.refresh(sessionRow);
+  };
+  const getScmCredentials = (requestLog: Logger) =>
+    new ScmCredentialsService(sourceControlProvider(), requestLog).getCredentials();
+
+  const sandboxHandler = new SandboxHandler(
     messageRepository,
     eventRepository,
     participantRepository,
     artifactRepository,
-    processSandboxEvent: (event) => sandboxEventProcessor.processSandboxEvent(event),
-    getSandbox: () => sandboxRepository.getSandbox(),
-    isValidSandboxToken: (token, sandbox) => isValidSandboxToken(token, sandbox),
-    getSession: () => sessionCoreRepository.getSession(),
-    refreshOpenAIToken: async (sessionRow, requestLog) => {
-      const service = new OpenAITokenRefreshService(
-        db!,
-        env.REPO_SECRETS_ENCRYPTION_KEY!,
-        resolveRepoId,
-        requestLog
-      );
-      return service.refresh(sessionRow);
-    },
-    refreshXaiToken: async (sessionRow, requestLog) => {
-      const service = new XaiTokenRefreshService(
-        db!,
-        env.REPO_SECRETS_ENCRYPTION_KEY!,
-        resolveRepoId,
-        requestLog
-      );
-      return service.refresh(sessionRow);
-    },
-    isManagedSecretsConfigured: () => Boolean(db && env.REPO_SECRETS_ENCRYPTION_KEY),
-    getScmCredentials: (requestLog) =>
-      new ScmCredentialsService(sourceControlProvider(), requestLog).getCredentials(),
+    sessionCoreRepository,
+    sandboxRepository,
+    sandboxEventProcessor,
     messenger,
-    generateId: () => generateId(),
-    now: () => Date.now(),
-  });
+    Boolean(db),
+    refreshOpenAIToken,
+    refreshXaiToken,
+    getScmCredentials,
+    isValidSandboxToken,
+    generateId
+  );
 
   const attachmentsHandler = new AttachmentsHandler(attachmentRepository, log);
 
-  const wsTokenHandler = createWsTokenHandler({
-    repository: participantRepository,
-    getParticipantByUserId: (userId) => participantService.getByUserId(userId),
-    generateId: (bytes) => generateId(bytes),
-    hashToken: (token) => hashToken(token),
-    now: () => Date.now(),
-  });
+  const wsTokenHandler = new WsTokenHandler(participantRepository, generateId, hashToken);
 
-  const sessionLifecycleHandler = createSessionLifecycleHandler({
+  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
+  const sessionLifecycleHandler = new SessionLifecycleHandler(
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
     participantRepository,
-    getDurableObjectId: () => durableObjectId,
-    tokenEncryptionKey: env.TOKEN_ENCRYPTION_KEY,
-    encryptToken: (token, encryptionKey) => encryptToken(token, encryptionKey),
-    validateReasoningEffort: (model, effort) => validateReasoningEffort(model, effort, log),
-    generateId: (bytes) => generateId(bytes),
-    now: () => Date.now(),
-    scheduleWarmSandbox: () =>
+    statusService,
+    titleService,
+    lifecycleWsManager,
+    durableObjectId,
+    tokenEncryptionKey,
+    () =>
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
         name: "sandbox.warm",
       }),
-    getSession: () => sessionCoreRepository.getSession(),
-    getSandbox: () => sandboxRepository.getSandbox(),
-    getPublicSessionId: (sessionRow) => resolvePublicSessionId(sessionRow, durableObjectId),
-    getParticipantByUserId: (userId) => participantService.getByUserId(userId),
-    statusService,
-    applySessionTitleUpdate: (title, options) =>
-      titleService.applySessionTitleUpdate(title, options),
-    cancelSession: async () => {
+    async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
     },
-    getSandboxSocket: () => wsManager.getSandboxSocket(),
-    sendToSandbox: (ws, message) => wsManager.send(ws, message),
-    updateSandboxStatus: (status) => sandboxRepository.updateSandboxStatus(status),
-  });
+    encryptToken,
+    generateId
+  );
 
   const prCreationClaims = new PullRequestCreationClaims();
-  const pullRequestHandler = createPullRequestHandler({
-    getSession: () => sessionCoreRepository.getSession(),
-    getSessionRepositories: () => sessionCoreRepository.getSessionRepositories(),
-    getPromptingParticipantForPR: () => participantService.getPromptingParticipantForPR(),
-    resolveAuthForPR: (participant) => participantService.resolveAuthForPR(participant),
-    getSessionUrl: (sessionRow) => {
+  const pullRequestHandler = new PullRequestHandler(
+    sessionCoreRepository,
+    participantService,
+    artifactRepository,
+    messenger,
+    (sessionRow) => {
       const sessionId = sessionRow.session_name || sessionRow.id;
       const webAppUrl = env.WEB_APP_URL || env.WORKER_URL || "";
       return webAppUrl + "/session/" + sessionId;
     },
-    createPullRequest: async (input, requestLog) => {
+    async (input, requestLog) => {
       const pullRequestService = new SessionPullRequestService({
         repository: sessionCoreRepository,
         artifactRepository,
@@ -604,16 +600,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
       return pullRequestService.createPullRequest(input);
     },
-    getArtifactById: (artifactId) => artifactRepository.getArtifactById(artifactId),
-    updateArtifact: (artifactId, data) => artifactRepository.updateArtifact(artifactId, data),
-    messenger,
-    now: () => Date.now(),
-    triggerPullRequestRefresh: () => schedulePullRequestRefresh("manual"),
-  });
+    () => schedulePullRequestRefresh("manual")
+  );
 
-  const participantsHandler = createParticipantsHandler({
-    repository: participantRepository,
-  });
+  const participantsHandler = new ParticipantsHandler(participantRepository);
 
   // Tier 9 — the read models, connection admission, and the server stack.
   const snapshotReader = new SessionSnapshotReader({
@@ -633,7 +623,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const accessReader = new SessionAccessReader({
     sessionCoreRepository,
     sandboxRepository,
-    repoSecretsEncryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
+    repoSecretsEncryptionKey,
     log,
   });
 
@@ -660,6 +650,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshot: () => snapshotReader.handleSnapshot(),
     sandboxAccess: () => accessReader.handleSandboxAccess(),
     prompt: (request, _url, requestLog) => messagesHandler.enqueuePrompt(request, requestLog),
+    autofix: (request, _url, requestLog) => autofixHandler.handle(request, requestLog),
     stop: () => messagesHandler.stop(),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => sandboxHandler.createMediaArtifact(request),
@@ -722,15 +713,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         (client) => client.participantId === participantId
       ),
   };
-  const clientCommands: SessionClientCommands<WebSocket, ClientInfo> = {
-    subscribe: (ws, message) => connectionAuthenticator.handleSubscribe(ws, message),
-    submitPrompt: (ws, client, message) => messageQueue.handlePromptMessage(ws, client, message),
-    cancelPrompt: (ws, message) => messageQueue.cancelQueuedPrompt(ws, message),
-    stopExecution: () => messageQueue.stopExecution(),
-    notifyTyping: () => presenceService.handleTyping(),
-    updatePresence: (client, message) => presenceService.updatePresence(client, message),
-    getHistoryPage: (message) => eventStream.getHistoryPage(message),
-  };
+  const clientCommands = new SessionClientCommandFacade(
+    connectionAuthenticator,
+    messageQueue,
+    presenceService,
+    eventStream
+  );
   const sandboxDisconnects: SandboxDisconnectMonitor = {
     getStatus: () => sandboxRepository.getSandbox()?.status,
     scheduleCheck: () => lifecycleManager.scheduleDisconnectCheck(),
@@ -742,21 +730,21 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const server = new SessionServer<WebSocket, ClientInfo>({
     http: new SessionHttpDispatcher({
-      getLogger: () => log,
+      log,
       routes,
       handleWebSocketUpgrade: (request, url, requestLog) =>
         connectionAuthenticator.handleWebSocketUpgrade(request, url, requestLog),
       clock,
     }),
     messages: new SessionMessageRouter({
-      getLogger: () => log,
+      log,
       sockets,
       clientCommands,
       processSandboxEvent: (event) => sandboxEventProcessor.processSandboxEvent(event),
       clock,
     }),
     disconnects: new SessionDisconnectHandler({
-      getLogger: () => log,
+      log,
       sockets,
       sandbox: sandboxDisconnects,
       broadcaster: disconnectBroadcaster,
@@ -805,9 +793,10 @@ interface LifecycleManagerDeps {
   db: SqlDatabase | null;
   /** The latched public-session-id resolver shared with the session logger. */
   getSessionId: () => string;
-  sessionCoreRepository: SessionCoreRepository;
-  sandboxRepository: SandboxRepository;
-  userEnvResolver: UserEnvResolver;
+  /** The repository, satisfying the manager's storage port structurally. */
+  storage: SandboxStorage;
+  sessionContext: SessionContextReader;
+  repoSecretsEncryptionKey: string;
   messenger: SessionMessenger;
   wsManager: SessionWebSocketManager;
   alarmScheduler: RehydratableAlarmScheduler;
@@ -820,9 +809,9 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     env,
     db,
     getSessionId,
-    sessionCoreRepository,
-    sandboxRepository,
-    userEnvResolver,
+    storage,
+    sessionContext,
+    repoSecretsEncryptionKey,
     messenger,
     wsManager,
     alarmScheduler,
@@ -834,71 +823,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
   const provider = createSandboxProviderFromEnv(env, sandboxBackend);
 
-  // Storage adapter
-  const storage: SandboxStorage = {
-    getSandbox: () => sandboxRepository.getSandbox(),
-    getSandboxWithCircuitBreaker: () => sandboxRepository.getSandboxWithCircuitBreaker(),
-    getSession: () => sessionCoreRepository.getSession(),
-    getSessionRepositories: () =>
-      sessionCoreRepository.getSessionRepositories().map((entry) => ({
-        repoOwner: entry.repoOwner,
-        repoName: entry.repoName,
-        baseBranch: entry.baseBranch ?? "main",
-        baseSha: entry.row?.base_sha ?? null,
-      })),
-    getUserEnvVars: () => userEnvResolver.getUserEnvVars(),
-    updateSandboxStatus: (status) => sandboxRepository.updateSandboxStatus(status),
-    updateSandboxForSpawn: (data) => sandboxRepository.updateSandboxForSpawn(data),
-    updateSandboxForResume: (data) => sandboxRepository.updateSandboxForResume(data),
-    updateSandboxModalObjectId: (id) => sandboxRepository.updateSandboxModalObjectId(id),
-    updateSandboxRuntimeVersion: (runtimeVersion) =>
-      sandboxRepository.updateSandboxRuntimeVersion(runtimeVersion),
-    updateSandboxSnapshotImageId: (sandboxId, imageId, runtimeVersion) =>
-      sandboxRepository.updateSandboxSnapshotImageId(sandboxId, imageId, runtimeVersion),
-    updateSandboxLastActivity: (timestamp) =>
-      sandboxRepository.updateSandboxLastActivity(timestamp),
-    incrementCircuitBreakerFailure: (timestamp) =>
-      sandboxRepository.incrementCircuitBreakerFailure(timestamp),
-    resetCircuitBreaker: () => sandboxRepository.resetCircuitBreaker(),
-    setLastSpawnError: (error, timestamp) =>
-      sandboxRepository.updateSandboxSpawnError(error, timestamp),
-    updateSandboxCodeServer: async (url, password) => {
-      const encrypted = env.REPO_SECRETS_ENCRYPTION_KEY
-        ? await encryptToken(password, env.REPO_SECRETS_ENCRYPTION_KEY)
-        : password;
-      sandboxRepository.updateSandboxCodeServer(url, encrypted);
-    },
-    clearSandboxCodeServer: () => sandboxRepository.clearSandboxCodeServer(),
-    clearSandboxCodeServerUrl: () => sandboxRepository.clearSandboxCodeServerUrl(),
-    updateSandboxVnc: async (url, password) => {
-      const encrypted = env.REPO_SECRETS_ENCRYPTION_KEY
-        ? await encryptToken(password, env.REPO_SECRETS_ENCRYPTION_KEY)
-        : password;
-      sandboxRepository.updateSandboxVnc(url, encrypted);
-    },
-    clearSandboxVnc: () => sandboxRepository.clearSandboxVnc(),
-    clearSandboxVncUrl: () => sandboxRepository.clearSandboxVncUrl(),
-    updateSandboxTunnelUrls: (urls) => sandboxRepository.updateSandboxTunnelUrls(urls),
-    clearSandboxTunnelUrls: () => sandboxRepository.clearSandboxTunnelUrls(),
-    updateSandboxTtyd: async (url, token) => {
-      const encrypted = env.REPO_SECRETS_ENCRYPTION_KEY
-        ? await encryptToken(token, env.REPO_SECRETS_ENCRYPTION_KEY)
-        : token;
-      sandboxRepository.updateSandboxTtyd(url, encrypted);
-    },
-    clearSandboxTtyd: () => sandboxRepository.clearSandboxTtyd(),
-  };
-
-  // WebSocket manager adapter — thin delegation to wsManager
-  const lifecycleWsManager: WebSocketManager = {
-    getSandboxWebSocket: () => wsManager.getSandboxSocket(),
-    detachSandboxWebSocket: (code, reason) => wsManager.detachSandboxSocket(code, reason),
-    sendToSandbox: (message) => {
-      const ws = wsManager.getSandboxSocket();
-      return ws ? wsManager.send(ws, message) : false;
-    },
-    getConnectedClientCount: () => wsManager.getConnectedClientCount(),
-  };
+  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
 
   // ID generator adapter
   const idGenerator: IdGenerator = {
@@ -913,7 +838,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   // Create D1-backed lookups if database is available
   let mcpServerLookup: McpServerLookup | undefined;
   if (db) {
-    const mcpStore = new McpServerStore(db, env.REPO_SECRETS_ENCRYPTION_KEY);
+    const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
     mcpServerLookup = {
       getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
     };
@@ -974,6 +899,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   return new SandboxLifecycleManager(
     provider,
     storage,
+    sessionContext,
     messenger,
     lifecycleWsManager,
     alarmScheduler,

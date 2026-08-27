@@ -289,15 +289,25 @@ describe("session inbox", () => {
     expect(finishedBody.items[0].descendantSessions.map(({ id }) => id)).toEqual(["draft-child"]);
   });
 
-  it("limits the Mine view to user-created non-automation sessions", async () => {
+  it("shows automation children but excludes directly automated sessions from Mine", async () => {
     await serviceFetch("https://example.com/sessions/inbox?category=finished");
     const store = new SessionIndexStore(env.DB);
     await store.create(session("mine"));
     await store.create(session("another-user", { userId: "22222222222222222222222222222222" }));
+    await store.create(session("github-bot", { spawnSource: "github-bot" }));
     await store.create(
       session("automation", {
         automationId: "automation-1",
         spawnSource: "automation",
+      })
+    );
+    await store.create(
+      session("automation-child", {
+        parentSessionId: "automation",
+        spawnSource: "agent",
+        spawnDepth: 1,
+        automationId: "automation-1",
+        updatedAt: 3000,
       })
     );
 
@@ -307,7 +317,7 @@ describe("session inbox", () => {
     const body = (await response.json()) as {
       items: Array<{ rootSession: { id: string } }>;
     };
-    expect(body.items.map((item) => item.rootSession.id)).toEqual(["mine"]);
+    expect(body.items.map((item) => item.rootSession.id)).toEqual(["automation-child", "mine"]);
   });
 
   it("reroots every visible subtree when Mine filters out the persisted root", async () => {

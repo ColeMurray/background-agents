@@ -34,14 +34,23 @@ export function makeRunRow(
   };
 }
 
-export async function seedRun(run: AutomationRunRow): Promise<void> {
+export async function seedRun(
+  run: AutomationRunRow,
+  invocation?: { concurrencyKey: string | null }
+): Promise<void> {
   const invocationInsert = env.DB.prepare(
     `INSERT INTO automation_invocations
        (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
         trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-     VALUES (?, ?, 'manual', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
+     VALUES (?, ?, 'manual', NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
      ON CONFLICT(id) DO NOTHING`
-  ).bind(run.invocation_id, run.automation_id, run.created_at, run.created_at);
+  ).bind(
+    run.invocation_id,
+    run.automation_id,
+    invocation?.concurrencyKey ?? null,
+    run.created_at,
+    run.created_at
+  );
   const runInsert = env.DB.prepare(
     `INSERT INTO automation_runs
      (id, automation_id, invocation_id, session_id, status, skip_reason, failure_reason,

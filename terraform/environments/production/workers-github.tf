@@ -2,6 +2,20 @@
 # GitHub Bot Worker
 # =============================================================================
 
+resource "cloudflare_queue" "github_autofix" {
+  count = var.enable_github_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-github-autofix-${local.name_suffix}"
+}
+
+resource "cloudflare_queue" "github_autofix_dlq" {
+  count = var.enable_github_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-github-autofix-dlq-${local.name_suffix}"
+}
+
 # Build github-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "github_bot_build" {
   count = var.enable_github_bot ? 1 : 0
@@ -41,6 +55,13 @@ module "github_bot_worker" {
 
   enable_service_bindings = var.enable_service_bindings
 
+  queue_bindings = [
+    {
+      binding_name = "AUTOFIX_QUEUE"
+      queue_name   = cloudflare_queue.github_autofix[0].queue_name
+    }
+  ]
+
   plain_text_bindings = [
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "APP_NAME", value = var.app_name },
@@ -60,4 +81,23 @@ module "github_bot_worker" {
   compatibility_flags = ["nodejs_compat"]
 
   depends_on = [null_resource.github_bot_build[0], module.control_plane_worker, module.github_kv[0]]
+}
+
+resource "cloudflare_queue_consumer" "github_autofix" {
+  count = var.enable_github_bot ? 1 : 0
+
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.github_autofix[0].queue_id
+  type              = "worker"
+  script_name       = module.control_plane_worker.worker_name
+  dead_letter_queue = cloudflare_queue.github_autofix_dlq[0].queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 5
+    max_retries      = 4
+    retry_delay      = 30
+  }
+
+  depends_on = [module.github_bot_worker, module.control_plane_worker]
 }

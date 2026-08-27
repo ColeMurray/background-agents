@@ -6,7 +6,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 export interface SessionAccessReaderDeps {
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
-  repoSecretsEncryptionKey: string | undefined;
+  repoSecretsEncryptionKey: string;
   log: Logger;
 }
 

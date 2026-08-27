@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
-import { componentsOf } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 import { encryptToken } from "../../src/auth/crypto";
 import {
   collectMessages,
@@ -90,8 +90,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
         sandboxId: SANDBOX_ID,
         status: "ready",
       });
-      await runInDurableObject(stub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      await runInSessionDO(stub, (instance: SessionDO, state) => {
+        state.storage.sql.exec("UPDATE session SET status = ?", status);
       });
 
       const { ws, response } = await openSandboxWs(name, {
@@ -114,8 +114,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
         sandboxId: SANDBOX_ID,
         status: "connecting",
       });
-      await runInDurableObject(stub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+      await runInSessionDO(stub, (instance: SessionDO, state) => {
+        state.storage.sql.exec("UPDATE session SET status = ?", status);
       });
 
       const { ws, response } = await openSandboxWs(name, {
@@ -142,14 +142,14 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     stub: DurableObjectStub,
     ...statements: string[]
   ): Promise<void> {
-    await runInDurableObject(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
       const repository = componentsOf(instance).sandboxRepository;
       const readSandbox = repository.getSandbox.bind(repository);
       vi.spyOn(repository, "getSandbox").mockImplementation(() => {
         const sandbox = readSandbox();
         queueMicrotask(() => {
           for (const statement of statements) {
-            instance.ctx.storage.sql.exec(statement);
+            state.storage.sql.exec(statement);
           }
         });
         return sandbox;
@@ -303,12 +303,12 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       status: "connecting",
     });
     const [codePassword, vncPassword, terminalToken] = await Promise.all([
-      encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
-      encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
-      encryptToken("terminal-token", env.REPO_SECRETS_ENCRYPTION_KEY),
+      encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
+      encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
+      encryptToken("terminal-token", env.REPO_SECRETS_ENCRYPTION_KEY!),
     ]);
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         `UPDATE sandbox
          SET code_server_url = ?, code_server_password = ?, vnc_url = ?, vnc_password = ?,
              ttyd_url = ?, ttyd_token = ?`,
@@ -357,7 +357,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       sandboxId: SANDBOX_ID,
       status: "spawning",
     });
-    await runInDurableObject(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO) => {
       const lifecycleManager = componentsOf(instance).lifecycleManager as unknown as {
         providerStartupPending: boolean;
       };
@@ -452,8 +452,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     await closed;
 
     const oldHeartbeat = Date.now() - 10 * 60 * 1000;
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
     });
 
     const { ws: reconnectedWs, response } = await openSandboxWs(name, {
@@ -470,7 +470,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     );
     expect(sandboxAfterReconnect[0].last_heartbeat).toBeGreaterThan(oldHeartbeat);
 
-    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+    await runInSessionDO(stub, (instance: SessionDO) => instance.alarm());
 
     const sandboxAfterAlarm = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
     expect(sandboxAfterAlarm[0].status).toBe("ready");
@@ -556,10 +556,11 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     sandboxWs!.accept();
 
     const collector = collectMessages(clientWs, {
-      until: (message) =>
-        message.type === "sandbox_event" &&
-        message.event.type === "token" &&
-        message.event.content === "After compaction",
+      until: (message) => {
+        if (message.type !== "sandbox_event") return false;
+        const event = message.event as { type?: string; content?: string };
+        return event.type === "token" && event.content === "After compaction";
+      },
     });
     const before = {
       type: "token",

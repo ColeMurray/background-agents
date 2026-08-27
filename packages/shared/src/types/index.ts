@@ -24,6 +24,19 @@ export type {
   SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
+export {
+  githubAutofixEnvelopeSchema,
+  githubAutofixOriginSchema,
+  githubAutofixSessionCommandSchema,
+  githubAutofixSessionResponseSchema,
+} from "./github-autofix";
+export type {
+  GitHubAutofixEnvelope,
+  GitHubAutofixOrigin,
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "./github-autofix";
+
 export { clientMessageSchema, clientRequestIdSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 

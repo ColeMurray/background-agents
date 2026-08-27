@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import { Scheduler, resolveAutomationProviderAuth } from "../../src/scheduler/scheduler";
@@ -76,7 +78,7 @@ describe("Scheduler (integration)", () => {
       const automation = makeAutomation({ id: `auto-account-${provider}` });
       await new AutomationStore(env.DB).create(automation);
       const authStore = new AutomationModelProviderAuthStore(env.DB);
-      await env.DB.batch(
+      await sqlDatabase(env.DB).batch(
         authStore.bindReplace(
           automation.id,
           {
@@ -101,7 +103,7 @@ describe("Scheduler (integration)", () => {
       const automation = makeAutomation({ id: `auto-api-key-${provider}` });
       await new AutomationStore(env.DB).create(automation);
       const authStore = new AutomationModelProviderAuthStore(env.DB);
-      await env.DB.batch(
+      await sqlDatabase(env.DB).batch(
         authStore.bindReplace(automation.id, { [provider]: { mode: "api_key" } }, Date.now())
       );
 
@@ -768,7 +770,7 @@ describe("Scheduler (integration)", () => {
       store: AutomationStore,
       automationId: string,
       invocationId: string,
-      children: Array<{ id: string; status: string; failed?: boolean }>
+      children: Array<{ id: string; status: AutomationRunStatus; failed?: boolean }>
     ): Promise<void> {
       const now = Date.now();
       const { inserted } = await store.insertInvocationGuarded({

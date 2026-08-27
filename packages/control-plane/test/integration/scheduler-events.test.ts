@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { SentryAutomationEvent, WebhookAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
@@ -107,7 +108,9 @@ describe("Scheduler event handling (integration)", () => {
       // Keep this matching test independent of SessionDO and sandbox startup.
       // A deleted environment still produces one child, which fails locally
       // during target resolution after the invocation is persisted.
-      await env.DB.batch(store.bindReplaceEnvironments(automationId, ["env-deleted"], Date.now()));
+      await sqlDatabase(env.DB).batch(
+        store.bindReplaceEnvironments(automationId, ["env-deleted"], Date.now())
+      );
 
       const event = makeSentryEvent(automationId);
       const res = await sendEvent(event);
@@ -361,13 +364,15 @@ describe("Scheduler event handling (integration)", () => {
         })
       );
 
+      // The active run's firing key lives on its invocation: seed it there so
+      // this proves per-key scoping, not merely keyed-vs-unkeyed.
       await seedRun(
         makeRunRow(automationId, {
           status: "running",
           session_id: "sess-existing",
           started_at: Date.now(),
-          concurrency_key: "sentry_issue:42",
-        })
+        }),
+        { concurrencyKey: "sentry_issue:42" }
       );
 
       const event = makeSentryEvent(automationId, {

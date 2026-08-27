@@ -4,6 +4,7 @@ import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import { SlackNotifyEvent } from "./slack-notify-event";
+import { CreatePullRequestEvent } from "./create-pull-request-event";
 import { TimelineRowContent } from "./timeline-row-content";
 import {
   ChevronRightIcon,
@@ -96,6 +97,17 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
 }
 
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
+  if (event.tool?.toLowerCase() === "create-pull-request") {
+    return (
+      <CreatePullRequestEvent
+        event={event}
+        isExpanded={isExpanded}
+        onToggle={onToggle}
+        showTime={showTime}
+      />
+    );
+  }
+
   if (event.tool === "slack-notify") {
     return (
       <SlackNotifyEvent
