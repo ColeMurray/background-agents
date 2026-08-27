@@ -11,13 +11,14 @@ import type {
   ConditionType,
   TriggerCondition,
 } from "./types";
+import { getGitHubConclusionOptions } from "./github/conditions";
 import { isGitHubConditionSupported } from "./github/webhook-types";
 
 type ConditionOf<K extends ConditionType> = Extract<TriggerCondition, { type: K }>;
 
 export interface ConditionHandler<K extends ConditionType> {
   /** Validate at automation creation time. Returns null if valid, error string otherwise. */
-  validate(condition: ConditionOf<K>): string | null;
+  validate(condition: ConditionOf<K>, eventType?: string): string | null;
 
   /** Evaluate at event matching time. Returns true if the condition passes. */
   evaluate(condition: ConditionOf<K>, event: AutomationEvent): boolean;
@@ -31,6 +32,15 @@ export interface ConditionHandler<K extends ConditionType> {
 export type ConditionRegistry = {
   [K in ConditionType]: ConditionHandler<K>;
 };
+
+export function isGitHubConditionCompatible(
+  eventType: string,
+  condition: TriggerCondition
+): boolean {
+  if (!isGitHubConditionSupported(eventType, condition.type)) return false;
+  if (condition.type !== "conclusion" && condition.type !== "check_conclusion") return true;
+  return getGitHubConclusionOptions(eventType).includes(condition.value);
+}
 
 // ─── Dispatch ────────────────────────────────────────────────────────────────
 
@@ -70,7 +80,7 @@ export function validateConditions(
         continue;
       }
     }
-    const err = handler.validate(condition);
+    const err = handler.validate(condition, eventType);
     if (err) errors.push(err);
   }
   return errors;

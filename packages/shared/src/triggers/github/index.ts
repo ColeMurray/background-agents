@@ -5,7 +5,13 @@
 import type { TriggerSourceDefinition } from "../types";
 import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
-export { githubConditions, DEFAULT_GITHUB_CONCLUSION, GITHUB_CONCLUSIONS } from "./conditions";
+export {
+  githubConditions,
+  DEFAULT_GITHUB_CONCLUSION,
+  CHECK_SUITE_CONCLUSIONS,
+  WORKFLOW_RUN_CONCLUSIONS,
+  getGitHubConclusionOptions,
+} from "./conditions";
 export { normalizeGitHubEvent } from "./normalizer";
 export {
   GITHUB_WEBHOOK_EVENT_CATALOG,

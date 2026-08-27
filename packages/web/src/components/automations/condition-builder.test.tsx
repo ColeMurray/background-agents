@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import {
-  GITHUB_CONCLUSIONS,
+  CHECK_SUITE_CONCLUSIONS,
+  WORKFLOW_RUN_CONCLUSIONS,
   type AutomationEventSource,
   type TriggerCondition,
 } from "@open-inspect/shared/triggers";
@@ -127,7 +128,7 @@ describe("ConditionBuilder — GitHub workflow editors", () => {
     ]);
   });
 
-  it.each(GITHUB_CONCLUSIONS)("renders the %s conclusion", (conclusion) => {
+  it.each(WORKFLOW_RUN_CONCLUSIONS)("renders the %s workflow conclusion", (conclusion) => {
     renderBuilder(
       [{ type: "conclusion", operator: "eq", value: conclusion }],
       "github",
@@ -136,6 +137,27 @@ describe("ConditionBuilder — GitHub workflow editors", () => {
 
     expect(screen.getByText("Conclusion")).toBeInTheDocument();
     expect(screen.getAllByRole("combobox")[0]).toHaveTextContent(conclusion);
+  });
+
+  it.each(CHECK_SUITE_CONCLUSIONS)("renders the %s check suite conclusion", (conclusion) => {
+    renderBuilder(
+      [{ type: "check_conclusion", operator: "eq", value: conclusion }],
+      "github",
+      "check_suite.completed"
+    );
+
+    expect(screen.getAllByRole("combobox")[0]).toHaveTextContent(conclusion);
+  });
+
+  it("does not offer check-suite-only conclusions for workflow runs", () => {
+    renderBuilder(
+      [{ type: "conclusion", operator: "eq", value: "success" }],
+      "github",
+      "workflow_run.completed"
+    );
+
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    expect(screen.queryByText("startup_failure")).not.toBeInTheDocument();
   });
 
   it("offers workflow filters only for workflow run events", () => {

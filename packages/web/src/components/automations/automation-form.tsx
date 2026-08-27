@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { isValidCron } from "@open-inspect/shared/cron";
 import {
   triggerSources,
-  isGitHubConditionSupported,
+  isGitHubConditionCompatible,
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationTriggerType,
   type AutomationEventSource,
@@ -165,7 +165,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [conditions, setConditions] = useState<TriggerCondition[]>(
     initialValues?.triggerConfig?.conditions ?? []
   );
-  const [droppedConditions, setDroppedConditions] = useState<string[]>([]);
+  const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>([]);
   const [sentryClientSecret, setSentryClientSecret] = useState("");
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
     initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
@@ -261,6 +261,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const handleEnvironmentToggle = (environmentId: string) => {
     toggleEnvironment(environmentId);
     if (!multipleSelectionEnabled) setRepoDropdownOpen(false);
+  };
+
+  const handleTriggerTypeChange = (value: AutomationTriggerType) => {
+    setTriggerType(value);
+    setDroppedConditions([]);
   };
 
   const handleNoRepository = () => {
@@ -399,7 +404,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </FieldDescription>
           <TriggerTypeSelector
             value={triggerType}
-            onChange={setTriggerType}
+            onChange={handleTriggerTypeChange}
             labelledBy="automation-trigger-type-label"
           />
         </div>
@@ -858,11 +863,15 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               // carries, so conditions the new event cannot answer come off
               // rather than being saved as filters that could never match. Say
               // which — a filter vanishing without a word reads as a bug.
-              if (TRIGGER_TYPE_TO_SOURCE[triggerType] !== "github") return;
-              const kept = conditions.filter((condition) =>
-                isGitHubConditionSupported(value, condition.type)
+              if (TRIGGER_TYPE_TO_SOURCE[triggerType] !== "github") {
+                setDroppedConditions([]);
+                return;
+              }
+              const candidates = [...conditions, ...droppedConditions];
+              const kept = candidates.filter((condition) =>
+                isGitHubConditionCompatible(value, condition)
               );
-              setDroppedConditions(conditions.filter((c) => !kept.includes(c)).map((c) => c.type));
+              setDroppedConditions(candidates.filter((condition) => !kept.includes(condition)));
               setConditions(kept);
             }}
           >
@@ -929,8 +938,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           {droppedConditions.length > 0 && (
             <FieldDescription>
               <span role="status">
-                Removed {droppedConditions.map((t) => CONDITION_LABELS[t] || t).join(", ")} — not
-                available for this event type.
+                Removed{" "}
+                {droppedConditions.map(({ type }) => CONDITION_LABELS[type] || type).join(", ")} —
+                not available for this event type.
               </span>
             </FieldDescription>
           )}

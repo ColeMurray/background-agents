@@ -12,7 +12,7 @@ Trigger types:
 | **Inbound Webhook** | Trigger from any system with an HTTP POST | Available          |
 | **Sentry Alert**    | Trigger from a Sentry Custom Integration  | Available          |
 | **Slack Message**   | Trigger on messages in watched channels   | Available (opt-in) |
-| **GitHub Event**    | Trigger on GitHub activity                | Available          |
+| **GitHub Event**    | Trigger on GitHub activity                | Available (opt-in) |
 | **Linear Event**    | Trigger on Linear activity                | Planned            |
 
 Common use cases include nightly dependency updates, reacting to deploy or incident events, triaging
@@ -219,9 +219,9 @@ concurrency protection.
 
 A **GitHub Event** automation starts a session when a supported webhook event arrives for its
 repository. Pick one repository and one event type. The GitHub App must subscribe to that event and
-have its required repository permission. See the
-[GitHub App setup](GETTING_STARTED.md#step-3-create-github-app) for the permission and webhook
-settings.
+have its required repository permission. Set `enable_github_bot = true`, then complete the
+[GitHub bot setup](GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot) to
+deploy the webhook worker and configure event delivery.
 
 **Workflow Run Completed** handles completed GitHub Actions workflow runs. It requires the GitHub
 App's read-only Actions permission and the **Workflow runs** event subscription. Use these
@@ -229,7 +229,7 @@ conditions to restrict it:
 
 - **Workflow Name** matches the workflow name exactly.
 - **Conclusion** matches `success`, `failure`, `neutral`, `cancelled`, `timed_out`,
-  `action_required`, `skipped`, `stale`, or `startup_failure`.
+  `action_required`, `stale`, or `skipped`.
 
 All configured conditions must match. Open-Inspect includes the workflow name, conclusion, and run
 ID in the untrusted event context sent to the agent. When GitHub supplies them, the context also

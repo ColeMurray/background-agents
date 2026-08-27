@@ -117,15 +117,32 @@ function parseTriggerConfig(value: unknown): ParseTriggerConfigResult {
   };
 }
 
-function getTriggerConditionError(
+interface TriggerConditionError {
+  condition: TriggerConfig["conditions"][number];
+  message: string;
+}
+
+function getTriggerConditionErrors(
   triggerType: AutomationTriggerType,
   triggerConfig: TriggerConfig,
   eventType?: string
-): string | null {
+): TriggerConditionError[] {
   const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
-  if (!source) return null;
-  const errors = validateConditions(triggerConfig.conditions, source, conditionRegistry, eventType);
-  return errors.length > 0 ? errors.join("; ") : null;
+  if (!source) return [];
+  return triggerConfig.conditions.flatMap((condition) =>
+    validateConditions([condition], source, conditionRegistry, eventType).map((message) => ({
+      condition,
+      message,
+    }))
+  );
+}
+
+function hasCondition(
+  triggerConfig: TriggerConfig,
+  condition: TriggerConditionError["condition"]
+): boolean {
+  const serialized = JSON.stringify(condition);
+  return triggerConfig.conditions.some((existing) => JSON.stringify(existing) === serialized);
 }
 
 /** Warn if next run is more than 31 days away. */
@@ -557,12 +574,14 @@ async function handleCreateAutomation(
 
   // Validate conditions
   if (body.triggerConfig) {
-    const conditionError = getTriggerConditionError(
+    const conditionErrors = getTriggerConditionErrors(
       triggerType,
       body.triggerConfig,
       body.eventType
     );
-    if (conditionError) return error(conditionError, 400);
+    if (conditionErrors.length > 0) {
+      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
+    }
   }
 
   // Slack triggers require explicit scoping (at least one watched channel).
@@ -888,6 +907,9 @@ async function handleUpdateAutomation(
 
   // Update event type — only for non-schedule types
   if (body.eventType !== undefined) {
+    if (typeof body.eventType !== "string" || body.eventType.trim().length === 0) {
+      return error("eventType must be a non-empty string", 400);
+    }
     if (existing.trigger_type === "schedule") {
       return error("Cannot set eventType on schedule automations", 400);
     }
@@ -924,12 +946,34 @@ async function handleUpdateAutomation(
   }
 
   if (triggerConfigToValidate) {
-    const conditionError = getTriggerConditionError(
+    const effectiveEventType =
+      body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
+    let conditionErrors = getTriggerConditionErrors(
       existing.trigger_type as AutomationTriggerType,
       triggerConfigToValidate,
-      body.eventType ?? existing.event_type ?? undefined
+      effectiveEventType
     );
-    if (conditionError) return error(conditionError, 400);
+
+    // Existing source-wide GitHub conditions predate event-scoped validation.
+    // Preserve an unchanged condition on unrelated edits, but validate strictly
+    // when its value or the selected event changes.
+    const eventTypeChanged = body.eventType !== undefined && body.eventType !== existing.event_type;
+    if (existing.trigger_type === "github_event" && !eventTypeChanged && existing.trigger_config) {
+      try {
+        const parsedExisting = triggerConfigSchema.safeParse(JSON.parse(existing.trigger_config));
+        if (parsedExisting.success) {
+          conditionErrors = conditionErrors.filter(
+            ({ condition }) => !hasCondition(parsedExisting.data, condition)
+          );
+        }
+      } catch {
+        // A valid replacement should be able to repair malformed stored JSON.
+      }
+    }
+
+    if (conditionErrors.length > 0) {
+      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
+    }
   }
 
   // trigger_config is a single source-interpreted JSON blob (the conditions),

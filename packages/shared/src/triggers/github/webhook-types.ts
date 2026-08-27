@@ -89,11 +89,13 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
   },
 ] as const satisfies readonly GitHubEventCatalogEntry[];
 
+const NO_GITHUB_EVENT_CONDITIONS: readonly ConditionType[] = [];
+
 export function getGitHubEventConditionTypes(eventType: string): readonly ConditionType[] {
   const entry = GITHUB_WEBHOOK_EVENT_CATALOG.find(
     ({ event, action }) => `${event}.${action}` === eventType
   );
-  return entry?.supportedConditions ?? [];
+  return entry?.supportedConditions ?? NO_GITHUB_EVENT_CONDITIONS;
 }
 
 export function isGitHubConditionSupported(

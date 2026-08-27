@@ -34,7 +34,7 @@ export {
 
 // Condition system
 export type { ConditionHandler, ConditionRegistry } from "./conditions";
-export { matchesConditions, validateConditions } from "./conditions";
+export { isGitHubConditionCompatible, matchesConditions, validateConditions } from "./conditions";
 
 // Registry
 export { conditionRegistry, triggerSources } from "./registry";
@@ -48,7 +48,9 @@ export {
   githubConditions,
   normalizeGitHubEvent,
   DEFAULT_GITHUB_CONCLUSION,
-  GITHUB_CONCLUSIONS,
+  CHECK_SUITE_CONCLUSIONS,
+  WORKFLOW_RUN_CONCLUSIONS,
+  getGitHubConclusionOptions,
   GITHUB_WEBHOOK_EVENT_CATALOG,
   getGitHubEventConditionTypes,
   isGitHubConditionSupported,

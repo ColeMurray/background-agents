@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { matchesConditions, validateConditions } from "./conditions";
+import { isGitHubConditionCompatible, matchesConditions, validateConditions } from "./conditions";
 import { conditionRegistry } from "./registry";
-import { GITHUB_CONCLUSIONS } from "./github";
+import { CHECK_SUITE_CONCLUSIONS, WORKFLOW_RUN_CONCLUSIONS } from "./github";
 import { buildMockEvent } from "./testing";
 
 describe("matchesConditions", () => {
@@ -174,6 +174,15 @@ describe("matchesConditions", () => {
 
       expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
     });
+
+    it("accepts the legacy normalized field during rolling deployments", () => {
+      const event = buildMockEvent("github", { checkConclusion: "failure" });
+      const conditions = [
+        { type: "check_conclusion" as const, operator: "eq" as const, value: "failure" },
+      ];
+
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
   });
 });
 
@@ -288,7 +297,7 @@ describe("validateConditions", () => {
     ).toHaveLength(0);
   });
 
-  it.each(GITHUB_CONCLUSIONS)("accepts the %s GitHub conclusion", (conclusion) => {
+  it.each(WORKFLOW_RUN_CONCLUSIONS)("accepts the %s workflow run conclusion", (conclusion) => {
     expect(
       validateConditions(
         [{ type: "conclusion", operator: "eq", value: conclusion }],
@@ -297,6 +306,9 @@ describe("validateConditions", () => {
         "workflow_run.completed"
       )
     ).toHaveLength(0);
+  });
+
+  it.each(CHECK_SUITE_CONCLUSIONS)("accepts the %s check suite conclusion", (conclusion) => {
     expect(
       validateConditions(
         [{ type: "check_conclusion", operator: "eq", value: conclusion }],
@@ -305,5 +317,29 @@ describe("validateConditions", () => {
         "check_suite.completed"
       )
     ).toHaveLength(0);
+  });
+
+  it("rejects conclusions unsupported by the selected event", () => {
+    expect(
+      validateConditions(
+        [{ type: "conclusion", operator: "eq", value: "startup_failure" }],
+        "github",
+        conditionRegistry,
+        "workflow_run.completed"
+      )
+    ).toEqual(["Invalid conclusion: startup_failure"]);
+  });
+});
+
+describe("isGitHubConditionCompatible", () => {
+  it("checks event-specific conclusion values", () => {
+    const startupFailure = {
+      type: "conclusion" as const,
+      operator: "eq" as const,
+      value: "startup_failure",
+    };
+
+    expect(isGitHubConditionCompatible("check_suite.completed", startupFailure)).toBe(true);
+    expect(isGitHubConditionCompatible("workflow_run.completed", startupFailure)).toBe(false);
   });
 });

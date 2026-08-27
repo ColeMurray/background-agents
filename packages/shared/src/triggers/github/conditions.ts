@@ -6,27 +6,41 @@ import type { AutomationEvent } from "../types";
 
 export const DEFAULT_GITHUB_CONCLUSION = "success" as const;
 
-export const GITHUB_CONCLUSIONS = [
+const SHARED_GITHUB_CONCLUSIONS = [
   DEFAULT_GITHUB_CONCLUSION,
   "failure",
   "neutral",
   "cancelled",
   "timed_out",
   "action_required",
-  "skipped",
   "stale",
+] as const;
+
+export const CHECK_SUITE_CONCLUSIONS = [
+  ...SHARED_GITHUB_CONCLUSIONS,
+  "skipped",
   "startup_failure",
 ] as const;
 
-const githubConclusionSet: ReadonlySet<string> = new Set(GITHUB_CONCLUSIONS);
+export const WORKFLOW_RUN_CONCLUSIONS = [...SHARED_GITHUB_CONCLUSIONS, "skipped"] as const;
 
-function validateGitHubConclusion(condition: { value: string }): string | null {
-  return githubConclusionSet.has(condition.value) ? null : `Invalid conclusion: ${condition.value}`;
+const NO_GITHUB_CONCLUSIONS: readonly string[] = [];
+
+export function getGitHubConclusionOptions(eventType?: string): readonly string[] {
+  if (eventType === "check_suite.completed") return CHECK_SUITE_CONCLUSIONS;
+  if (eventType === "workflow_run.completed") return WORKFLOW_RUN_CONCLUSIONS;
+  return NO_GITHUB_CONCLUSIONS;
+}
+
+function validateGitHubConclusion(condition: { value: string }, eventType?: string): string | null {
+  return getGitHubConclusionOptions(eventType).includes(condition.value)
+    ? null
+    : `Invalid conclusion: ${condition.value}`;
 }
 
 function evaluateGitHubConclusion(condition: { value: string }, event: AutomationEvent): boolean {
   if (event.source !== "github") return true;
-  return event.conclusion === condition.value;
+  return (event.conclusion ?? event.checkConclusion) === condition.value;
 }
 
 /** Match one branch name against a condition's exact list or glob patterns. */

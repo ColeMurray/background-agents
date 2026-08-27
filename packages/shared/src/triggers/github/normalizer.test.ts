@@ -271,7 +271,7 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.source).toBe("github");
       expect(event!.eventType).toBe("check_suite.completed");
       expect(event!.conclusion).toBe("failure");
-      expect(event).not.toHaveProperty("checkConclusion");
+      expect(event!.checkConclusion).toBe("failure");
       expect(event!.triggerKey).toBe("check_suite:77777");
       expect(event!.concurrencyKey).toBe("check_suite:77777");
       expect(event!.branch).toBe("feature/my-feature");

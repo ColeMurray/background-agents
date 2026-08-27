@@ -264,6 +264,7 @@ function normalizeCheckSuite(eventType: string, payload: CheckSuitePayload): Git
     branch: checkSuite.head_branch ?? undefined,
     actor: getActor(payload),
     conclusion,
+    checkConclusion: conclusion,
     contextBlock: buildCheckSuiteContextBlock(payload),
     meta: {
       checkSuiteId: checkSuite.id,

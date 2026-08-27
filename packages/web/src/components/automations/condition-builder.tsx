@@ -9,7 +9,7 @@ import type {
 import {
   conditionRegistry,
   DEFAULT_GITHUB_CONCLUSION,
-  GITHUB_CONCLUSIONS,
+  getGitHubConclusionOptions,
   getGitHubEventConditionTypes,
 } from "@open-inspect/shared/triggers";
 import { Input } from "@/components/ui/input";
@@ -143,7 +143,11 @@ export function ConditionBuilder({
             <div className="text-xs font-medium text-muted-foreground">
               {CONDITION_LABELS[condition.type] || condition.type}
             </div>
-            <ConditionEditor condition={condition} onChange={(c) => updateCondition(index, c)} />
+            <ConditionEditor
+              condition={condition}
+              eventType={eventType}
+              onChange={(c) => updateCondition(index, c)}
+            />
           </div>
           <Button
             type="button"
@@ -177,9 +181,11 @@ export function ConditionBuilder({
 
 function ConditionEditor({
   condition,
+  eventType,
   onChange,
 }: {
   condition: TriggerCondition;
+  eventType?: string;
   onChange: (c: TriggerCondition) => void;
 }) {
   switch (condition.type) {
@@ -266,7 +272,7 @@ function ConditionEditor({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {GITHUB_CONCLUSIONS.map((option) => (
+            {getGitHubConclusionOptions(eventType).map((option) => (
               <SelectItem key={option} value={option}>
                 {option}
               </SelectItem>
