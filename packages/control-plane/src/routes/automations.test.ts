@@ -1033,7 +1033,7 @@ describe("automation route handlers", () => {
       }
     );
 
-    it("rejects trigger config on schedule automations before shape validation", async () => {
+    it("validates trigger config shape before schedule automation semantics", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const response = await callRoute("PUT", "/automations/auto-1", {
@@ -1041,8 +1041,8 @@ describe("automation route handlers", () => {
       });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({
-        error: "Cannot set triggerConfig on schedule automations",
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining("triggerConfig.conditions"),
       });
     });
 
@@ -1410,17 +1410,20 @@ describe("automation route handlers", () => {
   });
 
   describe("POST /automations/:id/regenerate-key", () => {
-    it("rejects malformed sentry secret payloads before persistence", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "sentry" });
+    it.each([123, "  "])(
+      "rejects malformed sentry secret payloads before persistence",
+      async (sentryClientSecret) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "sentry" });
 
-      const res = await callRoute("POST", "/automations/auto-1/regenerate-key", {
-        body: { sentryClientSecret: 123 },
-      });
+        const res = await callRoute("POST", "/automations/auto-1/regenerate-key", {
+          body: { sentryClientSecret },
+        });
 
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "sentryClientSecret is required" });
-      expect(mockStore.update).not.toHaveBeenCalled();
-    });
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toEqual({ error: "sentryClientSecret is required" });
+        expect(mockStore.update).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe("POST /automations/:id/trigger", () => {
