@@ -38,10 +38,7 @@ export class SessionSandboxEventProcessor {
 
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
-    // The DO swaps its logger for a request-scoped child during fetch();
-    // a getter keeps this singleton reading the current logger instead of
-    // capturing one by value at construction time.
-    private readonly getLog: () => Logger,
+    private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly sandboxRepository: SandboxRepository,
     private readonly messageRepository: MessageRepository,
@@ -68,10 +65,6 @@ export class SessionSandboxEventProcessor {
     private readonly broadcastPromptQueue: () => void
   ) {}
 
-  private get log(): Logger {
-    return this.getLog();
-  }
-
   async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
     if (event.type === "heartbeat" || event.type === "token") {
       this.log.debug("Sandbox event", { event_type: event.type });
@@ -85,6 +78,12 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "heartbeat") {
       this.sandboxRepository.updateSandboxHeartbeat(now);
+      // A quiet tool call may emit no events for longer than the inactivity
+      // timeout. While its message is processing, the bridge heartbeat proves
+      // the sandbox is still occupied and should renew its activity timestamp.
+      if (this.messageRepository.getProcessingMessage() !== null) {
+        this.updateLastActivity(now);
+      }
       return;
     }
 

@@ -232,6 +232,7 @@ function GlobalSettingsSection({
     const body: GitHubGlobalConfig = {
       defaults: {
         autoReviewOnOpen,
+        ...(settings?.defaults?.autofix ? { autofix: settings.defaults.autofix } : {}),
         ...(model ? { model } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
@@ -698,6 +699,7 @@ function RepoOverrideRow({
     if (!repository) return;
     setSaving(true);
     const settings: GitHubBotSettings = {};
+    if (entry.settings.autofix) settings.autofix = entry.settings.autofix;
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
     if (triggerUserMode === "override") settings.allowedTriggerUsers = allowedTriggerUsers;

@@ -4,7 +4,6 @@ import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
-  GITHUB_AUTOFIX_DEFAULTS,
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
@@ -12,8 +11,8 @@ import {
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
+  type GitHubAutofixSettings,
   type GitHubBotSettings,
-  type ResolvedGitHubAutofixSettings,
   type LinearBotSettings,
   type CodeServerSettings,
   type VncSettings,
@@ -255,7 +254,17 @@ export class IntegrationSettingsStore {
     for (const overrides of [repoSettings ?? {}, environmentSettings ?? {}]) {
       for (const [key, value] of Object.entries(overrides)) {
         if (value !== undefined) {
-          settings[key] = value;
+          settings[key] =
+            integrationId === "github" &&
+            key === "autofix" &&
+            typeof settings[key] === "object" &&
+            settings[key] !== null &&
+            !Array.isArray(settings[key]) &&
+            typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value)
+              ? { ...(settings[key] as Record<string, unknown>), ...value }
+              : value;
         }
       }
     }
@@ -391,7 +400,7 @@ export class IntegrationSettingsStore {
     return normalized;
   }
 
-  private validateAndNormalizeGitHubAutofixSettings(value: unknown): ResolvedGitHubAutofixSettings {
+  private validateAndNormalizeGitHubAutofixSettings(value: unknown): GitHubAutofixSettings {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new IntegrationSettingsValidationError("autofix must be an object");
     }
@@ -433,33 +442,19 @@ export class IntegrationSettingsStore {
       );
     }
 
-    return {
-      enabled:
-        typeof settings.enabled === "boolean" ? settings.enabled : GITHUB_AUTOFIX_DEFAULTS.enabled,
-      reviewsEnabled:
-        typeof settings.reviewsEnabled === "boolean"
-          ? settings.reviewsEnabled
-          : GITHUB_AUTOFIX_DEFAULTS.reviewsEnabled,
-      prCommentsEnabled:
-        typeof settings.prCommentsEnabled === "boolean"
-          ? settings.prCommentsEnabled
-          : GITHUB_AUTOFIX_DEFAULTS.prCommentsEnabled,
-      openInspectReviewsEnabled:
-        typeof settings.openInspectReviewsEnabled === "boolean"
-          ? settings.openInspectReviewsEnabled
-          : GITHUB_AUTOFIX_DEFAULTS.openInspectReviewsEnabled,
-      allowedReviewBots: Array.from(
-        new Set(
-          Array.isArray(allowedReviewBots)
-            ? allowedReviewBots.map((login) => login.trim().toLowerCase()).filter(Boolean)
-            : GITHUB_AUTOFIX_DEFAULTS.allowedReviewBots
-        )
-      ),
-      maxAttemptsPerPrPer24Hours:
-        typeof maxAttempts === "number"
-          ? maxAttempts
-          : GITHUB_AUTOFIX_DEFAULTS.maxAttemptsPerPrPer24Hours,
-    };
+    const normalized: GitHubAutofixSettings = {};
+    for (const key of booleanKeys) {
+      if (typeof settings[key] === "boolean") normalized[key] = settings[key];
+    }
+    if (Array.isArray(allowedReviewBots)) {
+      normalized.allowedReviewBots = Array.from(
+        new Set(allowedReviewBots.map((login) => login.trim().toLowerCase()).filter(Boolean))
+      );
+    }
+    if (typeof maxAttempts === "number") {
+      normalized.maxAttemptsPerPrPer24Hours = maxAttempts;
+    }
+    return normalized;
   }
 
   private validateLinearSettings(settings: LinearBotSettings): void {

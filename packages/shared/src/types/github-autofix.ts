@@ -39,7 +39,7 @@ export const githubAutofixEnvelopeSchema = z.discriminatedUnion("eventType", [
 
 export type GitHubAutofixEnvelope = z.infer<typeof githubAutofixEnvelopeSchema>;
 
-const externalFeedbackOriginSchema = z.discriminatedUnion("kind", [
+export const githubAutofixOriginSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("pr_comment"),
     authorType: z.literal("human"),
@@ -65,7 +65,7 @@ const enqueueFeedbackCommandSchema = z.object({
     id: z.string().min(1),
     login: z.string().min(1),
   }),
-  origin: externalFeedbackOriginSchema,
+  origin: githubAutofixOriginSchema,
   attemptLimit: z.number().int().min(1).max(50),
 });
 
@@ -90,7 +90,7 @@ export const githubAutofixSessionResponseSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("rejected"),
-    reason: z.enum(["session_closed", "attempt_limit"]),
+    reason: z.enum(["session_closed", "queue_full", "attempt_limit"]),
   }),
   z.object({
     kind: z.literal("found"),
@@ -101,6 +101,6 @@ export const githubAutofixSessionResponseSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export type GitHubAutofixOrigin = z.infer<typeof externalFeedbackOriginSchema>;
+export type GitHubAutofixOrigin = z.infer<typeof githubAutofixOriginSchema>;
 export type GitHubAutofixSessionCommand = z.infer<typeof githubAutofixSessionCommandSchema>;
 export type GitHubAutofixSessionResponse = z.infer<typeof githubAutofixSessionResponseSchema>;

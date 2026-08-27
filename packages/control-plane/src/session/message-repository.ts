@@ -1,6 +1,7 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 import type { MessageSource, MessageStatus } from "@open-inspect/shared/types/sessions";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
@@ -50,7 +51,7 @@ export interface AdmitAutofixMessageData {
 export type AutofixMessageAdmission =
   | { kind: "enqueued"; messageId: string }
   | { kind: "duplicate"; messageId: string }
-  | { kind: "rejected"; reason: "session_closed" | "attempt_limit" };
+  | { kind: "rejected"; reason: "session_closed" | "queue_full" | "attempt_limit" };
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {
@@ -173,6 +174,9 @@ export class MessageRepository {
       }
       if (data.sessionClosed) {
         return { kind: "rejected", reason: "session_closed" };
+      }
+      if (this.getPendingOrProcessingCount() >= MAX_UNFINISHED_PROMPTS) {
+        return { kind: "rejected", reason: "queue_full" };
       }
 
       const count = this.sql

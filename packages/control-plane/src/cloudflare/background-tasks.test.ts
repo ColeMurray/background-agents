@@ -33,7 +33,7 @@ describe("createCloudflareBackgroundTasks", () => {
   it("catches and logs rejected tasks", async () => {
     const waitUntil = vi.fn();
     const logger = { error: vi.fn() };
-    const background = createCloudflareBackgroundTasks({ waitUntil }, () => logger as never);
+    const background = createCloudflareBackgroundTasks({ waitUntil }, logger as never);
 
     background.submit(() => Promise.reject(new Error("task failed")), {
       name: "test.task",
@@ -51,7 +51,7 @@ describe("createCloudflareBackgroundTasks", () => {
   it("absorbs and logs a factory that throws synchronously", () => {
     const waitUntil = vi.fn();
     const logger = { error: vi.fn() };
-    const background = createCloudflareBackgroundTasks({ waitUntil }, () => logger as never);
+    const background = createCloudflareBackgroundTasks({ waitUntil }, logger as never);
 
     expect(() =>
       background.submit(

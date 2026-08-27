@@ -30,7 +30,10 @@ describe("managed skills persistence and resolution", () => {
         content,
         assignments: [
           { type: "global" },
-          { type: "repository", repository: { repoOwner: "group/subgroup", repoName: "api" } },
+          {
+            type: "repository",
+            repository: { repoOwner: "group/subgroup", repoName: "api", baseBranch: null },
+          },
         ],
       },
       "user_1"
@@ -46,7 +49,10 @@ describe("managed skills persistence and resolution", () => {
         content,
         assignments: [
           { type: "global" },
-          { type: "repository", repository: { repoOwner: "group/subgroup", repoName: "api" } },
+          {
+            type: "repository",
+            repository: { repoOwner: "group/subgroup", repoName: "api", baseBranch: null },
+          },
         ],
       },
       "user_2",

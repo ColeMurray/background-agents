@@ -286,7 +286,7 @@ describe("POST /webhooks/github", () => {
     expect(env.AUTOFIX_QUEUE.send).not.toHaveBeenCalled();
   });
 
-  it("returns 503 and releases the delivery claim when Autofix queueing fails", async () => {
+  it("continues normal webhook handling when Autofix queueing fails", async () => {
     const body = JSON.stringify({
       action: "created",
       issue: {
@@ -333,10 +333,14 @@ describe("POST /webhooks/github", () => {
       ctx
     );
 
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "autofix queue unavailable" });
-    expect(env.GITHUB_KV.delete).toHaveBeenCalledWith("delivery:delivery-comment-1236");
-    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    await flushWaitUntil(ctx);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/internal/github-event",
+      expect.any(Object)
+    );
+    expect(env.GITHUB_KV.delete).not.toHaveBeenCalled();
   });
 
   it("returns 401 for invalid signature", async () => {

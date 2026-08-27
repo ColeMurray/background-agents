@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import {
   AttachmentClaimConflictError,
   SessionAttachmentRepository,
@@ -233,6 +234,30 @@ describe("MessageRepository", () => {
         sessionClosed: false,
       })
     ).toEqual({ kind: "rejected", reason: "attempt_limit" });
+    expect(mock.calls).toHaveLength(3);
+  });
+
+  it("rejects Autofix admission when the session queue is full", () => {
+    mock.setOne({ count: MAX_UNFINISHED_PROMPTS });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 50,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "queue_full" });
     expect(mock.calls).toHaveLength(2);
   });
 

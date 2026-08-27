@@ -3,7 +3,10 @@ import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import { fingerprintWebPrompt, SessionMessageQueue } from "./message-queue";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import {
+  serverMessageSchema,
+  type ServerMessage,
+} from "@open-inspect/shared/types/server-messages";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
@@ -836,6 +839,10 @@ describe("SessionMessageQueue", () => {
 
     const event = h.repository.startMessageProcessing.mock.calls[0][2];
     expect(event).toEqual(expect.objectContaining({ origin }));
+    expect(serverMessageSchema.parse({ type: "sandbox_event", event })).toEqual({
+      type: "sandbox_event",
+      event: expect.objectContaining({ origin }),
+    });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 

@@ -21,15 +21,13 @@ import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
 import { Scheduler } from "./scheduler/scheduler";
+import { isAutofixQueue } from "./queue-routing";
 
 const logger = createLogger("worker");
 
 // Re-export Durable Objects for Cloudflare to discover
 export { SessionDO } from "./session/durable-object";
 
-/**
- * Worker fetch handler.
- */
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -80,7 +78,7 @@ export default {
   },
 
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    if (!batch.queue.includes("github-autofix")) {
+    if (!isAutofixQueue(batch.queue)) {
       await consumeImageBuildFinalizations(batch, env);
       return;
     }

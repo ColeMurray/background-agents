@@ -147,6 +147,7 @@ describe("GitHubIntegrationSettings", () => {
           autoReviewOnOpen: true,
           model: "anthropic/claude-sonnet-4-6",
           reasoningEffort: "high",
+          autofix: { enabled: true, reviewsEnabled: false },
         },
       },
     });
@@ -174,6 +175,7 @@ describe("GitHubIntegrationSettings", () => {
           settings: {
             defaults: {
               autoReviewOnOpen: false,
+              autofix: { enabled: true, reviewsEnabled: false },
               model: "anthropic/claude-sonnet-4-6",
               reasoningEffort: "high",
             },
@@ -243,7 +245,7 @@ describe("GitHubIntegrationSettings", () => {
     const user = userEvent.setup();
     setupSWR({
       global: { defaults: { autoReviewOnOpen: false } },
-      repos: [{ repo: "acme/web", settings: {} }],
+      repos: [{ repo: "acme/web", settings: { autofix: { enabled: true } } }],
       availableRepos: [repo("acme/web")],
     });
     fetchMock.mockResolvedValue(okJson({}));
@@ -264,7 +266,9 @@ describe("GitHubIntegrationSettings", () => {
       "/api/integration-settings/github/repos/acme/web",
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ settings: { autoReviewOnOpen: false } }),
+        body: JSON.stringify({
+          settings: { autofix: { enabled: true }, autoReviewOnOpen: false },
+        }),
       })
     );
   });

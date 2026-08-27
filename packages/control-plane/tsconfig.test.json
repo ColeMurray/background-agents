@@ -8,6 +8,8 @@
   "compilerOptions": {
     "types": ["@cloudflare/workers-types", "node"]
   },
-  "include": ["src/**/*.ts"],
+  // The vitest configs are Node-context (Vite host process), so they belong
+  // to this Node-typed program rather than the workerd-typed integration one.
+  "include": ["src/**/*.ts", "vitest.config.ts", "vitest.integration.config.ts"],
   "exclude": ["node_modules"]
 }

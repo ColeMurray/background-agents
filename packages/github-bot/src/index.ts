@@ -111,15 +111,11 @@ app.post("/webhooks/github", async (c) => {
     try {
       await c.env.AUTOFIX_QUEUE.send(autofixEnvelope);
     } catch (err) {
-      if (dedupeKey) {
-        await cacheStore.delete(dedupeKey);
-      }
       log.error("webhook.autofix_queue_failed", {
         trace_id: traceId,
         delivery_id: deliveryId,
         error: err instanceof Error ? err : new Error(String(err)),
       });
-      return c.json({ error: "autofix queue unavailable" }, 503);
     }
   }
 
