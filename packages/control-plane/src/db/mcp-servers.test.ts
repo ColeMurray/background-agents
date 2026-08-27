@@ -161,6 +161,30 @@ describe("McpServerStore", () => {
       expect(result!.command).toEqual(["not-json"]);
     });
 
+    it("rejects parsed command JSON that is not an array", async () => {
+      const malformedRow = { ...sampleRow, command: JSON.stringify({ command: "npx" }) };
+      const { db } = createFakeD1({ firstResult: malformedRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      await expect(store.get("abc123")).rejects.toThrow();
+    });
+
+    it("rejects parsed command arrays with non-string members", async () => {
+      const malformedRow = { ...sampleRow, command: JSON.stringify(["npx", 1]) };
+      const { db } = createFakeD1({ firstResult: malformedRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      await expect(store.get("abc123")).rejects.toThrow();
+    });
+
+    it("rejects malformed persisted MCP server type", async () => {
+      const malformedRow = { ...sampleRow, type: "stdio" };
+      const { db } = createFakeD1({ firstResult: malformedRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      await expect(store.get("abc123")).rejects.toThrow();
+    });
+
     it("reports hasEnv=false when env is empty", async () => {
       const emptyEnvRow = { ...sampleRow, env: "{}" };
       const { db } = createFakeD1({ firstResult: emptyEnvRow });
@@ -179,6 +203,26 @@ describe("McpServerStore", () => {
       const result = await store.get("def456");
       expect(result!.hasHeaders).toBe(true);
       expect(result!.hasEnv).toBe(false);
+    });
+
+    it("drops malformed persisted env values when decrypting config", async () => {
+      const malformedEnvRow = { ...sampleRow, env: JSON.stringify({ DEBUG: 1 }) };
+      const { db } = createFakeD1({ allResults: [malformedEnvRow] });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      const [result] = await store.getDecryptedForSession([]);
+
+      expect(result.env).toEqual({});
+    });
+
+    it("keeps valid persisted env entries when filtering malformed values", async () => {
+      const mixedEnvRow = { ...sampleRow, env: JSON.stringify({ TOKEN: "valid", RETRIES: 3 }) };
+      const { db } = createFakeD1({ allResults: [mixedEnvRow] });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      const [result] = await store.getDecryptedForSession([]);
+
+      expect(result.env).toEqual({ TOKEN: "valid" });
     });
   });
 
