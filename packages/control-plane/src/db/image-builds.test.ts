@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { ImageBuildStore } from "./image-builds";
 
 /**
- * The exact `ImageBuildRecordView` wire columns. The status reads must project
- * these and only these — never the internal callback-token or provider-id
+ * The exact public-safe storage columns. The status reads must project these
+ * and only these — never the internal callback-token or provider-id
  * columns the `image_builds` table also carries.
  */
 const WIRE_KEYS = [

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import type { ImageBuildStatusRow } from "../db/image-builds";
 import type { ImageBuildProvider } from "./model";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
@@ -10,7 +10,7 @@ const unit = {
   repositoriesFingerprint: "fp-current",
 };
 
-function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordView {
+function row(overrides: Partial<ImageBuildStatusRow> = {}): ImageBuildStatusRow {
   return {
     id: "build-1",
     scope_kind: "repo",

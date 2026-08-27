@@ -1,4 +1,4 @@
-import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import type { ImageBuildStatusRow } from "../db/image-builds";
 import { parseRuntimeVersionNumber, type ImageBuildProvider } from "./model";
 import { parseRepositoryShasJson, repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
@@ -19,7 +19,7 @@ export type ImageBuildRebuildDecision =
 
 export function evaluateImageBuildRebuildPolicy(
   unit: EnabledScopeUnit,
-  rows: ImageBuildRecordView[],
+  rows: ImageBuildStatusRow[],
   provider: ImageBuildProvider
 ): ImageBuildRebuildDecision {
   const providerRows = rows.filter((row) => row.provider === provider);
