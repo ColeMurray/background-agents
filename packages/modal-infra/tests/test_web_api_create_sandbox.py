@@ -153,6 +153,50 @@ async def test_sandbox_requests_reject_invalid_typed_fields(monkeypatch, call, p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "payload", "field"),
+    [
+        (
+            _call_create_sandbox,
+            {key: value for key, value in CREATE_REQUEST.items() if key != "control_plane_url"},
+            "control_plane_url",
+        ),
+        (_call_create_sandbox, {**CREATE_REQUEST, "control_plane_url": ""}, "control_plane_url"),
+        (
+            _call_create_sandbox,
+            {key: value for key, value in CREATE_REQUEST.items() if key != "sandbox_auth_token"},
+            "sandbox_auth_token",
+        ),
+        (_call_create_sandbox, {**CREATE_REQUEST, "sandbox_auth_token": ""}, "sandbox_auth_token"),
+        (
+            _call_restore_sandbox,
+            {key: value for key, value in RESTORE_REQUEST.items() if key != "control_plane_url"},
+            "control_plane_url",
+        ),
+        (_call_restore_sandbox, {**RESTORE_REQUEST, "control_plane_url": ""}, "control_plane_url"),
+        (
+            _call_restore_sandbox,
+            {key: value for key, value in RESTORE_REQUEST.items() if key != "sandbox_auth_token"},
+            "sandbox_auth_token",
+        ),
+        (
+            _call_restore_sandbox,
+            {**RESTORE_REQUEST, "sandbox_auth_token": ""},
+            "sandbox_auth_token",
+        ),
+    ],
+)
+async def test_sandbox_requests_require_launch_credentials(monkeypatch, call, payload, field):
+    _patch_auth(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await call(payload)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == f"{field} is required"
+
+
+@pytest.mark.asyncio
 async def test_create_sandbox_passes_unknown_fields_to_session_config_helper(monkeypatch):
     captured = {}
     helper_requests = []

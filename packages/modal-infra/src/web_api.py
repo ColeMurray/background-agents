@@ -118,8 +118,8 @@ class _RepositoryContextModel(_ModalRequestModel):
 class CreateSandboxRequest(_RepositoryContextModel):
     session_id: NonEmptyString
     sandbox_id: str | None = None
-    control_plane_url: str = ""
-    sandbox_auth_token: str = ""
+    control_plane_url: NonEmptyString
+    sandbox_auth_token: NonEmptyString
     opencode_session_id: str | None = None
     provider: str | None = None
     model: str | None = None
@@ -158,8 +158,8 @@ class RestoreSandboxRequest(_ModalRequestModel):
     snapshot_image_id: NonEmptyString
     session_config: RestoreSessionConfigRequest
     sandbox_id: str | None = None
-    control_plane_url: str = ""
-    sandbox_auth_token: str = ""
+    control_plane_url: NonEmptyString
+    sandbox_auth_token: NonEmptyString
     user_env_vars: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
     code_server_enabled: bool = False
