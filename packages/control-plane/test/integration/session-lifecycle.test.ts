@@ -1,5 +1,5 @@
+import { runInSessionDO } from "./session-do-access";
 import { describe, it, expect } from "vitest";
-import { runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import {
   initSession,
@@ -181,8 +181,8 @@ describe("POST /internal/prompt", () => {
   it.each(["completed", "failed"])("reopens %s session back to active", async (status) => {
     const { stub } = await initSession({ userId: "user-1" });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec("UPDATE session SET status = ?", status);
     });
 
     const promptRes = await stub.fetch("http://internal/internal/prompt", {
@@ -204,8 +204,8 @@ describe("POST /internal/prompt", () => {
   it.each(["archived", "cancelled"])("rejects prompts for a %s session", async (status) => {
     const { stub } = await initSession({ userId: "user-1" });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec("UPDATE session SET status = ?", status);
     });
 
     const promptRes = await stub.fetch("http://internal/internal/prompt", {
@@ -297,8 +297,8 @@ describe("POST /internal/verify-sandbox-token", () => {
 
     // Seed auth_token on a live sandbox directly
     const authToken = "test-sandbox-auth-token-12345";
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         "UPDATE sandbox SET auth_token = ?, auth_token_hash = NULL, status = 'ready' WHERE id = (SELECT id FROM sandbox LIMIT 1)",
         authToken
       );

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import {
   AutomationStore,
   toAutomation,
@@ -128,11 +129,13 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-env" }));
 
       const now = Date.now();
-      await env.DB.batch(store.bindReplaceEnvironments("auto-env", ["env_abc", "env_def"], now));
+      await sqlDatabase(env.DB).batch(
+        store.bindReplaceEnvironments("auto-env", ["env_abc", "env_def"], now)
+      );
       const selected = await store.getEnvironmentsForAutomation("auto-env");
       expect(selected.map((row) => row.environment_id)).toEqual(["env_abc", "env_def"]);
 
-      await env.DB.batch(store.bindReplaceEnvironments("auto-env", [], now));
+      await sqlDatabase(env.DB).batch(store.bindReplaceEnvironments("auto-env", [], now));
       expect(await store.getEnvironmentsForAutomation("auto-env")).toEqual([]);
     });
 
@@ -219,7 +222,7 @@ describe("AutomationStore (D1 integration)", () => {
       const providerAuthStore = new AutomationModelProviderAuthStore(env.DB);
       const row = makeAutomation({ id: "auto-provider-auth" });
       await store.create(row);
-      await env.DB.batch(
+      await sqlDatabase(env.DB).batch(
         providerAuthStore.bindInserts(
           row.id,
           {
@@ -259,11 +262,11 @@ describe("AutomationStore (D1 integration)", () => {
 
     it("filters by repo owner and name via repository rows", async () => {
       const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-c", repo_owner: "acme", repo_name: "api" }));
+      await store.create(makeAutomation({ id: "auto-c" }));
       await store.replaceRepositories("auto-c", [
         { repo_owner: "acme", repo_name: "api", repo_id: 1, base_branch: null },
       ]);
-      await store.create(makeAutomation({ id: "auto-d", repo_owner: "acme", repo_name: "web" }));
+      await store.create(makeAutomation({ id: "auto-d" }));
       await store.replaceRepositories("auto-d", [
         { repo_owner: "acme", repo_name: "web", repo_id: 2, base_branch: null },
       ]);
@@ -277,10 +280,6 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(
         makeAutomation({
           id: "auto-multi",
-          repo_owner: null,
-          repo_name: null,
-          base_branch: null,
-          repo_id: null,
         })
       );
       await store.replaceRepositories("auto-multi", [
@@ -814,8 +813,6 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(
         makeAutomation({
           id: "auto-ev1",
-          repo_owner: "acme",
-          repo_name: "api",
           trigger_type: "github_event",
           event_type: "pull_request.opened",
         })
@@ -826,8 +823,6 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(
         makeAutomation({
           id: "auto-ev2",
-          repo_owner: "acme",
-          repo_name: "api",
           trigger_type: "github_event",
           event_type: "issues.opened",
         })
@@ -851,8 +846,6 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(
         makeAutomation({
           id: "auto-ev3",
-          repo_owner: "acme",
-          repo_name: "api",
           trigger_type: "github_event",
           event_type: "pull_request.opened",
           enabled: 0,
@@ -905,7 +898,6 @@ describe("AutomationStore (D1 integration)", () => {
         makeRun("auto-ck3", {
           id: "run-ck3",
           status: "running",
-          concurrency_key: null,
           started_at: Date.now(),
         })
       );

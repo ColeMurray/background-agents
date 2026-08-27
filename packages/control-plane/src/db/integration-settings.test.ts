@@ -298,6 +298,25 @@ describe("IntegrationSettingsStore", () => {
       expect(result?.defaults?.allowedTriggerUsers).toEqual(["alice", "bob"]);
     });
 
+    it("normalizes only explicitly configured Autofix settings", async () => {
+      await store.setGlobal("github", {
+        defaults: {
+          autofix: {
+            enabled: true,
+            allowedReviewBots: [" CodeRabbitAI[bot] ", "coderabbitai[bot]"],
+            maxAttemptsPerPrPer24Hours: 12,
+          },
+        },
+      });
+
+      const result = await store.getGlobal("github");
+      expect(result?.defaults?.autofix).toEqual({
+        enabled: true,
+        allowedReviewBots: ["coderabbitai[bot]"],
+        maxAttemptsPerPrPer24Hours: 12,
+      });
+    });
+
     it("rejects non-array defaults.allowedTriggerUsers", async () => {
       await expect(
         store.setGlobal("github", {
@@ -502,6 +521,25 @@ describe("IntegrationSettingsStore", () => {
       expect(config.enabledRepos).toEqual(["acme/widgets"]);
       expect(config.settings.model).toBe("anthropic/claude-opus-4-6");
       expect(config.settings.reasoningEffort).toBe("high");
+    });
+
+    it("merges repository Autofix fields without replacing global policy", async () => {
+      await store.setGlobal("github", {
+        defaults: {
+          autofix: { enabled: true, reviewsEnabled: false, allowedReviewBots: ["trusted[bot]"] },
+        },
+      });
+      await store.setRepoSettings("github", "acme/widgets", {
+        autofix: { maxAttemptsPerPrPer24Hours: 5 },
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.autofix).toEqual({
+        enabled: true,
+        reviewsEnabled: false,
+        allowedReviewBots: ["trusted[bot]"],
+        maxAttemptsPerPrPer24Hours: 5,
+      });
     });
 
     it("per-repo autoReviewOnOpen overrides global default", async () => {

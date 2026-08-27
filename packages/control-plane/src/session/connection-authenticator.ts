@@ -17,7 +17,6 @@ import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import type { DurableObjectSessionConnections } from "./durable-object-session-connections";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -27,7 +26,6 @@ import type { DurableObjectSessionConnections } from "./durable-object-session-c
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export interface SessionConnectionAuthenticatorDeps {
-  connections: DurableObjectSessionConnections;
   wsManager: SessionWebSocketManager;
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
@@ -58,7 +56,6 @@ export class SessionConnectionAuthenticator {
    */
   async handleWebSocketUpgrade(request: Request, url: URL, log: Logger): Promise<Response> {
     const {
-      connections,
       wsManager,
       sessionCoreRepository,
       sandboxRepository,
@@ -158,7 +155,7 @@ export class SessionConnectionAuthenticator {
     }
 
     try {
-      const { client, server } = connections.createUpgradeSockets();
+      const { client, server } = wsManager.createUpgradeSockets();
 
       const sandboxId = request.headers.get("X-Sandbox-ID");
 

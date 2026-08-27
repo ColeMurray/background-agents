@@ -30,6 +30,17 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
 
+  // Repository-authored and runtime-injected OpenCode extensions run under Node.js.
+  {
+    files: [".opencode/**/*.{js,ts}"],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+    },
+  },
+
   // TypeScript files configuration
   {
     files: ["packages/**/*.{ts,tsx}"],
@@ -139,16 +150,24 @@ export default tseslint.config(
     },
   },
 
-  // The session composition root is the platform adapter's private wiring:
-  // only durable-object.ts may import it. This is what keeps "composition
-  // root" a governed invariant rather than a convention — services take their
-  // dependencies as constructor inputs, never by reaching into the root.
-  // (Uses the base rule so it stacks with the repo-wide
-  // @typescript-eslint/no-restricted-imports paths above.)
+  // Session boundary rules, in the same family as the env.DB ban above. Two
+  // bans, both via the base no-restricted-imports rule so they stack with the
+  // repo-wide @typescript-eslint/no-restricted-imports paths config:
+  //  - the composition root (session/components.ts) is the platform adapter's
+  //    private wiring: only durable-object.ts may import it — services take
+  //    their dependencies as constructor inputs, never by reaching into the
+  //    root;
+  //  - the platform adapter (session/durable-object.ts) is the Cloudflare
+  //    edge of the session: only the worker entrypoint may import it, so
+  //    nothing the factory builds can hold a reference back to the DO.
+  // Flat-config gotcha: a later object's config for the same rule REPLACES
+  // the earlier one for files both match, so this general block carries both
+  // bans and each exempted file re-declares the ban that still applies to it.
   {
     files: ["packages/control-plane/src/**/*.ts"],
     ignores: [
       "packages/control-plane/src/session/durable-object.ts",
+      "packages/control-plane/src/index.ts",
       "packages/control-plane/src/**/*.test.ts",
     ],
     rules: {
@@ -157,7 +176,37 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ["**/session/components", "./components"],
+              // Last-segment match: covers any relative depth (./, ../, ../../)
+              // and extension-bearing specifiers. The basename is unique in
+              // this package, so anchoring on it is precise.
+              regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
+              message:
+                "Only the platform adapter (session/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
+            },
+            {
+              regex: "(?:^|/)durable-object(?:\\.[cm]?[jt]sx?)?$",
+              message:
+                "Only the worker entrypoint (src/index.ts) may import the platform adapter. Depend on the session collaborators, not the Durable Object.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // The worker entrypoint may import the adapter (it exports the DO class to
+  // the runtime) but not the composition root.
+  {
+    files: ["packages/control-plane/src/index.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              // Last-segment match: covers any relative depth (./, ../, ../../)
+              // and extension-bearing specifiers. The basename is unique in
+              // this package, so anchoring on it is precise.
+              regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
                 "Only the platform adapter (session/durable-object.ts) may import the composition root. Take dependencies as constructor inputs instead.",
             },

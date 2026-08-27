@@ -1,16 +1,53 @@
-name: CI
+name: CI (TypeScript)
 
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
+    paths:
+      - ".github/workflows/ci.yml"
+      - ".prettierignore"
+      - ".prettierrc"
+      - "eslint.config.js"
+      - "knip.json"
+      - "package-lock.json"
+      - "package.json"
+      - "packages/control-plane/**"
+      - "packages/github-bot/**"
+      - "packages/linear-bot/**"
+      - "packages/opencomputer-infra/**"
+      - "packages/sandbox-runtime/**"
+      - "packages/shared/**"
+      - "packages/slack-bot/**"
+      - "packages/web/**"
+      - "scripts/**"
+      - "terraform/d1/migrations/**"
+      - "vitest.workspace.ts"
+      - "!**/*.md"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
+    paths:
+      - ".github/workflows/ci.yml"
+      - ".prettierignore"
+      - ".prettierrc"
+      - "eslint.config.js"
+      - "knip.json"
+      - "package-lock.json"
+      - "package.json"
+      - "packages/control-plane/**"
+      - "packages/github-bot/**"
+      - "packages/linear-bot/**"
+      - "packages/opencomputer-infra/**"
+      - "packages/sandbox-runtime/**"
+      - "packages/shared/**"
+      - "packages/slack-bot/**"
+      - "packages/web/**"
+      - "scripts/**"
+      - "terraform/d1/migrations/**"
+      - "vitest.workspace.ts"
+      - "!**/*.md"
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -91,116 +128,6 @@ jobs:
 
       - name: Build web package
         run: npm run build -w @open-inspect/web
-
-  lint-python-sandbox-runtime:
-    name: Lint & Format (Python - sandbox-runtime)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: packages/sandbox-runtime
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run Ruff linter
-        run: ruff check src/ tests/
-
-      - name: Run Ruff formatter check
-        run: ruff format --check src/ tests/
-
-  lint-python:
-    name: Lint & Format (Python - provider infra)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e packages/sandbox-runtime
-          pip install -e "packages/modal-infra[dev]"
-
-      - name: Run Ruff linter
-        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/
-
-      - name: Run Ruff formatter check
-        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/
-
-  typecheck-python:
-    name: TypeCheck (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: packages/modal-infra
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ../sandbox-runtime
-          pip install -e ".[dev]"
-
-      - name: Run MyPy
-        run: mypy src/
-        continue-on-error: true # Allow failures initially as types are added
-
-  typecheck-python-sandbox-runtime:
-    name: TypeCheck (Python - sandbox-runtime)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [lint-python-sandbox-runtime]
-    defaults:
-      run:
-        working-directory: packages/sandbox-runtime
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run MyPy
-        run: mypy src/
-        continue-on-error: true # Allow failures initially as types are added
 
   test-cp-unit:
     name: Test (control-plane unit)
@@ -306,64 +233,3 @@ jobs:
 
       - name: Run linear-bot tests
         run: npm test -w @open-inspect/linear-bot
-
-  test-python-sandbox-runtime:
-    name: Test (Python - sandbox-runtime)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [lint-python-sandbox-runtime]
-    defaults:
-      run:
-        working-directory: packages/sandbox-runtime
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-      - name: Run Node.js tests
-        run: node --test tests/*.test.mjs
-
-  test-python:
-    name: Test (Python - modal-infra)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [lint-python]
-    defaults:
-      run:
-        working-directory: packages/modal-infra
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ../sandbox-runtime
-          pip install -e ".[dev]"
-
-      - name: Run tests
-        run: pytest tests/ -v
