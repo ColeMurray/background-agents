@@ -295,4 +295,17 @@ describe("useWarmDraftSession", () => {
     });
     expect(retireWarmDraftSession).toHaveBeenCalledWith("orphaned-session");
   });
+
+  it.each([
+    { sessionId: { id: "unsafe" }, status: "created" },
+    { sessionId: "missing-status" },
+    { sessionId: "invalid-status", status: "warming" },
+  ])("ignores malformed create-session responses: %j", async (payload) => {
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json(payload));
+    const { result } = renderHook(() => useWarmDraftSession(request()));
+
+    await expect(result.current.warm()).resolves.toBeNull();
+    expect(retireWarmDraftSession).not.toHaveBeenCalled();
+    expect(result.current.sessionId).toBeNull();
+  });
 });

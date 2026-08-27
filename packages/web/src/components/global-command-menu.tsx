@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import type { Session } from "@open-inspect/shared/types/sessions";
 import { formatRelativeTime } from "@/lib/time";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
-import { buildSessionSearchValue } from "@/lib/session-list";
+import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
 import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
 import {
@@ -26,10 +25,10 @@ interface GlobalCommandMenuProps {
   onOpenChange: (open: boolean) => void;
   onNavigate: (href: string) => void;
   onNewSession: () => void;
-  sessions: Session[];
+  sessions: SessionListItem[];
 }
 
-function buildSessionUrl(session: Session): string {
+function buildSessionUrl(session: SessionListItem): string {
   const searchParams = new URLSearchParams();
   if (session.repoOwner && session.repoName) {
     searchParams.set("repoOwner", session.repoOwner);

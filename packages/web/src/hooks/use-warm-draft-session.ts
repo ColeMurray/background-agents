@@ -97,7 +97,9 @@ export function useWarmDraftSession(
         });
         if (!response.ok) return null;
 
-        const parsed = createSessionResponseSchema.safeParse(await response.json());
+        const parsed = createSessionResponseSchema.safeParse(
+          await response.json().catch(() => null)
+        );
         if (!parsed.success) return null;
         const { sessionId } = parsed.data;
         if (identityRef.current !== launchIdentity) {

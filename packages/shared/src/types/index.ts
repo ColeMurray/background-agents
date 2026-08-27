@@ -45,6 +45,7 @@ export {
   MAX_SESSION_REPOSITORIES,
   sessionRepositoryStateSchema,
   prArtifactBelongsToRepo,
+  repositoryPairInputSchema,
   repositoryInputSchema,
   repositoriesInputSchema,
   sessionRepositoriesInputSchema,

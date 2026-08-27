@@ -457,6 +457,14 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects a malformed toggle body", async () => {
+    const response = await callToggle(createModalEnv(), null);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "enabled must be a boolean" });
+    expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
+  });
+
   it("returns 404 without writing the flag when enabling an uninstalled repo", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(null);
     const waitUntilTasks: Promise<unknown>[] = [];
