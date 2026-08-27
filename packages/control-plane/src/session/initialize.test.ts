@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initializeSession, type SessionInitInput } from "./initialize";
+import {
+  initializeSession,
+  ReviewGenerationSupersededError,
+  type SessionInitInput,
+} from "./initialize";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 
@@ -288,5 +292,144 @@ describe("initializeSession", () => {
 
     const d1Entry = createMock.mock.calls[0][0];
     expect(d1Entry.baseBranch).toBe("main");
+  });
+
+  describe("github review supersession", () => {
+    const reviewInput: SessionInitInput = {
+      ...baseInput,
+      githubReview: { repoId: 7, prNumber: 9, generation: 1, headSha: "sha-1" },
+    };
+
+    function createReviewDb(config: { fenceChanges?: number; latestGeneration: number | null }): {
+      db: unknown;
+      deletes: unknown[][];
+    } {
+      const deletes: unknown[][] = [];
+      const db = {
+        prepare(sql: string) {
+          const trimmed = sql.trim();
+          return {
+            bind(...values: unknown[]) {
+              return {
+                async run() {
+                  if (trimmed.startsWith("DELETE FROM github_review_sessions")) {
+                    deletes.push(values);
+                    return { meta: { changes: 1 } };
+                  }
+                  return { meta: { changes: config.fenceChanges ?? 1 } };
+                },
+                async first() {
+                  if (
+                    trimmed.startsWith("SELECT latest_generation") &&
+                    config.latestGeneration !== null
+                  ) {
+                    return { latest_generation: config.latestGeneration };
+                  }
+                  return null;
+                },
+              };
+            },
+          };
+        },
+      };
+      return { db, deletes };
+    }
+
+    function reviewCtx(db: unknown) {
+      return { ...ctx, db } as never;
+    }
+
+    it("rejects a stale-generation create before any D1 row or DO init", async () => {
+      const { db } = createReviewDb({ fenceChanges: 0, latestGeneration: 2 });
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        ReviewGenerationSupersededError
+      );
+      expect(createMock).not.toHaveBeenCalled();
+      expect(stubFetchMock).not.toHaveBeenCalled();
+    });
+
+    it("deletes the review fence when the D1 session insert fails", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 1 });
+      createMock.mockRejectedValue(new Error("D1 unavailable"));
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        "D1 unavailable"
+      );
+
+      expect(deletes).toEqual([[7, 9, 1]]);
+      expect(stubFetchMock).not.toHaveBeenCalled();
+    });
+
+    it("deletes the review fence when DO init returns a non-ok response", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 1 });
+      stubFetchMock.mockResolvedValue(new Response("unavailable", { status: 503 }));
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        "Failed to initialize session DO: 503"
+      );
+
+      expect(deletes).toEqual([[7, 9, 1]]);
+      expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
+    });
+
+    it("deletes the review fence when DO init throws", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 1 });
+      stubFetchMock.mockRejectedValue(new Error("transport failed"));
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        "transport failed"
+      );
+
+      expect(deletes).toEqual([[7, 9, 1]]);
+      expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
+    });
+
+    it("completes when the generation is still the latest after DO init", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 1 });
+
+      const result = await initializeSession(createEnv(), reviewInput, reviewCtx(db));
+
+      expect(result).toEqual({ sessionId: "session-123", status: "created" });
+      expect(deletes).toEqual([]);
+      const cancelCalls = (stubFetchMock.mock.calls as unknown as [Request][]).filter(([req]) =>
+        req.url.includes("/internal/cancel")
+      );
+      expect(cancelCalls).toEqual([]);
+    });
+
+    it("self-cancels and deletes its fence row when a newer generation claimed during init", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 2 });
+      stubFetchMock = vi.fn(async (req: Request) =>
+        req.url.includes("/internal/cancel")
+          ? new Response(null, { status: 200 })
+          : Response.json({ status: "created" })
+      );
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        ReviewGenerationSupersededError
+      );
+      const cancelCalls = (stubFetchMock.mock.calls as unknown as [Request][]).filter(([req]) =>
+        req.url.includes("/internal/cancel")
+      );
+      expect(cancelCalls).toHaveLength(1);
+      expect(deletes).toHaveLength(1);
+      expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
+    });
+
+    it("retains the fence row when the self-cancel is not confirmed", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 2 });
+      stubFetchMock = vi.fn(async (req: Request) =>
+        req.url.includes("/internal/cancel")
+          ? Response.json({ error: "unavailable" }, { status: 503 })
+          : Response.json({ status: "created" })
+      );
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        ReviewGenerationSupersededError
+      );
+      expect(deletes).toEqual([]);
+      expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
+    });
   });
 });
