@@ -37,6 +37,9 @@ function createMockLogger(): Logger {
 function createMockRepository() {
   return {
     getMessageCallbackContext: vi.fn<MessageRepository["getMessageCallbackContext"]>(() => null),
+    getProcessingMessageWithStartedAt: vi.fn<
+      MessageRepository["getProcessingMessageWithStartedAt"]
+    >(() => ({ id: "msg-1", started_at: 1 })),
     getSession: vi.fn(() => null),
   };
 }
@@ -544,6 +547,54 @@ describe("CallbackNotificationService", () => {
       await expect(harness.service.notifyActivityHeartbeat("msg-1")).resolves.toBe(false);
       expect(harness.slackBot.fetch).not.toHaveBeenCalled();
       expect(harness.linearBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("does not deliver after the message completes while the heartbeat is prepared", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ source: "slack", channel: "C123" }),
+        source: "slack",
+      });
+      harness.repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+
+      await expect(harness.service.notifyActivityHeartbeat("msg-1")).resolves.toBe(false);
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+    });
+
+    it("bounds a heartbeat fetch that never resolves", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+          callback_context: JSON.stringify({ source: "slack", channel: "C123" }),
+          source: "slack",
+        });
+        harness.slackBot.fetch.mockImplementation(
+          (_input, init) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+                once: true,
+              });
+            })
+        );
+        let settled = false;
+        const heartbeat = harness.service.notifyActivityHeartbeat("msg-1").then(() => {
+          settled = true;
+        });
+        await vi.waitFor(() => {
+          expect(harness.slackBot.fetch).toHaveBeenCalledTimes(1);
+        });
+
+        await vi.advanceTimersByTimeAsync(10_001);
+        await vi.waitFor(() => {
+          expect(harness.slackBot.fetch).toHaveBeenCalledTimes(2);
+        });
+        await vi.advanceTimersByTimeAsync(10_001);
+        await heartbeat;
+
+        expect(settled).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("keeps the heartbeat active after a transient delivery failure", async () => {

@@ -128,6 +128,30 @@ describe("createAlarmHandler", () => {
     expect(alarmScheduler.schedule).toHaveBeenCalledWith(92_000);
   });
 
+  it("does not re-arm after the message completes during heartbeat delivery", async () => {
+    const { handler, repository, callbackService, alarmScheduler } = createHandler();
+    let resolveDelivery!: (value: boolean) => void;
+    const delivery = new Promise<boolean>((resolve) => {
+      resolveDelivery = resolve;
+    });
+    repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "message-1",
+      started_at: 1500,
+    });
+    callbackService.notifyActivityHeartbeat.mockReturnValue(delivery);
+
+    const handled = handler.handle();
+    await vi.waitFor(() => {
+      expect(callbackService.notifyActivityHeartbeat).toHaveBeenCalledWith("message-1");
+    });
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    resolveDelivery(true);
+    await handled;
+
+    expect(alarmScheduler.schedule).toHaveBeenCalledTimes(1);
+    expect(alarmScheduler.schedule).toHaveBeenCalledWith(2500);
+  });
+
   it("does not refresh activity when the same alarm terminates the sandbox", async () => {
     const { handler, repository, messageQueue, lifecycleManager, callbackService, alarmScheduler } =
       createHandler();

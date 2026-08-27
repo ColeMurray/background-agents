@@ -85,7 +85,8 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       if (lifecycleResult === "no_action" && activityMessageId) {
         const continueActivityHeartbeat =
           await deps.callbackService.notifyActivityHeartbeat(activityMessageId);
-        if (continueActivityHeartbeat) {
+        const stillProcessing = deps.repository.getProcessingMessageWithStartedAt();
+        if (continueActivityHeartbeat && stillProcessing?.id === activityMessageId) {
           await deps.alarmScheduler.schedule(deps.now() + SLACK_ACTIVITY_HEARTBEAT_INTERVAL_MS);
         }
       }

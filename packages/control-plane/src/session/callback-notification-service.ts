@@ -403,20 +403,44 @@ export class CallbackNotificationService {
         context,
       };
       const signature = await this.signPayload(callbackData, secret);
-      const response = await binding.fetch("https://internal/callbacks/activity", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...callbackData, signature }),
-      });
+      const processing = this.messageRepository.getProcessingMessageWithStartedAt();
+      if (processing?.id !== messageId) {
+        this.log.debug("callback.activity_heartbeat", {
+          message_id: messageId,
+          session_id: sessionId,
+          source: "slack",
+          outcome: "skipped",
+          skip_reason: "no_longer_processing",
+        });
+        return false;
+      }
+
+      let lastError: unknown;
+      const delivery = await deliverWithRetry(
+        (signal) =>
+          binding.fetch("https://internal/callbacks/activity", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...callbackData, signature }),
+            signal,
+          }),
+        this.sleep,
+        ({ error }) => {
+          lastError = error;
+        }
+      );
       const fields = {
         message_id: messageId,
         session_id: sessionId,
         source: "slack",
-        outcome: response.ok ? "success" : "error",
-        http_status: response.status,
+        outcome: delivery.delivered ? "success" : "error",
+        ...(delivery.httpStatus !== undefined ? { http_status: delivery.httpStatus } : {}),
+        ...(lastError !== undefined
+          ? { error: lastError instanceof Error ? lastError : new Error(String(lastError)) }
+          : {}),
         duration_ms: Date.now() - startedAt,
       };
-      if (response.ok) this.log.info("callback.activity_heartbeat", fields);
+      if (delivery.delivered) this.log.info("callback.activity_heartbeat", fields);
       else this.log.warn("callback.activity_heartbeat", fields);
     } catch (error) {
       this.log.warn("callback.activity_heartbeat", {
