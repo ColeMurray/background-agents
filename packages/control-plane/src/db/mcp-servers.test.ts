@@ -214,6 +214,16 @@ describe("McpServerStore", () => {
 
       expect(result.env).toEqual({});
     });
+
+    it("keeps valid persisted env entries when filtering malformed values", async () => {
+      const mixedEnvRow = { ...sampleRow, env: JSON.stringify({ TOKEN: "valid", RETRIES: 3 }) };
+      const { db } = createFakeD1({ allResults: [mixedEnvRow] });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      const [result] = await store.getDecryptedForSession([]);
+
+      expect(result.env).toEqual({ TOKEN: "valid" });
+    });
   });
 
   describe("create()", () => {

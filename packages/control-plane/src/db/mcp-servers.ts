@@ -1,19 +1,18 @@
-import type {
-  McpServerConfig,
-  McpServerMetadata,
-  ValidatedCreateMcpServerInput,
-  ValidatedUpdateMcpServerInput,
+import {
+  mcpServerCommandSchema,
+  mcpServerCredentialMapSchema,
+  mcpServerTypeSchema,
+  type McpServerConfig,
+  type McpServerMetadata,
+  type ValidatedCreateMcpServerInput,
+  type ValidatedUpdateMcpServerInput,
 } from "@open-inspect/shared/types/integrations";
-import { z } from "zod";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
 
 const log = createLogger("db:mcp-servers");
-const mcpServerTypeSchema = z.enum(["local", "remote"]);
-const mcpCommandSchema = z.array(z.string());
-const mcpEnvSchema = z.record(z.string(), z.string());
 
 export class McpServerValidationError extends Error {
   constructor(message: string) {
@@ -60,17 +59,34 @@ function safeJsonParseCommand(raw: string | null): string[] | undefined {
   } catch {
     return [raw];
   }
-  return mcpCommandSchema.parse(parsed);
+  return mcpServerCommandSchema.parse(parsed);
 }
 
-function safeJsonParseEnv(raw: string): Record<string, string> {
+function safeJsonParseEnv(raw: string, serverId: string): Record<string, string> {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    const result = mcpEnvSchema.safeParse(parsed);
-    return result.success ? result.data : {};
+    parsed = JSON.parse(raw);
   } catch {
     return {};
   }
+  const result = mcpServerCredentialMapSchema.safeParse(parsed);
+  if (result.success) return result.data;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+  const credentials: Record<string, string> = {};
+  const rejectedKeys: string[] = [];
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === "string") credentials[key] = value;
+    else rejectedKeys.push(key);
+  }
+  if (rejectedKeys.length > 0) {
+    log.warn("MCP server env entries rejected", {
+      event: "mcp_server.env_entries_rejected",
+      server_id: serverId,
+      rejected_keys: rejectedKeys,
+    });
+  }
+  return credentials;
 }
 
 function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpServerConfig {
@@ -119,7 +135,7 @@ export class McpServerStore {
     return encryptToken(plain, this.encryptionKey);
   }
 
-  private async decryptEnv(raw: string): Promise<Record<string, string>> {
+  private async decryptEnv(raw: string, rowId: string): Promise<Record<string, string>> {
     // The write side stores an empty credential map as plaintext "{}" (see
     // encryptEnv) — recognize the full credential-free sentinel set that
     // rowToMetadata classifies ("", "{}", "null") before attempting a decrypt
@@ -127,10 +143,10 @@ export class McpServerStore {
     if (!raw || raw === "{}" || raw === "null") return {};
     try {
       const plain = await decryptToken(raw, this.encryptionKey);
-      return safeJsonParseEnv(plain);
+      return safeJsonParseEnv(plain, rowId);
     } catch {
       // Decryption failed — try plaintext fallback (pre-encryption row)
-      const plaintext = safeJsonParseEnv(raw);
+      const plaintext = safeJsonParseEnv(raw, rowId);
       if (Object.keys(plaintext).length > 0) {
         log.warn("MCP server env decryption failed — treating as pre-encryption plaintext row", {
           event: "mcp_server.env_decrypt_fallback",
@@ -145,7 +161,7 @@ export class McpServerStore {
   }
 
   private async decryptRow(row: McpServerRow): Promise<McpServerConfig> {
-    const env = await this.decryptEnv(row.env);
+    const env = await this.decryptEnv(row.env, row.id);
     return rowToConfig(row, env);
   }
 
