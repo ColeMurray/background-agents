@@ -4,12 +4,14 @@ import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import type { Env } from "../types";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 function createCtx(db: SqlDatabase = {} as SqlDatabase): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
     db,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     principal: {
       kind: "user",
       userId: "user-1",
@@ -45,7 +47,7 @@ describe("session runtime proxy routes", () => {
   it.each([
     ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
     ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],
-  ])("forwards %s for users and rejects service principals", async (_name, path, internalPath) => {
+  ])("forwards %s for users", async (_name, path, internalPath) => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
@@ -62,17 +64,6 @@ describe("session runtime proxy routes", () => {
 
     expect(response.status).toBe(200);
     expect(new URL(requests[0].url).pathname).toBe(internalPath);
-    const serviceCtx = createCtx();
-    serviceCtx.principal = { kind: "service", service: "slack-bot", actor: null };
-
-    const rejected = await handler(
-      new Request(`https://test.local${path}`),
-      createEnv(fetch),
-      match,
-      serviceCtx
-    );
-
-    expect(rejected.status).toBe(403);
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -256,6 +247,44 @@ describe("session runtime proxy routes", () => {
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.updateTitle);
     await expect(requests[0].json()).resolves.toEqual({
       userId: "user-1",
+      title: "New title",
+    });
+  });
+
+  it("forwards the verified service actor on title updates", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "updated" });
+    });
+    const { handler, match } = getHandler("PATCH", "/sessions/session-1/title");
+    const ctx = createCtx();
+    ctx.principal = {
+      kind: "service",
+      service: "slack-bot",
+      actor: {
+        provider: "slack",
+        providerUserId: "U0123",
+        canonicalUserId: "user-1",
+        participantUserId: "slack:U0123",
+      },
+    };
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/title", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New title" }),
+      }),
+      createEnv(fetch),
+      match,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    await expect(requests[0].json()).resolves.toEqual({
+      userId: "slack:U0123",
       title: "New title",
     });
   });

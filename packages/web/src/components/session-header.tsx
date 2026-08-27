@@ -45,22 +45,9 @@ const SANDBOX_STATUS_PRESENTATION: Record<
     dot: "bg-warning",
     pulse: true,
   },
-  syncing: {
-    label: "Syncing...",
-    detail: "Synchronizing the sandbox workspace.",
-    color: "text-accent",
-    dot: "bg-accent",
-    pulse: true,
-  },
   ready: {
     label: "Ready",
     detail: "The sandbox is available.",
-    color: "text-success",
-    dot: "bg-success",
-  },
-  running: {
-    label: "Running",
-    detail: "The sandbox is active.",
     color: "text-success",
     dot: "bg-success",
   },
@@ -93,6 +80,8 @@ const SANDBOX_STATUS_PRESENTATION: Record<
 
 export type SessionHeaderProps = {
   sessionState: SessionSocketState["sessionState"];
+  /** Why the sandbox last failed; shown in the status popover. */
+  sandboxError?: SessionSocketState["sandboxError"];
   fallbackSessionInfo: {
     repoOwner: string | null;
     repoName: string | null;
@@ -109,11 +98,13 @@ export type SessionHeaderProps = {
   onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
   actions: SessionActionProps;
-  renameSession: (title: string) => Promise<boolean | undefined>;
+  optimisticTitle?: string;
+  renameSession: (title: string) => Promise<boolean>;
 };
 
 export function SessionHeader({
   sessionState,
+  sandboxError,
   fallbackSessionInfo,
   connected,
   connecting,
@@ -126,6 +117,7 @@ export function SessionHeader({
   onToggleDesktopDetails,
   onOpenMobileDetails,
   actions,
+  optimisticTitle,
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
@@ -142,8 +134,6 @@ export function SessionHeader({
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [title, setTitle] = useState(baseResolvedTitle);
-  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null);
-
   const resolvedTitle =
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 
@@ -165,24 +155,13 @@ export function SessionHeader({
       return;
     }
 
-    const previousTitle = resolvedTitle;
     setIsRenaming(false);
-    setOptimisticTitle(trimmed);
 
     const success = await renameSession(trimmed);
     if (!success) {
-      setOptimisticTitle(null);
-      setTitle(previousTitle);
       setIsRenaming(true);
     }
   };
-
-  useEffect(() => {
-    if (!optimisticTitle) return;
-    if (sessionState?.title === optimisticTitle) {
-      setOptimisticTitle(null);
-    }
-  }, [optimisticTitle, sessionState?.title]);
 
   useEffect(() => {
     if (!isRenaming) setTitle(sessionState?.title ?? fallbackSessionInfo.title ?? "");
@@ -251,6 +230,7 @@ export function SessionHeader({
             <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
               dashboardUrl={sessionState?.sandboxDashboardUrl}
+              error={sandboxError}
             />
           </div>
           {showDesktopDetailsToggle && (
@@ -306,9 +286,17 @@ function ConnectionStatusIcon({
 function SandboxStatusIcon({
   status,
   dashboardUrl,
+  error,
 }: {
   status?: SandboxStatusValue;
   dashboardUrl?: string | null;
+  /**
+   * The control plane's reason for the current failure, when it has one.
+   * Rendered verbatim: it is usually the sandbox provider's own message (quota
+   * exceeded, rate limited, timeout above the plan cap), which is the only part
+   * that tells someone what to actually change.
+   */
+  error?: string | null;
 }) {
   if (!status) return null;
 
@@ -340,6 +328,11 @@ function SandboxStatusIcon({
             Sandbox {presentation.label}
           </div>
           <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{presentation.detail}</p>
+          {error && (
+            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-4 text-destructive">
+              {error}
+            </p>
+          )}
         </div>
         {safeDashboardUrl && (
           <a

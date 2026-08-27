@@ -2,6 +2,51 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 22, 2026
+
+**Unified model and reasoning selection.** New-session and follow-up composers now combine model and
+reasoning-effort selection in one responsive control, with nested desktop menus and an in-place
+mobile drill-down.
+
+## August 21, 2026
+
+**Configurable keyboard shortcuts.** Set per-user shortcuts for sending prompts, opening search or a
+new session, and toggling the sidebar. Settings can record, validate, reset, and persist bindings.
+
+**Recent automation activity.** Automation rows now show the latest execution outcomes at a glance,
+alongside clearer compact schedules, responsive mobile actions, and confirmation before deletion.
+
+**OpenCode Zen GLM 5.2.** Adds `opencode/glm-5.2` to the opt-in OpenCode Zen catalog.
+
+## August 20, 2026
+
+**Managed provider accounts.** Connect and manage multiple ChatGPT and SuperGrok subscription
+accounts from Settings using device authorization, choose accounts for sessions and automations, and
+configure defaults for unattended runs. These installation-wide accounts and defaults are available
+to every admitted user, while sandboxes receive short-lived access without exposing stored refresh
+credentials.
+
+**Prebuilt images for E2B.** E2B can now build, snapshot, reuse, and delete repository and
+environment images, with reliable startup from prebuilt snapshots and configurable template CPU and
+memory.
+
+**Actionable sandbox failures.** Session status now shows the provider's startup or recovery error
+when available and preserves it across reloads, while clearing stale details when a retry begins.
+
+**Automatic retirement of stale sandbox snapshots.** Session snapshots now record their runtime
+version and restore only when compatible. Incompatible or unknown snapshots trigger a fresh sandbox
+instead of repeatedly reviving a broken runtime, which may discard uncommitted filesystem state.
+
+## August 16, 2026
+
+**Session attention inbox.** The sidebar now groups session trees into Needs attention, In progress,
+and Recent, prioritizing unread terminal outcomes. Each section has independent pagination and retry
+behavior while preserving parent and child-session grouping.
+
+**Managed skill autocomplete.** Type `/skill-name` or `$skill-name` in new-session and follow-up
+prompts to search applicable skills, with keyboard and pointer selection. Existing sessions suggest
+from their pinned skill manifest so completions stay reproducible.
+
 ## August 15, 2026
 
 **Managed skills.** Create and edit reusable Agent Skills in Settings, assign them globally or to

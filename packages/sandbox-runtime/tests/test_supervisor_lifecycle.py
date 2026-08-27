@@ -136,7 +136,7 @@ async def test_bridge_restart_exhaustion_is_fatal(tmp_path, monkeypatch):
     supervisor, _repository, _opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
     agent_bridge.exit_code.return_value = 1
     supervisor._report_fatal_error = AsyncMock()
-    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False))
 
     await SandboxSupervisor.monitor_processes(supervisor)
 
@@ -165,11 +165,11 @@ async def test_code_server_restart_exhaustion_is_nonfatal(tmp_path, monkeypatch)
     code_server.exit_code.return_value = 1
     supervisor._report_fatal_error = AsyncMock()
 
-    async def no_delay(_seconds):
-        if code_server.stop.await_count > supervisor.MAX_RESTARTS:
-            supervisor.shutdown_event.set()
-
-    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", no_delay)
+    monkeypatch.setattr(
+        supervisor,
+        "_wait_for_shutdown",
+        AsyncMock(side_effect=[False] * supervisor.MAX_RESTARTS + [True]),
+    )
     await SandboxSupervisor.monitor_processes(supervisor)
 
     supervisor._report_fatal_error.assert_not_awaited()

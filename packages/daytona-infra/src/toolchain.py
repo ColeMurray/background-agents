@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from daytona import CreateSnapshotParams, Daytona, Image
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # OpenCode version to install.
 #
@@ -22,9 +25,7 @@ SANDBOX_VERSION = "daytona-v6-vnc-opencode-1-18-18"
 
 def build_base_image(repo_root: Path) -> Image:
     """Build the Open-Inspect Daytona base image."""
-    sandbox_runtime_dir = (
-        repo_root / "packages" / "sandbox-runtime" / "src" / "sandbox_runtime"
-    )
+    sandbox_runtime_dir = repo_root / "packages" / "sandbox-runtime" / "src" / "sandbox_runtime"
 
     return (
         Image.base("python:3.12-slim-bookworm")
@@ -72,7 +73,7 @@ def build_base_image(repo_root: Path) -> Image:
             # below. Mirror packages/modal-infra/src/images/base.py.
             "printf '%s\\n'"
             " '#!/bin/sh'"
-            ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
+            " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
             " > /usr/local/bin/oi-git-credentials",
             "chmod 0755 /usr/local/bin/oi-git-credentials",
             "git config --system credential.helper /usr/local/bin/oi-git-credentials",

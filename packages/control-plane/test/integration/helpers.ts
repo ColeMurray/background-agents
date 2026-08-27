@@ -1,12 +1,35 @@
-import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
+import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
+import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
+
+/**
+ * The test D1 binding viewed through the engine-neutral interface, so tests
+ * can `batch()` statements bound by stores (which type them as SqlStatement).
+ * Plain assignment — D1Database satisfies SqlDatabase structurally by the
+ * interface's documented method bivariance.
+ */
+export function sqlDatabase(db: D1Database): SqlDatabase {
+  return db;
+}
+
+/**
+ * `Headers.getSetCookie()`, which workerd implements but this workers-types
+ * version does not declare (src/routes/browser-auth.ts carries the same
+ * cast for the production proxy path).
+ */
+export function getSetCookies(headers: Headers): string[] {
+  return (headers as Headers & { getSetCookie(): string[] }).getSetCookie();
+}
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
+export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
@@ -19,6 +42,10 @@ const TEST_NAMED_SESSION_DEFAULTS = {
   repoId: 12345,
   userId: "user-1",
 } as const;
+export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
+  { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+  { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+];
 
 async function signCookieValue(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -138,9 +165,7 @@ export async function serviceFetch(
   });
 }
 
-/**
- * Create a fresh DO, call /internal/init, return the stub and id.
- */
+/** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
   repoOwner?: string;
@@ -160,24 +185,43 @@ export async function initSession(overrides?: {
   sandboxSettings?: SandboxSettings;
   userId?: string;
   scmLogin?: string;
+  providerAuth?: SessionModelProviderAuthInput[];
 }) {
-  const id = env.SESSION.newUniqueId();
-  const stub = env.SESSION.get(id);
   const defaults = {
-    sessionName: `test-${Date.now()}`,
+    sessionName: `test-${Date.now()}-${crypto.randomUUID()}`,
     repoOwner: "acme",
     repoName: "web-app",
     repoId: 12345,
     userId: "user-1",
     ...overrides,
   };
+  const id = env.SESSION.idFromName(defaults.sessionName);
+  const stub = env.SESSION.get(id);
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const now = Date.now();
+  await new SessionIndexStore(env.DB).create({
+    id: defaults.sessionName,
+    title: defaults.title ?? null,
+    repoOwner: defaults.repoOwner,
+    repoName: defaults.repoName,
+    model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    reasoningEffort: defaults.reasoningEffort ?? null,
+    baseBranch: defaults.defaultBranch ?? "main",
+    repositories: defaults.repositories,
+    environmentId: defaults.environmentId ?? null,
+    status: "created",
+    userId: defaults.userId,
+    providerAuth,
+    createdAt: now,
+    updatedAt: now,
+  });
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(defaults),
+    body: JSON.stringify(doDefaults),
   });
   if (res.status !== 200) throw new Error(`Init failed: ${res.status}`);
-  return { stub, id };
+  return { stub, id, sessionName: defaults.sessionName };
 }
 
 /**
@@ -188,8 +232,8 @@ export async function queryDO<T>(
   sql: string,
   ...params: unknown[]
 ): Promise<T[]> {
-  return runInDurableObject(stub, (instance: SessionDO) => {
-    return instance.ctx.storage.sql.exec(sql, ...params).toArray() as T[];
+  return runInSessionDO(stub, (instance: SessionDO, state) => {
+    return state.storage.sql.exec(sql, ...params).toArray() as T[];
   });
 }
 
@@ -225,9 +269,9 @@ export async function seedEvents(
     createdAt: number;
   }>
 ): Promise<void> {
-  await runInDurableObject(stub, (instance: SessionDO) => {
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
     for (const e of events) {
-      instance.ctx.storage.sql.exec(
+      state.storage.sql.exec(
         `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
          VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
         e.id,
@@ -255,8 +299,8 @@ export async function seedMessage(
     startedAt?: number;
   }
 ): Promise<void> {
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       "INSERT INTO messages (id, author_id, content, source, status, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       msg.id,
       msg.authorId,
@@ -299,6 +343,7 @@ export async function initNamedSession(
     spawnSource?: "user" | "agent" | "automation";
     spawnDepth?: number;
     sandboxSettings?: Record<string, unknown>;
+    providerAuth?: SessionModelProviderAuthInput[];
   }
 ) {
   const defaults = {
@@ -306,6 +351,7 @@ export async function initNamedSession(
     ...TEST_NAMED_SESSION_DEFAULTS,
     ...overrides,
   };
+  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
@@ -320,11 +366,12 @@ export async function initNamedSession(
     spawnSource: defaults.spawnSource ?? "user",
     spawnDepth: defaults.spawnDepth ?? 0,
     userId: defaults.canonicalUserId ?? defaults.userId,
+    providerAuth,
     createdAt: now,
     updatedAt: now,
   });
 
-  return initNamedSessionDO(sessionName, defaults);
+  return initNamedSessionDO(sessionName, doDefaults);
 }
 
 /** Create only the named session DO for tests that manage the D1 row explicitly. */
@@ -350,8 +397,8 @@ export function collectMessages(
 ): Promise<Record<string, unknown>[]> {
   return new Promise((resolve) => {
     const messages: Record<string, unknown>[] = [];
-    const timeout = opts?.timeoutMs ?? 2000;
-    const timer = setTimeout(() => resolve(messages), timeout);
+    const timeoutMs = opts?.timeoutMs ?? INTEGRATION_WEBSOCKET_TIMEOUT_MS;
+    const timer = setTimeout(() => resolve(messages), timeoutMs);
 
     ws.addEventListener("message", (event) => {
       const msg = JSON.parse(typeof event.data === "string" ? event.data : "{}");
@@ -368,14 +415,36 @@ export function collectMessages(
  * Open a client WebSocket via SELF.fetch (full worker routing path).
  * Optionally subscribe by generating a WS token and completing the subscribe flow.
  */
+interface OpenClientWsOpts {
+  subscribe?: boolean;
+  userId?: string;
+  canonicalUserId?: string;
+  scmLogin?: string;
+  scmName?: string;
+}
+
+// Overloaded on the `subscribe` discriminant: a subscribed socket always
+// resolves its token, participant, and replay messages; a bare socket never
+// carries them.
 export async function openClientWs(
   sessionName: string,
-  opts?: {
-    subscribe?: boolean;
-    userId?: string;
-    canonicalUserId?: string;
-  }
-) {
+  opts: OpenClientWsOpts & { subscribe: true }
+): Promise<{
+  ws: WebSocket;
+  token: string;
+  participantId: string;
+  messages: Record<string, unknown>[];
+}>;
+export async function openClientWs(
+  sessionName: string,
+  opts?: OpenClientWsOpts
+): Promise<{
+  ws: WebSocket;
+  token?: string;
+  participantId?: string;
+  messages?: Record<string, unknown>[];
+}>;
+export async function openClientWs(sessionName: string, opts?: OpenClientWsOpts) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },
   });
@@ -397,6 +466,8 @@ export async function openClientWs(
     body: JSON.stringify({
       userId: opts.userId ?? "user-1",
       canonicalUserId: opts.canonicalUserId,
+      scmLogin: opts.scmLogin,
+      scmName: opts.scmName,
     }),
   });
   const { token, participantId } = await tokenRes.json<{
@@ -454,8 +525,8 @@ export async function seedSandboxAuth(
   await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
       tokenHash,
@@ -478,8 +549,8 @@ export async function seedSandboxAuthHash(
   await waitForSandboxStatus(stub, "failed");
   const tokenHash = await hashToken(opts.authToken);
 
-  await runInDurableObject(stub, (instance: SessionDO) => {
-    instance.ctx.storage.sql.exec(
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec(
       "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,
       opts.sandboxId,

@@ -216,7 +216,7 @@ function createTestHarness() {
     log,
     generateId: () => `id-${++idCounter}`,
     pushBranchToRemote: vi.fn(async () => ({ success: true as const })),
-    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
+    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) },
     appName: "Open-Inspect",
     sessionPullRequests,
     resolveScmSettings: vi.fn(async () => ({})),

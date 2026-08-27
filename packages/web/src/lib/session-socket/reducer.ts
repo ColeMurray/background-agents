@@ -33,6 +33,14 @@ export interface SessionSocketState {
   loadingHistory: boolean;
   cursor: HistoryCursor | null;
   promptQueue: PromptQueueItem[];
+  /**
+   * Why the sandbox last failed, as reported by the control plane — the
+   * provider's own message (quota, rate limit, bad config), not a status label.
+   * Set from `sandbox_error` and from the spawn error carried by the snapshot /
+   * `subscribed`, and cleared as soon as a fresh attempt starts or succeeds, so
+   * it never outlives the failure it explains.
+   */
+  sandboxError: string | null;
 }
 
 export const initialSessionSocketState: SessionSocketState = {
@@ -47,6 +55,7 @@ export const initialSessionSocketState: SessionSocketState = {
   loadingHistory: false,
   cursor: null,
   promptQueue: [],
+  sandboxError: null,
 };
 
 export type SessionSocketAction =
@@ -93,6 +102,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
     hasMoreHistory: snapshot.timeline.hasMore,
     cursor: snapshot.timeline.cursor,
     promptQueue: snapshot.promptQueue,
+    sandboxError: snapshot.spawnError ?? null,
   };
 }
 
@@ -187,6 +197,7 @@ function reduceServerMessage(
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,
         promptQueue: message.promptQueue,
+        sandboxError: message.spawnError ?? null,
       };
     }
 
@@ -213,10 +224,14 @@ function reduceServerMessage(
       };
 
     case "sandbox_warming":
-      return updateSessionState(state, (prev) => ({ ...prev, sandboxStatus: "warming" }));
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+        ...prev,
+        sandboxStatus: "warming",
+      }));
 
     case "sandbox_spawning":
-      return updateSessionState(state, (prev) => ({
+      // A new attempt supersedes whatever the last one failed with.
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
         ...prev,
         sandboxStatus: "spawning",
         ...CLEARED_SANDBOX_RUNTIME_STATE,
@@ -229,19 +244,25 @@ function reduceServerMessage(
         message.status === "stale" ||
         message.status === "stopped" ||
         message.status === "failed";
-      return updateSessionState(state, (prev) => ({
-        ...prev,
-        sandboxStatus: message.status,
-        ...(shouldClearAccessState && CLEARED_SANDBOX_RUNTIME_STATE),
-        ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
-      }));
+      return updateSessionState(
+        message.status === "failed" ? state : { ...state, sandboxError: null },
+        (prev) => ({
+          ...prev,
+          sandboxStatus: message.status,
+          ...(shouldClearAccessState && CLEARED_SANDBOX_RUNTIME_STATE),
+          ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
+        })
+      );
     }
 
     case "sandbox_ready":
-      return updateSessionState(state, (prev) => ({ ...prev, sandboxStatus: "ready" }));
+      return updateSessionState({ ...state, sandboxError: null }, (prev) => ({
+        ...prev,
+        sandboxStatus: "ready",
+      }));
 
     case "sandbox_error":
-      return updateSessionState(state, (prev) => ({
+      return updateSessionState({ ...state, sandboxError: message.error }, (prev) => ({
         ...prev,
         sandboxStatus: "failed",
         ...CLEARED_SANDBOX_RUNTIME_STATE,

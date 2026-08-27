@@ -125,11 +125,12 @@ class BrowserDesktop:
     async def _forward_logs(self, name: str, process: asyncio.subprocess.Process) -> None:
         if not process.stdout:
             return
+        log = self.log.debug if name == "fluxbox" else self.log.info
         async for line in iter_process_lines(
             process.stdout,
             on_error=lambda error: self.log.warn(f"{name}.log_forward_error", exc=error),
         ):
-            self.log.info(f"{name}.stdout", line=line)
+            log(f"{name}.stdout", line=line)
 
     def _clear_display_artifacts(self) -> None:
         display_number = VNC_DISPLAY.removeprefix(":").split(".", maxsplit=1)[0]

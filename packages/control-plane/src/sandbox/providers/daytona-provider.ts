@@ -106,7 +106,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.id,
-        status: sandbox.state,
         createdAt: Date.now(),
         codeServerUrl,
         codeServerPassword,
@@ -186,7 +185,14 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   async stopSandbox(config: StopConfig): Promise<StopResult> {
     try {
       try {
-        await this.client.stopSandbox(config.providerObjectId);
+        if (config.reason === "respawn") {
+          await this.client.deleteSandbox(
+            config.providerObjectId,
+            ...(config.signal ? [config.signal] : [])
+          );
+        } else {
+          await this.client.stopSandbox(config.providerObjectId);
+        }
       } catch (error) {
         if (error instanceof DaytonaNotFoundError) {
           return { success: true };
@@ -196,7 +202,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return { success: true };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
-      throw this.classifyError("Failed to stop Daytona sandbox", error);
+      throw this.classifyError(
+        `Failed to ${config.reason === "respawn" ? "delete" : "stop"} Daytona sandbox`,
+        error
+      );
     }
   }
 

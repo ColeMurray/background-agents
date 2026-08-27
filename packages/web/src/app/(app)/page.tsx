@@ -8,15 +8,20 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { formatModelNameLower } from "@/lib/format";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { matchesShortcut } from "@/lib/keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
+  getSubscriptionProviderForModel,
   type ModelCategory,
+  type ReasoningEffort,
+  type ValidModel,
 } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -32,16 +37,36 @@ import {
   type SessionTargetSelection,
 } from "@/hooks/use-session-target-picker";
 import { SessionTargetPicker } from "@/components/session-target-picker";
-import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
-import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { ModelReasoningSelector } from "@/components/model-reasoning-selector";
+import { PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { SessionSkillSelector } from "@/components/session-skill-selector";
+import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
-import type { SkillResolutionPreviewInput } from "@/hooks/use-managed-skills";
+import {
+  useSkillResolutionPreview,
+  type SkillResolutionPreviewInput,
+  type SkillResolutionPreviewResponse,
+} from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
+import type {
+  ModelProviderSelections,
+  ProviderAuthSelection,
+  SubscriptionProviderId,
+} from "@open-inspect/shared/types/provider-accounts";
+import { ProviderAuthControls } from "@/components/provider-auth-controls";
+import { useProviderAccounts } from "@/hooks/use-provider-accounts";
+import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
+import {
+  buildInteractiveProviderRoutingIdentity,
+  parseStoredProviderSelections,
+  reconcileProviderSelections,
+  setProviderSelection,
+} from "@/lib/provider-selection";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
 
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
@@ -65,7 +90,7 @@ export default function Home() {
   const { data: session } = useAuthSession();
   const router = useRouter();
   const picker = useSessionTargetPicker();
-  const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
+  const { sessionTarget, buildRequestFields, isLaunchable } = picker;
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
@@ -73,136 +98,95 @@ export default function Home() {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
-  const skillSelectionKey =
-    skillSelection.mode === "profile" ? `profile:${skillSelection.profileId}` : skillSelection.mode;
+  const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
+  const [providerSelectionsHydrated, setProviderSelectionsHydrated] = useState(false);
+  const providerAccounts = useProviderAccounts();
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
-  const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const submitInFlightRef = useRef(false);
-  // Keyed by the picker's configKey so environment/ad-hoc selections
-  // invalidate a warmed session exactly like repo/branch changes do.
-  const pendingConfigRef = useRef<{
-    target: string;
-    model: string;
-    reasoningEffort?: string;
-    branch: string;
-    skills: string;
-  } | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
+  const targetRequestFields = buildRequestFields();
+  const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
+  const {
+    preview: skillPreview,
+    loading: skillPreviewLoading,
+    suggestions: skillSuggestions,
+  } = useSkillResolutionPreview(currentSkillPreviewTarget, skillSelection);
 
   useEffect(() => {
     if (hasHydratedModelPreferencesRef.current) return;
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
+    const storedProviderSelections = parseStoredProviderSelections(
+      localStorage.getItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY)
+    );
     setStoredPreference({
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
+    if (storedProviderSelections) setProviderSelections(storedProviderSelections);
+    setProviderSelectionsHydrated(true);
     hasHydratedModelPreferencesRef.current = true;
   }, []);
+
+  const availableProviderSelections = providerAccounts.loading
+    ? providerSelections
+    : reconcileProviderSelections(providerSelections, providerAccounts.accounts);
+
+  useEffect(() => {
+    if (
+      !providerSelectionsHydrated ||
+      providerAccounts.loading ||
+      availableProviderSelections === providerSelections
+    ) {
+      return;
+    }
+
+    setProviderSelections(availableProviderSelections);
+    localStorage.setItem(
+      LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
+      JSON.stringify(availableProviderSelections)
+    );
+  }, [
+    availableProviderSelections,
+    providerAccounts.loading,
+    providerSelections,
+    providerSelectionsHydrated,
+  ]);
 
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? storedPreference,
     loadingEnabledModels ? undefined : enabledModels
   );
 
-  // Skills are pinned while the session warms, so any identity input change
-  // must discard that session rather than submit a prompt with stale skills.
-  useEffect(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setPendingSessionId(null);
-    setIsCreatingSession(false);
-    sessionCreationPromise.current = null;
-    pendingConfigRef.current = null;
-  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch, skillSelectionKey]);
-
-  const createSessionForWarming = useCallback(async () => {
-    if (loadingEnabledModels) return null;
-    if (pendingSessionId) return pendingSessionId;
-    if (sessionCreationPromise.current) return sessionCreationPromise.current;
-    const targetRequestFields = buildRequestFields();
-    if (!targetRequestFields) return null;
-
-    setIsCreatingSession(true);
-    const currentConfig = {
-      target: configKey,
-      model: selectedModel,
-      reasoningEffort,
-      branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
-      skills: skillSelectionKey,
-    };
-    pendingConfigRef.current = currentConfig;
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
-    const promise = (async () => {
-      try {
-        const res = await browserApiFetch("/api/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...targetRequestFields,
-            model: selectedModel,
-            reasoningEffort,
-            skillSelection,
-          }),
-          signal: abortController.signal,
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (
-            pendingConfigRef.current?.target === currentConfig.target &&
-            pendingConfigRef.current?.model === currentConfig.model &&
-            pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
-            pendingConfigRef.current?.branch === currentConfig.branch &&
-            pendingConfigRef.current?.skills === currentConfig.skills
-          ) {
-            setPendingSessionId(data.sessionId);
-            return data.sessionId as string;
-          }
-          return null;
+  const warmRequest: WarmDraftSessionRequest | null =
+    session &&
+    providerSelectionsHydrated &&
+    !providerAccounts.loading &&
+    !loadingEnabledModels &&
+    targetRequestFields
+      ? {
+          ...targetRequestFields,
+          model: selectedModel,
+          reasoningEffort,
+          skillSelection,
+          providerSelections: availableProviderSelections,
         }
-        return null;
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          return null;
-        }
-        console.error("Failed to create session for warming:", error);
-        return null;
-      } finally {
-        if (abortControllerRef.current === abortController) {
-          setIsCreatingSession(false);
-          sessionCreationPromise.current = null;
-          abortControllerRef.current = null;
-        }
-      }
-    })();
-
-    sessionCreationPromise.current = promise;
-    return promise;
-  }, [
-    sessionTarget,
-    selectedBranch,
-    configKey,
-    buildRequestFields,
-    selectedModel,
-    reasoningEffort,
-    skillSelection,
-    skillSelectionKey,
-    pendingSessionId,
-    loadingEnabledModels,
-  ]);
+      : null;
+  const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
+    availableProviderSelections,
+    providerAccounts.defaults,
+    providerAccounts.accounts
+  );
+  const {
+    sessionId: pendingSessionId,
+    isWarming: isCreatingSession,
+    warm: createSessionForWarming,
+    consume: consumeWarmSession,
+  } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -215,17 +199,26 @@ export default function Home() {
   }, []);
 
   const handleModelChange = useCallback(
-    (model: string) => {
+    (model: ValidModel) => {
       saveModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
     },
     [saveModelPreferenceDraft]
   );
 
   const handleReasoningEffortChange = useCallback(
-    (nextReasoningEffort: string | undefined) => {
+    (nextReasoningEffort: ReasoningEffort | undefined) => {
       saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [saveModelPreferenceDraft, selectedModel]
+  );
+
+  const handleProviderSelectionChange = useCallback(
+    (provider: SubscriptionProviderId, selection: ProviderAuthSelection | undefined) => {
+      const next = setProviderSelection(availableProviderSelections, provider, selection);
+      setProviderSelections(next);
+      localStorage.setItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY, JSON.stringify(next));
+    },
+    [availableProviderSelections]
   );
 
   const handlePromptChange = (value: string) => {
@@ -252,7 +245,15 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitInFlightRef.current || sessionAttachments.isUploading || loadingEnabledModels) return;
+    if (
+      submitInFlightRef.current ||
+      sessionAttachments.isUploading ||
+      !providerSelectionsHydrated ||
+      providerAccounts.loading ||
+      loadingEnabledModels
+    ) {
+      return;
+    }
     const hasAttachments = sessionAttachments.attachments.length > 0;
     if (!prompt.trim() && !hasAttachments) return;
     if (!isLaunchable) {
@@ -300,8 +301,10 @@ export default function Home() {
       });
 
       if (res.ok) {
+        consumeWarmSession(sessionId);
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
+        mutate(isSessionInboxKey);
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();
@@ -335,12 +338,19 @@ export default function Home() {
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}
+      providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
-      skillPreviewTarget={skillPreviewTarget(buildRequestFields())}
+      skillPreviewTarget={currentSkillPreviewTarget}
+      skillPreview={skillPreview}
+      skillPreviewLoading={skillPreviewLoading}
+      skillSuggestions={skillSuggestions}
+      providerSelections={availableProviderSelections}
+      onProviderSelectionChange={handleProviderSelectionChange}
+      providerAccounts={providerAccounts}
     />
   );
 }
@@ -357,19 +367,26 @@ function HomeContent({
   attachments,
   creating,
   isCreatingSession,
+  providerSelectionsHydrated,
   error,
   handleSubmit,
   modelOptions,
   skillSelection,
   setSkillSelection,
   skillPreviewTarget,
+  skillPreview,
+  skillPreviewLoading,
+  skillSuggestions,
+  providerSelections,
+  onProviderSelectionChange,
+  providerAccounts,
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
-  selectedModel: string;
-  setSelectedModel: (value: string) => void;
-  reasoningEffort: string | undefined;
-  setReasoningEffort: (value: string | undefined) => void;
+  selectedModel: ValidModel;
+  setSelectedModel: (value: ValidModel) => void;
+  reasoningEffort: ReasoningEffort | undefined;
+  setReasoningEffort: (value: ReasoningEffort | undefined) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   attachments: {
@@ -381,14 +398,25 @@ function HomeContent({
   };
   creating: boolean;
   isCreatingSession: boolean;
+  providerSelectionsHydrated: boolean;
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
   skillSelection: SessionSkillSelection;
   setSkillSelection: (value: SessionSkillSelection) => void;
   skillPreviewTarget: Omit<SkillResolutionPreviewInput, "selection"> | null;
+  skillPreview: SkillResolutionPreviewResponse | null;
+  skillPreviewLoading: boolean;
+  skillSuggestions: PromptSkillSuggestionSource;
+  providerSelections: ModelProviderSelections;
+  onProviderSelectionChange: (
+    provider: SubscriptionProviderId,
+    selection: ProviderAuthSelection | undefined
+  ) => void;
+  providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
   const { isOpen } = useSidebarContext();
+  const { shortcuts, labels } = useKeyboardShortcuts();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentsLocked = creating || attachments.isUploading;
@@ -401,11 +429,12 @@ function HomeContent({
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
   const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
+  const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
 
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    if (matchesShortcut(e.nativeEvent, shortcuts["send-prompt"])) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -441,6 +470,10 @@ function HomeContent({
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
+              <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
+                <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
+              </div>
+
               <div
                 className={`border border-border bg-input ${isDraggingOver ? "ring-2 ring-accent" : ""}`}
                 onPaste={handlePaste}
@@ -464,14 +497,16 @@ function HomeContent({
                 />
                 {/* Text input area */}
                 <div className="relative">
-                  <textarea
+                  <PromptSkillTextarea
                     ref={inputRef}
                     value={prompt}
-                    onChange={(e) => handlePromptChange(e.target.value)}
+                    suggestions={skillSuggestions}
+                    onValueChange={handlePromptChange}
                     onKeyDown={handleKeyDown}
+                    maxLength={MAX_WEB_PROMPT_CHARS}
+                    disabled={creating}
                     placeholder="What do you want to build?"
                     autoComplete="off"
-                    disabled={creating}
                     className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
                     rows={3}
                   />
@@ -497,11 +532,13 @@ function HomeContent({
                       disabled={
                         (!prompt.trim() && attachments.items.length === 0) ||
                         attachmentsLocked ||
+                        !providerSelectionsHydrated ||
+                        providerAccounts.loading ||
                         !isLaunchable
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
-                      aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
+                      title={`Send (${labels["send-prompt"]})`}
+                      aria-label={`Send (${labels["send-prompt"]})`}
                     >
                       {creating ? (
                         <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -512,42 +549,15 @@ function HomeContent({
                   </div>
                 </div>
 
-                {/* Footer row with target and model selectors */}
-                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
-                  {/* Left side - Target selector + Model selector */}
+                {/* Footer row with session controls */}
+                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                    <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
-
-                    {/* Model selector */}
-                    <Combobox
-                      value={selectedModel}
-                      onChange={(value) => setSelectedModel(value)}
-                      items={
-                        modelOptions.map((group) => ({
-                          category: group.category,
-                          options: group.models.map((model) => ({
-                            value: model.id,
-                            label: model.name,
-                            description: model.description,
-                          })),
-                        })) as ComboboxGroup[]
-                      }
-                      direction="up"
-                      dropdownWidth="w-56"
-                      disabled={creating}
-                      triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                      <ModelIcon className="w-3.5 h-3.5" />
-                      <span className="truncate max-w-[9rem] sm:max-w-none">
-                        {formatModelNameLower(selectedModel)}
-                      </span>
-                    </Combobox>
-
-                    {/* Reasoning effort pills */}
-                    <ReasoningEffortPills
+                    <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}
-                      onSelect={setReasoningEffort}
+                      items={modelOptions}
+                      onModelChange={setSelectedModel}
+                      onReasoningEffortChange={setReasoningEffort}
                       disabled={creating}
                     />
 
@@ -555,14 +565,27 @@ function HomeContent({
                       value={skillSelection}
                       onChange={setSkillSelection}
                       target={skillPreviewTarget}
+                      preview={skillPreview}
+                      previewLoading={skillPreviewLoading}
                       disabled={creating}
                     />
-                  </div>
 
-                  {/* Right side - Agent label */}
-                  <span className="hidden sm:inline text-sm text-muted-foreground">
-                    build agent
-                  </span>
+                    {selectedProvider && (
+                      <ProviderAuthControls
+                        variant="menu"
+                        provider={selectedProvider}
+                        accounts={providerAccounts.accounts}
+                        defaultValue={providerAccounts.defaults.find(
+                          (item) => item.provider === selectedProvider
+                        )}
+                        value={providerSelections[selectedProvider]}
+                        disabled={creating}
+                        onChange={(selection) =>
+                          onProviderSelectionChange(selectedProvider, selection)
+                        }
+                      />
+                    )}
+                  </div>
                 </div>
               </div>
 

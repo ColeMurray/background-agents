@@ -127,7 +127,7 @@ export function TerminalMessageReadObserver({
   }, []);
 
   return (
-    <div ref={elementRef} data-terminal-message-id={messageId}>
+    <div ref={elementRef} data-terminal-message-id={messageId} className="space-y-2">
       {children}
     </div>
   );

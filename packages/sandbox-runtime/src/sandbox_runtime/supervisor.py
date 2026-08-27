@@ -95,13 +95,23 @@ class SandboxSupervisor:
                 if attempt > self.MAX_RESTARTS:
                     self.log.warn("vnc.max_restarts", restart_count=attempt)
                     return False
-                await asyncio.sleep(min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX))
+                if await self._wait_for_shutdown(min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX)):
+                    return False
         return False
 
-    async def _handle_opencode_exit(self, restart_count: int) -> tuple[int, bool]:
+    async def _wait_for_shutdown(self, delay: float) -> bool:
+        if self.shutdown_event.is_set():
+            return True
+        try:
+            await asyncio.wait_for(self.shutdown_event.wait(), timeout=delay)
+        except TimeoutError:
+            return False
+        return True
+
+    async def _handle_opencode_exit(self, restart_count: int) -> int:
         exit_code = self.opencode_server.exit_code()
         if exit_code is None:
-            return restart_count, False
+            return restart_count
 
         restart_count += 1
         self.log.error(
@@ -113,7 +123,7 @@ class SandboxSupervisor:
             self.log.error("opencode.max_restarts", restart_count=restart_count)
             await self._report_fatal_error(f"OpenCode crashed {restart_count} times, giving up")
             self.shutdown_event.set()
-            return restart_count, True
+            return restart_count
 
         delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
         self.log.info(
@@ -121,23 +131,24 @@ class SandboxSupervisor:
             delay_s=round(delay, 1),
             restart_count=restart_count,
         )
-        await asyncio.sleep(delay)
+        if await self._wait_for_shutdown(delay):
+            return restart_count
         if self._repository_boot_result is None:
             raise RuntimeError("OpenCode restart requested before repository boot")
         await self.opencode_server.start(
             self._repository_boot_result.repositories,
             self._repository_boot_result.workdir,
         )
-        return restart_count, False
+        return restart_count
 
-    async def _handle_bridge_exit(self, restart_count: int) -> tuple[int, bool]:
+    async def _handle_bridge_exit(self, restart_count: int) -> int:
         exit_code = self.agent_bridge.exit_code()
         if exit_code is None:
-            return restart_count, False
+            return restart_count
         if exit_code == 0:
             self.log.info("bridge.graceful_exit", exit_code=exit_code)
             self.shutdown_event.set()
-            return restart_count, True
+            return restart_count
 
         restart_count += 1
         self.log.error(
@@ -149,7 +160,7 @@ class SandboxSupervisor:
             self.log.error("bridge.max_restarts", restart_count=restart_count)
             await self._report_fatal_error(f"Bridge crashed {restart_count} times, giving up")
             self.shutdown_event.set()
-            return restart_count, True
+            return restart_count
 
         delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
         self.log.info(
@@ -157,9 +168,10 @@ class SandboxSupervisor:
             delay_s=round(delay, 1),
             restart_count=restart_count,
         )
-        await asyncio.sleep(delay)
+        if await self._wait_for_shutdown(delay):
+            return restart_count
         await self.agent_bridge.start()
-        return restart_count, False
+        return restart_count
 
     async def _handle_code_server_exit(self, restart_count: int) -> int:
         exit_code = self.code_server.exit_code()
@@ -177,7 +189,8 @@ class SandboxSupervisor:
             await self.code_server.stop()
             return restart_count
 
-        await asyncio.sleep(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX))
+        if await self._wait_for_shutdown(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)):
+            return restart_count
         try:
             if self._repository_boot_result is None:
                 raise RuntimeError("code-server restart requested before repository boot")
@@ -205,7 +218,8 @@ class SandboxSupervisor:
             self.log.warn("web_terminal.max_restarts", restart_count=restart_count)
             return restart_count
 
-        await asyncio.sleep(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX))
+        if await self._wait_for_shutdown(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)):
+            return restart_count
         try:
             if self._repository_boot_result is None:
                 raise RuntimeError("terminal restart requested before repository boot")
@@ -246,16 +260,21 @@ class SandboxSupervisor:
         desktop_restarts = 0
 
         while not self.shutdown_event.is_set():
-            opencode_restarts, should_stop = await self._handle_opencode_exit(opencode_restarts)
-            if should_stop:
+            opencode_restarts = await self._handle_opencode_exit(opencode_restarts)
+            if self.shutdown_event.is_set():
                 break
-            bridge_restarts, should_stop = await self._handle_bridge_exit(bridge_restarts)
-            if should_stop:
+            bridge_restarts = await self._handle_bridge_exit(bridge_restarts)
+            if self.shutdown_event.is_set():
                 break
             code_server_restarts = await self._handle_code_server_exit(code_server_restarts)
+            if self.shutdown_event.is_set():
+                break
             terminal_restarts = await self._handle_terminal_crash(terminal_restarts)
+            if self.shutdown_event.is_set():
+                break
             desktop_restarts = await self._handle_desktop_crash(desktop_restarts)
-            await asyncio.sleep(1.0)
+            if await self._wait_for_shutdown(1.0):
+                break
 
     def _image_build_execution_timeout_seconds(self) -> int | None:
         raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)

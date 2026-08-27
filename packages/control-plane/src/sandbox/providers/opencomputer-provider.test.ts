@@ -117,7 +117,6 @@ describe("OpenComputerSandboxProvider", () => {
     expect(result).toMatchObject({
       sandboxId: "sandbox-acme-repo-1",
       providerObjectId: "oc-sandbox-1",
-      status: "running",
       codeServerUrl: "https://sandbox-acme-repo-1-3000.opencomputer.test",
       tunnelUrls: { "5173": "https://oc-sandbox-1-5173.opencomputer.test" },
     });
@@ -504,7 +503,6 @@ describe("OpenComputerSandboxProvider", () => {
 
     expect(result).toMatchObject({
       providerObjectId: "oc-fork-1",
-      status: "running",
     });
     expect(client.createSandbox).not.toHaveBeenCalled();
     expect(client.forkFromCheckpoint).toHaveBeenCalledWith(
@@ -961,5 +959,30 @@ describe("OpenComputerSandboxProvider", () => {
     ).resolves.toEqual({ success: true });
 
     expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+  });
+
+  it("deletes sandboxes on replacement", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+    const signal = AbortSignal.timeout(1_000);
+
+    await expect(
+      provider.stopSandbox({
+        providerObjectId: "oc-sandbox-1",
+        sessionId: "session-1",
+        reason: "respawn",
+        signal,
+      })
+    ).resolves.toEqual({ success: true });
+
+    expect(client.deleteSandbox).toHaveBeenCalledWith(
+      "oc-sandbox-1",
+      { deleteSecretStore: true },
+      signal
+    );
+    expect(client.hibernateSandbox).not.toHaveBeenCalled();
   });
 });

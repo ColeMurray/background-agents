@@ -8,20 +8,12 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
+import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
 } from "./ws-client-mapping-repository";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** Result of parsing a WebSocket's Cloudflare hibernation tags. */
-export type ParsedTags =
-  | { kind: "sandbox"; sandboxId?: string }
-  | { kind: "client"; wsId?: string };
 
 /** Configuration for the WebSocket manager. */
 export interface WebSocketManagerConfig {
@@ -33,6 +25,9 @@ export interface WebSocketManagerConfig {
 // ---------------------------------------------------------------------------
 
 export interface SessionWebSocketManager {
+  /** Create the client/server WebSocket pair for an upgrade response. */
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket };
+
   /** Accept a client WebSocket with a wsId tag for hibernation recovery. */
   acceptClientSocket(ws: WebSocket, wsId: string): void;
 
@@ -43,7 +38,7 @@ export interface SessionWebSocketManager {
   acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean };
 
   /** Parse a WebSocket's tags to determine its kind and identity. */
-  classify(ws: WebSocket): ParsedTags;
+  classify(ws: WebSocket): ConnectionClassification;
 
   /**
    * Get the active sandbox socket, recovering from hibernation if needed.
@@ -86,7 +81,6 @@ export interface SessionWebSocketManager {
   ): void;
 
   enforceAuthTimeout(ws: WebSocket, wsId: string): Promise<void>;
-  enableAutoPingPong(): void;
   getAuthenticatedClients(): IterableIterator<ClientInfo>;
   getConnectedClientCount(): number;
 }
@@ -111,6 +105,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
   // Accept
   // -------------------------------------------------------------------------
+
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket } {
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    return { client, server };
+  }
 
   acceptClientSocket(ws: WebSocket, wsId: string): void {
     this.ctx.acceptWebSocket(ws, [`wsid:${wsId}`]);
@@ -140,7 +140,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Classification
   // -------------------------------------------------------------------------
 
-  classify(ws: WebSocket): ParsedTags {
+  classify(ws: WebSocket): ConnectionClassification {
     const tags = this.ctx.getTags(ws);
     if (tags.includes("sandbox")) {
       const sidTag = tags.find((t) => t.startsWith("sid:"));
@@ -185,11 +185,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
 
-      if (expectedSandboxId && parsed.sandboxId && parsed.sandboxId !== expectedSandboxId) {
+      if (expectedSandboxId && parsed.sandboxId !== expectedSandboxId) {
         this.log.debug("Skipping WS with wrong sandbox ID", {
           tag_sandbox_id: parsed.sandboxId,
           expected_sandbox_id: expectedSandboxId,
         });
+        this.close(ws, 1000, "Sandbox identity changed");
         continue;
       }
 
@@ -330,7 +331,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
    * Check whether a client socket has authentication evidence,
    * either in-memory or via persisted DB mapping (post-hibernation).
    */
-  private isAuthenticated(ws: WebSocket, parsed: ParsedTags): boolean {
+  private isAuthenticated(ws: WebSocket, parsed: ConnectionClassification): boolean {
     if (this.clients.has(ws)) return true;
     if (parsed.kind === "client" && parsed.wsId) {
       return this.wsClientMappingRepository.hasWsClientMapping(parsed.wsId);
@@ -358,15 +359,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       timeout_ms: this.config.authTimeoutMs,
     });
     this.close(ws, 4008, "Authentication timeout");
-  }
-
-  enableAutoPingPong(): void {
-    this.ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair(
-        JSON.stringify({ type: "ping" }),
-        JSON.stringify({ type: "pong", timestamp: Date.now() })
-      )
-    );
   }
 
   getAuthenticatedClients(): IterableIterator<ClientInfo> {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { SessionDO } from "../../src/session/durable-object";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 import { initNamedSession, initSession, queryDO, seedMessage, serviceFetch } from "./helpers";
 
 describe("POST /internal/create-pr", () => {
@@ -65,14 +66,14 @@ describe("POST /internal/create-pr", () => {
       startedAt: Date.now() - 500,
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec("PRAGMA foreign_keys = OFF");
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec("PRAGMA foreign_keys = OFF");
+      state.storage.sql.exec(
         "UPDATE messages SET author_id = ? WHERE id = ?",
         "participant-does-not-exist",
         "msg-processing-missing-author"
       );
-      instance.ctx.storage.sql.exec("PRAGMA foreign_keys = ON");
+      state.storage.sql.exec("PRAGMA foreign_keys = ON");
     });
 
     const res = await stub.fetch("http://internal/internal/create-pr", {
@@ -111,8 +112,8 @@ describe("POST /internal/create-pr", () => {
       startedAt: Date.now() - 500,
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         "UPDATE participants SET scm_access_token_encrypted = ?, scm_refresh_token_encrypted = ?, scm_token_expires_at = ? WHERE id = ?",
         "invalid-access-token",
         "invalid-refresh-token",
@@ -157,9 +158,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      (
-        instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-      )._sourceControlProvider = mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
 
     const res = await stub.fetch("http://internal/internal/create-pr", {
@@ -201,7 +200,7 @@ describe("POST /internal/create-pr", () => {
       startedAt: Date.now() - 500,
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO) => {
       const mockProvider = {
         name: "github",
         generatePushAuth: async () => ({ authType: "app", token: "push-token" as const }),
@@ -238,9 +237,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      (
-        instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-      )._sourceControlProvider = mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
 
     const res = await stub.fetch("http://internal/internal/create-pr", {
@@ -292,7 +289,7 @@ describe("POST /internal/create-pr", () => {
   }
 
   async function installSingleRepoMockProvider(stub: DurableObjectStub) {
-    await runInDurableObject(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO) => {
       const mockProvider = {
         name: "github",
         generatePushAuth: async () => ({ authType: "app", token: "push-token" as const }),
@@ -332,9 +329,7 @@ describe("POST /internal/create-pr", () => {
         }),
       } as unknown as SourceControlProvider;
 
-      (
-        instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-      )._sourceControlProvider = mockProvider;
+      componentsOf(instance).sourceControlProvider = mockProvider;
     });
   }
 
@@ -342,8 +337,8 @@ describe("POST /internal/create-pr", () => {
     const { stub } = await initSession({ userId: "user-1" });
     await seedProcessingMessageForOwner(stub, "msg-processing-2");
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         "INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         "artifact-pr-existing",
         "pr",
@@ -381,8 +376,8 @@ describe("POST /internal/create-pr", () => {
     const { stub } = await initSession({ userId: "user-1" });
     await seedProcessingMessageForOwner(stub, "msg-processing-legacy");
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         "INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         "artifact-pr-numberless",
         "pr",
@@ -444,7 +439,7 @@ describe("POST /internal/create-pr", () => {
     }
 
     async function installMockProvider(stub: DurableObjectStub) {
-      await runInDurableObject(stub, (instance: SessionDO) => {
+      await runInSessionDO(stub, (instance: SessionDO) => {
         let prCounter = 0;
         const mockProvider = {
           name: "github",
@@ -500,9 +495,7 @@ describe("POST /internal/create-pr", () => {
           }),
         } as unknown as SourceControlProvider;
 
-        (
-          instance as unknown as { _sourceControlProvider: SourceControlProvider | null }
-        )._sourceControlProvider = mockProvider;
+        componentsOf(instance).sourceControlProvider = mockProvider;
       });
     }
 
@@ -661,8 +654,8 @@ describe("POST /internal/pull-request-artifact-snapshot", () => {
   }
 
   async function seedPrArtifact(stub: DurableObjectStub, createdAt: number) {
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         "INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         "artifact-pr-1",
         "pr",

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { Image, Snapshots } from "@opencomputer/sdk/node";
+import runtimeManifest from "../../sandbox-runtime/src/sandbox_runtime/runtime_manifest.json";
 
 // Never pin below 1.18.15 — see packages/modal-infra/src/images/base.py for why
 // (OpenCode's message-ID counter wraps and earlier releases order by ID string).
@@ -23,6 +24,7 @@ const UV_PYTHON_INSTALL_DIR = `${SANDBOX_HOME}/.local/share/uv/python`;
 const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
 const LOCAL_NO_PROXY = "localhost,127.0.0.1,::1";
+export const OPENCOMPUTER_TEMPLATE_RUNTIME_VERSION = runtimeManifest.runtimeVersion;
 const HOSTS_BOOTSTRAP =
   "grep -Eq '^[[:space:]]*127\\.0\\.0\\.1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
   "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
@@ -247,7 +249,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       OPENINSPECT_BIN_INSTALL_DIR: USER_BIN,
       NO_PROXY: LOCAL_NO_PROXY,
       no_proxy: LOCAL_NO_PROXY,
-      SANDBOX_VERSION: "v59-vnc-opencode-1-18-18",
+      SANDBOX_VERSION: OPENCOMPUTER_TEMPLATE_RUNTIME_VERSION,
     })
     .workdir(`${SANDBOX_HOME}/workspace`)
     .builderMemory(options.builderMemoryMb);

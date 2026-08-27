@@ -151,6 +151,12 @@ describe("getAvatarUrl", () => {
     expect(getAvatarUrl("octocat", "github")).toBe("https://github.com/octocat.png");
   });
 
+  it("uses the stable GitHub avatar endpoint when a numeric user ID is available", () => {
+    expect(getAvatarUrl("open-inspect[bot]", "github", "255062780")).toBe(
+      "https://avatars.githubusercontent.com/u/255062780?v=4"
+    );
+  });
+
   it("returns undefined for null", () => {
     expect(getAvatarUrl(null)).toBeUndefined();
   });
@@ -554,6 +560,43 @@ describe("ParticipantService", () => {
         "Centralized token refresh failed, falling back to local",
         expect.any(Object)
       );
+    });
+
+    it("falls back to local refresh after a centralized OAuth timeout", async () => {
+      const h = createCentralizedHarness();
+      mockStore.getTokens.mockResolvedValue({
+        accessToken: "old-access",
+        refreshToken: "d1-refresh",
+        expiresAt: Date.now() - 1000,
+        refreshTokenEncrypted: "enc-d1-refresh",
+      });
+      mockStore.isTokenFresh.mockReturnValue(false);
+      vi.mocked(refreshAccessToken)
+        .mockRejectedValueOnce(new DOMException("deadline exceeded", "TimeoutError"))
+        .mockResolvedValueOnce({
+          access_token: "fallback-access",
+          refresh_token: "fallback-refresh",
+          token_type: "bearer",
+          scope: "repo",
+          expires_in: 28800,
+        });
+
+      const refreshedParticipant = createParticipant({
+        scm_user_id: "gh-123",
+        scm_access_token_encrypted: "enc:fallback-access",
+      });
+      vi.mocked(h.repository.getParticipantById).mockReturnValue(refreshedParticipant);
+
+      const participant = createParticipant({
+        scm_user_id: "gh-123",
+        scm_refresh_token_encrypted: "enc:local-refresh",
+      });
+      const result = await h.service.refreshToken(participant);
+
+      expect(result).toBe(refreshedParticipant);
+      expect(refreshAccessToken).toHaveBeenNthCalledWith(1, "d1-refresh", expect.any(Object));
+      expect(refreshAccessToken).toHaveBeenNthCalledWith(2, "local-refresh", expect.any(Object));
+      expect(mockStore.casUpdateTokens).not.toHaveBeenCalled();
     });
 
     it("returns null when D1 token expired and no GitHub OAuth credentials", async () => {

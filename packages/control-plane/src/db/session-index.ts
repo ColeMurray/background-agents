@@ -11,17 +11,33 @@ import {
   DEFAULT_SESSION_LIST_OFFSET,
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
+import {
+  sessionModelProviderAuthSchema,
+  SUBSCRIPTION_PROVIDER_IDS,
+} from "@open-inspect/shared/types/provider-accounts";
 import type { SessionSkillManifestInput } from "../session/skill-resolution";
-import { SessionPullRequestStore } from "./session-pull-request-store";
+import {
+  assertProviderAuthSelection,
+  type ModelProviderId,
+  type SessionModelProviderAuthInput,
+} from "../model-provider-accounts/provider-auth-contracts";
+import { bulkInsertStatements } from "./bulk-insert";
+import { attachSessionListMetadata } from "./session-list-metadata";
+import {
+  SessionInboxStore,
+  type ListSessionInboxOptions,
+  type ListSessionInboxResult,
+  type ListSessionInboxSnapshotResult,
+} from "./session-inbox-store";
+import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
+import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
-const TERMINAL_STATUSES = [
-  "completed",
-  "failed",
-  "archived",
-  "cancelled",
-] satisfies SessionStatus[];
-const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
+export type {
+  ListSessionInboxOptions,
+  ListSessionInboxResult,
+  ListSessionInboxSnapshotResult,
+} from "./session-inbox-store";
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -88,15 +104,8 @@ export interface SessionEntry {
   skillManifest?: SessionSkillManifestInput;
   /** Parent manifest to copy atomically for an agent-spawned child. */
   skillManifestSourceSessionId?: string;
-}
-
-interface SessionRepositoryRow {
-  session_id: string;
-  position: number;
-  repo_owner: string;
-  repo_name: string;
-  repo_id: number | null;
-  base_branch: string;
+  /** Complete immutable model-provider authentication snapshot. */
+  providerAuth?: SessionModelProviderAuthInput[];
 }
 
 interface SessionRow {
@@ -109,6 +118,7 @@ interface SessionRow {
   base_branch: string | null;
   status: SessionStatus;
   parent_session_id: string | null;
+  root_session_id: string | null;
   spawn_source: SpawnSource;
   spawn_depth: number;
   automation_id: string | null;
@@ -122,6 +132,14 @@ interface SessionRow {
   environment_id: string | null;
   created_at: number;
   updated_at: number;
+}
+
+interface SessionModelProviderAuthRow {
+  provider: string;
+  auth_mode: string;
+  provider_account_id: string | null;
+  selection_source: string;
+  inherited_from_session_id: string | null;
 }
 
 export interface ListSessionsOptions {
@@ -141,37 +159,7 @@ export interface ListSessionsResult {
   hasMore: boolean;
 }
 
-interface ViewerReadStateRow {
-  unread: number;
-  latest_terminal_message_id: string | null;
-}
-
 interface ViewerSessionRow extends SessionRow, ViewerReadStateRow {}
-
-function unreadSql(sessionAlias: string): string {
-  return `CASE
-            WHEN ${sessionAlias}.latest_terminal_message_id IS NOT NULL
-              AND ${sessionAlias}.latest_terminal_message_completed_at >= viewer.created_at
-              AND (
-                read_state.last_read_message_id IS NULL
-                OR read_state.last_read_message_id
-                  != ${sessionAlias}.latest_terminal_message_id
-              )
-            THEN 1 ELSE 0
-          END`;
-}
-
-function readStateFromRow(row: ViewerReadStateRow): SessionReadState {
-  return row.latest_terminal_message_id === null
-    ? {
-        latestMessageId: null,
-        unread: false,
-      }
-    : {
-        latestMessageId: row.latest_terminal_message_id,
-        unread: row.unread === 1,
-      };
-}
 
 function toEntry(row: SessionRow): SessionEntry {
   return {
@@ -198,6 +186,30 @@ function toEntry(row: SessionRow): SessionEntry {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {
+  const auth = sessionModelProviderAuthSchema.parse({
+    provider: row.provider,
+    authMode: row.auth_mode,
+    ...(row.provider_account_id ? { providerAccountId: row.provider_account_id } : {}),
+    selectionSource: row.selection_source,
+  });
+  return {
+    ...auth,
+    ...(row.inherited_from_session_id
+      ? { inheritedFromSessionId: row.inherited_from_session_id }
+      : {}),
+  };
+}
+
+function isCompleteProviderAuth(providerAuth: readonly SessionModelProviderAuthInput[]): boolean {
+  return (
+    providerAuth.length === SUBSCRIPTION_PROVIDER_IDS.length &&
+    SUBSCRIPTION_PROVIDER_IDS.every((provider) =>
+      providerAuth.some((auth) => auth.provider === provider)
+    )
+  );
 }
 
 function normalizeRepoIdentifier(value: string | null | undefined): string | null {
@@ -242,10 +254,25 @@ export class SessionIndexStore {
       throw new Error("Session cannot both resolve and copy a managed skill manifest");
     }
 
+    const providers = new Set<string>();
+    for (const auth of session.providerAuth ?? []) {
+      assertProviderAuthSelection(
+        auth.provider,
+        auth.authMode,
+        "providerAccountId" in auth ? auth.providerAccountId : null
+      );
+      if (providers.has(auth.provider))
+        throw new Error(`Duplicate provider auth: ${auth.provider}`);
+      providers.add(auth.provider);
+    }
+    if (session.providerAuth && !isCompleteProviderAuth(session.providerAuth)) {
+      throw new Error("Session provider auth snapshot must include every subscription provider");
+    }
+
     const sessionStmt = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -256,6 +283,9 @@ export class SessionIndexStore {
         session.reasoningEffort,
         repository.baseBranch,
         session.status,
+        session.parentSessionId ?? null,
+        session.parentSessionId ?? null,
+        session.id,
         session.parentSessionId ?? null,
         session.spawnSource ?? "user",
         session.spawnDepth ?? 0,
@@ -289,11 +319,32 @@ export class SessionIndexStore {
       : session.skillManifestSourceSessionId
         ? this.bindManifestCopy(session.id, session.skillManifestSourceSessionId)
         : [];
-    const results = await this.db.batch([sessionStmt, ...repositoryStmts, ...manifestStmts]);
+    const providerAuthStmts = (session.providerAuth ?? []).map((auth) =>
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO session_model_provider_auth (
+             session_id, provider, auth_mode, provider_account_id, selection_source,
+             inherited_from_session_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          session.id,
+          auth.provider,
+          auth.authMode,
+          "providerAccountId" in auth ? auth.providerAccountId : null,
+          auth.selectionSource,
+          auth.inheritedFromSessionId ?? null,
+          session.createdAt
+        )
+    );
+    const results = await this.db.batch([
+      sessionStmt,
+      ...repositoryStmts,
+      ...manifestStmts,
+      ...providerAuthStmts,
+    ]);
 
-    // INSERT OR IGNORE swallows every constraint violation, which would leave
-    // the session invisible to dashboards while the DO proceeds. Session ids
-    // are always freshly generated, so a skipped insert is a bug — surface it;
+    // Session ids are always freshly generated, so a skipped insert is a bug;
     // initialize.ts relies on D1 failures being caught before sandbox spawn.
     if ((results[0]?.meta?.changes ?? 0) === 0) {
       throw new Error(
@@ -306,6 +357,10 @@ export class SessionIndexStore {
    * Build manifest statements for the session-creation batch. The caller owns
    * execution so the session, repository snapshot, and pinned skills commit
    * atomically rather than leaving a partially initialized session.
+   *
+   * Revisions are packed into multi-row INSERTs: the pinned set is as wide as
+   * the applicable catalog, and a statement per skill would spend the
+   * invocation's whole query budget on one session create.
    */
   private bindManifestInserts(
     sessionId: string,
@@ -328,26 +383,21 @@ export class SessionIndexStore {
           manifest.manifestSha256,
           manifest.resolvedAt
         ),
-      ...manifest.skills.map((skill, position) =>
-        this.db
-          .prepare(
-            `INSERT INTO session_skill_revisions
-             (session_id, position, skill_id, revision_id, skill_name, description,
-              revision_number, revision_sha256, total_bytes, assignment_sources)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            sessionId,
-            position,
-            skill.skillId,
-            skill.revisionId,
-            skill.name,
-            skill.description,
-            skill.revisionNumber,
-            skill.revisionSha256,
-            skill.totalBytes,
-            JSON.stringify(skill.assignmentSources)
-          )
+      ...bulkInsertStatements(
+        this.db,
+        "session_skill_revisions",
+        manifest.skills.map((skill, position) => ({
+          session_id: sessionId,
+          position,
+          skill_id: skill.skillId,
+          revision_id: skill.revisionId,
+          skill_name: skill.name,
+          description: skill.description,
+          revision_number: skill.revisionNumber,
+          revision_sha256: skill.revisionSha256,
+          total_bytes: skill.totalBytes,
+          assignment_sources: JSON.stringify(skill.assignmentSources),
+        }))
       ),
     ];
   }
@@ -385,6 +435,43 @@ export class SessionIndexStore {
       .first<SessionRow>();
 
     return result ? toEntry(result) : null;
+  }
+
+  private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT provider, auth_mode, provider_account_id, selection_source,
+                inherited_from_session_id
+         FROM session_model_provider_auth
+         WHERE session_id = ? ORDER BY provider`
+      )
+      .bind(sessionId)
+      .all<SessionModelProviderAuthRow>();
+    return (result.results ?? []).map(toProviderAuth);
+  }
+
+  async getCompleteProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
+    const providerAuth = await this.getProviderAuth(sessionId);
+    if (!isCompleteProviderAuth(providerAuth)) {
+      throw new Error(`Session provider auth snapshot is incomplete for session ${sessionId}`);
+    }
+    return providerAuth;
+  }
+
+  async getProviderAuthForProvider(
+    sessionId: string,
+    provider: ModelProviderId
+  ): Promise<SessionModelProviderAuthInput | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT provider, auth_mode, provider_account_id, selection_source,
+                inherited_from_session_id
+         FROM session_model_provider_auth
+         WHERE session_id = ? AND provider = ?`
+      )
+      .bind(sessionId, provider)
+      .first<SessionModelProviderAuthRow>();
+    return row ? toProviderAuth(row) : null;
   }
 
   /**
@@ -508,7 +595,7 @@ export class SessionIndexStore {
           .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = await this.decorateEntries(
+    const sessions = await this.attachListMetadata(
       rows.slice(0, limit).map((row) => ({
         ...toEntry(row),
         ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
@@ -521,32 +608,18 @@ export class SessionIndexStore {
     };
   }
 
-  /**
-   * Attach repository lists and PR status summaries to the paged
-   * entries. The two lookups are independent — each is one grouped query
-   * keyed by the same session ids — so they run in parallel and merge onto
-   * the entries in a single pass. Sessions without rows are returned without
-   * the field: consumers fall back to the scalar repo columns, and PR state
-   * never influences session ordering (this only decorates paged rows).
-   */
-  private async decorateEntries(sessions: SessionEntry[]): Promise<SessionEntry[]> {
-    if (sessions.length === 0) return sessions;
-    const sessionIds = sessions.map((session) => session.id);
+  async listInbox(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
+    return new SessionInboxStore(this.db).list(options);
+  }
 
-    const [repositoriesBySession, summariesBySession] = await Promise.all([
-      this.repositoriesForSessions(sessionIds),
-      new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
-    ]);
+  async listInboxSnapshot(
+    options: Omit<ListSessionInboxOptions, "category" | "cursor">
+  ): Promise<ListSessionInboxSnapshotResult> {
+    return new SessionInboxStore(this.db).snapshot(options);
+  }
 
-    return sessions.map((session) => {
-      const repositories = repositoriesBySession.get(session.id);
-      const pullRequestSummary = summariesBySession.get(session.id);
-      return {
-        ...session,
-        ...(repositories ? { repositories } : {}),
-        ...(pullRequestSummary ? { pullRequestSummary } : {}),
-      };
-    });
+  private async attachListMetadata<T extends { id: string }>(sessions: T[]): Promise<T[]> {
+    return attachSessionListMetadata(this.db, sessions);
   }
 
   async recordLatestTerminalMessage(input: {
@@ -676,34 +749,6 @@ export class SessionIndexStore {
     return row ? readStateFromRow(row) : null;
   }
 
-  /** Repository lists for the given sessions, in one query. */
-  private async repositoriesForSessions(
-    sessionIds: readonly string[]
-  ): Promise<Map<string, SessionIndexRepository[]>> {
-    const placeholders = sessionIds.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(
-        `SELECT * FROM session_repositories
-         WHERE session_id IN (${placeholders})
-         ORDER BY session_id, position`
-      )
-      .bind(...sessionIds)
-      .all<SessionRepositoryRow>();
-
-    const bySession = new Map<string, SessionIndexRepository[]>();
-    for (const row of result.results || []) {
-      const list = bySession.get(row.session_id) ?? [];
-      list.push({
-        repoOwner: row.repo_owner,
-        repoName: row.repo_name,
-        repoId: row.repo_id,
-        baseBranch: row.base_branch,
-      });
-      bySession.set(row.session_id, list);
-    }
-    return bySession;
-  }
-
   async updateTitle(id: string, title: string): Promise<boolean> {
     const result = await this.db
       .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
@@ -756,8 +801,9 @@ export class SessionIndexStore {
    *
    * `created` is the status a session holds until its first prompt is enqueued,
    * so a row still sitting there long after its last update was abandoned before
-   * any work started. Ordered oldest-first so a backlog drains deterministically
-   * across ticks rather than re-reading the same head each time.
+   * any work started. Ordered oldest-first, which drains a backlog only while
+   * every visited row leaves this set — see `archiveOrphanedDraft` and
+   * `repairStatus` for the two cases where that had to be made true.
    */
   async listAbandonedDraftSessionIds(staleBefore: number, limit: number): Promise<string[]> {
     const result = await this.db
@@ -771,6 +817,46 @@ export class SessionIndexStore {
       .all<{ id: string }>();
 
     return (result.results ?? []).map((row) => row.id);
+  }
+
+  /**
+   * Retire an index row whose Durable Object holds no session at all.
+   *
+   * A 404 from the expiry route is definitive rather than transient: there is no
+   * Durable Object state for this row to diverge from, so the index can be
+   * corrected on its own. Guarded on `created` so a row that acquired a real
+   * session between the sweep's read and this write is left alone.
+   */
+  async archiveOrphanedDraft(id: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'created'"
+      )
+      .bind(Date.now(), id)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Correct a draft status projection that drifted away from its Durable Object.
+   *
+   * Deliberately not `updateStatus`, which carries an `updated_at` and refuses
+   * writes that would move it backwards. That guard keeps concurrent transitions
+   * ordered, but it silently drops a repair: the Durable Object sends its own
+   * timestamp, which is behind D1's whenever `touchUpdatedAt` has run, so the
+   * write matches no rows and reports success as `false`. This repair asserts
+   * only the stale shape the draft sweep selected: D1 still says `created`, and
+   * the Durable Object says otherwise. Only that status column is written,
+   * leaving `updated_at` to keep meaning "last real activity".
+   */
+  async repairStatus(id: string, status: SessionStatus): Promise<boolean> {
+    const result = await this.db
+      .prepare("UPDATE sessions SET status = ? WHERE id = ? AND status = 'created' AND status != ?")
+      .bind(status, id, status)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async touchUpdatedAt(id: string): Promise<boolean> {
@@ -798,7 +884,7 @@ export class SessionIndexStore {
       .prepare(`SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at DESC`)
       .bind(parentSessionId)
       .all<SessionRow>();
-    return this.decorateEntries((result.results || []).map(toEntry));
+    return this.attachListMetadata((result.results || []).map(toEntry));
   }
 
   /** List non-terminal descendants, deepest first, so cancellation cascades bottom-up. */
@@ -814,7 +900,7 @@ export class SessionIndexStore {
            WHERE descendants.depth < ${MAX_DESCENDANT_DEPTH}
          )
          SELECT id FROM descendants
-         WHERE status NOT IN (${TERMINAL_STATUS_SQL})
+         WHERE status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
          ORDER BY depth DESC`
       )
       .bind(parentSessionId)
@@ -846,7 +932,7 @@ export class SessionIndexStore {
          WHERE (
            SELECT COUNT(*) FROM (
              SELECT id AS child_session_id FROM sessions
-             WHERE parent_session_id = ? AND status NOT IN (${TERMINAL_STATUS_SQL})
+             WHERE parent_session_id = ? AND status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
              UNION
              SELECT child_session_id FROM child_admission_leases
              WHERE parent_session_id = ? AND expires_at > ?

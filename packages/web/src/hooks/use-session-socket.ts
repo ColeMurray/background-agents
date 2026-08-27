@@ -46,6 +46,8 @@ interface UseSessionSocketReturn {
   authError: string | null;
   connectionError: string | null;
   sessionState: SessionState | null;
+  /** Why the sandbox last failed, when the control plane reported a reason. */
+  sandboxError: string | null;
   messages: Message[];
   events: SandboxEvent[];
   participants: ParticipantPresence[];
@@ -187,9 +189,6 @@ export function useSessionSocket(
         console.log("WebSocket subscribed to session");
         pendingTextRef.current = null;
         void refreshSandboxAccess();
-        if (message.spawnError && message.session.sandboxStatus === "failed") {
-          console.error("Sandbox spawn error:", message.spawnError);
-        }
       } else if (message.type === "sandbox_access_changed") {
         void refreshSandboxAccess();
       } else if (message.type === "sandbox_error") {
@@ -410,6 +409,7 @@ export function useSessionSocket(
     authError: transport.authError,
     connectionError: transport.connectionError,
     sessionState,
+    sandboxError: state.sandboxError,
     messages: NO_MESSAGES,
     events: state.events,
     participants: state.participants,

@@ -18,12 +18,15 @@ export class McpServerValidationError extends Error {
   }
 }
 
+export class McpServerConflictError extends Error {}
+
 function generateId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
 interface McpServerRow {
   id: string;
+  revision: number;
   name: string;
   type: string;
   command: string | null;
@@ -56,7 +59,12 @@ function safeJsonParseCommand(raw: string | null): string[] | undefined {
 
 function safeJsonParseEnv(raw: string): Record<string, string> {
   try {
-    return JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
+    // JSON.parse accepts non-object documents ("null", numbers, strings);
+    // callers iterate keys, so anything but a plain object is "no env".
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
   } catch {
     return {};
   }
@@ -81,6 +89,7 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
   const hasCredentials = row.env !== "" && row.env !== "{}" && row.env !== "null";
   return {
     id: row.id,
+    revision: row.revision,
     name: row.name,
     type: row.type as "local" | "remote",
     command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
@@ -95,18 +104,22 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
 export class McpServerStore {
   constructor(
     private readonly db: SqlDatabase,
-    private readonly encryptionKey?: string
+    private readonly encryptionKey: string
   ) {}
 
   /** Empty dicts are stored as plaintext "{}" so rowToMetadata() can detect "no credentials". */
   private async encryptEnv(env: Record<string, string>): Promise<string> {
     const plain = JSON.stringify(env);
-    if (!this.encryptionKey || Object.keys(env).length === 0) return plain;
+    if (Object.keys(env).length === 0) return plain;
     return encryptToken(plain, this.encryptionKey);
   }
 
   private async decryptEnv(raw: string): Promise<Record<string, string>> {
-    if (!this.encryptionKey) return safeJsonParseEnv(raw);
+    // The write side stores an empty credential map as plaintext "{}" (see
+    // encryptEnv) — recognize the full credential-free sentinel set that
+    // rowToMetadata classifies ("", "{}", "null") before attempting a decrypt
+    // that is guaranteed to fail into the error path.
+    if (!raw || raw === "{}" || raw === "null") return {};
     try {
       const plain = await decryptToken(raw, this.encryptionKey);
       return safeJsonParseEnv(plain);
@@ -204,13 +217,17 @@ export class McpServerStore {
 
   async update(
     id: string,
-    patch: ValidatedUpdateMcpServerInput
+    patch: ValidatedUpdateMcpServerInput,
+    expectedRevision?: number
   ): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)
       .first<McpServerRow>();
     if (!row) return null;
+    if (expectedRevision !== undefined && row.revision !== expectedRevision) {
+      throw new McpServerConflictError("MCP server changed; reload and try again");
+    }
 
     const mergedType = patch.type ?? (row.type as "local" | "remote");
     if (mergedType === "local" && (patch.url !== undefined || patch.headers !== undefined)) {
@@ -250,11 +267,12 @@ export class McpServerStore {
     const now = Date.now();
 
     try {
-      await this.db
-        .prepare(
-          `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, enabled = ?, updated_at = ?
-           WHERE id = ?`
-        )
+      const statement = this.db.prepare(
+        `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, enabled = ?, updated_at = ?, revision = revision + 1
+         WHERE id = ? AND revision = COALESCE(?, revision)
+         RETURNING *`
+      );
+      const updated = await statement
         .bind(
           patch.name ?? row.name,
           mergedType,
@@ -268,9 +286,14 @@ export class McpServerStore {
             : row.repo_scope,
           patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : row.enabled,
           now,
-          id
+          id,
+          expectedRevision ?? null
         )
-        .run();
+        .first<McpServerRow>();
+      if (!updated) {
+        throw new McpServerConflictError("MCP server changed; reload and try again");
+      }
+      return rowToMetadata(updated);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw new McpServerValidationError(
@@ -279,12 +302,6 @@ export class McpServerStore {
       }
       throw err;
     }
-
-    const updated = await this.get(id);
-    if (!updated) {
-      throw new Error(`MCP server '${id}' not found after update — this should not happen`);
-    }
-    return updated;
   }
 
   async delete(id: string): Promise<boolean> {

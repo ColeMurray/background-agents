@@ -2,7 +2,7 @@
  * Type definitions for the Linear bot.
  */
 
-import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
 
 /**
@@ -13,7 +13,7 @@ export interface Env {
   LINEAR_KV: KVNamespace;
 
   // Service binding to control plane
-  CONTROL_PLANE: Fetcher;
+  CONTROL_PLANE: ControlPlaneFetcher;
 
   // Environment variables
   DEPLOYMENT_NAME: string;
@@ -32,7 +32,14 @@ export interface Env {
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
-  ANTHROPIC_API_KEY: string;
+  /**
+   * Classifier provider credentials. The deployment binds exactly the one
+   * `CLASSIFICATION_MODEL` selects, so each is optional on its own and the
+   * classifier guards the branch it needs.
+   */
+  ANTHROPIC_API_KEY?: string;
+  CLASSIFICATION_MODEL?: string; // Optional override; defaults to DEFAULT_CLASSIFICATION_MODEL
+  OPENAI_API_KEY?: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }
@@ -121,33 +128,6 @@ export const issueSessionSchema = z.object({
 });
 
 export type IssueSession = z.infer<typeof issueSessionSchema>;
-
-/**
- * Completion callback payload from control-plane.
- */
-export interface CompletionCallback {
-  sessionId: string;
-  messageId: string;
-  success: boolean;
-  error?: string;
-  timestamp: number;
-  signature: string;
-  context: LinearCallbackContext;
-}
-
-/**
- * Tool call callback payload from control-plane (ephemeral, best-effort).
- */
-export interface ToolCallCallback {
-  sessionId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  callId: string;
-  status?: string;
-  timestamp: number;
-  context: LinearCallbackContext;
-  signature: string;
-}
 
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 

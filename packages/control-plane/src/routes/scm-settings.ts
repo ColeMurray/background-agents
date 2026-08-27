@@ -13,6 +13,8 @@ import { createLogger } from "../logger";
 import {
   type Route,
   type RequestContext,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   parsePattern,
   json,
   error,
@@ -198,7 +200,7 @@ async function handleDeleteRepoSettings(
   }
 }
 
-export const scmSettingsRoutes: Route[] = [
+export const scmSettingsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
   { method: "GET", pattern: parsePattern("/scm-settings"), handler: handleGetGlobal },
   { method: "PUT", pattern: parsePattern("/scm-settings"), handler: handleSetGlobal },
   { method: "DELETE", pattern: parsePattern("/scm-settings"), handler: handleDeleteGlobal },
@@ -213,4 +215,4 @@ export const scmSettingsRoutes: Route[] = [
     pattern: parsePattern("/scm-settings/repos/:owner/:name"),
     handler: handleDeleteRepoSettings,
   },
-];
+]);

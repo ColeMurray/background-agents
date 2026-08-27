@@ -34,6 +34,11 @@ const NAV_ITEMS = [
     icon: ModelIcon,
   },
   {
+    id: "provider-accounts",
+    label: "Accounts",
+    icon: KeyIcon,
+  },
+  {
     id: "images",
     label: "Images",
     icon: BoxIcon,

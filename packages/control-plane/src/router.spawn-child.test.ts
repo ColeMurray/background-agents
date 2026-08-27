@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import {
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
@@ -45,6 +49,20 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     };
   };
 
+  const parentProviderAuth = [
+    {
+      provider: "openai" as const,
+      authMode: "provider_account" as const,
+      providerAccountId: "1".repeat(32),
+      selectionSource: "installation_default",
+    },
+    {
+      provider: "xai" as const,
+      authMode: "api_key" as const,
+      selectionSource: "fallback_api_key",
+    },
+  ];
+
   const spawnContext: TestSpawnContext = {
     repoOwner: "acme",
     repoName: "web-app",
@@ -77,6 +95,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       environmentId: "env_parent",
     }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
+    getCompleteProviderAuth: vi.fn().mockResolvedValue(parentProviderAuth),
     countTotalChildren: vi.fn().mockResolvedValue(0),
     acquireChildAdmissionLease: vi.fn().mockResolvedValue({
       token: "lease-token",
@@ -96,6 +115,55 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
 
+  it("copies the exact parent provider auth snapshot with immediate inheritance", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(spawnContext);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(201);
+    expect(store.getCompleteProviderAuth).toHaveBeenCalledWith(parentId);
+    expect(store.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerAuth: [
+          {
+            provider: "openai",
+            authMode: "provider_account",
+            providerAccountId: "1".repeat(32),
+            selectionSource: "installation_default",
+            inheritedFromSessionId: parentId,
+          },
+          {
+            provider: "xai",
+            authMode: "api_key",
+            selectionSource: "fallback_api_key",
+            inheritedFromSessionId: parentId,
+          },
+        ],
+      })
+    );
+  });
+
+  it("fails closed when the parent D1 provider auth snapshot is unavailable", async () => {
+    const store = makeStore();
+    store.getCompleteProviderAuth.mockRejectedValue(new Error("D1 unavailable"));
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(spawnContext);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Parent provider auth unavailable",
+    });
+    expect(store.create).not.toHaveBeenCalled();
+  });
+
   async function makeRequest(
     env: Record<string, unknown>,
     body: Record<string, unknown> = { title: "Child task", prompt: "Do the thing" }
@@ -106,7 +174,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         body: JSON.stringify(body),
         service: "linear-bot",
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
   }
 
@@ -462,7 +531,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
           model: "not-a-real-model",
         }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);
@@ -520,7 +590,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         service: "linear-bot",
         body: JSON.stringify({ title: "Child task" }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);
@@ -714,7 +785,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
           model: "",
         }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);

@@ -45,7 +45,7 @@ tenancy consistently across repositories, environments, sessions, secrets, integ
 | Storage          | D1 metadata, revisions, and text files for V1; design permits later R2 packages.         |
 | Delivery         | Sandbox-authenticated manifest endpoint; no skill content in environment variables.      |
 | Installation     | Atomically materialize into OpenCode's global skills directory before startup.           |
-| Conflicts        | Reject duplicate discovered skill names; do not depend on undocumented precedence.       |
+| Conflicts        | Prefer discovered skills and drop colliding managed entries with a warning.              |
 | Failure policy   | Fail sandbox startup if a selected manifest cannot be authenticated or installed.        |
 | Versioning       | Keep immutable revisions internally; defer history, diffs, tags, rollback, and Git sync. |
 | Access control   | All admitted users can read and modify skills in V1; preserve clear future ACL seams.    |
@@ -125,7 +125,8 @@ fresh boot and restore, not just copy new files with `dirs_exist_ok=True`.
 
 - Internal multi-team tenancy or role-based access control.
 - Public or cross-installation skill marketplaces.
-- Git-backed import, export, or bidirectional synchronization.
+- Git-backed export or bidirectional synchronization. (User-initiated Git import shipped after V1;
+  see Phase 4.)
 - User-facing version history, diffs, branches, tags, promotion channels, or rollback.
 - Binary assets or arbitrary archive upload.
 - Skill dependencies, package managers, hooks, MCP server creation, or secret declarations.
@@ -306,15 +307,89 @@ runtime:
 | Total bytes per revision          |          1 MiB |
 | Path length                       |      240 bytes |
 | Path depth below skill root       |    10 segments |
-| Managed skills per session        |             20 |
+| Managed skills per session        |      unbounded |
 | Total managed content per session |          5 MiB |
 
 Only valid UTF-8 text files are accepted. This supports Markdown, source code, scripts, JSON, YAML,
 and text templates while keeping D1 storage and JSON delivery bounded. Binary assets and archive
 upload move to content-addressed R2 packages in a later phase.
 
+A session's manifest is bounded by total content bytes, not by skill count. V1 also capped the count
+at 20; that was removed because assignments are additive and a global assignment applies to every
+session, so one per-session count limit gated the entire installation — exceeding it failed every
+session create and automation run rather than the one oversized session. Byte limits do not have
+that property. If manifest delivery becomes the bottleneck, change the transmission (paginate or
+stream the installation fetch, move file bodies to content-addressed storage) rather than
+reintroducing a count cap.
+
 The aggregate session limits are enforced by resolution preview and session creation. Resolution
 returns a specific error and never truncates a profile or silently drops skills.
+
+No single statement may bind a parameter per skill over an unbounded list. Such statements fail
+outright rather than degrading, and the count cap was previously masking them. Chunked reads still
+bind one parameter per skill within a chunk; what matters is that no one statement is handed the
+whole list. Prefer keying off an ID the database already holds — the session installation query
+filters `skill_revision_files` by a subquery on `session_skill_revisions`, so a wider manifest costs
+no additional parameters. Where the list genuinely originates outside the database — profile
+membership and skill assignments, both of which arrive in the request body — chunk by the engine's
+bound-parameter ceiling (`MAX_D1_QUERY_PARAMETERS`). A JSON-array parameter with `json_each` would
+also work on SQLite but is not portable to the second `SqlDatabase` engine.
+
+The same applies to aggregates on the read side, which are easier to miss because they fail on a
+byte ceiling rather than a parameter count. `SkillProfileStore.list` used to build a profile's whole
+membership into one `json_group_array` value, capped at 2 MB or roughly fifty thousand ids; nothing
+bounds profile width, and that ceiling was only out of reach because profile writes give out first
+at about 33,000 members. Making the write cheaper would have moved the write cliff past the read one
+and left profiles that could be saved and never loaded. It reads membership as its own query and
+groups in memory instead. When a limit is removed or a write is made cheaper, check what the read
+path was quietly relying on that limit to keep small.
+
+### Bounds that remain implicit
+
+Removing the count cap exposed three resources scaling with skill count rather than content. None
+was enforced, so each surfaced as an engine error rather than a validation message. What each cost
+and what it costs now:
+
+| Resource                     | Was                            | Now                                          | Cliff         |
+| ---------------------------- | ------------------------------ | -------------------------------------------- | ------------- |
+| Installation payload         | Whole manifest in one response | `MANAGED_SKILLS_PAGE_SIZE` per response      | none          |
+| Session manifest persistence | One INSERT per skill           | 10 `session_skill_revisions` rows per INSERT | 9,041 skills  |
+| Profile membership writes    | One INSERT per skill           | 50 `skill_profile_items` rows per INSERT     | 33,251 skills |
+
+The payload was the binding constraint at roughly 2,400 skills, assuming the worst realistic shape:
+`MAX_SKILL_FILES` near-empty files per skill, where roughly 134 bytes plus the path length of
+framing per file counts against the runtime's `MAX_MANAGED_SKILL_RESPONSE_BYTES` but contributes
+nothing to the 5 MiB content aggregate. Because resolution checks only content bytes, such a
+manifest was accepted and persisted, then failed closed at sandbox boot — the one case where an
+accepted manifest was not installable. That is a transport shape rather than a storage bound, so the
+runtime pages the fetch instead of resolution rejecting the manifest: a fixed number of skills per
+response keeps every response far below the ceiling however wide the manifest is, and the runtime
+writes each page into the staging tree as it arrives, so peak memory is one page rather than the
+whole installation. Duplicate names and the content aggregate accumulate across pages, because they
+are properties of the installation and not of a response.
+
+The two write paths are bounded by D1's 1,000 queries per Worker invocation. Both pack rows into
+multi-row `INSERT`s sized to the 100-parameter ceiling (`bulkInsertStatements`), which divides the
+statement count by rows-per-statement and keeps the write inside its caller's atomic `batch()`.
+Multi-row `VALUES` is standard SQL, so neither path needs an engine branch. `bindManifestCopy` is
+set-based (`INSERT … SELECT`) and stays fully count-independent.
+
+Packing lowers the constant; it does not remove the linear term, and the budget is spent by the
+whole invocation rather than by the write alone. The cliffs above are the minimum end-to-end cost
+for `N` skills, so any additional per-request work lowers them further:
+
+| Path           | Reads                                                   | Writes                                    | Total     |
+| -------------- | ------------------------------------------------------- | ----------------------------------------- | --------- |
+| Session create | 2 generation + 1 catalog + ⌈N/100⌉ assignment hydration | 1 session + 1 manifest + ⌈N/10⌉ revisions | 5 + 0.11N |
+| Profile create | ⌈N/100⌉ `validateSkillIds`                              | 1 profile + ⌈N/50⌉ items + 1 generation   | 2 + 0.03N |
+
+Session create excludes repository and provider-auth statements and assumes resolution does not
+retry; a generation change retries the read phase up to `MAX_CATALOG_READ_ATTEMPTS` times, and
+profile-mode selection adds two more reads. Profile create excludes authentication and routing.
+Making either genuinely count-independent needs a set-based bulk write behind the database boundary
+— `json_each`-style expansion of a single parameter — which the `SqlDatabase` port cannot express
+today because it is types-only and erased at build time, leaving no runtime dispatch point for an
+engine branch.
 
 Paths must be normalized relative POSIX paths. Reject absolute paths, empty segments, `.`, `..`,
 backslashes, NUL/control characters, duplicate normalized paths, symlinks, hard links, and reserved
@@ -365,8 +440,9 @@ project and global `.opencode/skills`, `.claude/skills`, and `.agents/skills` lo
 scan after multi-repository assembly, include bundled sources directly, and exclude the
 platform-owned managed destination because a snapshot may contain this session's previous complete
 tree. Reconcile that destination by manifest digest instead. If a selected managed skill has the
-same canonical name as another discovered skill, fail startup with a diagnostic naming both sources.
-Do not merge directories, overwrite files, or silently omit one skill.
+same canonical name as another discovered skill, keep the discovered skill, remove the managed entry
+from staging, and log a warning naming the managed skill and every discovered path. Continue
+installing all non-colliding managed skills without merging or overwriting directories.
 
 Repository-to-repository skill conflicts already predate this feature and remain governed by the
 current multi-repository assembly behavior. Normalizing that behavior is a separate change.
@@ -628,7 +704,7 @@ Add `GET /sessions/:id/skills` for authenticated human-readable provenance.
 Add a sandbox-authenticated endpoint:
 
 ```text
-GET /sessions/:id/sandbox-skills
+GET /sessions/:id/sandbox-skills[?limit=<1..200>&cursor=<position>]
 ```
 
 The session-specific sandbox bearer token, validated by the Session Durable Object, must
@@ -653,9 +729,21 @@ narrow installation DTO containing the pinned manifest digest and bounded UTF-8 
         }
       ]
     }
-  ]
+  ],
+  "nextCursor": null
 }
 ```
+
+`limit` is optional. Without it the response is the whole installation and `nextCursor` is null,
+which is the only shape sandbox runtimes predating paging understand — they ignore the field, so
+this route must keep serving unpaged requests for as long as older snapshots can be restored. With
+it, the response holds at most `limit` skills and `nextCursor` carries the last position returned,
+or null at the end. Pinned revisions are immutable, so position is a stable cursor and every page of
+one installation reports the same `manifestSha256`; a runtime must reject a page whose digest
+differs from the first page's.
+
+Only an unpaged response carries an `ETag`. The digest covers the whole manifest, so it cannot
+identify a page.
 
 All integer fields in digest encodings are unsigned big-endian. `str(value)` means a 32-bit byte
 length followed by the exact UTF-8 bytes. A SHA-256 field contributes its raw 32 bytes, not hex.
@@ -676,7 +764,8 @@ those six values with `str`, using the empty string for fields not applicable to
 The control plane owns the canonical provenance digest. The sandbox independently verifies every
 delivered file's path, size, content hash, permissions, and generated `SKILL.md` identity.
 Selection, revision metadata, and assignment provenance remain available from
-`GET /sessions/:id/skills`. Return `ETag: "<manifestSha256>"` for diagnostics and future caching.
+`GET /sessions/:id/skills`. The unpaged `ETag` described above exists for diagnostics and future
+caching.
 
 The response is intentionally not placed in `SESSION_CONFIG`, environment variables, or the Modal
 create request. Content can exceed environment limits, executable instructions should not appear in
@@ -694,7 +783,7 @@ control-plane URL, session ID, and sandbox authentication token.
 2. Request the pinned session manifest from the control plane.
 3. Revalidate schema, names, paths, counts, sizes, UTF-8, and every file SHA-256 hash.
 4. Scan all skill locations discovered by the pinned OpenCode version except the managed destination
-   and reject selected-name collisions.
+   and drop colliding managed entries with a structured warning.
 5. Build the complete managed tree in a temporary directory on the same filesystem.
 6. Set executable bits only where the manifest permits; remove other write/execute bits as
    appropriate.
@@ -779,7 +868,7 @@ explicit because mutating their skills in place would break reproducibility.
 | Sandbox download auth failure         | Fail startup; do not start OpenCode without selected skills.   |
 | Control-plane timeout                 | Retry with bounded exponential backoff, then fail startup.     |
 | Manifest or file hash mismatch        | Delete staging content and fail startup.                       |
-| Name collision                        | Fail startup with both sources and remediation guidance.       |
+| Name collision                        | Drop the managed entry, warn with discovered paths, continue.  |
 | Snapshot contains stale managed files | Replace the complete managed directory before startup.         |
 
 Use a named TypeScript timeout constant in milliseconds and a Python timeout constant in seconds.
@@ -850,7 +939,7 @@ Build `@open-inspect/shared` before dependent packages.
 - Atomic replacement and cleanup after an interrupted staging write.
 - Stale files disappear on snapshot restore.
 - A matching installed digest can take the validated fast path.
-- Managed/repository and managed/bundled name collisions fail clearly.
+- Managed/repository and managed/bundled name collisions drop only the managed entries and warn.
 - Download retry, timeout, and authentication behavior.
 - Python and TypeScript canonical digest fixtures produce identical values.
 
@@ -893,13 +982,16 @@ Build `@open-inspect/shared` before dependent packages.
 
 - Add the sandbox endpoint and runtime materializer across every supported provider.
 - Enable for internal sessions first, then opt-in installations, then by default.
-- Monitor boot failure rate, download latency, collision errors, and bytes per manifest.
+- Monitor boot failure rate, download latency, collision warnings, and bytes per manifest.
 
 ### Phase 4: Governance and distribution
 
 - Expose revision history, diff, rollback, and immutable release labels.
 - Add draft/review/publish/promotion lifecycle and evaluations.
-- Add Git import/export with source URL, commit SHA, and content digest provenance.
+- Add Git import/export with source, commit SHA, and content digest provenance. User-initiated
+  import shipped, recording provider, repository identity, requested and resolved ref, commit SHA,
+  subdirectory, and a digest of the imported bytes; export and bulk import of skill-collection
+  repositories remain open.
 - Move large or binary packages to a dedicated R2 bucket.
 - Add shared profiles, real team ownership, and operation-specific ACLs.
 - Add signed packages, approval gates, emergency revocation, and staged rollout channels.
@@ -956,11 +1048,12 @@ This dirties or requires excluding every checkout, duplicates content in multi-r
 and does not fit repository-less sessions. OpenCode's global skill location is the appropriate
 managed location.
 
-### Let nearest or latest source win name conflicts
+### Let installation order choose name conflicts
 
 OpenCode does not document a precedence rule for all discovered locations. Silent overwrite can
-select different instructions than the UI preview and can merge companion files. Rejecting
-collisions is safer and diagnosable.
+select different instructions than the UI preview and can merge companion files. Explicitly keeping
+the discovered skill, dropping the managed entry, and logging the decision is deterministic and
+diagnosable.
 
 ### Make profiles copied bundles
 
@@ -1002,10 +1095,10 @@ A session must always store the resolved revision ID and digest, never a moving 
 ## Product Validation
 
 V1 deliberately chooses admitted-user editing, personal-only profiles, All for unconfigured bot and
-automation sessions, bounded UTF-8 text packages, startup failure on name collision, and immediate
-publication of each successful save. Deleted revisions are retained for at least as long as any
-referencing session. Authorship survives user offboarding and does not make the skill part of the
-departing user's data.
+automation sessions, bounded UTF-8 text packages, discovered-skill precedence on name collision, and
+immediate publication of each successful save. Deleted revisions are retained for at least as long
+as any referencing session. Authorship survives user offboarding and does not make the skill part of
+the departing user's data.
 
 Before implementation, customer discovery should validate that the proposed 1 MiB per-skill and 5
 MiB per-session limits cover initial use cases and that immediate publication is acceptable. If

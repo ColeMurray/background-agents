@@ -11,7 +11,7 @@ import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
 import { SidebarIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
 
 interface SidebarContextValue {
@@ -43,14 +43,15 @@ interface SidebarLayoutProps {
 
 export function SidebarToggleButton({ label = "Open sidebar" }: { label?: string }) {
   const { toggle } = useSidebarContext();
+  const { labels } = useKeyboardShortcuts();
 
   return (
     <Button
       variant="ghost"
       size="icon"
       onClick={toggle}
-      title={`${label} (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-      aria-label={`${label} (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+      title={`${label} (${labels["toggle-sidebar"]})`}
+      aria-label={`${label} (${labels["toggle-sidebar"]})`}
     >
       <SidebarIcon className="w-4 h-4" />
     </Button>

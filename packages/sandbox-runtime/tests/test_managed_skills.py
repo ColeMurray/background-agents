@@ -159,22 +159,43 @@ async def test_materializer_replaces_destination(tmp_path):
     assert (destination / "managed" / "SKILL.md").stat().st_mode & 0o777 == 0o400
 
 
-async def test_materializer_rejects_bundled_name_collision(tmp_path):
+async def test_materializer_drops_only_managed_skills_that_collide_with_discovered_skills(tmp_path):
     document = _installation(name="conflict")
+    document["skills"].append(_installation(name="alias")["skills"][0])
+    document["skills"].append(_installation(name="bundled")["skills"][0])
+    document["skills"].append(_installation(name="kept")["skills"][0])
     client = MagicMock()
     client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
-    bundled = tmp_path / "bundled" / "conflict"
-    bundled.mkdir(parents=True)
-    (bundled / "SKILL.md").write_text("---\nname: conflict\n---\n")
+    repository = tmp_path / "repository"
+    discovered = repository / ".claude" / "skills" / "conflict"
+    discovered.mkdir(parents=True)
+    (discovered / "SKILL.md").write_text("---\nname: conflict\n---\n")
+    alias_discovered = repository / ".agents" / "skills" / "different-directory"
+    alias_discovered.mkdir(parents=True)
+    (alias_discovered / "SKILL.md").write_text("---\nname: alias\n---\n")
+    bundled_discovered = tmp_path / "bundled" / "bundled"
+    bundled_discovered.mkdir(parents=True)
+    (bundled_discovered / "SKILL.md").write_text("---\nname: bundled\n---\n")
+    destination = tmp_path / "global" / "skills"
+    log = MagicMock()
     materializer = ManagedSkillsMaterializer(
         client,
-        tmp_path / "global" / "skills",
-        MagicMock(),
+        destination,
+        log,
         bundled_skills_path=tmp_path / "bundled",
     )
 
-    with pytest.raises(ManagedSkillsError, match="collides"):
-        await materializer.materialize((), tmp_path / "workspace")
+    await materializer.materialize((MagicMock(path=repository),), tmp_path / "workspace")
+
+    assert sorted(entry.name for entry in destination.iterdir()) == ["kept"]
+    log.warn.assert_called_once_with(
+        "managed_skills.collisions_dropped",
+        collisions=[
+            {"name": "alias", "paths": [str(alias_discovered)]},
+            {"name": "bundled", "paths": [str(bundled_discovered)]},
+            {"name": "conflict", "paths": [str(discovered)]},
+        ],
+    )
 
 
 async def test_materializer_ignores_invalid_utf8_during_collision_scan(tmp_path):
@@ -195,6 +216,156 @@ async def test_materializer_ignores_invalid_utf8_during_collision_scan(tmp_path)
     await materializer.materialize((), tmp_path / "workspace")
 
     assert (destination / "managed" / "SKILL.md").exists()
+
+
+def _page(names, *, next_cursor=None, manifest_sha256="a" * 64):
+    """A response carrying `names` as one page of a wider installation."""
+    document = {
+        "schemaVersion": 1,
+        "manifestSha256": manifest_sha256,
+        "skills": [_installation(name=name)["skills"][0] for name in names],
+        "nextCursor": next_cursor,
+    }
+    return json.dumps(document).encode()
+
+
+async def test_materializer_installs_every_page(tmp_path):
+    pages = [
+        _page(["alpha", "beta"], next_cursor="1"),
+        _page(["gamma"], next_cursor="2"),
+        _page(["delta"]),
+    ]
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(side_effect=pages)
+    destination = tmp_path / "global" / "skills"
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert sorted(entry.name for entry in destination.iterdir()) == [
+        "alpha",
+        "beta",
+        "delta",
+        "gamma",
+    ]
+    # Every request must carry a page size, and each one resumes from the
+    # previous response's cursor.
+    assert [call.kwargs for call in client.fetch_installation.await_args_list] == [
+        {"cursor": None, "limit": 50},
+        {"cursor": "1", "limit": 50},
+        {"cursor": "2", "limit": 50},
+    ]
+
+
+async def test_materializer_keeps_previous_install_when_a_later_page_fails(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=[
+            _page(["alpha"], next_cursor="1"),
+            ManagedSkillsError("boom", code="fetch_failed"),
+        ]
+    )
+    destination = tmp_path / "global" / "skills"
+    destination.mkdir(parents=True)
+    (destination / "previous").mkdir()
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="boom"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+    # A partial fetch must never be swapped in: the tree is all-or-nothing.
+    assert [entry.name for entry in destination.iterdir()] == ["previous"]
+    assert not (tmp_path / "global" / ".managed-skills-staging").exists()
+
+
+async def test_materializer_rejects_pages_from_different_manifests(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=[
+            _page(["alpha"], next_cursor="1"),
+            _page(["beta"], manifest_sha256="b" * 64),
+        ]
+    )
+    materializer = ManagedSkillsMaterializer(
+        client,
+        tmp_path / "global" / "skills",
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="different manifests"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+
+async def test_materializer_rejects_duplicate_names_across_pages(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=[_page(["alpha"], next_cursor="1"), _page(["alpha"])]
+    )
+    materializer = ManagedSkillsMaterializer(
+        client,
+        tmp_path / "global" / "skills",
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="duplicate managed skill name"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+
+async def test_materializer_rejects_an_empty_page_that_claims_more(tmp_path):
+    """A page promising more must deliver something, or traversal cannot terminate."""
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(
+        side_effect=lambda **_: _page([], next_cursor="always-more")
+    )
+    materializer = ManagedSkillsMaterializer(
+        client,
+        tmp_path / "global" / "skills",
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    with pytest.raises(ManagedSkillsError, match="empty but claims more"):
+        await materializer.materialize((), tmp_path / "workspace")
+
+
+async def test_materializer_traversal_is_not_capped_by_a_page_count(tmp_path):
+    """Installation width is bounded by aggregate content, never by a page count."""
+    total = 1010
+    pages = [
+        _page([f"skill-{index:04d}"], next_cursor=None if index == total - 1 else str(index))
+        for index in range(total)
+    ]
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(side_effect=pages)
+    destination = tmp_path / "global" / "skills"
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert len(list(destination.iterdir())) == total
+    assert client.fetch_installation.await_count == total
+
+
+def test_validate_installation_rejects_a_page_read_as_a_whole():
+    with pytest.raises(ManagedSkillsError, match="paged"):
+        validate_installation(_page(["alpha"], next_cursor="1"))
 
 
 def test_materializer_repairs_interrupted_swap(tmp_path):

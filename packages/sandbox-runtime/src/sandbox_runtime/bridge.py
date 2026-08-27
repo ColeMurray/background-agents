@@ -287,10 +287,15 @@ class AgentBridge:
 
     def _build_ready_event(self) -> dict[str, Any]:
         repositories = load_repo_manifest(self.repo_manifest_path)
+        # The image bakes SANDBOX_VERSION; reporting it lets the control plane
+        # stamp snapshots with the runtime that produced them and retire the
+        # ones a later compatibility floor rules out.
+        runtime_version = os.environ.get("SANDBOX_VERSION", "")
         return {
             "type": "ready",
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": self.opencode_session_id,
+            **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
                     "position": position,
@@ -345,7 +350,9 @@ class AgentBridge:
                 except Exception as e:
                     error_str = str(e)
                     # Check for fatal HTTP errors that shouldn't trigger retry
-                    if self._is_fatal_connection_error(error_str):
+                    if (
+                        isinstance(e, GitSigningError) and not e.retryable
+                    ) or self._is_fatal_connection_error(error_str):
                         run_outcome = "fatal_error"
                         self.shutdown_event.set()
                         break

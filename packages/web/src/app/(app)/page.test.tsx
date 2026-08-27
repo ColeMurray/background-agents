@@ -2,11 +2,17 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import {
+  DEFAULT_KEYBOARD_SHORTCUTS,
+  type KeyboardShortcutPreferences,
+} from "@open-inspect/shared/types/keyboard-shortcuts";
 import Home from "./page";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { isUnarchivedSessionListKey } from "@/lib/session-list";
 
 expect.extend(matchers);
 
@@ -38,6 +44,43 @@ const mocks = vi.hoisted(() => ({
       baseBranch: string;
     }>;
   }>,
+  enabledModelsValue: [] as string[],
+  enabledModelOptionsValue: [] as Array<{
+    category: string;
+    models: Array<{ id: string; name: string; description: string }>;
+  }>,
+  providerAccountsValue: [] as Array<{
+    id: string;
+    provider: "openai" | "xai";
+    displayName: string;
+    externalAccountId: string | null;
+    status: "active";
+    createdBy: null;
+    updatedBy: null;
+    lastVerifiedAt: null;
+    lastUsedAt: null;
+    createdAt: number;
+    updatedAt: number;
+    archivedAt: null;
+  }>,
+  providerAccountsLoadingValue: false,
+  skillPreview: {
+    skills: [
+      {
+        skillId: "skill-1",
+        revisionId: "revision-1",
+        name: "review-pr",
+        description: "Review a pull request",
+        revisionNumber: 1,
+        revisionSha256: "abc",
+        totalBytes: 10,
+        assignmentSources: [],
+      },
+    ],
+    totalBytes: 10,
+    ignoredProfileSkillIds: [],
+  },
+  keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
 }));
 
 const repo = {
@@ -76,6 +119,14 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }));
 
+vi.mock("@/components/model-reasoning-selector", () => ({
+  ModelReasoningSelector: ({ disabled }: { disabled?: boolean }) => (
+    <button type="button" disabled={disabled} aria-label="Model and effort">
+      Model and effort
+    </button>
+  ),
+}));
+
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: mocks.reposValue, loading: mocks.loadingReposValue }),
 }));
@@ -86,14 +137,43 @@ vi.mock("@/hooks/use-branches", () => ({
 
 vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({
-    enabledModels: [DEFAULT_MODEL],
-    enabledModelOptions: [
-      {
-        category: "Anthropic",
-        models: [{ id: DEFAULT_MODEL, name: "Claude Sonnet 4.6", description: "" }],
-      },
-    ],
+    enabledModels: mocks.enabledModelsValue,
+    enabledModelOptions: mocks.enabledModelOptionsValue,
     loading: false,
+  }),
+}));
+
+vi.mock("@/hooks/use-keyboard-shortcuts", () => ({
+  useKeyboardShortcuts: () => ({
+    shortcuts: mocks.keyboardShortcuts,
+    labels: {
+      "send-prompt":
+        mocks.keyboardShortcuts["send-prompt"].code === "KeyJ" ? "Alt+J" : "Cmd/Ctrl+Enter",
+      "open-command-menu": "Cmd/Ctrl+K",
+      "new-session": "Cmd/Ctrl+Shift+O",
+      "toggle-sidebar": "Cmd/Ctrl+/",
+    },
+  }),
+}));
+
+vi.mock("@/hooks/use-provider-accounts", () => ({
+  useProviderAccounts: () => ({
+    providers: [],
+    accounts: mocks.providerAccountsValue,
+    defaults: [],
+    loading: mocks.providerAccountsLoadingValue,
+    error: undefined,
+    refresh: vi.fn(),
+  }),
+}));
+
+vi.mock("@/hooks/use-managed-skills", () => ({
+  useSkillProfiles: () => ({ profiles: [], loading: false }),
+  useSkillResolutionPreview: () => ({
+    preview: mocks.skillPreview,
+    loading: false,
+    error: undefined,
+    suggestions: { status: "ready", skills: mocks.skillPreview.skills },
   }),
 }));
 
@@ -106,6 +186,16 @@ beforeEach(() => {
   mocks.loadingReposValue = false;
   mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
+  mocks.enabledModelsValue = [DEFAULT_MODEL];
+  mocks.enabledModelOptionsValue = [
+    {
+      category: "Anthropic",
+      models: [{ id: DEFAULT_MODEL, name: "Claude Sonnet 4.6", description: "" }],
+    },
+  ];
+  mocks.providerAccountsValue = [];
+  mocks.providerAccountsLoadingValue = false;
+  mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -144,6 +234,36 @@ describe("Home", () => {
       "autocomplete",
       "off"
     );
+  });
+
+  it("submits with the configured prompt shortcut", async () => {
+    mocks.keyboardShortcuts = {
+      ...DEFAULT_KEYBOARD_SHORTCUTS,
+      "send-prompt": { code: "KeyJ", primary: false, alt: true, shift: false },
+    };
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    const promptCalls = () =>
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/prompt")).length;
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(promptCalls()).toBe(0);
+    fireEvent.keyDown(input, { key: "j", code: "KeyJ", altKey: true });
+    await waitFor(() => expect(promptCalls()).toBe(1));
+  });
+
+  it("completes skills from the current resolution preview", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+
+    await user.click(input);
+    await screen.findByText("(1)");
+    await user.type(input, "$rev");
+    await user.keyboard("{Enter}");
+
+    expect(input).toHaveValue("$review-pr ");
   });
 
   it("keeps the attachment control anchored while the sandbox warms", async () => {
@@ -211,6 +331,8 @@ describe("Home", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(mocks.mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
+    expect(mocks.mutateMock).toHaveBeenCalledWith(isSessionInboxKey);
     expect(sessionCreateBody()).toMatchObject({
       repoOwner: null,
       repoName: null,
@@ -347,6 +469,91 @@ describe("Home", () => {
     expect(sessionCreateBody()).toMatchObject({ environmentId: "env-1" });
   });
 
+  it("persists provider authentication and restores it on the next visit", async () => {
+    const openAiModel = "openai/gpt-5.4";
+    const accountId = "a".repeat(32);
+    mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
+    mocks.enabledModelOptionsValue.push({
+      category: "OpenAI",
+      models: [{ id: openAiModel, name: "GPT-5.4", description: "" }],
+    });
+    mocks.providerAccountsValue = [
+      {
+        id: accountId,
+        provider: "openai",
+        displayName: "Team ChatGPT",
+        externalAccountId: "acct_public",
+        status: "active",
+        createdBy: null,
+        updatedBy: null,
+        lastVerifiedAt: null,
+        lastUsedAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+        archivedAt: null,
+      },
+    ];
+    localStorage.setItem("open-inspect-last-selected-model", openAiModel);
+    const first = render(<Home />);
+
+    const authenticationTrigger = await screen.findByRole("button", {
+      name: /^OpenAI authentication options/,
+    });
+    const skillTrigger = screen.getByRole("button", { name: /all skills/i });
+    expect(
+      skillTrigger.compareDocumentPosition(authenticationTrigger) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    fireEvent.pointerDown(authenticationTrigger, { button: 0, ctrlKey: false });
+    const authenticationMenu = await screen.findByRole("menuitem", {
+      name: "OpenAI authentication",
+    });
+    authenticationMenu.focus();
+    fireEvent.keyDown(authenticationMenu, { key: "ArrowRight" });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Team ChatGPT" }));
+
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe(
+      JSON.stringify({ openai: { mode: "provider_account", accountId } })
+    );
+
+    first.unmount();
+    render(<Home />);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: /^OpenAI authentication options/ });
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(sessionCreateBody()).toMatchObject({
+      model: openAiModel,
+      providerSelections: { openai: { mode: "provider_account", accountId } },
+    });
+  });
+
+  it("waits for provider accounts and removes a stale stored selection", async () => {
+    const staleAccountId = "b".repeat(32);
+    localStorage.setItem(
+      "open-inspect-last-provider-selections",
+      JSON.stringify({ xai: { mode: "provider_account", accountId: staleAccountId } })
+    );
+    mocks.providerAccountsLoadingValue = true;
+    const user = userEvent.setup();
+    const view = render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    const send = screen.getByRole("button", { name: /send/i });
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith("/api/sessions", expect.anything());
+    expect(screen.queryByText("Failed to create session")).not.toBeInTheDocument();
+
+    mocks.providerAccountsLoadingValue = false;
+    view.rerender(<Home />);
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(sessionCreateBody()).toMatchObject({ providerSelections: {} }));
+    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe("{}");
+  });
+
   it("waits for environments to load before restoring a stored environment", async () => {
     localStorage.setItem("open-inspect-last-selected-repo", "env:env-1");
     mocks.environmentsLoadingValue = true;
@@ -367,6 +574,24 @@ describe("Home", () => {
     render(<Home />);
 
     await screen.findByRole("button", { name: /background-agents/i });
+  });
+
+  it("shows the repository and branch above the composer", async () => {
+    render(<Home />);
+
+    const repository = await screen.findByRole("button", { name: /background-agents/i });
+    const branch = await screen.findByText("main");
+    const composer = screen.getByPlaceholderText("What do you want to build?");
+    expect(
+      repository.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      branch.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(repository.querySelectorAll("svg")).toHaveLength(1);
+    expect(branch.closest("button")?.querySelectorAll("svg")).toHaveLength(1);
+    expect(branch).toHaveClass("max-w-[9rem]", "truncate");
+    expect(screen.queryByText("build agent")).not.toBeInTheDocument();
   });
 
   it("falls back to the repo default on a malformed stored value", async () => {

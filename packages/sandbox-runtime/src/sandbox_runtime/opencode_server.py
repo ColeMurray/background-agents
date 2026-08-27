@@ -506,12 +506,18 @@ class OpenCodeServer:
             ("OPENAI_OAUTH_MANAGED", "codex-auth-plugin.js", "openai_oauth.plugin_deployed"),
             ("XAI_OAUTH_MANAGED", "xai-auth-plugin.js", "xai_oauth.plugin_deployed"),
         )
+        broker_client_deployed = False
         for marker, filename, log_event in managed_plugins:
             plugin_source = Path(f"/app/sandbox_runtime/plugins/{filename}")
             if not plugin_source.exists() or not os.environ.get(marker):
                 continue
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
+            if not broker_client_deployed:
+                broker_client = Path("/app/sandbox_runtime/plugins/provider-token-broker.js")
+                shutil.copy(broker_client, plugin_dir / broker_client.name)
+                installed_runtime_paths.add(f".opencode/plugins/{broker_client.name}")
+                broker_client_deployed = True
             shutil.copy(plugin_source, plugin_dir / filename)
             installed_runtime_paths.add(f".opencode/plugins/{filename}")
             self.log.info(log_event)

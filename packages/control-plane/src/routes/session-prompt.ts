@@ -21,7 +21,13 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, parsePattern, type Route } from "./shared";
+import {
+  defineRoutes,
+  error,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
@@ -152,24 +158,29 @@ async function handleSessionPrompt(
   });
 
   const store = new SessionIndexStore(ctx.db);
-  ctx.executionCtx?.waitUntil(
-    store.touchUpdatedAt(sessionId).catch((error) => {
-      logger.error("session_index.touch_updated_at.background_error", {
-        session_id: sessionId,
-        trace_id: ctx.trace_id,
-        request_id: ctx.request_id,
-        error,
-      });
-    })
+  ctx.executionCtx.submit(
+    () =>
+      store.touchUpdatedAt(sessionId).catch((error) => {
+        logger.error("session_index.touch_updated_at.background_error", {
+          session_id: sessionId,
+          trace_id: ctx.trace_id,
+          request_id: ctx.request_id,
+          error,
+        });
+      }),
+    {
+      name: "session_index.touch_updated_at",
+      context: { session_id: sessionId, trace_id: ctx.trace_id, request_id: ctx.request_id },
+    }
   );
 
   return response;
 }
 
-export const sessionPromptRoutes: Route[] = [
+export const sessionPromptRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/prompt"),
     handler: handleSessionPrompt,
   }),
-];
+]);

@@ -1,27 +1,36 @@
-import useSWR from "swr";
+import useSWR, { mutate as mutateSWR } from "swr";
 import { z } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   listSkillProfilesResponseSchema,
   listSkillsResponseSchema,
+  reimportSkillResponseSchema,
+  SKILL_LIST_PAGE_SIZE,
+  skillImportPreviewResponseSchema,
   skillProfileResponseSchema,
   skillResolutionPreviewResponseSchema,
   skillResponseSchema,
 } from "@open-inspect/shared/types/skills";
 import type {
   CreateSkillInput,
+  ImportSkillInput,
+  ReimportSkillInput,
   ReplaceSkillContentAndAssignmentsInput,
   SetSkillEnabledInput,
   Skill,
   SkillContentInput,
+  SkillImportPreviewInput,
+  SkillImportPreviewResponse,
   SkillProfile,
+  SessionSkillSelection,
 } from "@open-inspect/shared/types/skills";
 import type { skillResolutionPreviewInputSchema } from "@open-inspect/shared/types/skills";
+import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 
 export type SkillResolutionPreviewInput = z.infer<typeof skillResolutionPreviewInputSchema>;
 
-type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
+export type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
 
 const skillContentPreviewSchema = z.strictObject({
   skillMarkdown: z.string(),
@@ -35,6 +44,38 @@ const errorResponseSchema = z.object({ error: z.string() });
 
 const SKILLS_KEY = "/api/skills";
 const SKILL_PROFILES_KEY = "/api/skill-profiles";
+export const SKILL_CATALOG_PAGE_SIZE = 25;
+
+function skillCatalogPageKey(cursor: string | null): BrowserApiPath {
+  const searchParams = new URLSearchParams({ limit: String(SKILL_CATALOG_PAGE_SIZE) });
+  if (cursor) searchParams.set("cursor", cursor);
+  return `${SKILLS_KEY}?${searchParams.toString()}`;
+}
+
+async function fetchSkillCatalog(): Promise<z.infer<typeof listSkillsResponseSchema>["skills"]> {
+  const skills: z.infer<typeof listSkillsResponseSchema>["skills"] = [];
+  let cursor: string | null = null;
+  do {
+    const searchParams = new URLSearchParams({ limit: String(SKILL_LIST_PAGE_SIZE) });
+    if (cursor) searchParams.set("cursor", cursor);
+    const page = await validatedFetcher(
+      `${SKILLS_KEY}?${searchParams.toString()}`,
+      listSkillsResponseSchema
+    );
+    skills.push(...page.skills);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return skills;
+}
+
+/**
+ * IDs are opaque and reach the BFF as one path segment. browserApiFetch sends
+ * the path as written, so an ID containing "/" has to be encoded here or it
+ * silently addresses a different route.
+ */
+function pathSegment(id: string): string {
+  return encodeURIComponent(id);
+}
 
 async function validatedFetcher<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
   const response = await browserApiFetch(path);
@@ -61,21 +102,40 @@ async function apiRequest<T>(
 
 export function useSkills() {
   const { data: session, status } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR(session ? SKILLS_KEY : null, (path) =>
-    validatedFetcher(path, listSkillsResponseSchema)
-  );
+  const { data, isLoading, error, mutate } = useSWR(session ? SKILLS_KEY : null, fetchSkillCatalog);
   return {
-    skills: data?.skills ?? [],
+    skills: data ?? [],
     loading: status === "loading" || isLoading,
     error,
     mutate,
   };
 }
 
+export function useSkillCatalogPage(cursor: string | null) {
+  const { data: session, status } = useAuthSession();
+  const { data, isLoading, error } = useSWR(session ? skillCatalogPageKey(cursor) : null, (path) =>
+    validatedFetcher(path, listSkillsResponseSchema)
+  );
+  return {
+    skills: data?.skills ?? [],
+    hasMore: data?.hasMore ?? false,
+    nextCursor: data?.nextCursor ?? null,
+    loading: status === "loading" || isLoading,
+    error,
+  };
+}
+
+export async function revalidateSkillCatalogPage(cursor: string | null): Promise<void> {
+  await Promise.all([
+    mutateSWR(SKILLS_KEY, undefined, { revalidate: false }),
+    mutateSWR(skillCatalogPageKey(cursor)),
+  ]);
+}
+
 export function useSkill(id: string | null) {
   const { data: session } = useAuthSession();
   const { data, isLoading, error, mutate } = useSWR(
-    session && id ? (`${SKILLS_KEY}/${id}` as const) : null,
+    session && id ? (`${SKILLS_KEY}/${pathSegment(id)}` as const) : null,
     (path) => validatedFetcher(path, skillResponseSchema)
   );
   return { skill: data?.skill, loading: isLoading, error, mutate };
@@ -105,7 +165,7 @@ export async function createSkill(input: CreateSkillInput): Promise<Skill> {
 
 export async function setSkillEnabled(id: string, input: SetSkillEnabledInput): Promise<Skill> {
   return (
-    await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {
+    await apiRequest(`${SKILLS_KEY}/${pathSegment(id)}`, skillResponseSchema, {
       method: "PATCH",
       body: JSON.stringify(input),
     })
@@ -118,7 +178,7 @@ export async function replaceSkillContentAndAssignments(
   input: ReplaceSkillContentAndAssignmentsInput
 ): Promise<Skill> {
   return (
-    await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {
+    await apiRequest(`${SKILLS_KEY}/${pathSegment(id)}`, skillResponseSchema, {
       method: "PUT",
       headers: { "If-Match": revisionId },
       body: JSON.stringify(input),
@@ -136,8 +196,49 @@ export async function previewSkill(
   });
 }
 
+export async function previewSkillImport(
+  input: SkillImportPreviewInput
+): Promise<SkillImportPreviewResponse> {
+  return apiRequest(`${SKILLS_KEY}/import/preview`, skillImportPreviewResponseSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function importSkill(input: ImportSkillInput): Promise<Skill> {
+  return (
+    await apiRequest(`${SKILLS_KEY}/import`, skillResponseSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  ).skill;
+}
+
+export async function previewSkillReimport(
+  id: string,
+  ref: string | null
+): Promise<SkillImportPreviewResponse> {
+  return apiRequest(
+    `${SKILLS_KEY}/${pathSegment(id)}/reimport/preview`,
+    skillImportPreviewResponseSchema,
+    { method: "POST", body: JSON.stringify({ ref }) }
+  );
+}
+
+export async function reimportSkill(
+  id: string,
+  revisionId: string,
+  input: ReimportSkillInput
+): Promise<{ skill: Skill; revisionCreated: boolean }> {
+  return apiRequest(`${SKILLS_KEY}/${pathSegment(id)}/reimport`, reimportSkillResponseSchema, {
+    method: "POST",
+    headers: { "If-Match": revisionId },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function deleteSkill(id: string): Promise<void> {
-  await apiRequest(`${SKILLS_KEY}/${id}`, okResponseSchema, { method: "DELETE" });
+  await apiRequest(`${SKILLS_KEY}/${pathSegment(id)}`, okResponseSchema, { method: "DELETE" });
 }
 
 export async function createSkillProfile(input: {
@@ -157,7 +258,7 @@ export async function updateSkillProfile(
   input: { name?: string; skillIds?: string[] }
 ): Promise<SkillProfile> {
   return (
-    await apiRequest(`${SKILL_PROFILES_KEY}/${id}`, skillProfileResponseSchema, {
+    await apiRequest(`${SKILL_PROFILES_KEY}/${pathSegment(id)}`, skillProfileResponseSchema, {
       method: "PATCH",
       body: JSON.stringify(input),
     })
@@ -165,7 +266,9 @@ export async function updateSkillProfile(
 }
 
 export async function deleteSkillProfile(id: string): Promise<void> {
-  await apiRequest(`${SKILL_PROFILES_KEY}/${id}`, okResponseSchema, { method: "DELETE" });
+  await apiRequest(`${SKILL_PROFILES_KEY}/${pathSegment(id)}`, okResponseSchema, {
+    method: "DELETE",
+  });
 }
 
 export async function resolveSkillPreview(
@@ -177,4 +280,21 @@ export async function resolveSkillPreview(
     body: JSON.stringify(input),
     signal,
   });
+}
+
+export function useSkillResolutionPreview(
+  target: Omit<SkillResolutionPreviewInput, "selection"> | null,
+  selection: SessionSkillSelection
+) {
+  const { data, isLoading, error } = useSWR(
+    target ? (["skill-resolution-preview", target, selection] as const) : null,
+    ([, currentTarget, currentSelection]) =>
+      resolveSkillPreview({ ...currentTarget, selection: currentSelection })
+  );
+  const suggestions: PromptSkillSuggestionSource = isLoading
+    ? { status: "loading" }
+    : error
+      ? { status: "error" }
+      : { status: "ready", skills: data?.skills ?? [] };
+  return { preview: data ?? null, loading: isLoading, error, suggestions };
 }
