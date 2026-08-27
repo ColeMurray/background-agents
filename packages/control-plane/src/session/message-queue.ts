@@ -685,7 +685,7 @@ export class SessionMessageQueue {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
-        avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
+        avatar: getAvatarUrl(participant.scm_login, this.scmProvider, participant.scm_user_id),
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(origin ? { origin } : {}),

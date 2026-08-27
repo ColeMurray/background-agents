@@ -829,6 +829,9 @@ describe("SessionMessageQueue", () => {
 
   it("preserves Autofix origin on the canonical dispatch-time user event", async () => {
     const h = buildQueue();
+    h.repository.getParticipantById.mockReturnValue(
+      createParticipant({ scm_user_id: "255062780", scm_login: "open-inspect[bot]" })
+    );
     const origin = {
       kind: "review",
       authorType: "human",
@@ -842,7 +845,14 @@ describe("SessionMessageQueue", () => {
     await h.queue.processMessageQueue();
 
     const event = h.repository.startMessageProcessing.mock.calls[0][2];
-    expect(event).toEqual(expect.objectContaining({ origin }));
+    expect(event).toEqual(
+      expect.objectContaining({
+        origin,
+        author: expect.objectContaining({
+          avatar: "https://avatars.githubusercontent.com/u/255062780?v=4",
+        }),
+      })
+    );
     expect(serverMessageSchema.parse({ type: "sandbox_event", event })).toEqual({
       type: "sandbox_event",
       event: expect.objectContaining({ origin }),
