@@ -86,7 +86,7 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
-import { createAutofixHandler } from "./http/handlers/autofix.handler";
+import { AutofixHandler } from "./http/handlers/autofix.handler";
 import { MessagesHandler } from "./http/handlers/messages.handler";
 import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
 import { SandboxHandler } from "./http/handlers/sandbox.handler";
@@ -425,7 +425,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     stopExecution: () => messageQueue.stopExecution(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
   });
-  const autofixHandler = createAutofixHandler(new SessionAutofixService(messageQueue));
+  const autofixHandler = new AutofixHandler(new SessionAutofixService(messageQueue));
 
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     backgroundTasks,

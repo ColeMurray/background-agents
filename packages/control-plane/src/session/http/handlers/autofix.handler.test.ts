@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { SessionAutofixService } from "../../services/autofix.service";
-import { createAutofixHandler } from "./autofix.handler";
+import { AutofixHandler } from "./autofix.handler";
 
 function createHandler() {
   const service = { handle: vi.fn() } as unknown as SessionAutofixService;
   const log = { error: vi.fn() } as unknown as Logger;
-  return { handler: createAutofixHandler(service), service, log };
+  return { handler: new AutofixHandler(service), service, log };
 }
 
-describe("createAutofixHandler", () => {
+describe("AutofixHandler", () => {
   it("validates and dispatches Autofix admission commands", async () => {
     const { handler, service, log } = createHandler();
     vi.mocked(service.handle).mockResolvedValue({ kind: "enqueued", messageId: "msg-autofix" });
