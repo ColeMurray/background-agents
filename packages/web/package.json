@@ -12,6 +12,7 @@
     "lint:fix": "eslint src/ --fix",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
+    "benchmark:timeline": "vitest bench src/lib/timeline-performance.bench.ts",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
   },

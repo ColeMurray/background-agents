@@ -21,6 +21,10 @@ import type {
   SessionSnapshot,
   SessionState,
 } from "@open-inspect/shared/types/server-messages";
+import {
+  publishTimelineHistoryMetric,
+  timelineDiagnosticsRequested,
+} from "@/lib/timeline-diagnostics";
 
 const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
@@ -113,6 +117,7 @@ export function useSessionSocket(
   const subscriptionWaitersRef = useRef(new Set<(subscribed: boolean) => void>());
   const pendingPromptRequestIdRef = useRef<string | null>(null);
   const pendingRequestsRef = useRef(new Map<string, PendingCorrelatedRequest>());
+  const historyRequestStartedAtRef = useRef<number | null>(null);
   const {
     sandboxAccess,
     clear: clearSandboxAccess,
@@ -173,6 +178,13 @@ export function useSessionSocket(
 
   const handleMessage = useCallback(
     (message: ServerMessage) => {
+      if (message.type === "history_page" && historyRequestStartedAtRef.current !== null) {
+        publishTimelineHistoryMetric({
+          latencyMs: performance.now() - historyRequestStartedAtRef.current,
+          payloadBytes: new TextEncoder().encode(JSON.stringify(message)).byteLength,
+        });
+        historyRequestStartedAtRef.current = null;
+      }
       if (message.type === "sandbox_event") {
         const { pending, append } = ingestLiveSandboxEvent(
           pendingTextRef.current,
@@ -386,6 +398,7 @@ export function useSessionSocket(
     if (!isOpen() || !subscribedRef.current) return;
     if (!hasMoreHistory || loadingHistory || !cursor) return;
     dispatch({ type: "history_requested" });
+    if (timelineDiagnosticsRequested()) historyRequestStartedAtRef.current = performance.now();
     send({
       type: "fetch_history",
       cursor,

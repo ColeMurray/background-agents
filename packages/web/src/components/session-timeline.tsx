@@ -2,12 +2,14 @@
 
 import {
   memo,
+  Profiler,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ProfilerOnRenderCallback,
   type ReactNode,
 } from "react";
 import { SafeMarkdown } from "@/components/safe-markdown";
@@ -16,7 +18,12 @@ import { SessionWorkGroup } from "@/components/session-work-group";
 import { TaskActivityItem } from "@/components/task-activity-item";
 import { TimelineRowContent } from "@/components/timeline-row-content";
 import { ToolCallGroup } from "@/components/tool-call-group";
+import { TimelineDebugPanel } from "@/components/timeline-debug-panel";
 import { copyToClipboard } from "@/lib/format";
+import {
+  createTimelineRuntimeMetrics,
+  type TimelineRuntimeMetrics,
+} from "@/lib/timeline-diagnostics";
 import {
   buildSessionTimelineItems,
   toolCallKey,
@@ -45,6 +52,8 @@ export function SessionTimeline({
   onOpenMedia,
   terminalMessageReadObservationEnabled = false,
   onMarkMessageRead,
+  debugEnabled,
+  debugLoadedRangeStart,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -58,8 +67,23 @@ export function SessionTimeline({
   onOpenMedia: (artifactId: string) => void;
   terminalMessageReadObservationEnabled?: boolean;
   onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
+  debugEnabled?: boolean;
+  debugLoadedRangeStart?: number;
 }) {
-  const timelineItems = useMemo(() => buildSessionTimelineItems(events), [events]);
+  const [queryDebugEnabled, setQueryDebugEnabled] = useState(false);
+  useEffect(() => {
+    setQueryDebugEnabled(new URLSearchParams(window.location.search).get("timelineDebug") === "1");
+  }, []);
+  const diagnosticsEnabled = debugEnabled ?? queryDebugEnabled;
+  const derivedTimeline = useMemo(() => {
+    const startedAt = diagnosticsEnabled ? performance.now() : 0;
+    const items = buildSessionTimelineItems(events);
+    return {
+      items,
+      durationMs: diagnosticsEnabled ? performance.now() - startedAt : 0,
+    };
+  }, [diagnosticsEnabled, events]);
+  const timelineItems = derivedTimeline.items;
   const pendingMessageIds = useMemo(
     () =>
       new Set(
@@ -98,12 +122,24 @@ export function SessionTimeline({
     };
   }, [timelineItems, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const timelineContentRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const isPrependingRef = useRef(false);
   const didPrependRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
+  const runtimeMetricsRef = useRef<TimelineRuntimeMetrics>(createTimelineRuntimeMetrics());
+  const handleProfilerRender = useCallback<ProfilerOnRenderCallback>(
+    (_id, _phase, actualDuration) => {
+      runtimeMetricsRef.current.commitDurationMs = actualDuration;
+      runtimeMetricsRef.current.maxCommitDurationMs = Math.max(
+        runtimeMetricsRef.current.maxCommitDurationMs,
+        actualDuration
+      );
+    },
+    []
+  );
 
   const handleScroll = useCallback(() => {
     hasScrolledRef.current = true;
@@ -230,19 +266,58 @@ export function SessionTimeline({
       renderFlatItem(item)
     );
 
-  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
-    item.type === "work_group" ? (
-      <SessionWorkGroup
-        key={item.id}
-        durationMs={item.durationMs}
-        isExpanded={expandedWorkGroups.has(item.messageId)}
-        onToggle={() => toggleWorkGroup(item.messageId)}
-      >
-        {item.activity.map(renderBaseTimelineItem)}
-      </SessionWorkGroup>
+  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode => {
+    const content =
+      item.type === "work_group" ? (
+        <SessionWorkGroup
+          key={item.id}
+          durationMs={item.durationMs}
+          isExpanded={expandedWorkGroups.has(item.messageId)}
+          onToggle={() => toggleWorkGroup(item.messageId)}
+        >
+          {item.activity.map(renderBaseTimelineItem)}
+        </SessionWorkGroup>
+      ) : (
+        renderBaseTimelineItem(item)
+      );
+    return diagnosticsEnabled ? (
+      <div key={item.id} data-timeline-row={item.id}>
+        {content}
+      </div>
     ) : (
-      renderBaseTimelineItem(item)
+      content
     );
+  };
+
+  const renderedTimeline = timelineItems.map((item, index) => {
+    if (
+      latestTerminalMessageGroupRange &&
+      onMarkMessageRead &&
+      index === latestTerminalMessageGroupRange.start
+    ) {
+      return (
+        <TerminalMessageReadObserver
+          key={`terminal-message-${latestTerminalMessageId}`}
+          messageId={latestTerminalMessageId!}
+          enabled={terminalMessageReadObservationEnabled}
+          onMarkMessageRead={onMarkMessageRead}
+        >
+          {timelineItems
+            .slice(latestTerminalMessageGroupRange.start, latestTerminalMessageGroupRange.end + 1)
+            .map(renderTimelineItem)}
+        </TerminalMessageReadObserver>
+      );
+    }
+    if (
+      latestTerminalMessageGroupRange &&
+      onMarkMessageRead &&
+      index > latestTerminalMessageGroupRange.start &&
+      index <= latestTerminalMessageGroupRange.end
+    ) {
+      return null;
+    }
+    return renderTimelineItem(item);
+  });
 
   return (
     <div
@@ -254,50 +329,34 @@ export function SessionTimeline({
       // ancestor overflow clip, and grow the page itself.
       className="relative h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
     >
-      <div className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
+      <div ref={timelineContentRef} className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
         <div ref={topSentinelRef} className="h-1" />
         {loadingHistory && (
           <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
         )}
         {showSkeleton ? (
           <TimelineSkeleton />
+        ) : diagnosticsEnabled ? (
+          <Profiler id="session-timeline" onRender={handleProfilerRender}>
+            {renderedTimeline}
+          </Profiler>
         ) : (
-          timelineItems.map((item, index) => {
-            if (
-              latestTerminalMessageGroupRange &&
-              onMarkMessageRead &&
-              index === latestTerminalMessageGroupRange.start
-            ) {
-              return (
-                <TerminalMessageReadObserver
-                  key={`terminal-message-${latestTerminalMessageId}`}
-                  messageId={latestTerminalMessageId!}
-                  enabled={terminalMessageReadObservationEnabled}
-                  onMarkMessageRead={onMarkMessageRead}
-                >
-                  {timelineItems
-                    .slice(
-                      latestTerminalMessageGroupRange.start,
-                      latestTerminalMessageGroupRange.end + 1
-                    )
-                    .map(renderTimelineItem)}
-                </TerminalMessageReadObserver>
-              );
-            }
-            if (
-              latestTerminalMessageGroupRange &&
-              onMarkMessageRead &&
-              index > latestTerminalMessageGroupRange.start &&
-              index <= latestTerminalMessageGroupRange.end
-            ) {
-              return null;
-            }
-            return renderTimelineItem(item);
-          })
+          renderedTimeline
         )}
         {isProcessing && <ThinkingIndicator />}
         <div />
       </div>
+      {diagnosticsEnabled && (
+        <TimelineDebugPanel
+          containerRef={scrollContainerRef}
+          contentRef={timelineContentRef}
+          eventCount={events.length}
+          itemCount={timelineItems.length}
+          derivationDurationMs={derivedTimeline.durationMs}
+          runtimeMetricsRef={runtimeMetricsRef}
+          loadedRangeStart={debugLoadedRangeStart}
+        />
+      )}
     </div>
   );
 }
