@@ -342,6 +342,30 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["mine-first"]);
   });
 
+  it("discards an in-flight response after switching filters away and back", async () => {
+    const pendingPage = deferred<SessionInboxPage>();
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=")) return pendingPage.promise;
+      return snapshot({
+        needs_attention: page([key.includes("mine=true") ? "mine-first" : "all-first"], "next"),
+      });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() =>
+      expect(result.current.sectionPagination.needsAttention.loadingMore).toBe(true)
+    );
+
+    act(() => result.current.setSessionCreatorFilter("mine"));
+    await waitFor(() => expect(result.current.needsAttention[0]?.id).toBe("mine-first"));
+    act(() => result.current.setSessionCreatorFilter("all"));
+    await waitFor(() => expect(result.current.needsAttention[0]?.id).toBe("all-first"));
+    await act(async () => pendingPage.resolve(page(["stale-all-page-2"])));
+
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["all-first"]);
+  });
+
   it("renders a cross-category tail root only in its newest loaded page", async () => {
     const fetcher = vi.fn(async (key: string) => {
       if (key.includes("category=needs_attention")) return page(["duplicate", "attention-tail"]);

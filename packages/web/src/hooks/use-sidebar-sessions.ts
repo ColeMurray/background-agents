@@ -31,11 +31,13 @@ type PaginationKey = ReturnType<typeof buildSessionInboxKey>;
 
 interface AdditionalPagesState {
   filterIdentity: string;
+  generation: number;
   pages: Array<{ page: SessionInboxPage; sequence: number }>;
 }
 
 interface PaginationRequest {
   filterIdentity: string;
+  generation: number;
   key: PaginationKey;
 }
 
@@ -51,15 +53,27 @@ function useCategoryPagination(
   const { fetcher } = useSWRConfig();
   const [additionalPagesState, setAdditionalPagesState] = useState<AdditionalPagesState>({
     filterIdentity,
+    generation: 0,
     pages: [],
   });
   const [paginationRequest, setPaginationRequest] = useState<PaginationRequest | null>(null);
   const [previousCanonicalRootIds, setPreviousCanonicalRootIds] = useState(canonicalRootIds);
   const activePaginationRequest =
-    paginationRequest?.filterIdentity === filterIdentity ? paginationRequest : null;
+    paginationRequest?.filterIdentity === filterIdentity &&
+    paginationRequest.generation === additionalPagesState.generation
+      ? paginationRequest
+      : null;
   const firstPage = snapshot?.categories[category];
   const additionalPages =
     additionalPagesState.filterIdentity === filterIdentity ? additionalPagesState.pages : [];
+
+  if (additionalPagesState.filterIdentity !== filterIdentity) {
+    setAdditionalPagesState((state) => ({
+      filterIdentity,
+      generation: state.generation + 1,
+      pages: [],
+    }));
+  }
 
   if (previousCanonicalRootIds !== canonicalRootIds) {
     setPreviousCanonicalRootIds(canonicalRootIds);
@@ -72,7 +86,7 @@ function useCategoryPagination(
           items: page.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
         },
       }));
-      return { filterIdentity, pages };
+      return { ...state, pages };
     });
   }
 
@@ -82,7 +96,11 @@ function useCategoryPagination(
     mutate: retryPage,
   } = useSWR<SessionInboxPage>(
     activePaginationRequest
-      ? [activePaginationRequest.key, activePaginationRequest.filterIdentity]
+      ? [
+          activePaginationRequest.key,
+          activePaginationRequest.filterIdentity,
+          activePaginationRequest.generation,
+        ]
       : null,
     activePaginationRequest
       ? () => {
@@ -99,14 +117,18 @@ function useCategoryPagination(
           ...loadedPage,
           items: loadedPage.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
         };
-        setAdditionalPagesState((state) => ({
-          filterIdentity,
-          pages: [
-            ...(state.filterIdentity === filterIdentity ? state.pages : []),
-            { page, sequence },
-          ],
-        }));
-        setPaginationRequest(null);
+        setAdditionalPagesState((state) =>
+          state.filterIdentity === activePaginationRequest.filterIdentity &&
+          state.generation === activePaginationRequest.generation
+            ? { ...state, pages: [...state.pages, { page, sequence }] }
+            : state
+        );
+        setPaginationRequest((current) =>
+          current?.filterIdentity === activePaginationRequest.filterIdentity &&
+          current.generation === activePaginationRequest.generation
+            ? null
+            : current
+        );
       },
     }
   );
@@ -117,13 +139,22 @@ function useCategoryPagination(
     if (!snapshot || !lastPage?.nextCursor || activePaginationRequest) return;
     setPaginationRequest({
       filterIdentity,
+      generation: additionalPagesState.generation,
       key: buildSessionInboxKey({
         category,
         cursor: lastPage.nextCursor,
         mine,
       }),
     });
-  }, [activePaginationRequest, category, filterIdentity, lastPage, mine, snapshot]);
+  }, [
+    activePaginationRequest,
+    additionalPagesState.generation,
+    category,
+    filterIdentity,
+    lastPage,
+    mine,
+    snapshot,
+  ]);
 
   const retry = useCallback(
     () => (error && activePaginationRequest ? retryPage() : refreshSnapshot()),
