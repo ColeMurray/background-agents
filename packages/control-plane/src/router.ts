@@ -4,7 +4,7 @@
 
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
-import type { Principal } from "./auth/principal";
+import { principalMayUseMethod, type Principal } from "./auth/principal";
 import { getUserAuth, getUserAuthRuntime } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
@@ -282,7 +282,8 @@ function logRequest(
 
 export function enforceRoutePrincipal(
   authentication: RouteAuthentication,
-  principal: Principal
+  principal: Principal,
+  method: string
 ): Response | null {
   if (
     authentication.kind === "web-service" &&
@@ -292,6 +293,12 @@ export function enforceRoutePrincipal(
   }
   if (authentication.kind === "user" && principal.kind !== "user") {
     return error("Human user authentication required", 403);
+  }
+  // A read-only service is refused every mutating method on every route,
+  // whatever that route's own policy allows. This is the trust boundary for
+  // the claim: holding the secret is not enough to write.
+  if (!principalMayUseMethod(principal, method)) {
+    return error("This credential may only read", 403);
   }
   return null;
 }
@@ -482,7 +489,7 @@ export async function handleRequest(
         ctx.principal = authResult.principal;
         ctx.authentication = authResult.authentication;
         request = authResult.request;
-        authError = enforceRoutePrincipal(authentication, ctx.principal);
+        authError = enforceRoutePrincipal(authentication, ctx.principal, method);
       }
     }
 

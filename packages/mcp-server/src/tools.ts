@@ -2,18 +2,31 @@
  * The read-only tool surface.
  *
  * Every tool is one GET against a route whose policy already accepts service
- * auth. Nothing here mutates, and nothing here needs an actor.
+ * auth. Nothing here mutates, and nothing here needs an actor — and the
+ * control plane refuses this credential any mutating method regardless.
  */
 
 import { z } from "zod";
 import type { ControlPlaneClient } from "./client";
 
-/** Cap on how much of a session's timeline one call returns. */
-const MAX_EVENT_LIMIT = 500;
+/**
+ * Page caps, matching what the control-plane handlers themselves enforce.
+ * Asking past a server cap is silently clamped, which reads as a short page
+ * and invites the model to conclude there is nothing more.
+ */
+const MAX_EVENT_LIMIT = 200;
 const DEFAULT_EVENT_LIMIT = 100;
+
+const MAX_MESSAGE_LIMIT = 100;
 
 const MAX_SESSION_LIMIT = 100;
 const DEFAULT_SESSION_LIMIT = 20;
+
+/** Every paged tool takes the same continuation argument. */
+const cursor = z
+  .string()
+  .optional()
+  .describe("Continuation cursor from a previous page of this same call");
 
 export interface ToolDefinition {
   name: string;
@@ -31,12 +44,12 @@ export const TOOLS: ToolDefinition[] = [
     title: "List sessions",
     description:
       "List Open-Inspect sessions, newest first. Use to find a session id before reading its " +
-      "events or diff. Filter by status to narrow to running or failed work.",
+      "events or diff. Filter by status to narrow to active or failed work.",
     inputSchema: {
       status: z
-        .string()
+        .enum(["created", "active", "completed", "failed", "archived", "cancelled"])
         .optional()
-        .describe("Only sessions in this status (e.g. running, completed, failed)"),
+        .describe("Only sessions in this status. In-flight work is `active`, not `running`."),
       limit: z.number().int().min(1).max(MAX_SESSION_LIMIT).optional(),
       offset: z.number().int().min(0).optional(),
     },
@@ -52,14 +65,16 @@ export const TOOLS: ToolDefinition[] = [
     title: "Read a session timeline",
     description:
       "Read one session's event timeline — tool calls, agent output, errors. This is the " +
-      "primary tool for working out what a session actually did and where it went wrong.",
+      "primary tool for working out what a session actually did and where it went wrong. Returns one page; pass the response's cursor back to continue.",
     inputSchema: {
       session_id: sessionId,
       limit: z.number().int().min(1).max(MAX_EVENT_LIMIT).optional(),
+      cursor,
     },
     run: (client, args) =>
       client.get(`/sessions/${encodeURIComponent(args.session_id as string)}/events`, {
         limit: (args.limit as number | undefined) ?? DEFAULT_EVENT_LIMIT,
+        cursor: args.cursor as string | undefined,
       }),
   },
   {
@@ -68,9 +83,16 @@ export const TOOLS: ToolDefinition[] = [
     description:
       "Read the prompt/response messages exchanged in one session, without the tool-call " +
       "detail that get_session_events includes.",
-    inputSchema: { session_id: sessionId },
+    inputSchema: {
+      session_id: sessionId,
+      limit: z.number().int().min(1).max(MAX_MESSAGE_LIMIT).optional(),
+      cursor,
+    },
     run: (client, args) =>
-      client.get(`/sessions/${encodeURIComponent(args.session_id as string)}/messages`),
+      client.get(`/sessions/${encodeURIComponent(args.session_id as string)}/messages`, {
+        limit: args.limit as number | undefined,
+        cursor: args.cursor as string | undefined,
+      }),
   },
   {
     name: "get_session_diff",

@@ -87,6 +87,47 @@ describe("ControlPlaneClient", () => {
     await expect(client.get("/sessions")).rejects.toThrow(/ECONNREFUSED/);
   });
 
+  it("keeps the timeout running while the body is read, not just the headers", async () => {
+    // fetch() resolves on headers. A body that never completes must still hit
+    // the timeout rather than hanging the tool call forever.
+    const client = new ControlPlaneClient({ baseUrl: BASE_URL, secret: SECRET, timeoutMs: 50 });
+    fetchMock.mockImplementation(
+      async (_url: string, init: { signal: AbortSignal }) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"a":'));
+              init.signal.addEventListener("abort", () => controller.error(new Error("aborted")));
+            },
+          }),
+          { status: 200 }
+        )
+    );
+
+    await expect(client.get("/sessions")).rejects.toThrow(/timed out after 50ms/);
+  });
+
+  it("refuses an oversized body instead of buffering it, and says so", async () => {
+    const oversized = new Uint8Array(9 * 1024 * 1024);
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(oversized);
+              controller.close();
+            },
+          }),
+          { status: 200 }
+        )
+    );
+    const client = new ControlPlaneClient({ baseUrl: BASE_URL, secret: SECRET });
+
+    // Not reported as a transport failure or as invalid JSON: either would
+    // send someone debugging the wrong thing.
+    await expect(client.get("/sessions/s1/diff")).rejects.toThrow(/exceeded 8388608 bytes/);
+  });
+
   it("does not double the slash when the base URL has a trailing one", async () => {
     fetchMock.mockResolvedValue(jsonResponse({}));
     await new ControlPlaneClient({ baseUrl: `${BASE_URL}/`, secret: SECRET }).get("/sessions");

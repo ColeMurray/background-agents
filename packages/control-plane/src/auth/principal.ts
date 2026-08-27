@@ -54,3 +54,28 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   // act as a person, so every route it reaches sees a bare service principal.
   mcp: null,
 };
+
+/**
+ * Services whose credential may only ever read.
+ *
+ * `mcp` runs on an operator's machine rather than inside the deployment, so
+ * its secret is the one most likely to leak — and a leaked secret is only as
+ * dangerous as the routes it can reach. Restricting it to safe methods here,
+ * at the router, is what makes "read-only" a property of the credential
+ * rather than of whichever client happens to hold it: the same signature on a
+ * `DELETE /sessions/:id` or `PUT /secrets` is refused whoever built it.
+ *
+ * Safe methods are the boundary rather than a route allowlist because every
+ * mutating route is already a non-GET, and an allowlist silently fails open
+ * for each read route added later.
+ */
+export const READ_ONLY_SERVICES: ReadonlySet<ServiceName> = new Set<ServiceName>(["mcp"]);
+
+/** Methods a read-only service credential may use. */
+const READ_ONLY_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
+
+/** Whether this principal may issue a request with this method. */
+export function principalMayUseMethod(principal: Principal, method: string): boolean {
+  if (principal.kind !== "service" || !READ_ONLY_SERVICES.has(principal.service)) return true;
+  return READ_ONLY_METHODS.has(method.toUpperCase());
+}

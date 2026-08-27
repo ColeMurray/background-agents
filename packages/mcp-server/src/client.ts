@@ -44,10 +44,11 @@ export class ControlPlaneClient {
   /**
    * GET a control-plane path and parse the JSON body.
    *
-   * Only GET is exposed. The `mcp` secret would be accepted on the mutating
-   * routes that share the user-or-service policy — stopping sessions, deleting
-   * them, triggering automations — so the restriction lives here, in the one
-   * place every tool goes through, rather than in each tool's discipline.
+   * Only GET is exposed, but that is ergonomics rather than the security
+   * boundary: the control plane refuses every mutating method from a
+   * read-only service principal, so a signed `DELETE` is rejected whether or
+   * not it came from this class (`READ_ONLY_SERVICES` in the control plane's
+   * `auth/principal.ts`).
    */
   async get(path: string, query?: Record<string, string | number | undefined>): Promise<unknown> {
     const url = new URL(`${this.baseUrl}${path}`);
@@ -64,13 +65,21 @@ export class ControlPlaneClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let response: Response;
+    let body: string;
     try {
       response = await fetch(request.url, {
         method: "GET",
         headers: { ...headers, Accept: "application/json" },
         signal: controller.signal,
       });
+      // Inside the same timer as the fetch: `fetch` resolves on headers, so a
+      // control plane that sends headers and then stalls the body would hang
+      // the tool call forever if the timeout ended here.
+      body = await readCapped(response);
     } catch (cause) {
+      // A cap breach already says exactly what happened; rewrapping it as a
+      // transport failure would hide the one detail that matters.
+      if (cause instanceof ControlPlaneError) throw cause;
       const reason = controller.signal.aborted
         ? `timed out after ${this.timeoutMs}ms`
         : cause instanceof Error
@@ -81,7 +90,6 @@ export class ControlPlaneClient {
       clearTimeout(timer);
     }
 
-    const body = await readCapped(response);
     if (!response.ok) {
       // 401 here means the signature was rejected: a wrong secret, or a
       // control plane that predates the `mcp` service name.
@@ -102,7 +110,41 @@ export class ControlPlaneClient {
   }
 }
 
+/**
+ * Read a response body, refusing to buffer more than `MAX_RESPONSE_BYTES`.
+ *
+ * Streamed rather than `response.text()`-then-measured: the cap has to bound
+ * what is allocated, and a session diff can be arbitrarily large. Counting is
+ * in bytes off the wire, not string length — `String.length` is UTF-16 code
+ * units, which undercounts every multi-byte character.
+ *
+ * An oversized body is an error rather than a truncation, because truncated
+ * JSON only resurfaces later as a parse failure that blames the wrong thing.
+ */
 async function readCapped(response: Response): Promise<string> {
-  const text = await response.text();
-  return text.length > MAX_RESPONSE_BYTES ? text.slice(0, MAX_RESPONSE_BYTES) : text;
+  if (!response.body) return "";
+
+  const decoder = new TextDecoder("utf-8");
+  const reader = response.body.getReader();
+  let total = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        throw new ControlPlaneError(
+          `response exceeded ${MAX_RESPONSE_BYTES} bytes; narrow the request (a limit, or a single session)`,
+          response.status
+        );
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // An abort or an over-cap throw leaves the stream open; cancelling lets
+    // the socket close rather than leaking it for the process's lifetime.
+    void reader.cancel().catch(() => {});
+  }
+  return text + decoder.decode();
 }

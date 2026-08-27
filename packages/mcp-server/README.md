@@ -11,19 +11,25 @@ Two properties make this safe to keep on a laptop:
 - **It asserts no actor.** `ASSERTION_RIGHTS.mcp` is `null`, so the control plane resolves it to a
   bare service principal. Unlike `slack-bot`, `github-bot`, and `linear-bot` — each of which may
   assert an actor in its own namespace — this credential cannot act as any person.
-- **It reads only.** `ControlPlaneClient` exposes `get()` and nothing else. The same signature would
-  be accepted on the mutating routes that share the user-or-service policy (stopping a session,
-  deleting one, triggering an automation), so the restriction lives in the client rather than in
-  each tool's discipline.
+- **It reads only, and the control plane enforces that.** `mcp` is in `READ_ONLY_SERVICES`
+  (control-plane `auth/principal.ts`), so the router refuses it every method but `GET`/`HEAD` on
+  every route, whatever that route's own policy allows. A leaked secret cannot sign a
+  `DELETE /sessions/:id` or a `PUT /secrets`. `ControlPlaneClient` exposing only `get()` is
+  convenience on top of that, not the boundary itself.
+
+  Safe methods are the boundary rather than a route allowlist because every mutating route is
+  already a non-GET, while an allowlist would fail open for each read route added later.
 
 **Never point this at `SERVICE_AUTH_SECRET_WEB`.** The `web` service is the one that escalates to
 _user_ auth by pairing its signature with a Better Auth cookie; its secret on a laptop is a
 categorically larger exposure. That is why `mcp` has its own secret.
 
 Two limits worth knowing. Nonce-reuse detection in the control plane is log-only and in-isolate, so
-a captured request can be replayed inside the five-minute signature validity window — harmless for
-GETs, and a reason not to widen this service to anything mutating. And the secret sits in plaintext
-in your MCP client config, like any local API key; rotating it means a Terraform apply.
+a captured request can be replayed inside the five-minute signature validity window. That changes no
+state — the method restriction sees to it — but it does allow a captured read to be repeated, which
+re-discloses whatever it returned: session messages, diffs, automation data. Treat it as a
+disclosure window, not a harmless one. And the secret sits in plaintext in your MCP client config,
+like any local API key; rotating it means a Terraform apply.
 
 ## Setup
 
@@ -72,7 +78,8 @@ service name existed.
 | `get_automation_run`   | `GET /automations/:id/runs/:runId` | one run and the sessions it launched           |
 
 Every route above already carried a user-or-service auth policy; adding this package changed none of
-them.
+them. `get_session_events` and `get_session_messages` are paged — pass the cursor from a response
+back to continue.
 
 `GET /sessions/:id` (session detail) and `sandbox-access` are human-user-only and deliberately out
 of reach — the latter mints credentials.

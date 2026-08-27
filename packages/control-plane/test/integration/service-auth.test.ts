@@ -196,6 +196,26 @@ describe("sig1 service-credential authentication", () => {
     }
   });
 
+  it("refuses every mutating method from mcp, on a route that accepts other services", async () => {
+    // The read-only guarantee has to hold at the credential, not in whichever
+    // client holds it: a leaked secret must not be able to sign a DELETE.
+    const response = await signedFetch({
+      service: "mcp",
+      method: "DELETE",
+      url: "https://test.local/sessions/does-not-matter",
+    });
+    expect(response.status).toBe(403);
+
+    // Same route, same policy, a service that is not read-only: not a 403,
+    // so the refusal above is the read-only rule and not the route's own.
+    const bot = await signedFetch({
+      service: "github-bot",
+      method: "DELETE",
+      url: "https://test.local/sessions/does-not-matter",
+    });
+    expect(bot.status).not.toBe(403);
+  });
+
   it("denies actor assertions from web", async () => {
     const response = await signedFetch({
       service: "web",
