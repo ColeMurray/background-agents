@@ -13,6 +13,7 @@ import {
 import { ConditionBuilder } from "./condition-builder";
 
 type ChannelListing = { id: string; name: string; isPrivate: boolean; isMember: boolean };
+const DEFAULT_TRIGGER_SOURCE: AutomationEventSource = "slack";
 // Mutable per-test channel listing; the hoisted use-slack-channels mock closes over it.
 let slackChannelsMock: { channels: ChannelListing[]; loading: boolean; error?: string };
 vi.mock("@/hooks/use-slack-channels", () => ({
@@ -29,7 +30,7 @@ beforeEach(() => {
 
 function renderBuilder(
   conditions: TriggerCondition[],
-  triggerSource: AutomationEventSource = "slack",
+  triggerSource: AutomationEventSource = DEFAULT_TRIGGER_SOURCE,
   eventType?: string
 ) {
   const onChange = vi.fn();

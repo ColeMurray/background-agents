@@ -23,7 +23,7 @@ export interface ConditionHandler<K extends ConditionType> {
   evaluate(condition: ConditionOf<K>, event: AutomationEvent): boolean;
 
   /** Which event sources this condition can be used with. */
-  appliesTo: AutomationEventSource[];
+  appliesTo: readonly AutomationEventSource[];
 }
 
 // ─── Typed Registry ──────────────────────────────────────────────────────────

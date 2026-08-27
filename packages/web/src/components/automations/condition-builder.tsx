@@ -54,6 +54,7 @@ export const CONDITION_LABELS: Record<string, string> = {
 const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
+const DEFAULT_WORKFLOW_NAME = "";
 
 export function ConditionBuilder({
   conditions,
@@ -112,7 +113,7 @@ export function ConditionBuilder({
         };
         break;
       case "workflow_name":
-        newCondition = { type: "workflow_name", operator: "eq", value: "" };
+        newCondition = { type: "workflow_name", operator: "eq", value: DEFAULT_WORKFLOW_NAME };
         break;
       case "text_match":
         newCondition = { type: "text_match", operator: "contains", value: { pattern: "" } };

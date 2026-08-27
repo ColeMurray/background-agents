@@ -81,6 +81,7 @@ const DEFAULT_REASONING_VALUE = "__default__";
 // packages/control-plane/src/routes/automations.ts.
 const INSTRUCTIONS_MAX_LENGTH = 15000;
 const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
+const EMPTY_CONDITIONS: TriggerCondition[] = [];
 
 function requiresRepositoryContext(triggerType: AutomationTriggerType): boolean {
   return triggerType === "github_event" || triggerType === "linear_event";
@@ -164,9 +165,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
   const [eventTypeError, setEventTypeError] = useState("");
   const [conditions, setConditions] = useState<TriggerCondition[]>(
-    initialValues?.triggerConfig?.conditions ?? []
+    initialValues?.triggerConfig?.conditions ?? EMPTY_CONDITIONS
   );
-  const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>([]);
+  const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>(EMPTY_CONDITIONS);
   const [sentryClientSecret, setSentryClientSecret] = useState("");
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
     initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
@@ -266,8 +267,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
   const handleTriggerTypeChange = (value: AutomationTriggerType) => {
     setTriggerType(value);
-    setConditions([]);
-    setDroppedConditions([]);
+    setConditions(EMPTY_CONDITIONS);
+    setDroppedConditions(EMPTY_CONDITIONS);
   };
 
   const handleNoRepository = () => {
@@ -866,7 +867,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               // rather than being saved as filters that could never match. Say
               // which — a filter vanishing without a word reads as a bug.
               if (TRIGGER_TYPE_TO_SOURCE[triggerType] !== "github") {
-                setDroppedConditions([]);
+                setDroppedConditions(EMPTY_CONDITIONS);
                 return;
               }
               const candidates = dedupeConditionsBySemanticKey([
