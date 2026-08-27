@@ -73,6 +73,17 @@ describe("useWarmDraftSession", () => {
     expect(result.current.sessionId).toBeNull();
   });
 
+  it("rejects a malformed create-session response", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ sessionId: "session-1" }));
+    const { result } = renderHook(() => useWarmDraftSession(request()));
+
+    await act(async () => {
+      await expect(result.current.warm()).resolves.toBeNull();
+    });
+
+    expect(result.current.sessionId).toBeNull();
+  });
+
   it("retires a draft and warms the explicit provider account after authentication changes", async () => {
     vi.mocked(browserApiFetch)
       .mockResolvedValueOnce(Response.json({ sessionId: "legacy-session", status: "created" }))
@@ -283,5 +294,18 @@ describe("useWarmDraftSession", () => {
       await warming;
     });
     expect(retireWarmDraftSession).toHaveBeenCalledWith("orphaned-session");
+  });
+
+  it.each([
+    { sessionId: { id: "unsafe" }, status: "created" },
+    { sessionId: "missing-status" },
+    { sessionId: "invalid-status", status: "warming" },
+  ])("ignores malformed create-session responses: %j", async (payload) => {
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json(payload));
+    const { result } = renderHook(() => useWarmDraftSession(request()));
+
+    await expect(result.current.warm()).resolves.toBeNull();
+    expect(retireWarmDraftSession).not.toHaveBeenCalled();
+    expect(result.current.sessionId).toBeNull();
   });
 });

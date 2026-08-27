@@ -13,13 +13,15 @@ import {
   type SessionStatus,
 } from "./sessions";
 
-export interface UserPreferences {
-  userId: string;
-  model?: string;
-  reasoningEffort?: string;
-  branch?: string;
-  updatedAt: number;
-}
+export const userPreferencesSchema = z.object({
+  userId: z.string(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  branch: z.string().optional(),
+  updatedAt: z.number(),
+});
+
+export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
