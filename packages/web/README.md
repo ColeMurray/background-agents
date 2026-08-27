@@ -122,8 +122,8 @@ visible children, anchor offset, scroll geometry, resize deltas, layout shifts, 
 Chromium heap usage when supported. Full DOM-node counting runs only when explicitly sampled.
 
 The lab renders the production timeline tree unchanged and owns its observers outside the timeline.
-React render timing requires a development or profiling build. The lab route returns 404 in
-production unless `ENABLE_TIMELINE_PERFORMANCE_LAB=true`.
+React render timing requires a development or profiling build. The lab route is development-only and
+returns 404 in production.
 
 ## Pages
 

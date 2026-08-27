@@ -26,9 +26,19 @@ const HISTORY_PAGE_SIZE = 200;
 const SESSION_SIZES = [5_000, 25_000, LARGE_SESSION_EVENT_COUNT] as const;
 
 export function TimelinePerformanceLab() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) {
+    return (
+      <main className="h-screen bg-background" aria-label="Loading timeline performance lab" />
+    );
+  }
+  return <MountedTimelinePerformanceLab />;
+}
+
+function MountedTimelinePerformanceLab() {
   const [sessionEventCount, setSessionEventCount] = useState<number>(LARGE_SESSION_EVENT_COUNT);
   const [loadedEventCount, setLoadedEventCount] = useState(INITIAL_LOADED_EVENTS);
-  const [mounted, setMounted] = useState(false);
   const timelineHostRef = useRef<HTMLDivElement>(null);
   const runtimeMetricsRef = useRef<TimelineRuntimeMetrics>(createTimelineRuntimeMetrics());
   const handleProfilerRender = useCallback<ProfilerOnRenderCallback>(
@@ -41,7 +51,6 @@ export function TimelinePerformanceLab() {
     },
     []
   );
-  useEffect(() => setMounted(true), []);
   const fixture = useMemo(() => {
     const startedAt = performance.now();
     const events = generateTimelinePerformanceFixture(sessionEventCount);
@@ -73,6 +82,7 @@ export function TimelinePerformanceLab() {
           className="mt-1 w-full rounded border border-border bg-background px-2 py-1"
           value={sessionEventCount}
           onChange={(event) => {
+            runtimeMetricsRef.current = createTimelineRuntimeMetrics();
             setSessionEventCount(Number(event.target.value));
             setLoadedEventCount(INITIAL_LOADED_EVENTS);
           }}
@@ -87,7 +97,7 @@ export function TimelinePerformanceLab() {
           <dt className="text-muted-foreground">Loaded</dt>
           <dd>{visibleEvents.length.toLocaleString("en-US")}</dd>
           <dt className="text-muted-foreground">Fixture generation</dt>
-          <dd>{mounted ? `${fixture.generationDurationMs.toFixed(1)} ms` : "measuring"}</dd>
+          <dd>{fixture.generationDurationMs.toFixed(1)} ms</dd>
           <dt className="text-muted-foreground">Approx. JSON</dt>
           <dd>{(summary.approximateJsonBytes / 1024 / 1024).toFixed(1)} MiB</dd>
         </dl>
@@ -125,6 +135,7 @@ export function TimelinePerformanceLab() {
           />
         </Profiler>
         <TimelineDebugPanel
+          key={sessionEventCount}
           hostRef={timelineHostRef}
           eventCount={visibleEvents.length}
           runtimeMetricsRef={runtimeMetricsRef}
