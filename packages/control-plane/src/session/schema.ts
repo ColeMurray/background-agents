@@ -247,6 +247,21 @@ export interface SchemaMigration {
   readonly run: string | ((sql: SqlStorage) => void);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseSqlColumnNames(rows: unknown[]): string[] {
+  return rows.map((row, index) => {
+    if (!isRecord(row) || typeof row.name !== "string") {
+      throw new TypeError(
+        `Invalid SQLite column metadata at row ${index}: expected an object with a string name`
+      );
+    }
+    return row.name;
+  });
+}
+
 /**
  * Ordered list of all schema migrations.
  *
@@ -290,10 +305,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 7,
     description: "Add refresh_token_encrypted to participants",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
-        name: string;
-      }>;
-      const names = new Set(columns.map((c) => c.name));
+      const names = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(participants)").toArray())
+      );
       // Fresh DOs (post-rename) already have scm_refresh_token_encrypted from SCHEMA_SQL.
       // Only add the old column name on pre-rename DOs that need migration 20 to rename it.
       if (
@@ -378,10 +392,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 20,
     description: "Rename github_* columns to scm_* in participants",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
-        name: string;
-      }>;
-      const columnNames = new Set(columns.map((c) => c.name));
+      const columnNames = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(participants)").toArray())
+      );
 
       const renames: [string, string][] = [
         ["github_user_id", "scm_user_id"],
@@ -414,10 +427,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Drop scm_provider from session and participants (now deployment-level)",
     run: (sql) => {
       for (const table of ["session", "participants"] as const) {
-        const columns = sql.exec(`PRAGMA table_info(${table})`).toArray() as Array<{
-          name: string;
-        }>;
-        if (columns.some((c) => c.name === "scm_provider")) {
+        if (
+          parseSqlColumnNames(sql.exec(`PRAGMA table_info(${table})`).toArray()).includes(
+            "scm_provider"
+          )
+        ) {
           sql.exec(`ALTER TABLE ${table} DROP COLUMN scm_provider`);
         }
       }
@@ -427,10 +441,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 24,
     description: "Rename repo_default_branch to base_branch in session",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(session)").toArray() as Array<{
-        name: string;
-      }>;
-      const columnNames = new Set(columns.map((c) => c.name));
+      const columnNames = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(session)").toArray())
+      );
       if (columnNames.has("repo_default_branch") && !columnNames.has("base_branch")) {
         sql.exec(`ALTER TABLE session RENAME COLUMN repo_default_branch TO base_branch`);
       }

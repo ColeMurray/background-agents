@@ -255,5 +255,41 @@ describe("SessionEventStream", () => {
         hasMore: true,
       });
     });
+
+    it("rejects persisted event data that is valid JSON but not an object", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.listEventPage).mockReturnValue({
+        events: [eventRow("e1", "token", "[]", 1000)],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      expect(() =>
+        stream.listEvents({
+          cursor: null,
+          limit: 10,
+          type: "token",
+          messageId: null,
+        })
+      ).toThrow();
+    });
+
+    it("rejects malformed persisted event JSON", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.listEventPage).mockReturnValue({
+        events: [eventRow("e1", "token", "{bad", 1000)],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      expect(() =>
+        stream.listEvents({
+          cursor: null,
+          limit: 10,
+          type: "token",
+          messageId: null,
+        })
+      ).toThrow(SyntaxError);
+    });
   });
 });
