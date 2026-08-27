@@ -44,7 +44,7 @@ export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
   prCommentsEnabled: true,
   openInspectReviewsEnabled: true,
   allowedReviewBots: [],
-  maxAttemptsPerPrPer24Hours: 10,
+  maxAttemptsPerPrPer24Hours: 30,
 };
 
 /** Overridable behavior settings for the GitHub bot. Used at both global and repo levels. */
