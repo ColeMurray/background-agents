@@ -462,7 +462,7 @@ describe("ProviderAccountsSettings", () => {
     );
   });
 
-  it("surfaces reconnect as the primary action when an account needs attention", () => {
+  it("surfaces reconnect only as the primary action when an account needs attention", async () => {
     accountsResult = [{ ...account, status: "reconnect_required" }];
     render(<ProviderAccountsSettings />);
 
@@ -470,9 +470,15 @@ describe("ProviderAccountsSettings", () => {
     expect(
       screen.getByText("This account cannot start new sessions until it is reconnected.")
     ).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Reconnect" })).not.toBeInTheDocument();
   });
 
-  it("surfaces enable as the primary action when an account is disabled", () => {
+  it("surfaces enable as the primary action when an account is disabled", async () => {
     accountsResult = [{ ...account, status: "disabled" }];
     render(<ProviderAccountsSettings />);
 
@@ -480,6 +486,11 @@ describe("ProviderAccountsSettings", () => {
     expect(
       screen.getByText("This account is disabled and is not available for new sessions.")
     ).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitem", { name: "Reconnect" })).toBeInTheDocument();
   });
 
   it("confirms disable and runs the lifecycle action", async () => {

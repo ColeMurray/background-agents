@@ -397,16 +397,18 @@ export function ProviderAccountsSettings() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                disabled={saving}
-                                onSelect={() =>
-                                  beginConnection(
-                                    CONNECTION_STRATEGIES[account.provider].reconnect(account)
-                                  )
-                                }
-                              >
-                                Reconnect
-                              </DropdownMenuItem>
+                              {account.status !== "reconnect_required" && (
+                                <DropdownMenuItem
+                                  disabled={saving}
+                                  onSelect={() =>
+                                    beginConnection(
+                                      CONNECTION_STRATEGIES[account.provider].reconnect(account)
+                                    )
+                                  }
+                                >
+                                  Reconnect
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem
                                 disabled={saving || account.status !== "active"}
                                 onSelect={() =>
