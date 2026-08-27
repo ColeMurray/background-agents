@@ -35,22 +35,34 @@ export interface GitHubBotSettings {
 export const scmSettingsSchema = z
   .object({
     /** Always open pull/merge requests created by sessions as drafts. */
-    alwaysUseDraftMode: z.boolean().optional(),
+    alwaysUseDraftMode: z.boolean({ error: "alwaysUseDraftMode must be a boolean" }).optional(),
     /** Label applied to pull/merge requests created by sessions. */
-    pullRequestLabel: z.string().optional(),
+    pullRequestLabel: z
+      .string({ error: "pullRequestLabel must be a string" })
+      .trim()
+      .refine((label) => !label.includes(","), {
+        message: "pullRequestLabel must not contain commas",
+      })
+      .optional(),
   })
-  .strict();
+  .strict()
+  .transform(({ alwaysUseDraftMode, pullRequestLabel }) => ({
+    ...(alwaysUseDraftMode !== undefined ? { alwaysUseDraftMode } : {}),
+    ...(pullRequestLabel ? { pullRequestLabel } : {}),
+  }));
 
 export type ScmSettings = z.infer<typeof scmSettingsSchema>;
 
 export const scmGlobalConfigSchema = z
   .object({
-    enabledRepos: z.array(z.string()).optional(),
     defaults: scmSettingsSchema.optional(),
   })
   .strict();
 
-export type ScmGlobalConfig = z.infer<typeof scmGlobalConfigSchema>;
+/** SCM has no per-repository enable/disable allowlist. */
+export type ScmGlobalConfig = z.infer<typeof scmGlobalConfigSchema> & {
+  enabledRepos?: never;
+};
 
 /** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
 export type ScmRepoSettings = ScmSettings;

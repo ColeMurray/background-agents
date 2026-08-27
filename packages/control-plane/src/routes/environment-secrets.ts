@@ -25,26 +25,9 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
+import { parseSecretsRequestBody } from "./secrets-request";
 
 const logger = createLogger("router:environment-secrets");
-
-function parseEnvironmentSecretsBody(body: unknown): Record<string, string> | Response {
-  if (!body || typeof body !== "object" || Array.isArray(body) || !("secrets" in body)) {
-    return error("Request body must include secrets object", 400);
-  }
-
-  const secrets = body.secrets;
-  if (!secrets || typeof secrets !== "object") {
-    return error("Request body must include secrets object", 400);
-  }
-
-  const parsed: Record<string, string> = {};
-  for (const [key, value] of Object.entries(secrets)) {
-    if (typeof value !== "string") return error("Value must be a string", 400);
-    parsed[key] = value;
-  }
-  return parsed;
-}
 
 /**
  * Post-mutation hook (design §7.4): supersede every live image — their baked
@@ -147,7 +130,7 @@ async function handleSetEnvironmentSecrets(
 
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
-  const secrets = parseEnvironmentSecretsBody(body);
+  const secrets = parseSecretsRequestBody(body);
   if (secrets instanceof Response) return secrets;
 
   const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);

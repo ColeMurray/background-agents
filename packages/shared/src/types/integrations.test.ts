@@ -76,20 +76,24 @@ describe("resolveBuildTimeoutSeconds", () => {
 });
 
 describe("SCM settings schemas", () => {
-  it("parses valid global and repo settings", () => {
+  it("parses and normalizes valid global and repo settings", () => {
     expect(
-      scmGlobalConfigSchema.safeParse({
-        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "agent" },
-      }).success
-    ).toBe(true);
-    expect(scmSettingsSchema.safeParse({ alwaysUseDraftMode: false }).success).toBe(true);
+      scmGlobalConfigSchema.parse({
+        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "  agent  " },
+      })
+    ).toEqual({ defaults: { alwaysUseDraftMode: true, pullRequestLabel: "agent" } });
+    expect(scmSettingsSchema.parse({ alwaysUseDraftMode: false, pullRequestLabel: "   " })).toEqual(
+      { alwaysUseDraftMode: false }
+    );
   });
 
   it("rejects malformed global and repo settings", () => {
+    expect(scmGlobalConfigSchema.safeParse({ enabledRepos: ["acme/web"] }).success).toBe(false);
     expect(scmGlobalConfigSchema.safeParse({ defaults: { pullRequestLabel: 123 } }).success).toBe(
       false
     );
     expect(scmSettingsSchema.safeParse({ alwaysUseDraftMode: "yes" }).success).toBe(false);
+    expect(scmSettingsSchema.safeParse({ pullRequestLabel: "release,agent" }).success).toBe(false);
   });
 });
 

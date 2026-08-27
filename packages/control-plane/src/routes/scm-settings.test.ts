@@ -45,12 +45,12 @@ describe("SCM settings routes", () => {
   );
 
   it.each([
-    ["PUT", "/scm-settings", { settings: { enabledRepos: ["acme/web"] } }, "Unknown SCM"],
+    ["PUT", "/scm-settings", { settings: { enabledRepos: ["acme/web"] } }, "Unrecognized key"],
     [
       "PUT",
       "/scm-settings/repos/acme/web",
       { settings: { alwaysUseDraftMode: "yes" } },
-      "Invalid input",
+      "alwaysUseDraftMode must be a boolean",
     ],
   ])("rejects malformed settings for %s %s before storage", async (method, path, body, message) => {
     const { route, match } = findRoute(method, path);

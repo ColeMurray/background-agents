@@ -61,6 +61,48 @@ describe("environment secrets routes", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
+  it("rejects array-shaped secrets before persistence", async () => {
+    const { route, match } = findRoute("PUT", "/environments/env-1/secrets");
+    const { ctx, batch } = createContext();
+
+    const response = await route.handler(
+      new Request("https://test.local/environments/env-1/secrets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secrets: [] }),
+      }),
+      { REPO_SECRETS_ENCRYPTION_KEY: "test-key" } as never,
+      match,
+      ctx
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Request body must include secrets object",
+    });
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it("preserves an own __proto__ secret key for canonical normalization", async () => {
+    const { route, match } = findRoute("PUT", "/environments/env-1/secrets");
+    const { ctx, batch } = createContext();
+
+    const response = await route.handler(
+      new Request("https://test.local/environments/env-1/secrets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: '{"secrets":{"__proto__":"value"}}',
+      }),
+      { REPO_SECRETS_ENCRYPTION_KEY: generateEncryptionKey() } as never,
+      match,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ keys: ["__PROTO__"], created: 1 });
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+
   it("accepts valid secret records", async () => {
     const { route, match } = findRoute("PUT", "/environments/env-1/secrets");
     const { ctx, batch } = createContext();

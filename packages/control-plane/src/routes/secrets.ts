@@ -19,6 +19,7 @@ import {
   extractRepoParams,
   resolveRepoOrError,
 } from "./shared";
+import { parseSecretsRequestBody } from "./secrets-request";
 
 const logger = createLogger("router:secrets");
 
@@ -44,12 +45,10 @@ async function handleSetRepoSecrets(
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
 
-  const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
+  const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
-
-  if (!body?.secrets || typeof body.secrets !== "object") {
-    return error("Request body must include secrets object", 400);
-  }
+  const secrets = parseSecretsRequestBody(body);
+  if (secrets instanceof Response) return secrets;
 
   const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
@@ -58,7 +57,7 @@ async function handleSetRepoSecrets(
       resolved.repoId,
       resolved.repoOwner,
       resolved.repoName,
-      body.secrets
+      secrets
     );
 
     logger.info("repo.secrets_updated", {
@@ -242,17 +241,15 @@ async function handleSetGlobalSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
+  const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
-
-  if (!body?.secrets || typeof body.secrets !== "object") {
-    return error("Request body must include secrets object", 400);
-  }
+  const secrets = parseSecretsRequestBody(body);
+  if (secrets instanceof Response) return secrets;
 
   const store = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
-    const result = await store.setSecrets(body.secrets);
+    const result = await store.setSecrets(secrets);
 
     logger.info("global.secrets_updated", {
       event: "global.secrets_updated",
