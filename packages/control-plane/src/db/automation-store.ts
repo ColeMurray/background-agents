@@ -320,8 +320,8 @@ export class AutomationStore {
   // --- Automation CRUD ---
 
   /**
-   * Prepared INSERT for an automation row. Public so a route can compose it with
-   * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
+   * Prepared INSERT for an automation row. The aggregate writer composes it with
+   * relationship and trigger-index statements in one atomic batch.
    */
   bindAutomationInsert(row: AutomationRow): SqlStatement {
     return this.db
@@ -462,10 +462,14 @@ export class AutomationStore {
 
   /**
    * Build the dynamic UPDATE statement for the allowed automation fields, or
-   * null when `fields` carries nothing to write. Public so a route can compose it
-   * with `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
+   * null when `fields` carries nothing to write. The aggregate writer composes
+   * it with relationship and trigger-index statements in one atomic batch.
    */
-  bindAutomationUpdate(id: string, fields: Partial<AutomationRow>): SqlStatement | null {
+  bindAutomationUpdate(
+    id: string,
+    fields: Partial<AutomationRow>,
+    now: number = Date.now()
+  ): SqlStatement | null {
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -496,7 +500,7 @@ export class AutomationStore {
     if (setClauses.length === 0) return null;
 
     setClauses.push("updated_at = ?");
-    params.push(Date.now());
+    params.push(now);
     params.push(id);
 
     return this.db
