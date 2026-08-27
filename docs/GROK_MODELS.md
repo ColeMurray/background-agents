@@ -25,88 +25,88 @@ The **xAI / SuperGrok** group is disabled by default. An administrator must enab
 
 ## Setup
 
-### Step 1: Obtain an xAI OAuth Refresh Token
+### Step 1: Connect SuperGrok
 
-Use OpenCode 1.17.18 or newer on a trusted local machine:
+1. Open **Settings > Provider Accounts**.
+2. Choose **Add account > SuperGrok**.
+3. Open the xAI device authorization page and approve access with the displayed code.
+4. Keep the dialog open until Open-Inspect confirms the connection.
 
-1. Install and launch [OpenCode](https://opencode.ai).
-2. Run `/connect setup`.
-3. Select **xAI Grok OAuth (SuperGrok Subscription)** and complete the browser login. For a remote
-   machine, select the headless/device-code xAI option instead.
-4. Open OpenCode's credential file:
-   ```bash
-   cat ~/.local/share/opencode/auth.json
-   ```
-5. In the `xai` entry, copy the `refresh` value.
+Open-Inspect creates the account as **SuperGrok account** by default. Use **Rename** afterward if
+you need to distinguish multiple subscriptions.
 
-Treat this value like a password. Do not copy the short-lived `access` value into Open-Inspect and
-do not commit either value to a repository.
+The refresh token is returned directly to the control plane and encrypted there. It is never shown
+in the browser or copied through the sandbox. Provider accounts are installation-wide and available
+to every admitted user in the deployment.
 
-xAI refresh tokens rotate. After transferring the token, do not keep using the same xAI credential
-entry in local OpenCode: a local refresh can rotate the token before Open-Inspect persists it.
-Remove the local `xai` entry or reserve that login exclusively for Open-Inspect. If another client
-rotates the token, repeat this step and replace the stored secret.
+### Step 2: Configure Defaults
 
-### Step 2: Store the Refresh Token
+Choose an xAI **Default account** in **Settings > Provider Accounts**. Set **Unattended mode** to
+**Use default account** for Slack, GitHub, Linear, and unpinned automation runs to use SuperGrok, or
+choose **Use API key** to retain the metered API-key path for unattended launches.
 
-In the Open-Inspect web app, open **Settings > Secrets** and add:
-
-| Secret name               | Value                                 |
-| ------------------------- | ------------------------------------- |
-| `XAI_OAUTH_REFRESH_TOKEN` | The `xai.refresh` value from OpenCode |
-
-Choose the scope based on who should share the subscription:
-
-| Scope       | Sessions that use it                                                               |
-| ----------- | ---------------------------------------------------------------------------------- |
-| Global      | Any session without a more specific managed xAI credential                         |
-| Repository  | Sessions launched from that repository; overrides global                           |
-| Environment | Sessions launched from that environment; overrides global and ignores repo secrets |
-
-For an ad-hoc multi-repository session, managed OAuth credentials come from the primary repository
-only, then fall back to global. A secondary repository cannot become the token rotation source.
+Defaults affect newly created sessions only. Existing sessions keep their pinned provider-account,
+API-key, or `legacy_scoped_oauth` mode. When a new session has no explicit selection or xAI default,
+it also persists `legacy_scoped_oauth`: a resolved legacy refresh token uses the managed broker,
+while its absence leaves `XAI_API_KEY` available as the compatibility fallback.
 
 ### Step 3: Enable and Select Grok
 
 1. Open **Settings > Models**.
 2. Enable **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **xAI / SuperGrok**.
-3. Create a new session or restart an existing sandbox.
-4. Select the enabled Grok model and the desired reasoning effort.
+3. Create a new session.
+4. Select the enabled Grok model and desired reasoning effort.
+5. Use **xAI authentication** to follow provider policy, select a specific account, or choose **Use
+   API key**.
+
+Automation editors expose xAI authentication independently of the configured model. Leave it on
+**Use defaults when each run starts**, or pin a specific account or API-key mode for future runs.
 
 ---
 
 ## How Authentication Works
 
-The OAuth refresh token stays in the encrypted control-plane secret store:
+The provider-account OAuth refresh token stays in the encrypted credential store:
 
-1. At sandbox creation, Open-Inspect removes xAI OAuth credentials from the generic environment and
-   injects only the non-secret `XAI_OAUTH_MANAGED=1` marker.
-2. The sandbox runtime writes an xAI OAuth sentinel to OpenCode's `auth.json` and installs the xAI
+1. Session creation pins a concrete xAI provider account, API-key mode, or legacy scoped-OAuth mode.
+2. In account mode, Open-Inspect removes `XAI_API_KEY` and legacy xAI OAuth fields from the sandbox
+   environment and injects only the non-secret `XAI_OAUTH_MANAGED=1` marker.
+3. The sandbox runtime writes an xAI OAuth sentinel to OpenCode's `auth.json` and installs the xAI
    auth proxy plugin.
-3. The plugin calls the sandbox-authenticated `/sessions/:id/xai-token-refresh` broker.
-4. The control plane returns a short-lived access token, caches it, and writes any rotated refresh
-   token back to the same global, repository, or environment scope it came from.
-5. The plugin replaces OpenCode's dummy authorization header with the short-lived bearer token.
+4. The plugin calls `POST /sessions/:id/provider-auth/xai/access-token` with the session's sandbox
+   credential.
+5. The control plane returns a short-lived access token and atomically persists rotated account
+   credentials.
+6. The plugin replaces OpenCode's dummy authorization header with the short-lived bearer token.
 
-The sandbox never receives `XAI_OAUTH_REFRESH_TOKEN`. Broker responses use
-`Cache-Control: no-store`, and the endpoint rejects user and service credentials in favor of the
-matching session's sandbox token.
+For a `legacy_scoped_oauth` binding, the generic broker delegates to the legacy scoped refresh path.
+If the resolved secrets contain no legacy xAI refresh token, sandbox preparation leaves
+`XAI_API_KEY` available as the compatibility fallback instead.
+
+The sandbox never receives the refresh token. Broker responses use `Cache-Control: no-store`, and
+the endpoint rejects user and service credentials in favor of the matching session's sandbox token.
 
 ---
 
 ## Deployment and Rollout
 
-The xAI proxy plugin is part of `packages/sandbox-runtime`. After upgrading Open-Inspect, rebuild
-the sandbox runtime image or provider snapshot before testing Grok. Existing images do not gain the
-plugin merely because the control plane was deployed.
+The provider-account xAI proxy plugin is part of `packages/sandbox-runtime`. Before rollout, rebuild
+**every** sandbox runtime image, template, and provider snapshot. Existing images do not gain the
+generic provider-auth endpoint merely because the control plane was deployed.
 
 Before production rollout, run a staging session with an eligible SuperGrok account and verify:
 
 - The selected Grok model is available to the account.
 - A prompt succeeds at each enabled reasoning effort.
 - A second prompt reuses or refreshes the brokered access token.
-- A new sandbox can authenticate after token refresh without replacing the stored secret manually.
-- Sandbox environment inspection does not reveal `XAI_OAUTH_REFRESH_TOKEN`.
+- A new sandbox can authenticate after token refresh without reconnecting the account manually.
+- Sandbox environment inspection reveals neither the refresh token nor `XAI_API_KEY` in account
+  mode.
+
+Legacy scoped OAuth continues to work alongside provider accounts. Set an xAI default when new
+sessions should use the connected account; existing sessions keep their pinned authentication. The
+settings page lists legacy key locations so operators can remove them after legacy-bound sessions
+are no longer needed. See [Using OpenAI Models](OPENAI_MODELS.md#deployment-and-coexistence).
 
 ---
 
@@ -117,16 +117,15 @@ Before production rollout, run a staging session with an eligible SuperGrok acco
 Enable **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **Settings > Models**. The xAI group
 is opt-in and is not part of the default enabled model set.
 
-### `XAI_OAUTH_REFRESH_TOKEN not configured`
+### Session uses API-key mode unexpectedly
 
-Check the session target's secret scope. Environment sessions do not inherit repository secrets, and
-multi-repository sessions use only the primary repository for managed OAuth credentials. Restart the
-sandbox after changing secrets.
+Inspect the session or automation authentication selector and verify the xAI default and unattended
+mode. Without a default or explicit choice, new sessions preserve legacy scoped behavior.
 
 ### `xAI token refresh failed: unauthorized` or `invalid_grant`
 
-The refresh token was revoked, expired, or already rotated elsewhere. Repeat the local OpenCode
-login and replace `XAI_OAUTH_REFRESH_TOKEN` in the same secret scope.
+The refresh token was revoked, expired, or already rotated elsewhere. Use **Reconnect** on the
+provider account and complete xAI device authorization again.
 
 ### `Model not found: xai/grok-4.6`, `xai/grok-4.5`, or `xai/grok-build-0.1`
 

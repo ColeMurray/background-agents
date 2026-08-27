@@ -39,7 +39,7 @@ type SessionRepositoryRow = {
 };
 
 const QUERY_PATTERNS = {
-  INSERT_SESSION: /^INSERT OR IGNORE INTO sessions/,
+  INSERT_SESSION: /^INSERT INTO sessions/,
   INSERT_SESSION_REPO: /^INSERT INTO session_repositories/,
   SELECT_SESSION_REPOS: /^SELECT \* FROM session_repositories WHERE session_id IN/,
   SELECT_PR_SUMMARIES: /FROM session_pull_requests WHERE session_id IN/,
@@ -188,6 +188,8 @@ class FakeD1Database {
     const normalized = normalizeQuery(query);
 
     if (QUERY_PATTERNS.INSERT_SESSION.test(normalized)) {
+      if (this.rows.has(args[0] as string))
+        throw new Error("UNIQUE constraint failed: sessions.id");
       const [
         id,
         title,
@@ -542,12 +544,48 @@ describe("SessionIndexStore", () => {
       );
     });
 
+    it("rejects invalid or duplicate provider auth before writing the session batch", async () => {
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              {
+                provider: "other" as never,
+                authMode: "api_key",
+                selectionSource: "explicit",
+              },
+            ],
+          })
+        )
+      ).rejects.toThrow("Unsupported model provider");
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+            ],
+          })
+        )
+      ).rejects.toThrow("Duplicate provider auth: openai");
+      await expect(
+        store.create(
+          makeSession({
+            providerAuth: [
+              { provider: "openai", authMode: "api_key", selectionSource: "explicit" },
+            ],
+          })
+        )
+      ).rejects.toThrow("must include every subscription provider");
+      expect(await store.exists("test-id")).toBe(false);
+    });
+
     it("throws instead of silently skipping a duplicate insert", async () => {
       const session = makeSession();
       await store.create(session);
 
       await expect(store.create(makeSession({ title: "Different Title" }))).rejects.toThrow(
-        "Session index insert was skipped"
+        "UNIQUE constraint failed"
       );
 
       const result = await store.get("test-id");

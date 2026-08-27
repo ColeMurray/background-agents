@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
 import { SandboxProviderError } from "../provider";
 import { ModalApiError } from "../client";
+import { RequestDeadlineError } from "../request-deadline";
 import type {
   ModalClient,
   CreateSandboxRequest,
@@ -46,7 +47,6 @@ function createMockModalClient(
       async (): Promise<CreateSandboxResponse> => ({
         sandboxId: "sandbox-123",
         modalObjectId: "modal-obj-123",
-        status: "created",
         createdAt: Date.now(),
       })
     ),
@@ -194,10 +194,10 @@ describe("ModalSandboxProvider", () => {
         }
       });
 
-      it("classifies 'timeout' errors as transient", async () => {
+      it("classifies typed request deadline errors as transient", async () => {
         const client = createMockModalClient({
           createSandbox: vi.fn(async () => {
-            throw new Error("Request timeout after 30000ms");
+            throw new RequestDeadlineError("Modal", "createSandbox", 30_000);
           }),
         });
         const provider = new ModalSandboxProvider(client);
@@ -480,7 +480,6 @@ describe("ModalSandboxProvider", () => {
       const expectedResult = {
         sandboxId: "sandbox-abc",
         modalObjectId: "modal-obj-xyz",
-        status: "created",
         createdAt: 1234567890,
         vncUrl: "https://vnc.test",
         vncPassword: "vnc-pw",
@@ -495,7 +494,6 @@ describe("ModalSandboxProvider", () => {
 
       expect(result.sandboxId).toBe("sandbox-abc");
       expect(result.providerObjectId).toBe("modal-obj-xyz");
-      expect(result.status).toBe("created");
       expect(result.createdAt).toBe(1234567890);
       expect(result).toMatchObject({
         vncAccess: { url: "https://vnc.test", password: "vnc-pw" },

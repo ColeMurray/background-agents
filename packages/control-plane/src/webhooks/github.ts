@@ -1,7 +1,7 @@
 /**
  * GitHub automation event webhook route — internal endpoint that receives
  * pre-normalized GitHubAutomationEvents from the github-bot, proxies them to
- * the SchedulerDO for automation matching, and piggybacks PR lifecycle
+ * the scheduler for automation matching, and piggybacks PR lifecycle
  * tracking (design §5.2) on the same forward. The lifecycle step runs in the
  * background and is additive: its failure never affects automation matching.
  */
@@ -117,10 +117,11 @@ async function handleGitHubAutomationEvent(
     return validated.response;
   }
 
-  const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
-  ctx.executionCtx.submit(lifecycleWork);
+  ctx.executionCtx.submit(() => trackPullRequestLifecycle(env, validated.event, ctx), {
+    name: "github_webhook.lifecycle",
+  });
 
-  return forwardAutomationEventToScheduler(env, validated.event);
+  return forwardAutomationEventToScheduler(env, validated.event, ctx);
 }
 
 export const githubAutomationEventRoute: Route = defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {

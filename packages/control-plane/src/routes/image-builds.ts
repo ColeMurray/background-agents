@@ -8,9 +8,9 @@
  * - Enabled-scope and status queries
  */
 
-import type {
-  ImageBuildRecordView,
-  ImageBuildStatusResponse,
+import {
+  type ImageBuildStatusResponse,
+  repositoryShaEntrySchema,
 } from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
 import { ImageBuildStore } from "../db/image-builds";
@@ -24,7 +24,6 @@ import {
   type ImageBuildScope,
 } from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
-import { repositoryShaEntrySchema } from "../image-builds/provenance";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
@@ -402,7 +401,7 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
 async function readStatusRows(
   db: SqlDatabase,
   scope: ImageBuildScope | null
-): Promise<ImageBuildRecordView[]> {
+): Promise<ImageBuildStatusResponse["images"]> {
   const store = new ImageBuildStore(db);
   if (scope) return store.getStatus(scope);
   return store.getStatusForEnabledScopes(await listEnabledScopes(db));
@@ -413,9 +412,9 @@ async function readStatusRows(
  * With a scope: that scope's recent non-superseded rows (the settings UI /
  * debugging view). Without: the cron's cross-scope view over every
  * prebuild-enabled scope — non-superseded, so failed builds are visible in
- * the aggregate feed. Rows are the `ImageBuildRecordView` projection
- * (snake_case columns; repository_shas is a JSON document) — the store drops
- * internal columns, so no callback token or provider id reaches a client.
+ * the aggregate feed. The store maps its public-safe projection to
+ * `ImageBuildRecordView`, so no storage encoding, callback token, or provider
+ * id reaches a client.
  */
 async function handleGetStatus(
   request: Request,

@@ -15,4 +15,26 @@ describe("package root compatibility", () => {
       shared.RepositoryPairValidationError
     );
   });
+
+  it("exports provider account contracts from the package root", () => {
+    expect(shared.SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai"]);
+    expect(
+      shared.modelProviderSelectionsSchema.safeParse({ xai: { mode: "api_key" } }).success
+    ).toBe(true);
+  });
+
+  it("exports GitHub Autofix contracts from the package root", () => {
+    expect(
+      shared.githubAutofixEnvelopeSchema.safeParse({
+        version: 1,
+        eventType: "issue_comment",
+        action: "created",
+        deliveryId: "delivery-1",
+        providerObject: { kind: "pr_comment", id: "123" },
+        repository: { id: "456", owner: "acme", name: "widgets" },
+        pullRequestNumber: 42,
+        receivedAt: "2026-08-26T12:00:00.000Z",
+      }).success
+    ).toBe(true);
+  });
 });

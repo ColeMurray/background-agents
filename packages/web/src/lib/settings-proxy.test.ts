@@ -21,7 +21,7 @@ function streamingMutationRequest(size: number, cookie?: string): NextRequest {
 }
 
 describe("settingsProxy", () => {
-  const { GET, POST, PUT } = settingsProxy(() => "/settings", "settings");
+  const { DELETE, GET, POST, PUT } = settingsProxy(() => "/settings", "settings");
   const context = { params: Promise.resolve(undefined) };
 
   beforeEach(() => vi.resetAllMocks());
@@ -106,6 +106,46 @@ describe("settingsProxy", () => {
     expect(response.status).toBe(413);
     await expect(response.json()).resolves.toEqual({ error: "Request body is too large" });
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
+  it("allows mutation bodies exactly at the configured cap", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+    const response = await POST(
+      streamingMutationRequest(
+        SETTINGS_PROXY_MAX_BODY_BYTES,
+        "__Secure-openinspect.session_token=session.signature"
+      ),
+      { params: Promise.resolve(undefined) }
+    );
+
+    const [path, init] = vi.mocked(controlPlaneUserFetch).mock.calls[0];
+    expect(path).toBe("/settings");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toHaveLength(SETTINGS_PROXY_MAX_BODY_BYTES);
+    expect(response.status).toBe(200);
+  });
+
+  it("forwards DELETE with CAS headers without requiring or reading a body", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(new Response(null, { status: 204 }));
+    const request = new NextRequest("http://localhost/api/settings", {
+      method: "DELETE",
+      headers: { "If-Match": 'W/"revision-3"' },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(SETTINGS_PROXY_MAX_BODY_BYTES + 1));
+        },
+      }),
+      duplex: "half",
+    } as never);
+
+    const response = await DELETE(request, context);
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", {
+      method: "DELETE",
+      headers: { "If-Match": 'W/"revision-3"' },
+    });
+    expect(request.bodyUsed).toBe(false);
+    expect(response.status).toBe(204);
   });
 
   it("keeps resource request failures distinct from unauthorized responses", async () => {

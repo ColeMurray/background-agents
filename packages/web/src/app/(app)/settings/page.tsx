@@ -15,8 +15,9 @@ import { ScmSettingsPage } from "@/components/settings/scm-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
 import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
+import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
 import { SkillsSettings } from "@/components/settings/skills-settings";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { SidebarIcon, BackIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -25,6 +26,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   secrets: "Secrets",
   environments: "Environments",
   models: "Models",
+  "provider-accounts": "Accounts",
   images: "Images",
   appearance: "Appearance",
   "keyboard-shortcuts": "Keyboard",
@@ -40,6 +42,7 @@ const VALID_CATEGORIES = new Set<string>([
   "secrets",
   "environments",
   "models",
+  "provider-accounts",
   "images",
   "appearance",
   "keyboard-shortcuts",
@@ -56,6 +59,7 @@ function isValidCategory(tab: string | null): tab is SettingsCategory {
 }
 
 function SettingsPageContent() {
+  const { labels } = useKeyboardShortcuts();
   const { isOpen, toggle } = useSidebarContext();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
@@ -92,6 +96,7 @@ function SettingsPageContent() {
       {activeCategory === "secrets" && <SecretsSettings />}
       {activeCategory === "environments" && <EnvironmentsSettings />}
       {activeCategory === "models" && <ModelsSettings />}
+      {activeCategory === "provider-accounts" && <ProviderAccountsSettings />}
       {activeCategory === "images" && repoImagesEnabled && <ImagesSettings />}
       {activeCategory === "appearance" && <AppearanceSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
@@ -115,8 +120,8 @@ function SettingsPageContent() {
                   type="button"
                   onClick={toggle}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-                  aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+                  title={`Open sidebar (${labels["toggle-sidebar"]})`}
+                  aria-label={`Open sidebar (${labels["toggle-sidebar"]})`}
                 >
                   <SidebarIcon className="w-4 h-4" />
                 </button>
@@ -138,8 +143,8 @@ function SettingsPageContent() {
                   type="button"
                   onClick={toggle}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-                  aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
+                  title={`Open sidebar (${labels["toggle-sidebar"]})`}
+                  aria-label={`Open sidebar (${labels["toggle-sidebar"]})`}
                 >
                   <SidebarIcon className="w-4 h-4" />
                 </button>

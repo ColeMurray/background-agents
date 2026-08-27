@@ -25,6 +25,12 @@ describe("resolveModelPreference", () => {
     ).toEqual({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
   });
 
+  it("preserves an omitted effort so the model default remains selectable", () => {
+    expect(resolveModelPreference({ model: "openai/gpt-5.6-sol" }, ["openai/gpt-5.6-sol"])).toEqual(
+      { model: "openai/gpt-5.6-sol", reasoningEffort: undefined }
+    );
+  });
+
   it("uses the default when the loaded enabled-model list is empty", () => {
     expect(
       resolveModelPreference({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" }, [])

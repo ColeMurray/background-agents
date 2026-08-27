@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const GITHUB_OAUTH_REQUEST_TIMEOUT_MS = 10_000;
+
 const githubOAuthErrorSchema = z.object({
   error: z.string().optional(),
   error_description: z.string().optional(),
@@ -54,6 +56,7 @@ export async function refreshAccessToken(
       grant_type: "refresh_token",
       refresh_token: refreshToken,
     }),
+    signal: AbortSignal.timeout(GITHUB_OAUTH_REQUEST_TIMEOUT_MS),
   });
 
   return parseGitHubTokenResponse(response);

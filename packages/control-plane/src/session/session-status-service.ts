@@ -17,14 +17,12 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
-import type { BackgroundJobDispatcher } from "../platform-ports";
-
-/** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
-const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
+import type { BackgroundTasks } from "../platform-ports";
+import { isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
 export class SessionStatusService {
   constructor(
-    private readonly backgroundJobs: BackgroundJobDispatcher,
+    private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
@@ -53,7 +51,7 @@ export class SessionStatusService {
       ).catch((error) =>
         this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
       );
-      if (TERMINAL_STATUSES.includes(status)) {
+      if (isTurnSettled(status)) {
         this.syncSessionMetrics(publicSessionId);
       }
       return false;
@@ -127,7 +125,7 @@ export class SessionStatusService {
 
     this.messenger.broadcast({ type: "session_status", status });
 
-    if (TERMINAL_STATUSES.includes(status)) {
+    if (isTurnSettled(status)) {
       this.syncSessionMetrics(publicSessionId);
     }
 
@@ -161,6 +159,16 @@ export class SessionStatusService {
     return nextStatus;
   }
 
+  /**
+   * The status an idle session should hold, read off its finished messages.
+   *
+   * Falling back to `created` sends a session *backwards* into draft, which
+   * looks like a bug and is not. It is reachable only when the session has no
+   * messages at all -- cancelling the only pending prompt deletes its row --
+   * and returning an empty session to draft is what lets the 8-hour
+   * abandoned-draft sweep reclaim it. That behaviour was added deliberately
+   * after dead sessions accumulated. Do not "fix" it to `completed`.
+   */
   private getIdleStatusFromTerminalMessages(): SessionStatus {
     const latestMessage = this.messageRepository.getLatestTerminalMessage();
     return latestMessage ? (latestMessage.status === "failed" ? "failed" : "completed") : "created";
@@ -181,9 +189,9 @@ export class SessionStatusService {
     const parentDoId = this.parentSessions.idFromName(parentId);
     const parentStub = this.parentSessions.get(parentDoId);
 
-    this.backgroundJobs.submit(
-      parentStub
-        .fetch(
+    this.backgroundTasks.submit(
+      () =>
+        parentStub.fetch(
           new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -193,15 +201,15 @@ export class SessionStatusService {
               title: update.title,
             }),
           })
-        )
-        .catch((error) => {
-          this.log.error("notify_parent.failed", {
-            parent_id: parentId,
-            child_id: childSessionId,
-            status: update.status,
-            error,
-          });
-        })
+        ),
+      {
+        name: "session.notify_parent",
+        context: {
+          parent_id: parentId,
+          child_id: childSessionId,
+          status: update.status,
+        },
+      }
     );
   }
 
@@ -247,7 +255,8 @@ export class SessionStatusService {
   }
 
   private syncSessionMetrics(sessionId: string): void {
-    if (!this.sessionIndex) return;
+    const sessionIndex = this.sessionIndex;
+    if (!sessionIndex) return;
 
     const session = this.repository.getSession();
     if (!session) return;
@@ -257,20 +266,18 @@ export class SessionStatusService {
     const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
-    this.backgroundJobs.submit(
-      this.sessionIndex
-        .updateMetrics(sessionId, {
+    this.backgroundTasks.submit(
+      () =>
+        sessionIndex.updateMetrics(sessionId, {
           totalCost: session.total_cost ?? 0,
           activeDurationMs,
           messageCount,
           prCount,
-        })
-        .catch((error) => {
-          this.log.error("session_index.update_metrics.background_error", {
-            session_id: sessionId,
-            error,
-          });
-        })
+        }),
+      {
+        name: "session_index.update_metrics",
+        context: { session_id: sessionId },
+      }
     );
   }
 }

@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { serializeBrowserSessionCookies } from "@/lib/browser-session-cookie";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { relayJsonResponse } from "@/lib/control-plane-json-proxy";
+import { PRIVATE_NO_STORE_HEADERS, relayJsonResponse } from "@/lib/control-plane-json-proxy";
 
 type ProxyMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
@@ -47,11 +47,17 @@ async function relaySettingsResource(
       if (method !== "DELETE") {
         const cookieHeader = serializeBrowserSessionCookies(request.cookies.getAll());
         if (!cookieHeader) {
-          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+          return NextResponse.json(
+            { error: "Unauthorized" },
+            { status: 401, headers: PRIVATE_NO_STORE_HEADERS }
+          );
         }
         const body = await readMutationBody(request);
         if (!body) {
-          return NextResponse.json({ error: "Request body is too large" }, { status: 413 });
+          return NextResponse.json(
+            { error: "Request body is too large" },
+            { status: 413, headers: PRIVATE_NO_STORE_HEADERS }
+          );
         }
         init.body = new TextDecoder().decode(body);
       }
@@ -63,7 +69,7 @@ async function relaySettingsResource(
     console.error(`Failed to ${METHOD_VERBS[method]} ${label}:`, error);
     return NextResponse.json(
       { error: `Failed to ${METHOD_VERBS[method]} ${label}` },
-      { status: 500 }
+      { status: 500, headers: PRIVATE_NO_STORE_HEADERS }
     );
   }
 }

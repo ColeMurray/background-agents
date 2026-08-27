@@ -132,8 +132,15 @@ function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
     db: {} as SqlDatabase,
     metrics: createRequestMetrics(),
     executionCtx: {
-      submit: (task: Promise<unknown>) => {
-        waitUntilTasks?.push(task);
+      submit: (task: () => Promise<unknown>) => {
+        // Contract-faithful: run the factory even without a collector, and
+        // absorb synchronous throws like the production boundary does.
+        try {
+          const pending = task();
+          waitUntilTasks?.push(pending);
+        } catch {
+          // Absorbed like background_task.failed.
+        }
       },
     },
   };

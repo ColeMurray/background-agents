@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PlusIcon } from "@/components/ui/icons";
-import { errorMessage, ScopeCheckbox } from "./shared";
+import { ScopeCheckbox } from "./shared";
+import { errorMessage } from "./utils";
 
 interface ProfileFormProps {
   profile?: SkillProfile;

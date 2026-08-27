@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { applyTitleUpdate, isSessionListKey, type SessionListResponse } from "@/lib/session-list";
@@ -101,8 +101,11 @@ export function useSessionRename({
   const { mutate } = useSWRConfig();
   const currentTitleRef = useRef(currentTitle);
   const authoritativeTitleRef = useRef(authoritativeTitle);
-  currentTitleRef.current = currentTitle;
-  authoritativeTitleRef.current = authoritativeTitle;
+
+  useLayoutEffect(() => {
+    currentTitleRef.current = currentTitle;
+    authoritativeTitleRef.current = authoritativeTitle;
+  }, [authoritativeTitle, currentTitle]);
 
   const subscribe = useCallback(
     (listener: () => void) => {
