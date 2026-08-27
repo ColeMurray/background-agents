@@ -161,6 +161,22 @@ describe("McpServerStore", () => {
       expect(result!.command).toEqual(["not-json"]);
     });
 
+    it("rejects parsed command JSON that is not an array", async () => {
+      const malformedRow = { ...sampleRow, command: JSON.stringify({ command: "npx" }) };
+      const { db } = createFakeD1({ firstResult: malformedRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      await expect(store.get("abc123")).rejects.toThrow();
+    });
+
+    it("rejects parsed command arrays with non-string members", async () => {
+      const malformedRow = { ...sampleRow, command: JSON.stringify(["npx", 1]) };
+      const { db } = createFakeD1({ firstResult: malformedRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      await expect(store.get("abc123")).rejects.toThrow();
+    });
+
     it("rejects malformed persisted MCP server type", async () => {
       const malformedRow = { ...sampleRow, type: "stdio" };
       const { db } = createFakeD1({ firstResult: malformedRow });

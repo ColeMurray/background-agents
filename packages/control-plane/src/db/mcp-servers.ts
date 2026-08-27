@@ -54,13 +54,13 @@ function parseRepoScopes(raw: string | null): string[] | null {
 
 function safeJsonParseCommand(raw: string | null): string[] | undefined {
   if (!raw) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    const result = mcpCommandSchema.safeParse(parsed);
-    return result.success ? result.data : [raw];
+    parsed = JSON.parse(raw);
   } catch {
     return [raw];
   }
+  return mcpCommandSchema.parse(parsed);
 }
 
 function safeJsonParseEnv(raw: string): Record<string, string> {
