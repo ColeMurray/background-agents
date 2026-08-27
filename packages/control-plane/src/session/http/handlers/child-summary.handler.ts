@@ -20,8 +20,7 @@ import {
  * fetches about this child session: status, artifacts, recent activity, and
  * on request the final response and a paginated trajectory. This class only
  * gathers rows; the assembly lives in the pure builders in
- * `child-session-summary.ts`. Split from `ChildSessionsHandler` because this
- * read owned five collaborators no other child route touches.
+ * `child-session-summary.ts`.
  */
 export class ChildSummaryHandler {
   constructor(

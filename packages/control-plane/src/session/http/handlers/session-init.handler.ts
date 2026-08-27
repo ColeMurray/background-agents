@@ -81,9 +81,7 @@ type InitRequest = z.infer<typeof initRequestSchema>;
  * bootstrap. Writes the entire initial aggregate (session row, repository
  * member set, pending sandbox row, owner participant) in one transaction,
  * then schedules the warm spawn. Single caller: `session/initialize.ts`,
- * after the D1 index insert succeeds. Split from `SessionLifecycleHandler`
- * because bootstrap owned collaborators no lifecycle route touches
- * (token encryption, id generation, the warm-spawn trigger, the clock).
+ * after the D1 index insert succeeds.
  */
 export class SessionInitHandler {
   constructor(
@@ -92,7 +90,6 @@ export class SessionInitHandler {
     private readonly participantRepository: ParticipantRepository,
     private readonly durableObjectId: string,
     private readonly scheduleWarmSandbox: () => void,
-    /** Bound to the deployment's token key by the composition root. */
     private readonly encryptScmToken: (token: string) => Promise<string>,
     private readonly generateId: (bytes?: number) => string,
     private readonly now: () => number = Date.now

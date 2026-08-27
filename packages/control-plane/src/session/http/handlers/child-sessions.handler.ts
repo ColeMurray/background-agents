@@ -54,9 +54,8 @@ function toActivePromptAuthor(participant: ParticipantRow): ActivePromptAuthor {
 /**
  * HTTP boundary for the parent/child session endpoints: spawn context and
  * prompt-author reads for child spawning, and the parent-prompt/status-update
- * callbacks children invoke. The child-summary read model lives in
- * `ChildSummaryHandler` — its five collaborators are untouched by every
- * route here.
+ * callbacks children invoke. The child-summary read is served by
+ * `ChildSummaryHandler`.
  */
 export class ChildSessionsHandler {
   constructor(
