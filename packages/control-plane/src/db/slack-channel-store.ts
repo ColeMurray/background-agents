@@ -9,9 +9,9 @@
  * Kept out of AutomationStore so trigger-source-specific persistence doesn't leak
  * into the generic automation store — slack is the only source that needs a
  * dedicated index. The index is a denormalized copy of each automation's
- * `slack_channel` condition (held in trigger_config); a route writes the
- * automation row and the channel rows in one `db.batch` (via bindChannelStatements)
- * so the two can't drift apart on a partial failure.
+ * `slack_channel` condition (held in trigger_config). The aggregate writer
+ * persists the automation row and channel rows in one batch so the two can't
+ * drift apart on a partial failure.
  */
 
 import type { AutomationRow } from "./automation-store";
@@ -48,8 +48,8 @@ export class SlackChannelStore {
 
   /**
    * Statements that replace an automation's watched-channel set (DELETE + re-INSERT).
-   * Public so a route can compose them with the automation insert/update into one
-   * `db.batch`, keeping the canonical trigger_config and this index atomic.
+   * The aggregate writer composes these with the automation insert/update,
+   * keeping the canonical trigger_config and this index atomic.
    */
   bindChannelStatements(automationId: string, channelIds: string[]): SqlStatement[] {
     const statements: SqlStatement[] = [

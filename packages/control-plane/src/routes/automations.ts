@@ -4,16 +4,11 @@
 
 import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
-  triggerConfigSchema,
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
-import type {
-  CreateAutomationRequest,
-  UpdateAutomationRequest,
-} from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { listChannels } from "@open-inspect/shared/slack";
 import {
@@ -25,7 +20,6 @@ import {
   AutomationStore,
   toAutomation,
   toAutomationRun,
-  type AutomationRow,
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import {
@@ -48,9 +42,16 @@ import { createLogger } from "../logger";
 import { Scheduler } from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
 import {
-  automationRepositoriesInputSchema,
-  MAX_AUTOMATION_REPOSITORIES,
-} from "@open-inspect/shared/types/automations";
+  AutomationMutationInputError,
+  parseCreateAutomationMutation,
+  parseUpdateAutomationMutation,
+} from "../automation/automation-mutation";
+import {
+  D1AutomationAggregateWriter,
+  type CreateAutomationCommand,
+  type UpdateAutomationCommand,
+} from "../db/automation-aggregate-writer";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   type Route,
@@ -64,7 +65,7 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
-import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import type { SqlDatabase } from "../db/sql-database";
 import { z } from "zod";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 
@@ -80,42 +81,6 @@ const MAX_NAME_LENGTH = 200;
 const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
 const RECENT_EXECUTION_COUNT = 10;
-
-type ParseTriggerConfigResult =
-  | { ok: true; triggerConfig: TriggerConfig }
-  | { ok: false; error: string };
-
-function parseTriggerConfig(value: unknown): ParseTriggerConfigResult {
-  const parsed = triggerConfigSchema.safeParse(value);
-  if (parsed.success) return { ok: true, triggerConfig: parsed.data };
-
-  const issue = parsed.error.issues[0];
-  if (issue?.path.length === 1 && issue.path[0] === "conditions") {
-    return { ok: false, error: "triggerConfig.conditions must be an array" };
-  }
-
-  const path = ["triggerConfig", ...(issue?.path ?? [])].map(String).join(".");
-  const conditionIndex = issue?.path[0] === "conditions" ? issue.path[1] : undefined;
-  const rawConditions =
-    typeof value === "object" && value !== null && "conditions" in value
-      ? (value as { conditions?: unknown }).conditions
-      : undefined;
-  const rawCondition =
-    typeof conditionIndex === "number" && Array.isArray(rawConditions)
-      ? rawConditions[conditionIndex]
-      : undefined;
-  const conditionType =
-    typeof rawCondition === "object" &&
-    rawCondition !== null &&
-    "type" in rawCondition &&
-    typeof rawCondition.type === "string"
-      ? `${rawCondition.type}: `
-      : "";
-  return {
-    ok: false,
-    error: `${path}: ${conditionType}${issue?.message ?? "invalid trigger config"}`,
-  };
-}
 
 /** Warn if next run is more than 31 days away. */
 const FAR_FUTURE_THRESHOLD_MS = 31 * 24 * 60 * 60 * 1000;
@@ -134,38 +99,15 @@ interface NormalizedRepositoryInput {
   baseBranch: string | null;
 }
 
-type RepositorySelectionRequest =
-  | { kind: "unchanged" }
-  | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
-
 /**
- * Thrown by {@link parseRepositorySelection} and {@link parseEnvironmentBinding}
- * when the session-target payload is invalid. Route handlers catch it and answer
- * 400 — the parsers stay free of HTTP concerns (mirrors
- * normalizeOptionalRepositoryPair / RepositoryPairValidationError).
+ * Thrown when a session-target payload is invalid. Route handlers catch it and
+ * answer 400 while target validation stays free of HTTP concerns.
  */
 class TargetSelectionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "TargetSelectionError";
   }
-}
-
-/**
- * Parse the repository selection from a create/update body. `unchanged` means
- * the body did not touch the selection (create treats that as empty).
- *
- * @throws TargetSelectionError when the `repositories` payload is invalid.
- */
-function parseRepositorySelection(body: { repositories?: unknown }): RepositorySelectionRequest {
-  if (body.repositories === undefined) return { kind: "unchanged" };
-  const parsed = automationRepositoriesInputSchema.safeParse(body.repositories);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
-    throw new TargetSelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
-  }
-  return { kind: "replace", repositories: parsed.data };
 }
 
 /**
@@ -286,14 +228,6 @@ function isValidTimezone(tz: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Extract the watched channel IDs from a slack automation's `slack_channel` condition. */
-function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): string[] {
-  for (const condition of triggerConfig?.conditions ?? []) {
-    if (condition.type === "slack_channel") return condition.value;
-  }
-  return [];
 }
 
 /**
@@ -444,68 +378,41 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<
-    CreateAutomationRequest & {
-      // Bot-asserted actor display fields — cosmetic, never identity.
-      actorDisplayName?: string;
-      actorEmail?: string;
-      actorAvatarUrl?: string;
-    }
-  >(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
-    const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-    body.triggerConfig = parsedTriggerConfig.triggerConfig;
-  }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
 
   // Automation attribution comes from the verified principal. The stored
   // values are replayed by the scheduler as session identity at fire time,
   // so this is where they become trustworthy.
-  const enforcement = applyIdentityEnforcement(ctx, "automation-create", body);
+  const enforcement = applyIdentityEnforcement(ctx, "automation-create", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
 
+  let body;
+  try {
+    body = parseCreateAutomationMutation(rawBody);
+  } catch (e) {
+    if (e instanceof AutomationMutationInputError) return error(e.message, 400);
+    throw e;
+  }
+
   // Validate required fields
-  if (!body.name || typeof body.name !== "string" || body.name.trim().length === 0) {
+  if (body.name.trim().length === 0) {
     return error("name is required", 400);
   }
   if (body.name.length > MAX_NAME_LENGTH) {
     return error(`name must be at most ${MAX_NAME_LENGTH} characters`, 400);
   }
-  if (
-    !body.instructions ||
-    typeof body.instructions !== "string" ||
-    body.instructions.trim().length === 0
-  ) {
+  if (body.instructions.trim().length === 0) {
     return error("instructions is required", 400);
   }
   if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  let selection: RepositorySelectionRequest;
-  try {
-    selection = parseRepositorySelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
-  const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
+  const requestedRepositories = body.repositories ?? [];
 
-  // Validate trigger type
-  const triggerType: AutomationTriggerType = body.triggerType || "schedule";
-  const validTriggerTypes: AutomationTriggerType[] = [
-    "schedule",
-    "sentry",
-    "webhook",
-    "github_event",
-    "linear_event",
-    "slack_event",
-  ];
-  if (!validTriggerTypes.includes(triggerType)) {
-    return error(`triggerType must be one of: ${validTriggerTypes.join(", ")}`, 400);
-  }
+  const triggerType: AutomationTriggerType = body.triggerType ?? "schedule";
   let requestedEnvironmentIds: string[];
   try {
     const environmentSelection = parseEnvironmentSelection(body);
@@ -622,48 +529,29 @@ async function handleCreateAutomation(
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution.userId;
 
-  const db: SqlDatabase = ctx.db;
-  const store = new AutomationStore(db);
-  const providerAuthStore = new AutomationModelProviderAuthStore(db);
-  const row: AutomationRow = {
+  const command: CreateAutomationCommand = {
     id,
     name: body.name.trim(),
     instructions: body.instructions,
-    trigger_type: triggerType,
-    schedule_cron: body.scheduleCron ?? null,
-    schedule_tz: body.scheduleTz ?? "UTC",
+    triggerType,
+    scheduleCron: body.scheduleCron ?? null,
+    scheduleTz: body.scheduleTz ?? "UTC",
     model,
-    reasoning_effort: reasoningEffort,
-    enabled: 1,
-    next_run_at: nextRunAt,
-    consecutive_failures: 0,
-    created_by: enforced.participantUserId,
-    user_id: resolvedUserId,
-    created_at: now,
-    updated_at: now,
-    deleted_at: null,
-    event_type: body.eventType ?? null,
-    trigger_config: body.triggerConfig ? JSON.stringify(body.triggerConfig) : null,
-    trigger_auth_data: triggerAuthData,
+    reasoningEffort,
+    nextRunAt,
+    createdBy: enforced.participantUserId,
+    userId: resolvedUserId,
+    eventType: body.eventType ?? null,
+    triggerConfig: body.triggerConfig ?? null,
+    triggerAuthData,
+    repositories: newRepositories,
+    environmentIds: requestedEnvironmentIds,
+    providerSelections,
+    now,
   };
-
-  // Persist the automation, its repository selection, and (for slack_event)
-  // its watched-channel index in a single atomic write, so none of the three
-  // can drift apart on a partial failure. The batch composes the single-table
-  // stores' prepared statements.
-  const createStatements = [
-    store.bindAutomationInsert(row),
-    ...store.bindRepositoryInserts(id, newRepositories, now),
-    ...store.bindEnvironmentInserts(id, requestedEnvironmentIds, now),
-    ...providerAuthStore.bindInserts(id, providerSelections, now),
-  ];
-  if (triggerType === "slack_event") {
-    const slackStore = new SlackChannelStore(db);
-    createStatements.push(
-      ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
-    );
-  }
-  await db.batch(createStatements);
+  const db: SqlDatabase = ctx.db;
+  const store = new AutomationStore(db);
+  await new D1AutomationAggregateWriter(db).create(command);
 
   const automation = await hydrateAutomation(db, (await store.getById(id))!);
 
@@ -729,23 +617,18 @@ async function handleUpdateAutomation(
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
-  const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
-  const body = await parseJsonBody<UpdateAutomationRequest>(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
-    if (existing.trigger_type === "schedule") {
-      return error("Cannot set triggerConfig on schedule automations", 400);
-    }
-    if (body.triggerConfig !== null) {
-      const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-      if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-      body.triggerConfig = parsedTriggerConfig.triggerConfig;
-    }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  let body;
+  try {
+    body = parseUpdateAutomationMutation(rawBody, existing.trigger_type);
+  } catch (e) {
+    if (e instanceof AutomationMutationInputError) return error(e.message, 400);
+    throw e;
   }
-
   let replacementProviderSelections: ModelProviderSelections | null = null;
   if (body.providerSelections !== undefined) {
     try {
@@ -762,7 +645,7 @@ async function handleUpdateAutomation(
 
   // Validate fields if provided
   if (body.name !== undefined) {
-    if (typeof body.name !== "string" || body.name.trim().length === 0) {
+    if (body.name.trim().length === 0) {
       return error("name cannot be empty", 400);
     }
     if (body.name.length > MAX_NAME_LENGTH) {
@@ -771,7 +654,7 @@ async function handleUpdateAutomation(
   }
 
   if (body.instructions !== undefined) {
-    if (typeof body.instructions !== "string" || body.instructions.trim().length === 0) {
+    if (body.instructions.trim().length === 0) {
       return error("instructions cannot be empty", 400);
     }
     if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
@@ -814,29 +697,24 @@ async function handleUpdateAutomation(
     return error("Invalid reasoning effort for selected model", 400);
   }
 
-  // Build update fields
-  const updateFields: Record<string, unknown> = {};
-  if (body.name !== undefined) updateFields.name = body.name.trim();
-  if (body.instructions !== undefined) updateFields.instructions = body.instructions;
-  if (body.scheduleCron !== undefined) updateFields.schedule_cron = body.scheduleCron;
-  if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
-  if (body.model !== undefined) updateFields.model = nextModel;
+  const command: UpdateAutomationCommand = {
+    id,
+    triggerType: existing.trigger_type as AutomationTriggerType,
+    now: Date.now(),
+  };
+  if (body.name !== undefined) command.name = body.name.trim();
+  if (body.instructions !== undefined) command.instructions = body.instructions;
+  if (body.scheduleCron !== undefined) command.scheduleCron = body.scheduleCron;
+  if (body.scheduleTz !== undefined) command.scheduleTz = body.scheduleTz;
+  if (body.model !== undefined) command.model = nextModel;
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
-    updateFields.reasoning_effort = resolvedReasoningEffort;
+    command.reasoningEffort = resolvedReasoningEffort;
   }
 
   // Repository-set edits are UNCONDITIONAL — no cardinality freeze and no
   // active-invocation guard. In-flight invocations already materialized their
   // children from their firing-time snapshot, so an edit cannot corrupt them;
   // it simply applies from the next invocation.
-  let selection: RepositorySelectionRequest;
-  try {
-    selection = parseRepositorySelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
-
   let environmentSelection: EnvironmentSelectionRequest;
   try {
     environmentSelection = parseEnvironmentSelection(body);
@@ -853,11 +731,11 @@ async function handleUpdateAutomation(
   let replacementRepositories: AutomationRepositoryInsert[] | null = null;
   const replacementEnvironmentIds: string[] | null =
     environmentSelection.kind === "replace" ? environmentSelection.environmentIds : null;
-  if (selection.kind === "replace" || replacementEnvironmentIds !== null) {
+  if (body.repositories !== undefined || replacementEnvironmentIds !== null) {
     try {
       const finalRepositoryCount =
-        selection.kind === "replace"
-          ? selection.repositories.length
+        body.repositories !== undefined
+          ? body.repositories.length
           : (await store.getRepositoriesForAutomation(id)).length;
       const finalEnvironmentCount =
         replacementEnvironmentIds !== null
@@ -875,8 +753,8 @@ async function handleUpdateAutomation(
       if (e instanceof TargetSelectionError) return error(e.message, 400);
       throw e;
     }
-    if (selection.kind === "replace") {
-      replacementRepositories = await resolveRepositorySelection(env, selection.repositories, ctx);
+    if (body.repositories !== undefined) {
+      replacementRepositories = await resolveRepositorySelection(env, body.repositories, ctx);
     }
   }
 
@@ -885,7 +763,7 @@ async function handleUpdateAutomation(
     if (existing.trigger_type === "schedule") {
       return error("Cannot set eventType on schedule automations", 400);
     }
-    updateFields.event_type = body.eventType;
+    command.eventType = body.eventType;
   }
 
   // Validate trigger config (conditions) — only for non-schedule types
@@ -927,9 +805,9 @@ async function handleUpdateAutomation(
   // so a PUT replaces it wholesale (null clears it). The caller owns the full
   // blob; the web form always re-submits the conditions within triggerConfig.
   if (body.triggerConfig === null) {
-    updateFields.trigger_config = null;
+    command.triggerConfig = null;
   } else if (body.triggerConfig !== undefined) {
-    updateFields.trigger_config = JSON.stringify(body.triggerConfig);
+    command.triggerConfig = body.triggerConfig;
   }
 
   // Recompute next_run_at if schedule changed (only for schedule types)
@@ -942,39 +820,19 @@ async function handleUpdateAutomation(
     if (!cron) {
       return error("Cannot compute schedule: no cron expression", 400);
     }
-    updateFields.next_run_at = nextCronOccurrence(cron, tz).getTime();
+    command.nextRunAt = nextCronOccurrence(cron, tz).getTime();
   }
 
-  // Apply the field update, the repository-selection replacement (which
-  // carries the transitional scalar-mirror dual-write), and any slack
-  // watched-channel re-sync in ONE atomic batch so none of them can drift
-  // apart on a partial failure. Tolerates a null update statement (e.g. a
-  // repositories-only edit).
-  const resyncSlackChannels =
-    existing.trigger_type === "slack_event" && body.triggerConfig !== undefined;
-  const statements: SqlStatement[] = [];
-  const updateStatement = store.bindAutomationUpdate(id, updateFields);
-  if (updateStatement) statements.push(updateStatement);
   if (replacementRepositories !== null) {
-    statements.push(...store.bindReplaceRepositories(id, replacementRepositories, Date.now()));
+    command.repositories = replacementRepositories;
   }
   if (replacementEnvironmentIds !== null) {
-    statements.push(...store.bindReplaceEnvironments(id, replacementEnvironmentIds, Date.now()));
+    command.environmentIds = replacementEnvironmentIds;
   }
   if (replacementProviderSelections !== null) {
-    statements.push(
-      ...providerAuthStore.bindReplace(id, replacementProviderSelections, Date.now())
-    );
+    command.providerSelections = replacementProviderSelections;
   }
-  if (resyncSlackChannels) {
-    const slackStore = new SlackChannelStore(db);
-    statements.push(
-      ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
-    );
-  }
-  if (statements.length > 0) {
-    await db.batch(statements);
-  }
+  await new D1AutomationAggregateWriter(db).update(command);
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);
 

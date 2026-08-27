@@ -941,7 +941,8 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(200);
       expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ name: "Updated" })
+        expect.objectContaining({ name: "Updated" }),
+        expect.any(Number)
       );
       expect(mockBatch).toHaveBeenCalledWith(
         expect.arrayContaining([{ sql: "update-automation" }])
@@ -1033,7 +1034,8 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(200);
       expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ reasoning_effort: "high" })
+        expect.objectContaining({ reasoning_effort: "high" }),
+        expect.any(Number)
       );
     });
 
@@ -1047,7 +1049,8 @@ describe("automation route handlers", () => {
       expect(res.status).toBe(200);
       expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ model: "openai/gpt-5.4", reasoning_effort: null })
+        expect.objectContaining({ model: "openai/gpt-5.4", reasoning_effort: null }),
+        expect.any(Number)
       );
     });
 
@@ -1287,7 +1290,8 @@ describe("automation route handlers", () => {
         expect.objectContaining({
           schedule_cron: "0 12 * * *",
           next_run_at: expect.any(Number),
-        })
+        }),
+        expect.any(Number)
       );
     });
   });
