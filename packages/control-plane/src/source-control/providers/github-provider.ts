@@ -124,6 +124,96 @@ const githubBranchRefSchema = z.object({
   object: z.object({ sha: z.string().min(1) }),
 });
 
+const githubFeedbackAuthorSchema = z.object({
+  id: z.number(),
+  login: z.string(),
+  type: z.string(),
+});
+
+const githubPullRequestCommentSchema = z.object({
+  id: z.number(),
+  body: z.string(),
+  html_url: z.url(),
+  issue_url: z.url(),
+  user: githubFeedbackAuthorSchema,
+});
+
+const githubPullRequestReviewSchema = z.object({
+  id: z.number(),
+  body: z.string().nullable(),
+  html_url: z.url(),
+  pull_request_url: z.url(),
+  state: z.enum(["PENDING", "COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"]),
+  user: githubFeedbackAuthorSchema,
+});
+
+const githubReviewCommentSchema = z.object({
+  id: z.number(),
+  body: z.string(),
+  html_url: z.url(),
+  path: z.string(),
+  line: z.number().nullable().optional(),
+  start_line: z.number().nullable().optional(),
+  side: z.string().nullable().optional(),
+  start_side: z.string().nullable().optional(),
+  diff_hunk: z.string(),
+});
+
+const githubCollaboratorPermissionSchema = z.object({
+  permission: z.enum(["none", "read", "triage", "write", "maintain", "admin"]),
+});
+
+interface GitHubPullRequestFeedbackLocation {
+  owner: string;
+  name: string;
+  pullRequestNumber: number;
+}
+
+export type GetGitHubPullRequestFeedbackConfig = GitHubPullRequestFeedbackLocation &
+  (
+    | { providerObject: { kind: "pr_comment"; id: string } }
+    | { providerObject: { kind: "review"; id: string } }
+  );
+
+export interface GitHubFeedbackAuthor {
+  id: string;
+  login: string;
+  type: string;
+}
+
+export type GitHubPullRequestFeedback =
+  | {
+      kind: "pr_comment";
+      id: string;
+      body: string;
+      url: string;
+      author: GitHubFeedbackAuthor;
+    }
+  | {
+      kind: "review";
+      id: string;
+      body: string;
+      url: string;
+      state: "PENDING" | "COMMENTED" | "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED";
+      author: GitHubFeedbackAuthor;
+      comments: GitHubReviewComment[];
+    };
+
+export interface GitHubReviewComment {
+  id: string;
+  body: string;
+  url: string;
+  path: string;
+  line: number | null;
+  startLine: number | null;
+  side: string | null;
+  startSide: string | null;
+  diffHunk: string;
+}
+
+export const MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS = 100;
+const GITHUB_REVIEW_COMMENTS_PER_PAGE = 100;
+
 /** Wire shape of GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1. */
 const githubTreeSchema = z.object({
   truncated: z.boolean().optional(),
@@ -172,6 +262,130 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     this.appConfig = config.appConfig;
     this.cacheStore = config.cacheStore;
     this.userAgent = config.userAgent || USER_AGENT;
+  }
+
+  async getPullRequestFeedback(
+    config: GetGitHubPullRequestFeedbackConfig
+  ): Promise<GitHubPullRequestFeedback> {
+    if (config.providerObject.kind === "review") {
+      return this.getPullRequestReviewFeedback(config, config.providerObject.id);
+    }
+
+    const repositoryPath = `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+      config.name
+    )}`;
+    const data = await this.appJsonRequired(
+      `${repositoryPath}/issues/comments/${encodeURIComponent(config.providerObject.id)}`,
+      githubPullRequestCommentSchema,
+      "get pull request comment"
+    );
+    const expectedIssuePath = `${repositoryPath}/issues/${config.pullRequestNumber}`.toLowerCase();
+    if (
+      String(data.id) !== config.providerObject.id ||
+      new URL(data.issue_url).pathname.toLowerCase() !== expectedIssuePath
+    ) {
+      throw new SourceControlProviderError(
+        "Pull request comment does not belong to the requested pull request",
+        "permanent"
+      );
+    }
+
+    return {
+      kind: "pr_comment",
+      id: String(data.id),
+      body: data.body,
+      url: data.html_url,
+      author: {
+        id: String(data.user.id),
+        login: data.user.login,
+        type: data.user.type,
+      },
+    };
+  }
+
+  async hasPullRequestWritePermission(config: {
+    owner: string;
+    name: string;
+    authorLogin: string;
+  }): Promise<boolean> {
+    const data = await this.appJson(
+      `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+        config.name
+      )}/collaborators/${encodeURIComponent(config.authorLogin)}/permission`,
+      githubCollaboratorPermissionSchema,
+      "get collaborator permission",
+      true
+    );
+    if (!data) return false;
+    const { permission } = data;
+    return permission === "write" || permission === "maintain" || permission === "admin";
+  }
+
+  private async getPullRequestReviewFeedback(
+    config: GitHubPullRequestFeedbackLocation,
+    reviewId: string
+  ): Promise<Extract<GitHubPullRequestFeedback, { kind: "review" }>> {
+    const pullRequestPath = `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+      config.name
+    )}/pulls/${config.pullRequestNumber}`;
+    const reviewPath = `${pullRequestPath}/reviews/${encodeURIComponent(reviewId)}`;
+    const review = await this.appJsonRequired(
+      reviewPath,
+      githubPullRequestReviewSchema,
+      "get pull request review"
+    );
+    if (
+      String(review.id) !== reviewId ||
+      new URL(review.pull_request_url).pathname.toLowerCase() !== pullRequestPath.toLowerCase()
+    ) {
+      throw new SourceControlProviderError(
+        "Pull request review does not belong to the requested pull request",
+        "permanent"
+      );
+    }
+
+    const comments: GitHubReviewComment[] = [];
+    for (let page = 1; ; page += 1) {
+      const pageComments = await this.appJsonRequired(
+        `${reviewPath}/comments?per_page=${GITHUB_REVIEW_COMMENTS_PER_PAGE}&page=${page}`,
+        z.array(githubReviewCommentSchema),
+        "get pull request review comments"
+      );
+      if (comments.length + pageComments.length > MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS) {
+        throw new SourceControlProviderError(
+          `Pull request review exceeds the Autofix limit of ${MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS} comments`,
+          "permanent"
+        );
+      }
+      comments.push(
+        ...pageComments.map((comment) => ({
+          id: String(comment.id),
+          body: comment.body,
+          url: comment.html_url,
+          path: comment.path,
+          line: comment.line ?? null,
+          startLine: comment.start_line ?? null,
+          side: comment.side ?? null,
+          startSide: comment.start_side ?? null,
+          diffHunk: comment.diff_hunk,
+        }))
+      );
+      if (pageComments.length < GITHUB_REVIEW_COMMENTS_PER_PAGE) break;
+    }
+
+    return {
+      kind: "review",
+      id: String(review.id),
+      body: review.body ?? "",
+      url: review.html_url,
+      state: review.state,
+      author: {
+        id: String(review.user.id),
+        login: review.user.login,
+        type: review.user.type,
+      },
+      comments,
+    };
   }
 
   /**

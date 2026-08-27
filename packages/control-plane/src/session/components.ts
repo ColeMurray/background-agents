@@ -83,9 +83,15 @@ import { Scheduler } from "../scheduler/scheduler";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
-import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
+import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
+import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
+import { SandboxRuntimeEventHandler } from "./sandbox-events/runtime.handler";
+import { SandboxStreamingEventHandler } from "./sandbox-events/streaming.handler";
+import { SandboxPushService } from "./sandbox-push-service";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
+import { AutofixHandler } from "./http/handlers/autofix.handler";
 import { MessagesHandler } from "./http/handlers/messages.handler";
 import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
 import { SandboxHandler } from "./http/handlers/sandbox.handler";
@@ -172,6 +178,7 @@ export interface SessionComponents {
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
+  pushService: SandboxPushService;
   sessionLifecycleHandler: SessionLifecycleHandler;
 }
 
@@ -423,27 +430,56 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     stopExecution: () => messageQueue.stopExecution(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
   });
+  const autofixHandler = new AutofixHandler(messageQueue);
 
-  const sandboxEventProcessor = new SessionSandboxEventProcessor(
+  const updateLastActivity = (timestamp: number) => lifecycleManager.updateLastActivity(timestamp);
+  const streamingEventHandler = new SandboxStreamingEventHandler(
+    backgroundTasks,
+    sessionCoreRepository,
+    eventRepository,
+    callbackService,
+    messenger,
+    updateLastActivity
+  );
+  const artifactEventHandler = new SandboxArtifactEventHandler(
+    artifactRepository,
+    eventRepository,
+    messenger,
+    updateLastActivity
+  );
+  const executionEventHandler = new SandboxExecutionEventHandler(
     backgroundTasks,
     log,
-    sessionCoreRepository,
-    sandboxRepository,
     messageRepository,
-    eventRepository,
-    artifactRepository,
     callbackService,
-    wsManager,
     messenger,
-    diffService,
-    (title, options) => titleService.applySessionTitleUpdate(title, options),
-    (reason) => lifecycleManager.triggerSnapshot(reason),
     recordTerminalMessage,
     statusService,
-    (timestamp) => lifecycleManager.updateLastActivity(timestamp),
+    (reason) => lifecycleManager.triggerSnapshot(reason),
+    updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
     () => messageQueue.broadcastPromptQueue()
+  );
+  const runtimeEventHandler = new SandboxRuntimeEventHandler(
+    sessionCoreRepository,
+    sandboxRepository,
+    eventRepository,
+    messenger,
+    diffService,
+    (title, options) => titleService.applySessionTitleUpdate(title, options),
+    updateLastActivity
+  );
+  const pushService = new SandboxPushService(log, wsManager);
+  const sandboxEventProcessor = new SessionSandboxEventProcessor(
+    log,
+    messageRepository,
+    wsManager,
+    streamingEventHandler,
+    artifactEventHandler,
+    executionEventHandler,
+    runtimeEventHandler,
+    pushService
   );
 
   const alarmHandler = createAlarmHandler({
@@ -588,7 +624,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         sourceControlProvider: sourceControlProvider(),
         log: requestLog,
         generateId: () => generateId(),
-        pushBranchToRemote: (pushSpec) => sandboxEventProcessor.pushBranchToRemote(pushSpec),
+        pushBranchToRemote: (pushSpec) => pushService.pushBranchToRemote(pushSpec),
         messenger,
         appName: resolveAppName(env),
         sessionPullRequests: sessionPullRequestStore ?? undefined,
@@ -647,6 +683,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshot: () => snapshotReader.handleSnapshot(),
     sandboxAccess: () => accessReader.handleSandboxAccess(),
     prompt: (request, _url, requestLog) => messagesHandler.enqueuePrompt(request, requestLog),
+    autofix: (request, _url, requestLog) => autofixHandler.handle(request, requestLog),
     stop: () => messagesHandler.stop(),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => sandboxHandler.createMediaArtifact(request),
@@ -766,6 +803,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     presenceService,
     sandboxEventProcessor,
+    pushService,
     sessionLifecycleHandler,
   };
 

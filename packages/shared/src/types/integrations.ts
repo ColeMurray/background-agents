@@ -18,6 +18,33 @@ export interface IntegrationEntry<
 }
 
 /** Overridable behavior settings for the GitHub bot. Used at both global (defaults) and per-repo (overrides) levels. */
+export interface GitHubAutofixSettings {
+  enabled?: boolean;
+  reviewsEnabled?: boolean;
+  prCommentsEnabled?: boolean;
+  openInspectReviewsEnabled?: boolean;
+  allowedReviewBots?: string[];
+  maxAttemptsPerPrPer24Hours?: number;
+}
+
+export interface ResolvedGitHubAutofixSettings {
+  enabled: boolean;
+  reviewsEnabled: boolean;
+  prCommentsEnabled: boolean;
+  openInspectReviewsEnabled: boolean;
+  allowedReviewBots: string[];
+  maxAttemptsPerPrPer24Hours: number;
+}
+
+export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
+  enabled: false,
+  reviewsEnabled: true,
+  prCommentsEnabled: true,
+  openInspectReviewsEnabled: true,
+  allowedReviewBots: [],
+  maxAttemptsPerPrPer24Hours: 10,
+};
+
 export interface GitHubBotSettings {
   autoReviewOnOpen?: boolean;
   model?: string;
@@ -25,6 +52,7 @@ export interface GitHubBotSettings {
   allowedTriggerUsers?: string[];
   codeReviewInstructions?: string;
   commentActionInstructions?: string;
+  autofix?: GitHubAutofixSettings;
 }
 
 /**

@@ -151,6 +151,12 @@ describe("getAvatarUrl", () => {
     expect(getAvatarUrl("octocat", "github")).toBe("https://github.com/octocat.png");
   });
 
+  it("uses the stable GitHub avatar endpoint when a numeric user ID is available", () => {
+    expect(getAvatarUrl("open-inspect[bot]", "github", "255062780")).toBe(
+      "https://avatars.githubusercontent.com/u/255062780?v=4"
+    );
+  });
+
   it("returns undefined for null", () => {
     expect(getAvatarUrl(null)).toBeUndefined();
   });
