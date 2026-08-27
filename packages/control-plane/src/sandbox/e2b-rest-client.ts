@@ -33,6 +33,14 @@ const ENVELOPE_HEADER_BYTES = 5;
 /** Connect end-of-stream flag; that envelope carries `{}` or `{"error": ...}`. */
 const ENVELOPE_END_STREAM_FLAG = 0x02;
 
+const connectEndStreamSchema = z.object({
+  error: z
+    .object({
+      message: z.string().optional(),
+    })
+    .optional(),
+});
+
 const e2bSandboxDetailSchema = z.object({
   sandboxID: z.string(),
   templateID: z.string(),
@@ -184,10 +192,14 @@ function assertProcessStarted(buffer: Uint8Array): void {
   let endOfStream = false;
   for (const { flags, body } of decodeConnectEnvelopes(buffer)) {
     if (flags & ENVELOPE_END_STREAM_FLAG) {
-      const streamError = isRecord(body) ? body.error : undefined;
-      if (isRecord(streamError)) {
-        const message = typeof streamError.message === "string" ? streamError.message : undefined;
-        throw new Error(`envd process start failed: ${message ?? "stream error"}`);
+      const parsed = connectEndStreamSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new Error("envd process start stream contained a malformed end-of-stream envelope");
+      }
+      if (parsed.data.error) {
+        throw new Error(
+          `envd process start failed: ${parsed.data.error.message ?? "stream error"}`
+        );
       }
       endOfStream = true;
       continue;

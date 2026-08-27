@@ -373,22 +373,26 @@ describe("E2BRestClient", () => {
     );
   });
 
-  it("startProcess treats malformed Connect event and error envelopes as incomplete", async () => {
-    const client = new E2BRestClient(defaultConfig);
-    fetchSpy.mockResolvedValue(
-      new Response(
-        connectStream([
-          { flags: 0, body: { event: [] } },
-          { flags: 2, body: { error: [] } },
-        ]),
-        { status: 200 }
-      )
-    );
+  it.each([[], "provider failure"])(
+    "startProcess rejects malformed Connect error envelope %j",
+    async (error) => {
+      const client = new E2BRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(
+        new Response(
+          connectStream([
+            { flags: 0, body: { event: { start: { pid: 7 } } } },
+            { flags: 0, body: { event: { end: { exited: true, status: "exit status 0" } } } },
+            { flags: 2, body: { error } },
+          ]),
+          { status: 200 }
+        )
+      );
 
-    await expect(client.startProcess("sb-1", "cmd", { envdAccessToken: "tok" })).rejects.toThrow(
-      /stream incomplete/
-    );
-  });
+      await expect(client.startProcess("sb-1", "cmd", { envdAccessToken: "tok" })).rejects.toThrow(
+        /malformed end-of-stream envelope/
+      );
+    }
+  );
 
   it("startProcess rejects a stream with no clean exit or end-of-stream", async () => {
     const client = new E2BRestClient(defaultConfig);
