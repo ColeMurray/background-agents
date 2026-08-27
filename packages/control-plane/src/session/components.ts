@@ -96,7 +96,6 @@ import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handl
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
-import { SessionAutofixService } from "./services/autofix.service";
 import { createAlarmHandler } from "./alarm/handler";
 import {
   createEarliestAlarmScheduler,
@@ -425,7 +424,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     stopExecution: () => messageQueue.stopExecution(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
   });
-  const autofixHandler = new AutofixHandler(new SessionAutofixService(messageQueue));
+  const autofixHandler = new AutofixHandler(messageQueue);
 
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     backgroundTasks,
