@@ -4,6 +4,7 @@
 
 import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
+  triggerConfigSchema,
   validateConditions,
   conditionRegistry,
   isGitHubConditionSupported,
@@ -107,6 +108,8 @@ function formatAutomationRequestError(parseError: z.ZodError, rawBody: unknown):
     const index = typeof issue.path[1] === "number" ? `[${String(issue.path[1])}]` : "";
     return `repositories${index}: ${issue.message}`;
   }
+
+  if (field === "eventType") return "eventType must be a non-empty string";
 
   if (field === "triggerConfig") {
     if (issue.path.length === 2 && issue.path[1] === "conditions") {
