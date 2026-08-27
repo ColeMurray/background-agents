@@ -1,13 +1,23 @@
 import type { GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SqlResult, SqlStorage } from "./sql-storage";
-import type { SandboxRow } from "./types";
+import type { SandboxAccessKind, SandboxRow } from "./types";
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
+
+/** URL and secret columns backing each access artifact kind. */
+const ACCESS_ARTIFACT_COLUMNS: Record<
+  SandboxAccessKind,
+  { urlColumn: string; secretColumn: string }
+> = {
+  codeServer: { urlColumn: "code_server_url", secretColumn: "code_server_password" },
+  vnc: { urlColumn: "vnc_url", secretColumn: "vnc_password" },
+  ttyd: { urlColumn: "ttyd_url", secretColumn: "ttyd_token" },
+};
 
 /** Minimal sandbox state needed for circuit breaker spawn decisions. */
 export interface SandboxCircuitBreakerState {
@@ -244,42 +254,30 @@ export class SandboxRepository {
     );
   }
 
-  async updateSandboxCodeServer(url: string, password: string): Promise<void> {
+  /** Set one access artifact's URL and encrypted secret. */
+  async updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): Promise<void> {
+    const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
-      `UPDATE sandbox SET code_server_url = ?, code_server_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      `UPDATE sandbox SET ${urlColumn} = ?, ${secretColumn} = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       url,
-      await this.encrypt(password)
+      await this.encrypt(secret)
     );
   }
 
-  clearSandboxCodeServer(): void {
+  /** Clear one access artifact's URL and secret. */
+  clearSandboxAccess(kind: SandboxAccessKind): void {
+    const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
-      `UPDATE sandbox SET code_server_url = NULL, code_server_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+      `UPDATE sandbox SET ${urlColumn} = NULL, ${secretColumn} = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
 
-  clearSandboxCodeServerUrl(): void {
+  /** Clear one access artifact's URL while preserving its stored secret. */
+  clearSandboxAccessUrl(kind: SandboxAccessKind): void {
+    const { urlColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
-      `UPDATE sandbox SET code_server_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+      `UPDATE sandbox SET ${urlColumn} = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
-  }
-
-  async updateSandboxVnc(url: string, password: string): Promise<void> {
-    this.sql.exec(
-      `UPDATE sandbox SET vnc_url = ?, vnc_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      url,
-      await this.encrypt(password)
-    );
-  }
-
-  clearSandboxVnc(): void {
-    this.sql.exec(
-      `UPDATE sandbox SET vnc_url = NULL, vnc_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
-    );
-  }
-
-  clearSandboxVncUrl(): void {
-    this.sql.exec(`UPDATE sandbox SET vnc_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`);
   }
 
   updateSandboxTunnelUrls(urls: Record<string, string>): void {
@@ -292,20 +290,6 @@ export class SandboxRepository {
   clearSandboxTunnelUrls(): void {
     this.sql.exec(
       `UPDATE sandbox SET tunnel_urls = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
-    );
-  }
-
-  async updateSandboxTtyd(url: string, token: string): Promise<void> {
-    this.sql.exec(
-      `UPDATE sandbox SET ttyd_url = ?, ttyd_token = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      url,
-      await this.encrypt(token)
-    );
-  }
-
-  clearSandboxTtyd(): void {
-    this.sql.exec(
-      `UPDATE sandbox SET ttyd_url = NULL, ttyd_token = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
 
