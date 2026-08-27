@@ -197,6 +197,59 @@ describe("RepoClassifier", () => {
     expect(result.alternatives).toBeUndefined();
   });
 
+  it("parses null targetId from structured model output", async () => {
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_null",
+          name: "classify_target",
+          input: {
+            targetId: null,
+            confidence: "medium",
+            reasoning: "The request could refer to either repo.",
+            alternatives: ["acme/prod", "acme/web"],
+          },
+        },
+      ],
+    });
+
+    const classifier = new RepoClassifier(TEST_ENV);
+    const result = await classifier.classify("please fix the app");
+
+    expect(result.target).toBeNull();
+    expect(result.confidence).toBe("medium");
+    expect(result.needsClarification).toBe(true);
+    expect(
+      result.alternatives?.map((t) => (t.kind === "repository" ? t.repo.fullName : "")).sort()
+    ).toEqual(["acme/prod", "acme/web"]);
+  });
+
+  it("rejects partial structured model output", async () => {
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_partial",
+          name: "classify_target",
+          input: {
+            targetId: "acme/prod",
+            confidence: "high",
+            reasoning: "Mentions prod.",
+          },
+        },
+      ],
+    });
+
+    const classifier = new RepoClassifier(TEST_ENV);
+    const result = await classifier.classify("please fix prod");
+
+    expect(result.target).toBeNull();
+    expect(result.confidence).toBe("low");
+    expect(result.needsClarification).toBe(true);
+    expect(result.reasoning).toContain("structured model output");
+  });
+
   describe("routing rules", () => {
     it("routes deterministically when a keyword matches, without calling the LLM", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);

@@ -494,6 +494,9 @@ export interface McpServerConfig {
 }
 
 export const DEFAULT_MCP_SERVER_ENABLED = true;
+export const mcpServerTypeSchema = z.enum(["local", "remote"]);
+export const mcpServerCommandSchema = z.array(z.string()).min(1);
+export const mcpServerCredentialMapSchema = z.record(z.string(), z.string());
 
 const mcpServerCommonFields = {
   name: z.string().trim().min(1),
@@ -506,8 +509,8 @@ export const createMcpServerInputSchema = z.discriminatedUnion("type", [
     .object({
       ...mcpServerCommonFields,
       type: z.literal("local"),
-      command: z.array(z.string()).min(1),
-      env: z.record(z.string(), z.string()).optional(),
+      command: mcpServerCommandSchema,
+      env: mcpServerCredentialMapSchema.optional(),
       enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
     })
     .strict(),
@@ -516,7 +519,7 @@ export const createMcpServerInputSchema = z.discriminatedUnion("type", [
       ...mcpServerCommonFields,
       type: z.literal("remote"),
       url: z.url(),
-      headers: z.record(z.string(), z.string()).optional(),
+      headers: mcpServerCredentialMapSchema.optional(),
       enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
     })
     .strict(),
@@ -526,11 +529,11 @@ export const updateMcpServerInputSchema = z
   .object({
     ...mcpServerCommonFields,
     revision: z.number().int().positive(),
-    type: z.enum(["local", "remote"]),
-    command: z.array(z.string()),
+    type: mcpServerTypeSchema,
+    command: mcpServerCommandSchema,
     url: z.url(),
-    env: z.record(z.string(), z.string()),
-    headers: z.record(z.string(), z.string()),
+    env: mcpServerCredentialMapSchema,
+    headers: mcpServerCredentialMapSchema,
   })
   .partial()
   .strict();
