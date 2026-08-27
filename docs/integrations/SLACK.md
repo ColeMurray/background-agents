@@ -40,13 +40,11 @@ notification controls and safety notes are covered near the end.
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
 | Review generated media      | Optionally attach charts, screenshots, and small recordings to the thread  |
 | Ask the agent to post Slack | Enable agent notifications, then explicitly ask the agent to post to Slack |
-| Auto-trigger from a channel | Opt-in: watch a channel so matching messages start an automation           |
+| Auto-trigger from a channel | Watch a channel so matching messages start an automation                   |
 
-Open-Inspect does not use slash commands today. In channels, it normally responds only to
-`@mentions`, not to every message. The optional
-[channel-message triggers](#channel-message-triggers) feature can additionally start an
-**automation** from non-mention messages that match conditions you configure; it is disabled by
-default and must be enabled by an operator.
+Open-Inspect does not use slash commands today. In channels, interactive requests require an
+`@mention`. [Channel-message triggers](#channel-message-triggers) can additionally start an
+**automation** from non-mention messages that match conditions you configure.
 
 All completion replies are delivered asynchronously through a Cloudflare Queue. Open-Inspect
 attaches generated PNG, JPEG, WebP, or MP4 session artifacts to the completion thread. Delivery is
@@ -393,8 +391,9 @@ These notes are most useful for workspace admins deciding where the Slack bot sh
 
 ### The bot does not respond in a channel
 
-Check that the bot has been invited to the channel and that your message mentions the bot. The bot
-does not act on ordinary channel messages.
+For an interactive request, check that the bot has been invited to the channel and that your message
+mentions the bot. An ordinary channel message only starts a session when it matches a configured
+Slack Message automation; verify its watched channel and conditions.
 
 If setup was just changed, confirm the Slack app event subscriptions and interactivity URLs in
 [Complete Slack Setup](../GETTING_STARTED.md#step-7b-complete-slack-setup-if-using-slack).

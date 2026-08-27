@@ -2,6 +2,13 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 27, 2026
+
+**Always-on Slack message triggers.** Slack channel-message trigger ingestion is now always enabled
+when the Slack bot is deployed. Before upgrading, audit enabled Slack Message automations because
+they can begin processing matching ambient messages and starting sessions immediately. Remove the
+retired `slack_triggers_enabled` variable from Terraform inputs.
+
 ## August 22, 2026
 
 **Unified model and reasoning selection.** New-session and follow-up composers now combine model and
@@ -322,7 +329,7 @@ agent-browser, `gh`, `ttyd`, and `bun`, selectable from the web UI.
 **Slack watched-channel automations.** A new automation event source: messages posted in watched
 Slack channels can auto-trigger coding sessions, with text-match, channel, and actor conditions,
 per-automation hourly rate limits, per-thread concurrency guards, and results posted back into the
-originating thread.
+originating thread. Opt-in behind `SLACK_TRIGGERS_ENABLED`.
 
 **Multi-email allowlist sign-in.** GitHub sign-in now checks all of a user's verified emails against
 the configured email allowlists instead of only the primary one, unblocking users with private
