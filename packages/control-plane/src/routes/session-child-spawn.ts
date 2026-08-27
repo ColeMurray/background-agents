@@ -41,6 +41,10 @@ import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 const logger = createLogger("router:session-child-spawn");
 const MAX_SPAWN_DEPTH = 2;
 
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function handleSpawnChild(
   request: Request,
   env: Env,
@@ -98,8 +102,8 @@ async function handleSpawnChild(
   if (!spawnContextRes.ok) {
     let message = "Failed to get parent session context";
     try {
-      const body = (await spawnContextRes.json()) as { error?: unknown };
-      if (typeof body.error === "string" && body.error.length > 0) {
+      const body = await spawnContextRes.json();
+      if (isJsonRecord(body) && typeof body.error === "string" && body.error.length > 0) {
         message = body.error;
       }
     } catch {

@@ -3,15 +3,24 @@
  */
 
 import type { SandboxEvent, Task } from "@/types/session";
+import { z } from "zod";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
-interface TodoWriteArgs {
-  todos?: Array<{
-    content: string;
-    status: "pending" | "in_progress" | "completed";
-    activeForm?: string;
-  }>;
+const todoWriteArgsSchema = z.object({
+  todos: z
+    .array(
+      z.object({
+        content: z.string().optional(),
+        status: z.string().optional(),
+        activeForm: z.string().optional(),
+      })
+    )
+    .optional(),
+});
+
+function normalizeTaskStatus(status: string | undefined): Task["status"] {
+  return status === "in_progress" || status === "completed" ? status : "pending";
 }
 
 /**
@@ -33,15 +42,15 @@ export function extractLatestTasks(events: SandboxEvent[]): Task[] {
   }
 
   const latestTodoWrite = todoWriteEvents[0];
-  const args = latestTodoWrite.args as TodoWriteArgs | undefined;
+  const parsedArgs = todoWriteArgsSchema.safeParse(latestTodoWrite.args);
 
-  if (!args?.todos || !Array.isArray(args.todos)) {
+  if (!parsedArgs.success || !parsedArgs.data.todos) {
     return [];
   }
 
-  return args.todos.map((todo) => ({
+  return parsedArgs.data.todos.map((todo) => ({
     content: todo.content || "",
-    status: todo.status || "pending",
+    status: normalizeTaskStatus(todo.status),
     activeForm: todo.activeForm,
   }));
 }

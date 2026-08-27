@@ -55,6 +55,8 @@ import {
 const logger = createLogger("router:image-builds");
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
 
+const toggleRepoImageBuildsBodySchema = z.object({ enabled: z.boolean() });
+
 /**
  * Build-complete callback body. Every field is required: all providers bind a
  * provider session before the runtime launches, and the runtime always
@@ -335,12 +337,13 @@ async function handleToggleRepoImageBuilds(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  const body = await parseJsonBody<{ enabled?: unknown }>(request);
-  if (body instanceof Response) return body;
-
-  if (typeof body.enabled !== "boolean") {
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  const parsedBody = toggleRepoImageBuildsBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
     return error("enabled must be a boolean", 400);
   }
+  const body = parsedBody.data;
 
   const scope = repoImageBuildScope(owner, name);
 
