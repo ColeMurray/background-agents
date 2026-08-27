@@ -4,6 +4,7 @@ import {
 } from "@open-inspect/shared/types/github-identity";
 import { z } from "zod";
 import { encryptToken } from "../auth/crypto";
+import { requireTokenEncryptionKey } from "../env-validation";
 import type {
   GitHubAccountSelection,
   GitHubCredentialAuthority,
@@ -168,11 +169,9 @@ export async function resolveGitHubEnrichment(
 
   const [user, tokens] = await Promise.all([
     userStore.getUserById(userId),
-    env.TOKEN_ENCRYPTION_KEY
-      ? new UserScmTokenStore(db, env.TOKEN_ENCRYPTION_KEY).getEncryptedTokens(
-          githubIdentity.providerUserId
-        )
-      : null,
+    new UserScmTokenStore(db, requireTokenEncryptionKey(env)).getEncryptedTokens(
+      githubIdentity.providerUserId
+    ),
   ]);
 
   const authorIdentity = resolveGitAuthorIdentity({
@@ -207,6 +206,9 @@ export async function resolveGitHubEnrichmentForRequest(
   userId: string,
   authority: GitHubCredentialAuthority
 ): Promise<GitHubEnrichment | null> {
+  // One invariant for the whole boundary: both authorities encrypt with
+  // validated AES-256 material, regardless of which branch runs.
+  const tokenEncryptionKey = requireTokenEncryptionKey(env);
   if (authority.kind === "legacy") {
     return resolveGitHubEnrichment(env, db, userStore, userId);
   }
@@ -217,6 +219,6 @@ export async function resolveGitHubEnrichmentForRequest(
   return resolveBrowserGitHubEnrichment(userId, githubAccount, {
     getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
     getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
-    encryptAccessToken: (accessToken) => encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY),
+    encryptAccessToken: (accessToken) => encryptToken(accessToken, tokenEncryptionKey),
   });
 }

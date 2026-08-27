@@ -509,6 +509,23 @@ function UserMessageEvent({
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
+      {event.origin && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-2 text-xs">
+          <span className="font-medium text-accent">Resumed by PR feedback</span>
+          <span className="text-muted-foreground">
+            {event.origin.kind === "pr_comment" ? "PR comment" : "Review"} ·{" "}
+            {event.origin.authorType === "bot" ? "Bot" : "Human"}
+          </span>
+          <a
+            href={event.origin.feedbackUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-accent hover:underline"
+          >
+            Open feedback
+          </a>
+        </div>
+      )}
       {event.content && (
         <pre className="whitespace-pre-wrap text-sm text-foreground [overflow-wrap:anywhere]">
           {event.content}

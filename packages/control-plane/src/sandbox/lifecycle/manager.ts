@@ -79,13 +79,12 @@ interface SandboxCircuitBreakerInfo {
 }
 
 /**
- * Storage adapter for sandbox data operations.
+ * The session context a spawn needs alongside sandbox storage. A separate
+ * port from `SandboxStorage`: sandbox-row persistence is one collaborator's
+ * contract, these reads belong to others, and conflating them forced every
+ * implementer to bridge unrelated objects.
  */
-export interface SandboxStorage {
-  /** Get current sandbox state */
-  getSandbox(): SandboxRow | null;
-  /** Get sandbox with circuit breaker state (subset of fields) */
-  getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
+export interface SessionContextReader {
   /** Get current session */
   getSession(): SessionRow | null;
   /**
@@ -97,6 +96,17 @@ export interface SandboxStorage {
   getSessionRepositories(): SessionRepositoryInfo[];
   /** Get user env vars for sandbox injection */
   getUserEnvVars(): Promise<Record<string, string> | undefined>;
+}
+
+/**
+ * Storage adapter for sandbox data operations — the sandbox repository's
+ * contract, satisfied by it structurally.
+ */
+export interface SandboxStorage {
+  /** Get current sandbox state */
+  getSandbox(): SandboxRow | null;
+  /** Get sandbox with circuit breaker state (subset of fields) */
+  getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
   /**
@@ -357,6 +367,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   constructor(
     private readonly provider: SandboxProvider,
     private readonly storage: SandboxStorage,
+    private readonly sessionContext: SessionContextReader,
     private readonly broadcaster: SandboxBroadcaster,
     private readonly wsManager: WebSocketManager,
     private readonly alarmScheduler: AlarmScheduler,
@@ -508,7 +519,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     let session: SessionRow | null = null;
 
     try {
-      session = this.storage.getSession();
+      session = this.sessionContext.getSession();
       if (!session) {
         this.log.error("Cannot spawn sandbox: no session");
         return;
@@ -525,9 +536,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.storage.getUserEnvVars();
+      const userEnvVars = await this.sessionContext.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const repositories = this.storage.getSessionRepositories();
+      const repositories = this.sessionContext.getSessionRepositories();
       const multiRepoFields = multiRepoSpawnFields(repositories);
 
       // Prebuilt-image selection: an environment session matches its
@@ -815,7 +826,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * changing state, and that distinction is theirs to make.
    */
   reportSandboxError(reason: string): void {
-    // Persisting is best effort. `updateSandboxSpawnError` is a bare synchronous
+    // Persisting is best effort. `setLastSpawnError` is a bare synchronous
     // sql.exec, so a storage failure would otherwise also cost the broadcast —
     // the one signal an already-open tab gets — and, from the message queue's
     // spawn catch, would replace the spawn error being reported with the
@@ -851,7 +862,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     let session: SessionRow | null = null;
 
     try {
-      session = this.storage.getSession();
+      session = this.sessionContext.getSession();
       if (!session) {
         this.log.error("Cannot restore: no session");
         return;
@@ -874,10 +885,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.storage.getUserEnvVars();
+      const userEnvVars = await this.sessionContext.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
-      const repositories = this.storage.getSessionRepositories();
+      const repositories = this.sessionContext.getSessionRepositories();
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
@@ -993,7 +1004,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.providerStartupPending = true;
 
     try {
-      const session = this.storage.getSession();
+      const session = this.sessionContext.getSession();
       const sandbox = this.storage.getSandbox();
       if (!session || !sandbox?.modal_sandbox_id) {
         this.log.error("Cannot resume sandbox: missing session or logical sandbox ID");
@@ -1074,7 +1085,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
 
     const sandbox = this.storage.getSandbox();
-    const session = this.storage.getSession();
+    const session = this.sessionContext.getSession();
 
     if (!sandbox?.modal_object_id || !session) {
       this.log.debug("Cannot snapshot: no modal_object_id or session");
@@ -1242,7 +1253,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
 
     const sandbox = providerObjectId ? null : this.storage.getSandbox();
-    const session = this.storage.getSession();
+    const session = this.sessionContext.getSession();
     const objectId = providerObjectId ?? sandbox?.modal_object_id;
     if (!objectId || !session) {
       return;

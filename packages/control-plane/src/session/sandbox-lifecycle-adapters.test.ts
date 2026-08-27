@@ -1,98 +1,49 @@
 /**
- * Unit tests for the lifecycle-manager port adapters — the pieces with real
- * logic: the encrypt-before-store branch, the repository-shape defaults, the
- * setLastSpawnError rename, and the no-socket send branch. Pure forwards are
- * covered through the manager and server suites.
+ * Unit tests for the lifecycle-manager port adapters: the session-context
+ * facade's repository-shape defaults and the socket slice's send branches.
+ * Sandbox storage needs no adapter — the repository satisfies that port
+ * directly and is tested as itself.
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { decryptToken } from "../auth/crypto";
-import { DurableObjectSandboxStorage, LifecycleSocketAdapter } from "./sandbox-lifecycle-adapters";
-import type { SandboxRepository } from "./sandbox-repository";
+import { LifecycleSessionContext, LifecycleSocketAdapter } from "./sandbox-lifecycle-adapters";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { UserEnvResolver } from "./user-env-resolver";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
-const ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef";
-
-function createStorage(overrides: { encryptionKey?: string } = {}) {
-  const sandboxes = {
-    updateSandboxCodeServer: vi.fn(),
-    updateSandboxVnc: vi.fn(),
-    updateSandboxTtyd: vi.fn(),
-    updateSandboxSpawnError: vi.fn(),
-  } as unknown as SandboxRepository;
-  const sessions = {
-    getSessionRepositories: vi.fn(() => [
-      { repoOwner: "acme", repoName: "web-app", baseBranch: null, row: undefined },
-      {
-        repoOwner: "acme",
-        repoName: "api",
-        baseBranch: "develop",
-        row: { base_sha: "abc123" },
-      },
-    ]),
-  } as unknown as SessionCoreRepository;
-  const userEnv = {} as UserEnvResolver;
-  const storage = new DurableObjectSandboxStorage(
-    sandboxes,
-    sessions,
-    userEnv,
-    overrides.encryptionKey
-  );
-  return { storage, sandboxes, sessions };
-}
-
-describe("DurableObjectSandboxStorage", () => {
-  it("encrypts secrets before storing when a key is configured", async () => {
-    const { storage, sandboxes } = createStorage({ encryptionKey: ENCRYPTION_KEY });
-
-    await storage.updateSandboxCodeServer("https://cs.example", "cs-secret");
-    await storage.updateSandboxVnc("https://vnc.example", "vnc-secret");
-    await storage.updateSandboxTtyd("https://ttyd.example", "ttyd-token");
-
-    for (const [mock, url, plaintext] of [
-      [vi.mocked(sandboxes.updateSandboxCodeServer), "https://cs.example", "cs-secret"],
-      [vi.mocked(sandboxes.updateSandboxVnc), "https://vnc.example", "vnc-secret"],
-      [vi.mocked(sandboxes.updateSandboxTtyd), "https://ttyd.example", "ttyd-token"],
-    ] as const) {
-      const [storedUrl, storedSecret] = mock.mock.calls[0];
-      expect(storedUrl).toBe(url);
-      expect(storedSecret).not.toBe(plaintext);
-      await expect(decryptToken(storedSecret, ENCRYPTION_KEY)).resolves.toBe(plaintext);
-    }
-  });
-
-  it("stores secrets as-is and synchronously when no key is configured", () => {
-    const { storage, sandboxes } = createStorage();
-
-    // No await before asserting: the keyless branch must persist before the
-    // call returns, so a same-turn caller that does not await still observes
-    // the write (and a later clear cannot be overwritten by a deferred store).
-    const result = storage.updateSandboxCodeServer("https://cs.example", "cs-secret");
-
-    expect(result).toBeUndefined();
-    expect(sandboxes.updateSandboxCodeServer).toHaveBeenCalledWith(
-      "https://cs.example",
-      "cs-secret"
-    );
-  });
+describe("LifecycleSessionContext", () => {
+  function createContext() {
+    const sessions = {
+      getSessionRepositories: vi.fn(() => [
+        { repoOwner: "acme", repoName: "web-app", baseBranch: null, row: undefined },
+        {
+          repoOwner: "acme",
+          repoName: "api",
+          baseBranch: "develop",
+          row: { base_sha: "abc123" },
+        },
+      ]),
+    } as unknown as SessionCoreRepository;
+    const userEnv = {
+      getUserEnvVars: vi.fn(async () => ({ FOO: "bar" })),
+    } as unknown as UserEnvResolver;
+    return { context: new LifecycleSessionContext(sessions, userEnv), userEnv };
+  }
 
   it("maps repository entries with baseBranch and baseSha defaults", () => {
-    const { storage } = createStorage();
+    const { context } = createContext();
 
-    expect(storage.getSessionRepositories()).toEqual([
+    expect(context.getSessionRepositories()).toEqual([
       { repoOwner: "acme", repoName: "web-app", baseBranch: "main", baseSha: null },
       { repoOwner: "acme", repoName: "api", baseBranch: "develop", baseSha: "abc123" },
     ]);
   });
 
-  it("forwards setLastSpawnError to the spawn-error column update", () => {
-    const { storage, sandboxes } = createStorage();
+  it("forwards user env resolution to the resolver", async () => {
+    const { context, userEnv } = createContext();
 
-    storage.setLastSpawnError("boom", 1234);
-
-    expect(sandboxes.updateSandboxSpawnError).toHaveBeenCalledWith("boom", 1234);
+    await expect(context.getUserEnvVars()).resolves.toEqual({ FOO: "bar" });
+    expect(userEnv.getUserEnvVars).toHaveBeenCalledOnce();
   });
 });
 

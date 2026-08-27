@@ -3,7 +3,7 @@ import type { Clock } from "../ports";
 import type { SessionInternalRoute } from "./routes";
 
 export interface SessionHttpDispatcherDeps {
-  getLogger: () => Logger;
+  log: Logger;
   routes: readonly SessionInternalRoute[];
   handleWebSocketUpgrade: (request: Request, url: URL, log: Logger) => Promise<Response>;
   clock: Clock;
@@ -58,7 +58,7 @@ export class SessionHttpDispatcher {
 
   private requestLogger(request: Request): Logger {
     // Never mutate the session logger with request correlation shared by later callbacks.
-    const sessionLog = this.deps.getLogger();
+    const sessionLog = this.deps.log;
     const traceId = request.headers.get("x-trace-id");
     const requestId = request.headers.get("x-request-id");
     if (!traceId && !requestId) return sessionLog;

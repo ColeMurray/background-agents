@@ -116,6 +116,9 @@ CREATE TABLE IF NOT EXISTS messages (
   callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
   client_request_id TEXT,                           -- Web-client idempotency key
   request_fingerprint TEXT,                         -- Participant-scoped canonical request hash
+  autofix_feedback_key TEXT,                        -- Stable provider feedback identity for idempotency
+  autofix_pr_key TEXT,                              -- Stable provider PR identity for rolling attempt limits
+  origin_context TEXT,                              -- Typed JSON describing the external feedback origin
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
@@ -214,6 +217,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
 ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
 ON messages(status) WHERE status = 'processing';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_autofix_feedback
+ON messages(autofix_feedback_key) WHERE autofix_feedback_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
+ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
@@ -584,6 +591,19 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: (sql) => {
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN runtime_version TEXT`);
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_runtime_version TEXT`);
+    },
+  },
+  {
+    id: 45,
+    description: "Add Autofix message admission metadata",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN autofix_feedback_key TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN autofix_pr_key TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN origin_context TEXT`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_autofix_feedback
+        ON messages(autofix_feedback_key) WHERE autofix_feedback_key IS NOT NULL`);
+      sql.exec(`CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
+        ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL`);
     },
   },
 ];

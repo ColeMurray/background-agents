@@ -20,6 +20,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionEventStream } from "./event-stream";
 import type { MessageService } from "./services/message.service";
 import type { SessionRow, SandboxRow } from "./types";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 export interface SessionSnapshotEnrichment {
   environmentId: string | null;
@@ -156,7 +157,7 @@ export class SessionSnapshotReader {
       repoOwner: member.repoOwner,
       repoName: member.repoName,
       repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
-      baseBranch: member.baseBranch ?? "main",
+      baseBranch: member.baseBranch ?? DEFAULT_BASE_BRANCH,
       branchName:
         member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
       baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),

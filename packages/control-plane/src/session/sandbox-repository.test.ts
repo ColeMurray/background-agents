@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxRepository } from "./sandbox-repository";
+import { decryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
 
@@ -35,6 +36,8 @@ function createMockSql() {
   };
 }
 
+const TEST_ENCRYPTION_KEY = generateEncryptionKey();
+
 describe("SandboxRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
   let repository: SandboxRepository;
@@ -43,7 +46,7 @@ describe("SandboxRepository", () => {
   beforeEach(() => {
     mock = createMockSql();
     log = createLog();
-    repository = new SandboxRepository(mock.sql, log);
+    repository = new SandboxRepository(mock.sql, log, TEST_ENCRYPTION_KEY);
   });
 
   describe("getSandbox", () => {
@@ -246,9 +249,9 @@ describe("SandboxRepository", () => {
     });
   });
 
-  describe("updateSandboxSpawnError", () => {
+  describe("setLastSpawnError", () => {
     it("updates spawn error fields", () => {
-      repository.updateSandboxSpawnError("Failed to spawn sandbox", 123456);
+      repository.setLastSpawnError("Failed to spawn sandbox", 123456);
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_spawn_error");
@@ -257,13 +260,30 @@ describe("SandboxRepository", () => {
   });
 
   describe("VNC access", () => {
-    it("stores and clears VNC credentials", () => {
-      repository.updateSandboxVnc("https://vnc.test", "encrypted-password");
+    it("stores encrypted credentials and clears them", async () => {
+      await repository.updateSandboxVnc("https://vnc.test", "vnc-secret");
       repository.clearSandboxVnc();
 
       expect(mock.calls[0].query).toContain("SET vnc_url = ?, vnc_password = ?");
-      expect(mock.calls[0].params).toEqual(["https://vnc.test", "encrypted-password"]);
+      const [url, stored] = mock.calls[0].params as [string, string];
+      expect(url).toBe("https://vnc.test");
+      expect(stored).not.toBe("vnc-secret");
+      await expect(decryptToken(stored, TEST_ENCRYPTION_KEY)).resolves.toBe("vnc-secret");
       expect(mock.calls[1].query).toContain("SET vnc_url = NULL, vnc_password = NULL");
+    });
+
+    it("encrypts code-server and ttyd secrets the same way", async () => {
+      await repository.updateSandboxCodeServer("https://cs.test", "cs-secret");
+      await repository.updateSandboxTtyd("https://ttyd.test", "ttyd-token");
+
+      for (const [call, plaintext] of [
+        [mock.calls[0], "cs-secret"],
+        [mock.calls[1], "ttyd-token"],
+      ] as const) {
+        const stored = call.params[1] as string;
+        expect(stored).not.toBe(plaintext);
+        await expect(decryptToken(stored, TEST_ENCRYPTION_KEY)).resolves.toBe(plaintext);
+      }
     });
 
     it("can clear only the VNC URL", () => {

@@ -132,7 +132,7 @@ async function handleListSessionInbox(
   const commonOptions = {
     limit: SESSION_INBOX_LIMIT,
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
-    excludeAutomationLineage: mine === "true",
+    excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
   };
 

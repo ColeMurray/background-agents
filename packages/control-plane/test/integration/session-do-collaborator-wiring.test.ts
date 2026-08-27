@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import type { Mock } from "vitest";
 import type { SessionComponents } from "../../src/session/components";
 import type { SessionDO } from "../../src/session/durable-object";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { GitPushSpec } from "../../src/source-control";
 import { cleanD1Tables } from "./cleanup";
-import { componentsOf } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpers";
 
 /**
@@ -35,7 +35,10 @@ import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpe
  */
 function collaboratorsOf(
   instance: SessionDO
-): Pick<SessionComponents, "lifecycleManager" | "presenceService" | "sandboxEventProcessor"> {
+): Pick<
+  SessionComponents,
+  "lifecycleManager" | "presenceService" | "sandboxEventProcessor" | "pushService"
+> {
   return componentsOf(instance);
 }
 
@@ -75,6 +78,9 @@ function stubSourceControlProvider(): SourceControlProvider {
       sourceBranch: "open-inspect/test-session",
       targetBranch: "main",
     }),
+    resolveCommit: () => notUsedHere("resolveCommit"),
+    listTree: () => notUsedHere("listTree"),
+    readBlob: () => notUsedHere("readBlob"),
     buildManualPullRequestUrl: (config) =>
       `https://github.com/${config.owner}/${config.name}/pull/new/${config.targetBranch}...${config.sourceBranch}`,
     buildGitPushSpec: (config) => ({
@@ -109,7 +115,7 @@ describe("SessionDO collaborator wiring", () => {
     // typing takes the spawn branch rather than short-circuiting.
     await waitForSandboxStatus(stub, "failed");
 
-    const spawned = await runInDurableObject(stub, async (instance: SessionDO) => {
+    const spawned = await runInSessionDO(stub, async (instance: SessionDO) => {
       const collaborators = collaboratorsOf(instance);
       const spawnSandbox = vi.fn(async () => {});
       collaborators.lifecycleManager.spawnSandbox = spawnSandbox;
@@ -126,7 +132,7 @@ describe("SessionDO collaborator wiring", () => {
     const { stub } = await initSession({ userId: "user-1" });
     await waitForSandboxStatus(stub, "failed");
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO) => {
       collaboratorsOf(instance).lifecycleManager.triggerSnapshot = vi.fn(
         async (_reason: string) => {}
       );
@@ -145,7 +151,7 @@ describe("SessionDO collaborator wiring", () => {
     });
     expect(response.status).toBe(200);
 
-    const reasons = await runInDurableObject(stub, (instance: SessionDO) => {
+    const reasons = await runInSessionDO(stub, (instance: SessionDO) => {
       const spy = collaboratorsOf(instance).lifecycleManager.triggerSnapshot as unknown as Mock<
         (reason: string) => Promise<void>
       >;
@@ -175,7 +181,7 @@ describe("SessionDO collaborator wiring", () => {
       startedAt: Date.now() - 500,
     });
 
-    await runInDurableObject(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO) => {
       // SCM access reads through the components record, so replacing this
       // property substitutes the stub for every consumer.
       const provider = stubSourceControlProvider();
@@ -183,7 +189,7 @@ describe("SessionDO collaborator wiring", () => {
       // Without a connected sandbox the real implementation short-circuits to
       // `{ success: true }`, which is exactly what a dropped edge would return.
       // Spying is the only way to tell the two apart from out here.
-      collaboratorsOf(instance).sandboxEventProcessor.pushBranchToRemote = vi.fn(
+      collaboratorsOf(instance).pushService.pushBranchToRemote = vi.fn(
         async (_pushSpec: GitPushSpec) => ({ success: true as const })
       );
     });
@@ -195,9 +201,8 @@ describe("SessionDO collaborator wiring", () => {
     });
     expect(response.status).toBe(200);
 
-    const pushSpecs = await runInDurableObject(stub, (instance: SessionDO) => {
-      const spy = collaboratorsOf(instance).sandboxEventProcessor
-        .pushBranchToRemote as unknown as Mock<
+    const pushSpecs = await runInSessionDO(stub, (instance: SessionDO) => {
+      const spy = collaboratorsOf(instance).pushService.pushBranchToRemote as unknown as Mock<
         (pushSpec: GitPushSpec) => Promise<{ success: true }>
       >;
       return spy.mock.calls.map((call) => ({
@@ -228,7 +233,7 @@ describe("SessionDO collaborator wiring", () => {
     // already committed by the time the warm spawn runs. (Init's own
     // ensureInitialized() is idempotent, so pre-initializing here matches
     // production order within the same activation.)
-    await runInDurableObject(stub, (instance: SessionDO) => {
+    await runInSessionDO(stub, (instance: SessionDO) => {
       componentsOf(instance).lifecycleManager.warmSandbox = vi.fn(() =>
         Promise.reject(new Error("modal API unavailable"))
       );
@@ -254,7 +259,7 @@ describe("SessionDO collaborator wiring", () => {
     // evidence the rejection was absorbed rather than evidence it never
     // happened. `submit` runs the task factory synchronously and routes the
     // rejection to background_task.failed instead of letting it escape.
-    const warmSpawnCalls = await runInDurableObject(stub, (instance: SessionDO) => {
+    const warmSpawnCalls = await runInSessionDO(stub, (instance: SessionDO) => {
       const spy = componentsOf(instance).lifecycleManager.warmSandbox as unknown as Mock<
         () => Promise<void>
       >;

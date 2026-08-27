@@ -1,44 +1,27 @@
 /**
  * Composition-root adapters for the sandbox lifecycle manager's ports.
  *
- * The manager owns `SandboxStorage` and `WebSocketManager`; these classes
- * implement them over the session's collaborators so the root wires objects
- * instead of building closure-bag literals inline (deps standard: pass
- * collaborators directly, give shared-collaborator groups a composition
- * class).
+ * `SandboxStorage` needs no adapter at all — it is the repository's contract
+ * and `SandboxRepository` satisfies it structurally. What lives here are the
+ * two ports that genuinely span or narrow other collaborators: the session
+ * context the manager reads alongside storage, and the slice of the socket
+ * registry it may touch.
  */
 
-import { encryptToken } from "../auth/crypto";
-import type { SandboxStorage, WebSocketManager } from "../sandbox/lifecycle/manager";
+import type { SessionContextReader, WebSocketManager } from "../sandbox/lifecycle/manager";
 import type { SessionRepositoryInfo } from "../sandbox/provider";
-import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import type {
-  SandboxRepository,
-  SandboxCircuitBreakerState,
-  SpawnSandboxData,
-  ResumeSandboxData,
-} from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { UserEnvResolver } from "./user-env-resolver";
+import type { SessionRow } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import type { SandboxRow, SessionRow } from "./types";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
-export class DurableObjectSandboxStorage implements SandboxStorage {
+/** The session-context reads owned by the session repositories and resolver. */
+export class LifecycleSessionContext implements SessionContextReader {
   constructor(
-    private readonly sandboxes: SandboxRepository,
     private readonly sessions: SessionCoreRepository,
-    private readonly userEnv: UserEnvResolver,
-    /** Absent on deployments without a secrets key — values persist unencrypted. */
-    private readonly encryptionKey: string | undefined
+    private readonly userEnv: UserEnvResolver
   ) {}
-
-  getSandbox(): SandboxRow | null {
-    return this.sandboxes.getSandbox();
-  }
-
-  getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
-    return this.sandboxes.getSandboxWithCircuitBreaker();
-  }
 
   getSession(): SessionRow | null {
     return this.sessions.getSession();
@@ -48,118 +31,13 @@ export class DurableObjectSandboxStorage implements SandboxStorage {
     return this.sessions.getSessionRepositories().map((entry) => ({
       repoOwner: entry.repoOwner,
       repoName: entry.repoName,
-      baseBranch: entry.baseBranch ?? "main",
+      baseBranch: entry.baseBranch ?? DEFAULT_BASE_BRANCH,
       baseSha: entry.row?.base_sha ?? null,
     }));
   }
 
   getUserEnvVars(): Promise<Record<string, string> | undefined> {
     return this.userEnv.getUserEnvVars();
-  }
-
-  updateSandboxStatus(status: SandboxStatus): void {
-    this.sandboxes.updateSandboxStatus(status);
-  }
-
-  updateSandboxForSpawn(data: SpawnSandboxData): void {
-    this.sandboxes.updateSandboxForSpawn(data);
-  }
-
-  updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean {
-    return this.sandboxes.updateSandboxAuthTokenHash(modalSandboxId, authTokenHash);
-  }
-
-  updateSandboxForResume(data: ResumeSandboxData): void {
-    this.sandboxes.updateSandboxForResume(data);
-  }
-
-  updateSandboxModalObjectId(modalObjectId: string | null): void {
-    this.sandboxes.updateSandboxModalObjectId(modalObjectId);
-  }
-
-  updateSandboxRuntimeVersion(runtimeVersion: string | null): void {
-    this.sandboxes.updateSandboxRuntimeVersion(runtimeVersion);
-  }
-
-  updateSandboxSnapshotImageId(
-    sandboxId: string,
-    imageId: string,
-    runtimeVersion: string | null
-  ): void {
-    this.sandboxes.updateSandboxSnapshotImageId(sandboxId, imageId, runtimeVersion);
-  }
-
-  updateSandboxLastActivity(timestamp: number): void {
-    this.sandboxes.updateSandboxLastActivity(timestamp);
-  }
-
-  incrementCircuitBreakerFailure(timestamp: number): void {
-    this.sandboxes.incrementCircuitBreakerFailure(timestamp);
-  }
-
-  resetCircuitBreaker(): void {
-    this.sandboxes.resetCircuitBreaker();
-  }
-
-  setLastSpawnError(error: string | null, timestamp: number | null): void {
-    this.sandboxes.updateSandboxSpawnError(error, timestamp);
-  }
-
-  updateSandboxCodeServer(url: string, password: string): void | Promise<void> {
-    return this.persistEncrypted(password, (stored) =>
-      this.sandboxes.updateSandboxCodeServer(url, stored)
-    );
-  }
-
-  clearSandboxCodeServer(): void {
-    this.sandboxes.clearSandboxCodeServer();
-  }
-
-  clearSandboxCodeServerUrl(): void {
-    this.sandboxes.clearSandboxCodeServerUrl();
-  }
-
-  updateSandboxVnc(url: string, password: string): void | Promise<void> {
-    return this.persistEncrypted(password, (stored) =>
-      this.sandboxes.updateSandboxVnc(url, stored)
-    );
-  }
-
-  clearSandboxVnc(): void {
-    this.sandboxes.clearSandboxVnc();
-  }
-
-  clearSandboxVncUrl(): void {
-    this.sandboxes.clearSandboxVncUrl();
-  }
-
-  updateSandboxTunnelUrls(urls: Record<string, string>): void {
-    this.sandboxes.updateSandboxTunnelUrls(urls);
-  }
-
-  clearSandboxTunnelUrls(): void {
-    this.sandboxes.clearSandboxTunnelUrls();
-  }
-
-  updateSandboxTtyd(url: string, token: string): void | Promise<void> {
-    return this.persistEncrypted(token, (stored) => this.sandboxes.updateSandboxTtyd(url, stored));
-  }
-
-  clearSandboxTtyd(): void {
-    this.sandboxes.clearSandboxTtyd();
-  }
-
-  /**
-   * Encrypt-at-rest for access secrets. The keyless branch persists
-   * synchronously so callers that do not await still observe the write in the
-   * same turn, matching the pre-extraction literal's ordering.
-   */
-  private persistEncrypted(value: string, persist: (stored: string) => void): void | Promise<void> {
-    if (!this.encryptionKey) {
-      persist(value);
-      return;
-    }
-    return encryptToken(value, this.encryptionKey).then(persist);
   }
 }
 

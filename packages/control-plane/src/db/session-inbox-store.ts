@@ -12,7 +12,7 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
-  excludeAutomationLineage?: boolean;
+  excludeAutomatedSessions?: boolean;
   viewerUserId: string;
   limit: number;
   cursor: SessionInboxCursor | null;
@@ -186,7 +186,7 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomationLineage" | "viewerUserId"
+      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId"
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
@@ -243,14 +243,12 @@ export class SessionInboxStore {
   }
 
   private eligibility(
-    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomationLineage">
+    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomatedSessions">
   ): { conditions: string[]; params: unknown[] } {
     const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
     const params: unknown[] = [];
-    if (options.excludeAutomationLineage) {
-      conditions.push(
-        "sessions.automation_id IS NULL AND sessions.spawn_source NOT IN ('automation', 'github-bot')"
-      );
+    if (options.excludeAutomatedSessions) {
+      conditions.push("sessions.spawn_source NOT IN ('automation', 'github-bot')");
     }
     if (options.createdByUserIds?.length) {
       conditions.push(
