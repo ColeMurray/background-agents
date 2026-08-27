@@ -18,6 +18,18 @@ import { z } from "zod";
 /** SWR key for the unified image-build feed. */
 export const IMAGE_BUILDS_KEY = "/api/image-builds";
 
+/** Poll cadence for a build-row feed showing a build still in progress. */
+export const IMAGE_BUILD_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * SWR `refreshInterval` for build-row feeds: poll while any row is still
+ * building. Terminal rows only change through user actions, which mutate the
+ * key directly, so an all-terminal feed doesn't poll.
+ */
+export function imageBuildPollInterval(images: ImageBuildRecordView[] | undefined): number {
+  return images?.some((image) => image.status === "building") ? IMAGE_BUILD_POLL_INTERVAL_MS : 0;
+}
+
 /** One prebuild-enabled scope as served by GET /api/image-builds. */
 export const imageBuildUnitViewSchema = z.object({
   scopeKind: imageBuildScopeKindSchema,

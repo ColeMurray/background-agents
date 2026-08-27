@@ -4,6 +4,8 @@ import {
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
+  IMAGE_BUILD_POLL_INTERVAL_MS,
+  imageBuildPollInterval,
   imageBuildScopeKey,
   imageBuildEnabledRepoViewSchema,
   imageBuildsEnabledReposResponseSchema,
@@ -194,5 +196,23 @@ describe("parsePrimaryBuildSha", () => {
 
   it("returns null for unavailable provenance", () => {
     expect(parsePrimaryBuildSha(null)).toBeNull();
+  });
+});
+
+describe("imageBuildPollInterval", () => {
+  it("polls while any row is still building", () => {
+    const images = [record({ status: "ready" }), record({ id: "build-2", status: "building" })];
+
+    expect(imageBuildPollInterval(images)).toBe(IMAGE_BUILD_POLL_INTERVAL_MS);
+  });
+
+  it("does not poll an all-terminal feed", () => {
+    const images = [record({ status: "ready" }), record({ id: "build-2", status: "failed" })];
+
+    expect(imageBuildPollInterval(images)).toBe(0);
+  });
+
+  it("does not poll before the feed has loaded", () => {
+    expect(imageBuildPollInterval(undefined)).toBe(0);
   });
 });

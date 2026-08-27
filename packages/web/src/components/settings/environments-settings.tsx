@@ -10,7 +10,11 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
+import {
+  formatReadyDetails,
+  imageBuildPollInterval,
+  parsePrimaryBuildSha,
+} from "@/lib/image-builds";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
@@ -405,9 +409,16 @@ function environmentImagesKey(environmentId: string): string {
  * shared ImageBuildStatus.
  */
 function EnvironmentImageStatus({ environment }: { environment: Environment }) {
-  const { data } = useSWR<{ images: ImageBuildRecordView[] }>(
-    environment.prebuildEnabled ? environmentImagesKey(environment.id) : null
+  const { data, error } = useSWR<{ images: ImageBuildRecordView[] }>(
+    environment.prebuildEnabled ? environmentImagesKey(environment.id) : null,
+    { refreshInterval: (latest) => imageBuildPollInterval(latest?.images) }
   );
+
+  // Distinguish a failed fetch from a genuinely build-less environment —
+  // "No image" invites a manual rebuild the environment may not need.
+  if (environment.prebuildEnabled && error && !data) {
+    return <span className="text-xs text-muted-foreground">Status unavailable</span>;
+  }
 
   const image = environment.prebuildEnabled ? data?.images?.[0] : undefined;
 

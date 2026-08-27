@@ -12,6 +12,7 @@ import { RefreshIcon } from "@/components/ui/icons";
 import {
   IMAGE_BUILDS_KEY,
   formatReadyDetails,
+  imageBuildPollInterval,
   parsePrimaryBuildSha,
   type ImageBuildsFeed,
 } from "@/lib/image-builds";
@@ -22,9 +23,13 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 export function ImagesSettings() {
   const repoImagesSupported = supportsRepoImages();
   const { repos, loading: reposLoading } = useRepos();
-  const { data, isLoading: imagesLoading } = useSWR<ImageBuildsFeed>(
-    repoImagesSupported ? IMAGE_BUILDS_KEY : null
-  );
+  const {
+    data,
+    error: feedError,
+    isLoading: imagesLoading,
+  } = useSWR<ImageBuildsFeed>(repoImagesSupported ? IMAGE_BUILDS_KEY : null, {
+    refreshInterval: (latest) => imageBuildPollInterval(latest?.images),
+  });
   const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
   const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
@@ -120,6 +125,17 @@ export function ImagesSettings() {
       <div className="flex items-center gap-2 text-muted-foreground">
         <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
         Loading image settings...
+      </div>
+    );
+  }
+
+  // Without the feed there is no toggle state to show — rendering the list
+  // would present every repo as disabled and invite state-changing toggles.
+  if (feedError && !data) {
+    return (
+      <div>
+        <h2 className="text-xl font-semibold text-foreground mb-1">Pre-Built Images</h2>
+        <ErrorBanner>Failed to load image build settings.</ErrorBanner>
       </div>
     );
   }
