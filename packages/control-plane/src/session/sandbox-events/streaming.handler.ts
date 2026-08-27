@@ -9,10 +9,11 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
 /**
  * Streaming/timeline family: the high-frequency events that narrate an
- * execution (tokens, steps, tool activity, compaction). Everything here
- * records to the timeline and broadcasts; nothing transitions session state.
- * Also owns the generic observer path (`recordTimelineEvent`) that
- * unclassified events fall through to.
+ * execution (tokens, steps, tool activity, compaction). Every event here is
+ * broadcast to clients; the ones with a durable representation also record
+ * to the timeline (steps only renew activity and accumulate cost). Nothing
+ * here transitions session state. Also owns the timeline-observer path
+ * (`recordTimelineEvent`) for events that persist and broadcast unchanged.
  */
 export class SandboxStreamingEventHandler {
   constructor(
@@ -82,9 +83,8 @@ export class SandboxStreamingEventHandler {
   }
 
   /**
-   * Persist-and-broadcast for events with no specialized handling:
-   * `tool_result` by design, plus anything the router does not classify
-   * (`error`, `warning`, `user_message`, and future event types).
+   * Persist-and-broadcast for the router's timeline-observer cases
+   * (`tool_result`, `error`, `warning`, `user_message`).
    */
   recordTimelineEvent(event: SandboxEvent, context: SandboxEventContext): void {
     persistSandboxEvent(this.eventRepository, event, context);

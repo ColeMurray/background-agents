@@ -179,6 +179,7 @@ export interface SessionComponents {
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
+  pushCoordinator: SandboxPushCoordinator;
   sessionLifecycleHandler: SessionLifecycleHandler;
 }
 
@@ -624,7 +625,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         sourceControlProvider: sourceControlProvider(),
         log: requestLog,
         generateId: () => generateId(),
-        pushBranchToRemote: (pushSpec) => sandboxEventProcessor.pushBranchToRemote(pushSpec),
+        pushBranchToRemote: (pushSpec) => pushCoordinator.pushBranchToRemote(pushSpec),
         messenger,
         appName: resolveAppName(env),
         sessionPullRequests: sessionPullRequestStore ?? undefined,
@@ -803,6 +804,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     presenceService,
     sandboxEventProcessor,
+    pushCoordinator,
     sessionLifecycleHandler,
   };
 

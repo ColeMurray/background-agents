@@ -12,10 +12,10 @@ import type { SandboxEventContext } from "./context";
  * is the convergence point of the session — message completion, terminal
  * projection, client broadcasts, queue release, callbacks, snapshotting,
  * activity accounting, and the status reconcile all meet here, which is why
- * this handler is the widest of the families. The status-owner campaign
- * (docs/internal/2026-08-27-session-status-owner-plan.md) is expected to
- * absorb `projectTerminalMessage` and parts of `statusService` into one
- * projection surface; re-measure after it lands before splitting further.
+ * this handler is the widest of the families. A planned single-writer rework
+ * of session status and its D1 projection is expected to fold
+ * `projectTerminalMessage` and parts of `statusService` into one projection
+ * surface; re-measure this class after that lands before splitting further.
  */
 export class SandboxExecutionEventHandler {
   constructor(

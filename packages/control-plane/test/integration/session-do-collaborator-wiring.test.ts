@@ -35,7 +35,10 @@ import { initSession, queryDO, seedMessage, waitForSandboxStatus } from "./helpe
  */
 function collaboratorsOf(
   instance: SessionDO
-): Pick<SessionComponents, "lifecycleManager" | "presenceService" | "sandboxEventProcessor"> {
+): Pick<
+  SessionComponents,
+  "lifecycleManager" | "presenceService" | "sandboxEventProcessor" | "pushCoordinator"
+> {
   return componentsOf(instance);
 }
 
@@ -186,7 +189,7 @@ describe("SessionDO collaborator wiring", () => {
       // Without a connected sandbox the real implementation short-circuits to
       // `{ success: true }`, which is exactly what a dropped edge would return.
       // Spying is the only way to tell the two apart from out here.
-      collaboratorsOf(instance).sandboxEventProcessor.pushBranchToRemote = vi.fn(
+      collaboratorsOf(instance).pushCoordinator.pushBranchToRemote = vi.fn(
         async (_pushSpec: GitPushSpec) => ({ success: true as const })
       );
     });
@@ -199,7 +202,7 @@ describe("SessionDO collaborator wiring", () => {
     expect(response.status).toBe(200);
 
     const pushSpecs = await runInSessionDO(stub, (instance: SessionDO) => {
-      const spy = collaboratorsOf(instance).sandboxEventProcessor
+      const spy = collaboratorsOf(instance).pushCoordinator
         .pushBranchToRemote as unknown as Mock<
         (pushSpec: GitPushSpec) => Promise<{ success: true }>
       >;

@@ -1,6 +1,5 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
-import type { GitPushSpec } from "../../source-control";
 import type { MessageRepository } from "../message-repository";
 import type { SessionWebSocketManager } from "../websocket-manager";
 import type { SandboxArtifactEventHandler } from "./artifact.handler";
@@ -100,18 +99,18 @@ export class SessionSandboxEventProcessor {
       case "push_error":
         this.push.handleTerminalEvent(event, context);
         return;
-      default:
-        // tool_result by design, plus error/warning/user_message and any
-        // future event type: observe on the timeline, nothing else.
+      case "tool_result":
+      case "error":
+      case "warning":
+      case "user_message":
+        // Timeline-observer events: persist and broadcast, nothing else.
         this.streaming.recordTimelineEvent(event, context);
         return;
+      default:
+        // Exhaustive: a new SandboxEvent variant must pick a family here.
+        event satisfies never;
+        return;
     }
-  }
-
-  pushBranchToRemote(
-    pushSpec: GitPushSpec
-  ): Promise<{ success: true } | { success: false; error: string }> {
-    return this.push.pushBranchToRemote(pushSpec);
   }
 
   private sendAck(ackId: string | undefined): void {

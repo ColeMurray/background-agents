@@ -92,6 +92,12 @@ function createProcessor() {
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
+  const pushCoordinator = new SandboxPushCoordinator(
+    log,
+    eventRepository,
+    messenger,
+    wsManager as unknown as SessionWebSocketManager
+  );
   const processor = new SessionSandboxEventProcessor(
     log,
     repository as unknown as MessageRepository,
@@ -133,16 +139,12 @@ function createProcessor() {
       applySessionTitleUpdate,
       updateLastActivity
     ),
-    new SandboxPushCoordinator(
-      log,
-      eventRepository,
-      messenger,
-      wsManager as unknown as SessionWebSocketManager
-    )
+    pushCoordinator
   );
 
   return {
     processor,
+    pushCoordinator,
     artifactRepository,
     repository,
     eventRepository,
@@ -576,7 +578,7 @@ describe("SessionSandboxEventProcessor", () => {
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    const pushPromise = h.processor.pushBranchToRemote(
+    const pushPromise = h.pushCoordinator.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")
     );
 
@@ -606,10 +608,10 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.processor.pushBranchToRemote(
+      const webPush = h.pushCoordinator.pushBranchToRemote(
         createPushSpec("acme", "web", "open-inspect/session-1")
       );
-      const backendPush = h.processor.pushBranchToRemote(
+      const backendPush = h.pushCoordinator.pushBranchToRemote(
         createPushSpec("acme", "backend", "open-inspect/session-1")
       );
 
@@ -640,7 +642,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushCoordinator.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -658,7 +660,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushCoordinator.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -681,7 +683,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushCoordinator.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -711,8 +713,8 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.processor.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
-      const backendPush = h.processor.pushBranchToRemote(
+      const webPush = h.pushCoordinator.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
+      const backendPush = h.pushCoordinator.pushBranchToRemote(
         createPushSpec("acme", "backend", "feature/b")
       );
 
