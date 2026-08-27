@@ -45,16 +45,17 @@ function hasAutomationEventSource<S extends AutomationEventSource>(
   return event.source === source;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function logAutomationEventRejection(
   body: unknown,
   source: AutomationEventSource,
   issuePaths: string[],
   ctx: RequestContext
 ): void {
-  const rawEventType =
-    typeof body === "object" && body !== null && !Array.isArray(body)
-      ? (body as Record<string, unknown>).eventType
-      : undefined;
+  const rawEventType = isRecord(body) ? body.eventType : undefined;
   const eventType = typeof rawEventType === "string" ? rawEventType.slice(0, 128) : undefined;
 
   logger.warn("Normalized automation event rejected", {
@@ -74,13 +75,13 @@ export function validateAutomationEventEnvelope<S extends AutomationEventSource>
   body: unknown,
   source: S
 ): AutomationEventEnvelopeResult<S> {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+  if (!isRecord(body)) {
     return {
       response: error("Invalid event: body must be a JSON object", 400),
       issuePaths: ["body"],
     };
   }
-  if ((body as Record<string, unknown>).source !== source) {
+  if (body.source !== source) {
     return {
       response: error(`Invalid event: source must be '${source}'`, 400),
       issuePaths: ["source"],
@@ -113,21 +114,14 @@ export async function forwardAutomationEventToScheduler(
   event: AutomationEvent,
   ctx: RequestContext
 ): Promise<Response> {
-  let response: Response;
+  let result;
   try {
-    response = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+    result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
   } catch {
     return json({ ok: false, error: "Failed to reach scheduler" }, 502);
   }
 
-  let result: { triggered: number; skipped: number; steered?: number };
-  try {
-    result = await response.json<{ triggered: number; skipped: number; steered?: number }>();
-  } catch {
-    return json({ ok: false, error: "Invalid response from scheduler" }, 502);
-  }
-
-  return json({ ok: true, ...result }, response.status);
+  return json({ ok: true, ...result });
 }
 
 export function createAutomationEventRoute(opts: {

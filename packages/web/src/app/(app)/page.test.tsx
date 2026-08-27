@@ -119,6 +119,14 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }));
 
+vi.mock("@/components/model-reasoning-selector", () => ({
+  ModelReasoningSelector: ({ disabled }: { disabled?: boolean }) => (
+    <button type="button" disabled={disabled} aria-label="Model and effort">
+      Model and effort
+    </button>
+  ),
+}));
+
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: mocks.reposValue, loading: mocks.loadingReposValue }),
 }));
@@ -195,7 +203,7 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/sessions") {
-        return Response.json({ sessionId: "session-1" });
+        return Response.json({ sessionId: "session-1", status: "created" });
       }
       if (url === "/api/sessions/session-1/prompt") {
         return Response.json({ ok: true });
@@ -281,8 +289,26 @@ describe("Home", () => {
       warmingStatus.compareDocumentPosition(attachmentButton) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
 
-    resolveCreate?.(Response.json({ sessionId: "session-1" }));
+    resolveCreate?.(Response.json({ sessionId: "session-1", status: "created" }));
     await waitFor(() => expect(screen.queryByText("Warming sandbox...")).not.toBeInTheDocument());
+  });
+
+  it("does not warm a pending session from a malformed create response", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input) === "/api/sessions") {
+        return Response.json({ sessionId: "session-1" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Investigate logs");
+    await waitFor(() => expect(screen.queryByText("Warming sandbox...")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await screen.findByText("Failed to create session");
+    expect(mocks.routerPush).not.toHaveBeenCalled();
   });
 
   it("invalidates a warmed session when the managed skill selection changes", async () => {
@@ -491,6 +517,10 @@ describe("Home", () => {
     const authenticationTrigger = await screen.findByRole("button", {
       name: /^OpenAI authentication options/,
     });
+    const skillTrigger = screen.getByRole("button", { name: /all skills/i });
+    expect(
+      skillTrigger.compareDocumentPosition(authenticationTrigger) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     fireEvent.pointerDown(authenticationTrigger, { button: 0, ctrlKey: false });
     const authenticationMenu = await screen.findByRole("menuitem", {
       name: "OpenAI authentication",
@@ -564,10 +594,20 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /background-agents/i });
   });
 
-  it("keeps the composer footer compact", async () => {
+  it("shows the repository and branch above the composer", async () => {
     render(<Home />);
 
+    const repository = await screen.findByRole("button", { name: /background-agents/i });
     const branch = await screen.findByText("main");
+    const composer = screen.getByPlaceholderText("What do you want to build?");
+    expect(
+      repository.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      branch.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(repository.querySelectorAll("svg")).toHaveLength(1);
+    expect(branch.closest("button")?.querySelectorAll("svg")).toHaveLength(1);
     expect(branch).toHaveClass("max-w-[9rem]", "truncate");
     expect(screen.queryByText("build agent")).not.toBeInTheDocument();
   });

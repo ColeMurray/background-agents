@@ -5,8 +5,9 @@ import {
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
 } from "@open-inspect/shared/session-list-query";
-import type { Session } from "@open-inspect/shared/types/sessions";
-import type { BrowserApiPath } from "./browser-api-fetch";
+import { sessionStatusSchema, type SessionReadState } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
+import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
@@ -23,9 +24,45 @@ export const COMMAND_MENU_SESSIONS_KEY = buildSessionsPageKey({
   limit: COMMAND_MENU_SESSIONS_LIMIT,
 });
 
-export interface SessionListResponse {
-  sessions: Session[];
-  hasMore: boolean;
+const sessionListItemSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  status: sessionStatusSchema,
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  repositories: z
+    .array(
+      z.object({
+        repoOwner: z.string(),
+        repoName: z.string(),
+        repoId: z.number().nullable(),
+        baseBranch: z.string(),
+      })
+    )
+    .optional(),
+  readState: z
+    .union([
+      z.object({ latestMessageId: z.null(), unread: z.literal(false) }),
+      z.object({ latestMessageId: z.string(), unread: z.boolean() }),
+    ])
+    .optional(),
+});
+
+export type SessionListItem = z.infer<typeof sessionListItemSchema>;
+
+export const sessionListResponseSchema = z.object({
+  sessions: z.array(sessionListItemSchema),
+  hasMore: z.boolean(),
+});
+
+export type SessionListResponse = z.infer<typeof sessionListResponseSchema>;
+
+export async function fetchSessionListPage(path: BrowserApiPath): Promise<SessionListResponse> {
+  const response = await browserApiFetch(path);
+  if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+  return sessionListResponseSchema.parse(await response.json());
 }
 
 export function buildSessionsPageKey(options: SessionListQuery = {}): BrowserApiPath {
@@ -78,7 +115,7 @@ export function applyTitleUpdate(
 export function applySessionReadState(
   data: SessionListResponse | undefined,
   sessionId: string,
-  readState: Session["readState"]
+  readState: SessionReadState | undefined
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
@@ -98,11 +135,11 @@ export function applySessionReadState(
   };
 }
 
-export function removeSessionFromList(sessions: Session[], sessionId: string) {
+export function removeSessionFromList(sessions: SessionListItem[], sessionId: string) {
   return sessions.filter((session) => session.id !== sessionId);
 }
 
-export function buildSessionSearchValue(session: Session): string {
+export function buildSessionSearchValue(session: SessionListItem): string {
   const repositoryLabels = session.repositories?.length
     ? session.repositories.map((repository) =>
         formatRepoLabel(repository.repoOwner, repository.repoName)
@@ -118,7 +155,7 @@ export function buildSessionSearchValue(session: Session): string {
  * session payload loads.
  */
 export function buildSessionHref(
-  session: Pick<Session, "id" | "title" | "repoOwner" | "repoName">
+  session: Pick<SessionListItem, "id" | "title" | "repoOwner" | "repoName">
 ) {
   const query: Record<string, string> = {};
   if (session.repoOwner && session.repoName) {

@@ -1,3 +1,14 @@
+/**
+ * Ports consumed by the platform-neutral server stack (dispatcher, message
+ * router, disconnect handler), generic over the connection type so the stack
+ * unit-tests off-platform with plain values (see server.test.ts).
+ *
+ * These are deliberately separate from the delivery seam (`SessionMessenger`)
+ * and the concrete registry (`SessionWebSocketManager`): the server stack
+ * needs connection-addressed operations (classify THIS connection, reply to
+ * THIS socket), which a connection-anonymous delivery port cannot express.
+ */
+
 /** Mutable state associated with one authenticated browser connection. */
 export interface ConnectedClient {
   participantId: string;

@@ -8,7 +8,7 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import { SUBSCRIPTION_PROVIDER_DISPLAY_METADATA } from "@open-inspect/shared/types/provider-accounts";
 import { Label } from "@/components/ui/label";
-import { MoreIcon } from "@/components/ui/icons";
+import { SubscriptionProviderIcon } from "@/components/subscription-provider-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -101,23 +101,24 @@ export function ProviderAuthControls({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className={`flex max-w-52 items-center gap-1.5 rounded px-2 py-1 text-xs transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
+            className={`rounded p-1 transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${value ? "text-accent" : "text-muted-foreground"}`}
             aria-label={`${providerName} authentication options, ${triggerSelectionLabel}`}
             title={`${providerName} authentication`}
             disabled={disabled}
           >
-            <span className="truncate">
-              {providerName}: {triggerSelectionLabel}
-            </span>
-            <MoreIcon className="size-3.5 shrink-0" />
+            <SubscriptionProviderIcon provider={provider} className="size-3.5" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" className="w-52 max-w-[calc(100vw-2rem)]">
           <DropdownMenuLabel>Session options</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger disabled={disabled}>
-              {providerName} authentication
+            <DropdownMenuSubTrigger
+              disabled={disabled}
+              aria-label={`${providerName} authentication`}
+            >
+              <SubscriptionProviderIcon provider={provider} className="size-3.5" />
+              authentication
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               collisionPadding={8}
@@ -149,9 +150,15 @@ export function ProviderAuthControls({
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={`provider-auth-${provider}`}>{providerName} authentication</Label>
+      <Label htmlFor={`provider-auth-${provider}`} className="flex items-center gap-1.5">
+        <SubscriptionProviderIcon provider={provider} className="size-4" />
+        authentication
+      </Label>
       <Select value={selected} onValueChange={handleChange} disabled={disabled}>
-        <SelectTrigger id={`provider-auth-${provider}`}>
+        <SelectTrigger
+          id={`provider-auth-${provider}`}
+          aria-label={`${providerName} authentication`}
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

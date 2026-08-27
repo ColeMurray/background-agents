@@ -1,25 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
-import type { SessionDO } from "../../src/session/durable-object";
+import { env } from "cloudflare:test";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, initSession } from "./helpers";
+import { getUserEnvVars } from "./session-do-access";
 import type { SessionProviderAuthMode } from "@open-inspect/shared/types/provider-accounts";
 
 const KEY = () => env.REPO_SECRETS_ENCRYPTION_KEY as string;
-
-/** Invoke the DO's real (private) getUserEnvVars, exercising the session-target fold. */
-function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
-  return runInDurableObject(stub, (instance: SessionDO) =>
-    (
-      instance as unknown as {
-        getUserEnvVars(): Promise<Record<string, string> | undefined>;
-      }
-    ).getUserEnvVars()
-  );
-}
 
 async function initSessionWithProviderAuth(
   overrides: Parameters<typeof initNamedSession>[1] = {},

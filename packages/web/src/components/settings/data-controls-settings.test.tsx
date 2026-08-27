@@ -65,6 +65,7 @@ type FetchHandlers = {
   // successful POST /unarchive removes the session from it so subsequent
   // pages shift the way they would server-side.
   archivedSessions?: ArchivedSession[];
+  onArchivedList?: (offset: number, limit: number) => Response | Promise<Response>;
   onUnarchive?: (sessionId: string) => Response | Promise<Response>;
   onListSidebar?: () => Response | Promise<Response>;
 };
@@ -93,6 +94,7 @@ function installFetch(handlers: FetchHandlers) {
       if (params.get("status") === "archived") {
         const offset = Number(params.get("offset") || 0);
         const limit = Number(params.get("limit") || 20);
+        if (handlers.onArchivedList) return handlers.onArchivedList(offset, limit);
         const sessions = archived.slice(offset, offset + limit);
         return jsonResponse({
           sessions,
@@ -270,6 +272,35 @@ describe("DataControlsSettings — unarchive flow", () => {
     expect(await screen.findByText("Session 21")).toBeInTheDocument();
     expect(screen.getByText("Session 22")).toBeInTheDocument();
     expect(screen.getByText("Session 23")).toBeInTheDocument();
+  });
+
+  it("rejects malformed Load-more responses", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    installFetch({
+      onArchivedList: (offset) => {
+        if (offset === 0) {
+          const sessions = Array.from({ length: 20 }, (_, i) => createArchivedSession(i + 1));
+          return jsonResponse({ sessions, hasMore: true });
+        }
+        return jsonResponse({ sessions: [{ id: 21 }], hasMore: false });
+      },
+    });
+
+    renderComponent();
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to fetch archived sessions:",
+        expect.any(Error)
+      );
+    });
+    expect(screen.queryByText("Session 21")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
   });
 
   it("keeps the row visible when the unarchive request returns 500", async () => {

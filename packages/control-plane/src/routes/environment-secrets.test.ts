@@ -57,7 +57,9 @@ describe("environment secrets routes", () => {
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Value must be a string" });
+    await expect(response.json()).resolves.toEqual({
+      error: "Request body must include secrets object",
+    });
     expect(batch).not.toHaveBeenCalled();
   });
 

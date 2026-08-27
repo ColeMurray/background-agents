@@ -46,6 +46,9 @@ function makeEnv() {
   const githubKv = createMockKV();
   return {
     GITHUB_KV: githubKv,
+    AUTOFIX_QUEUE: {
+      send: vi.fn(async () => undefined),
+    },
     CONTROL_PLANE: {
       fetch: vi.fn(async () => new Response(null, { status: 204 })),
     },
@@ -71,6 +74,275 @@ async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): P
 }
 
 describe("POST /webhooks/github", () => {
+  it("queues an eligible pull request comment before acknowledging the webhook", async () => {
+    const body = JSON.stringify({
+      action: "created",
+      issue: {
+        number: 42,
+        title: "Handle nullable input",
+        pull_request: {
+          url: "https://api.github.com/repos/test/repo/pulls/42",
+        },
+      },
+      comment: {
+        id: 1234,
+        body: "Please handle the null case.",
+        user: { login: "alice" },
+      },
+      repository: {
+        id: 99,
+        name: "repo",
+        private: false,
+        owner: { login: "test" },
+      },
+      sender: {
+        id: 7,
+        login: "alice",
+        type: "User",
+        avatar_url: "https://example.com/alice.png",
+      },
+    });
+    const signature = await sign(SECRET, body);
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-comment-1234",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    expect(env.AUTOFIX_QUEUE.send).toHaveBeenCalledOnce();
+    expect(env.AUTOFIX_QUEUE.send).toHaveBeenCalledWith({
+      version: 1,
+      eventType: "issue_comment",
+      action: "created",
+      deliveryId: "delivery-comment-1234",
+      providerObject: { kind: "pr_comment", id: "1234" },
+      repository: { id: "99", owner: "test", name: "repo" },
+      pullRequestNumber: 42,
+      receivedAt: expect.any(String),
+    });
+    await flushWaitUntil(ctx);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/internal/github-event",
+      expect.any(Object)
+    );
+  });
+
+  it("does not queue explicit bot mentions for Autofix", async () => {
+    const body = JSON.stringify({
+      action: "created",
+      issue: {
+        number: 42,
+        title: "Handle nullable input",
+        pull_request: {
+          url: "https://api.github.com/repos/test/repo/pulls/42",
+        },
+      },
+      comment: {
+        id: 1235,
+        body: "@test-bot[bot] please investigate this.",
+        user: { login: "alice" },
+      },
+      repository: {
+        id: 99,
+        name: "repo",
+        private: false,
+        owner: { login: "test" },
+      },
+      sender: {
+        id: 7,
+        login: "alice",
+        type: "User",
+        avatar_url: "https://example.com/alice.png",
+      },
+    });
+    const signature = await sign(SECRET, body);
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-comment-1235",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    expect(env.AUTOFIX_QUEUE.send).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+  });
+
+  it("queues one Autofix request for a submitted review", async () => {
+    const body = JSON.stringify({
+      action: "submitted",
+      review: {
+        id: 5678,
+        state: "changes_requested",
+      },
+      pull_request: { number: 42 },
+      repository: {
+        id: 99,
+        name: "repo",
+        owner: { login: "test" },
+      },
+      sender: { id: 7, login: "alice", type: "User" },
+    });
+    const signature = await sign(SECRET, body);
+    const env = makeEnv();
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "pull_request_review",
+          "X-GitHub-Delivery": "delivery-review-5678",
+        },
+      }),
+      env,
+      makeCtx()
+    );
+
+    expect(res.status).toBe(200);
+    expect(env.AUTOFIX_QUEUE.send).toHaveBeenCalledOnce();
+    expect(env.AUTOFIX_QUEUE.send).toHaveBeenCalledWith({
+      version: 1,
+      eventType: "pull_request_review",
+      action: "submitted",
+      deliveryId: "delivery-review-5678",
+      providerObject: { kind: "review", id: "5678" },
+      repository: { id: "99", owner: "test", name: "repo" },
+      pullRequestNumber: 42,
+      receivedAt: expect.any(String),
+    });
+  });
+
+  it("does not queue individual review comment webhooks", async () => {
+    const body = JSON.stringify({
+      action: "created",
+      pull_request: {
+        number: 42,
+        title: "Handle nullable input",
+        head: { ref: "feature/nulls", sha: "abc123" },
+        base: { ref: "main" },
+      },
+      comment: {
+        id: 5679,
+        body: "Please handle the null case.",
+        path: "src/input.ts",
+        diff_hunk: "@@ -1 +1 @@",
+        user: { login: "alice" },
+      },
+      repository: {
+        id: 99,
+        name: "repo",
+        private: false,
+        owner: { login: "test" },
+      },
+      sender: {
+        id: 7,
+        login: "alice",
+        type: "User",
+        avatar_url: "https://example.com/alice.png",
+      },
+    });
+    const signature = await sign(SECRET, body);
+    const env = makeEnv();
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "pull_request_review_comment",
+          "X-GitHub-Delivery": "delivery-review-comment-5679",
+        },
+      }),
+      env,
+      makeCtx()
+    );
+
+    expect(res.status).toBe(200);
+    expect(env.AUTOFIX_QUEUE.send).not.toHaveBeenCalled();
+  });
+
+  it("continues normal webhook handling when Autofix queueing fails", async () => {
+    const body = JSON.stringify({
+      action: "created",
+      issue: {
+        number: 42,
+        title: "Handle nullable input",
+        pull_request: {
+          url: "https://api.github.com/repos/test/repo/pulls/42",
+        },
+      },
+      comment: {
+        id: 1236,
+        body: "Please handle the null case.",
+        user: { login: "alice" },
+      },
+      repository: {
+        id: 99,
+        name: "repo",
+        private: false,
+        owner: { login: "test" },
+      },
+      sender: {
+        id: 7,
+        login: "alice",
+        type: "User",
+        avatar_url: "https://example.com/alice.png",
+      },
+    });
+    const signature = await sign(SECRET, body);
+    const env = makeEnv();
+    const ctx = makeCtx();
+    env.AUTOFIX_QUEUE.send.mockRejectedValueOnce(new Error("queue unavailable"));
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": signature,
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-comment-1236",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    await flushWaitUntil(ctx);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/internal/github-event",
+      expect.any(Object)
+    );
+    expect(env.GITHUB_KV.delete).not.toHaveBeenCalled();
+  });
+
   it("returns 401 for invalid signature", async () => {
     const body = '{"action":"created"}';
     const res = await app.fetch(

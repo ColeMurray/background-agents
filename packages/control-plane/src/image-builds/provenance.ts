@@ -1,5 +1,7 @@
-import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
-import { z } from "zod";
+import {
+  repositoryShasSchema,
+  type RepositoryShaEntry,
+} from "@open-inspect/shared/types/image-builds";
 
 type RepositoryIdentity = Pick<RepositoryShaEntry, "repoOwner" | "repoName">;
 
@@ -7,20 +9,6 @@ type RepositoryIdentity = Pick<RepositoryShaEntry, "repoOwner" | "repoName">;
 export function repositoryIdentityKey(repository: RepositoryIdentity): string {
   return `${repository.repoOwner.toLowerCase()}/${repository.repoName.toLowerCase()}`;
 }
-
-/**
- * Canonical schema for one repository provenance entry — the single
- * cross-language shape produced by the runtime ({repoOwner, repoName,
- * baseSha}, all non-empty). Callback bodies and persisted rows both validate
- * against this; unknown keys are dropped by projection.
- */
-export const repositoryShaEntrySchema = z.object({
-  repoOwner: z.string().min(1),
-  repoName: z.string().min(1),
-  baseSha: z.string().min(1),
-});
-
-const repositoryShasSchema = z.array(repositoryShaEntrySchema);
 
 /** Decode the repository SHA document used by callbacks and persisted build rows. */
 export function decodeRepositoryShas(value: unknown): RepositoryShaEntry[] | null {

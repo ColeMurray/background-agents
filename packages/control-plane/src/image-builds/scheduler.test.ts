@@ -221,22 +221,20 @@ describe("ImageBuildScheduler", () => {
       return [
         {
           id: `build-${scope.id}`,
-          scope_kind: scope.kind,
-          scope_id: scope.id,
+          scopeKind: scope.kind,
+          scopeId: scope.id,
           provider: "modal",
           status: "ready",
-          repositories_fingerprint: target.repositoriesFingerprint,
-          repository_shas: JSON.stringify(
-            target.repositories.map((repository) => ({
-              repoOwner: repository.repoOwner,
-              repoName: repository.repoName,
-              baseSha: "abc123",
-            }))
-          ),
-          runtime_version: COMPATIBLE_RUNTIME_VERSION,
-          build_duration_seconds: 1,
-          error_message: null,
-          created_at: 1,
+          repositoriesFingerprint: target.repositoriesFingerprint,
+          repositoryShas: target.repositories.map((repository) => ({
+            repoOwner: repository.repoOwner,
+            repoName: repository.repoName,
+            baseSha: "abc123",
+          })),
+          runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+          buildDurationSeconds: 1,
+          errorMessage: null,
+          createdAt: 1,
         },
       ];
     });

@@ -19,7 +19,7 @@ import {
   extractRepoParams,
   resolveRepoOrError,
 } from "./shared";
-import { parseSecretsRequestBody } from "./secrets-request";
+import { secretsRequestBodySchema } from "./secret-request-schemas";
 
 const logger = createLogger("router:secrets");
 
@@ -45,10 +45,14 @@ async function handleSetRepoSecrets(
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
 
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-  const secrets = parseSecretsRequestBody(body);
-  if (secrets instanceof Response) return secrets;
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+
+  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return error("Request body must include secrets object", 400);
+  }
+  const body = parsedBody.data;
 
   const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
@@ -57,7 +61,7 @@ async function handleSetRepoSecrets(
       resolved.repoId,
       resolved.repoOwner,
       resolved.repoName,
-      secrets
+      body.secrets
     );
 
     logger.info("repo.secrets_updated", {
@@ -241,15 +245,19 @@ async function handleSetGlobalSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-  const secrets = parseSecretsRequestBody(body);
-  if (secrets instanceof Response) return secrets;
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+
+  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return error("Request body must include secrets object", 400);
+  }
+  const body = parsedBody.data;
 
   const store = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
-    const result = await store.setSecrets(secrets);
+    const result = await store.setSecrets(body.secrets);
 
     logger.info("global.secrets_updated", {
       event: "global.secrets_updated",

@@ -125,7 +125,8 @@ fresh boot and restore, not just copy new files with `dirs_exist_ok=True`.
 
 - Internal multi-team tenancy or role-based access control.
 - Public or cross-installation skill marketplaces.
-- Git-backed import, export, or bidirectional synchronization.
+- Git-backed export or bidirectional synchronization. (User-initiated Git import shipped after V1;
+  see Phase 4.)
 - User-facing version history, diffs, branches, tags, promotion channels, or rollback.
 - Binary assets or arbitrary archive upload.
 - Skill dependencies, package managers, hooks, MCP server creation, or secret declarations.
@@ -987,7 +988,10 @@ Build `@open-inspect/shared` before dependent packages.
 
 - Expose revision history, diff, rollback, and immutable release labels.
 - Add draft/review/publish/promotion lifecycle and evaluations.
-- Add Git import/export with source URL, commit SHA, and content digest provenance.
+- Add Git import/export with source, commit SHA, and content digest provenance. User-initiated
+  import shipped, recording provider, repository identity, requested and resolved ref, commit SHA,
+  subdirectory, and a digest of the imported bytes; export and bulk import of skill-collection
+  repositories remain open.
 - Move large or binary packages to a dedicated R2 bucket.
 - Add shared profiles, real team ownership, and operation-specific ACLs.
 - Add signed packages, approval gates, emergency revocation, and staged rollout channels.

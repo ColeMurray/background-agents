@@ -41,7 +41,7 @@ describe("ProviderAuthControls menu", () => {
       name: "OpenAI authentication options, Team ChatGPT",
     });
     expect(trigger).toHaveAttribute("title", "OpenAI authentication");
-    expect(trigger).toHaveTextContent("OpenAI: Team ChatGPT");
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
 
     expect(await screen.findByText("Session options")).toBeInTheDocument();
@@ -60,7 +60,26 @@ describe("ProviderAuthControls menu", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
   });
 
-  it("shows the effective default on the compact trigger", () => {
+  it("uses the Grok logo for xAI authentication", () => {
+    render(
+      <ProviderAuthControls
+        variant="menu"
+        provider="xai"
+        accounts={[{ ...account, provider: "xai", displayName: "SuperGrok" }]}
+        value={{ mode: "provider_account", accountId: account.id }}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "xAI authentication options, SuperGrok",
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("Grok")).toBeInTheDocument();
+  });
+
+  it("keeps the effective default in the compact trigger's accessible label", () => {
     render(
       <ProviderAuthControls
         variant="menu"
@@ -83,10 +102,11 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Team ChatGPT",
       })
-    ).toHaveTextContent("OpenAI: Team ChatGPT");
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
   });
 
-  it("shows when the configured default account is unavailable", () => {
+  it("identifies an unavailable default account in the compact trigger's accessible label", () => {
     render(
       <ProviderAuthControls
         variant="menu"
@@ -109,7 +129,8 @@ describe("ProviderAuthControls menu", () => {
       screen.getByRole("button", {
         name: "OpenAI authentication options, Unavailable account",
       })
-    ).toHaveTextContent("OpenAI: Unavailable account");
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("OpenAI")).toBeInTheDocument();
   });
 
   it("shows the effective unattended API-key default", () => {
