@@ -202,8 +202,7 @@ describe("SessionDO collaborator wiring", () => {
     expect(response.status).toBe(200);
 
     const pushSpecs = await runInSessionDO(stub, (instance: SessionDO) => {
-      const spy = collaboratorsOf(instance).pushCoordinator
-        .pushBranchToRemote as unknown as Mock<
+      const spy = collaboratorsOf(instance).pushCoordinator.pushBranchToRemote as unknown as Mock<
         (pushSpec: GitPushSpec) => Promise<{ success: true }>
       >;
       return spy.mock.calls.map((call) => ({

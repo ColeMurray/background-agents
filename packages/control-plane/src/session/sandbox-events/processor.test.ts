@@ -713,7 +713,9 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.pushCoordinator.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
+      const webPush = h.pushCoordinator.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/a")
+      );
       const backendPush = h.pushCoordinator.pushBranchToRemote(
         createPushSpec("acme", "backend", "feature/b")
       );
