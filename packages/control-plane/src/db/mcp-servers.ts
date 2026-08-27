@@ -4,12 +4,16 @@ import type {
   ValidatedCreateMcpServerInput,
   ValidatedUpdateMcpServerInput,
 } from "@open-inspect/shared/types/integrations";
+import { z } from "zod";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
 
 const log = createLogger("db:mcp-servers");
+const mcpServerTypeSchema = z.enum(["local", "remote"]);
+const mcpCommandSchema = z.array(z.string());
+const mcpEnvSchema = z.record(z.string(), z.string());
 
 export class McpServerValidationError extends Error {
   constructor(message: string) {
@@ -51,7 +55,9 @@ function parseRepoScopes(raw: string | null): string[] | null {
 function safeJsonParseCommand(raw: string | null): string[] | undefined {
   if (!raw) return undefined;
   try {
-    return JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
+    const result = mcpCommandSchema.safeParse(parsed);
+    return result.success ? result.data : [raw];
   } catch {
     return [raw];
   }
@@ -60,25 +66,23 @@ function safeJsonParseCommand(raw: string | null): string[] | undefined {
 function safeJsonParseEnv(raw: string): Record<string, string> {
   try {
     const parsed: unknown = JSON.parse(raw);
-    // JSON.parse accepts non-object documents ("null", numbers, strings);
-    // callers iterate keys, so anything but a plain object is "no env".
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, string>)
-      : {};
+    const result = mcpEnvSchema.safeParse(parsed);
+    return result.success ? result.data : {};
   } catch {
     return {};
   }
 }
 
 function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpServerConfig {
+  const type = mcpServerTypeSchema.parse(row.type);
   const envOrHeaders: Pick<McpServerConfig, "env" | "headers"> =
-    row.type === "remote" ? { headers: payload } : { env: payload };
+    type === "remote" ? { headers: payload } : { env: payload };
   return {
     id: row.id,
     name: row.name,
-    type: row.type as "local" | "remote",
-    command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
-    url: row.type === "remote" ? (row.url ?? undefined) : undefined,
+    type,
+    command: type === "local" ? safeJsonParseCommand(row.command) : undefined,
+    url: type === "remote" ? (row.url ?? undefined) : undefined,
     ...envOrHeaders,
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
@@ -86,16 +90,17 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
 }
 
 function rowToMetadata(row: McpServerRow): McpServerMetadata {
+  const type = mcpServerTypeSchema.parse(row.type);
   const hasCredentials = row.env !== "" && row.env !== "{}" && row.env !== "null";
   return {
     id: row.id,
     revision: row.revision,
     name: row.name,
-    type: row.type as "local" | "remote",
-    command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
-    url: row.type === "remote" ? (row.url ?? undefined) : undefined,
-    hasEnv: row.type === "local" && hasCredentials,
-    hasHeaders: row.type === "remote" && hasCredentials,
+    type,
+    command: type === "local" ? safeJsonParseCommand(row.command) : undefined,
+    url: type === "remote" ? (row.url ?? undefined) : undefined,
+    hasEnv: type === "local" && hasCredentials,
+    hasHeaders: type === "remote" && hasCredentials,
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
   };
@@ -229,7 +234,7 @@ export class McpServerStore {
       throw new McpServerConflictError("MCP server changed; reload and try again");
     }
 
-    const mergedType = patch.type ?? (row.type as "local" | "remote");
+    const mergedType = patch.type ?? mcpServerTypeSchema.parse(row.type);
     if (mergedType === "local" && (patch.url !== undefined || patch.headers !== undefined)) {
       throw new McpServerValidationError("Local MCP servers do not support url or headers");
     }
