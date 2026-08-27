@@ -83,7 +83,12 @@ import { Scheduler } from "../scheduler/scheduler";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
-import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
+import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
+import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
+import { SandboxPushCoordinator } from "./sandbox-events/push.coordinator";
+import { SandboxRuntimeEventHandler } from "./sandbox-events/runtime.handler";
+import { SandboxStreamingEventHandler } from "./sandbox-events/streaming.handler";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
 import { createAutofixHandler } from "./http/handlers/autofix.handler";
@@ -427,26 +432,54 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
   const autofixHandler = createAutofixHandler(new SessionAutofixService(messageQueue));
 
-  const sandboxEventProcessor = new SessionSandboxEventProcessor(
+  const updateLastActivity = (timestamp: number) => lifecycleManager.updateLastActivity(timestamp);
+  const streamingEventHandler = new SandboxStreamingEventHandler(
+    backgroundTasks,
+    sessionCoreRepository,
+    eventRepository,
+    callbackService,
+    messenger,
+    updateLastActivity
+  );
+  const artifactEventHandler = new SandboxArtifactEventHandler(
+    artifactRepository,
+    eventRepository,
+    messenger,
+    updateLastActivity
+  );
+  const executionEventHandler = new SandboxExecutionEventHandler(
     backgroundTasks,
     log,
-    sessionCoreRepository,
-    sandboxRepository,
     messageRepository,
-    eventRepository,
-    artifactRepository,
     callbackService,
-    wsManager,
     messenger,
-    diffService,
-    (title, options) => titleService.applySessionTitleUpdate(title, options),
-    (reason) => lifecycleManager.triggerSnapshot(reason),
     recordTerminalMessage,
     statusService,
-    (timestamp) => lifecycleManager.updateLastActivity(timestamp),
+    (reason) => lifecycleManager.triggerSnapshot(reason),
+    updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
     () => messageQueue.broadcastPromptQueue()
+  );
+  const runtimeEventHandler = new SandboxRuntimeEventHandler(
+    sessionCoreRepository,
+    sandboxRepository,
+    eventRepository,
+    messenger,
+    diffService,
+    (title, options) => titleService.applySessionTitleUpdate(title, options),
+    updateLastActivity
+  );
+  const pushCoordinator = new SandboxPushCoordinator(log, eventRepository, messenger, wsManager);
+  const sandboxEventProcessor = new SessionSandboxEventProcessor(
+    log,
+    messageRepository,
+    wsManager,
+    streamingEventHandler,
+    artifactEventHandler,
+    executionEventHandler,
+    runtimeEventHandler,
+    pushCoordinator
   );
 
   const alarmHandler = createAlarmHandler({

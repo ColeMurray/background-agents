@@ -1,0 +1,158 @@
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { Logger } from "../../logger";
+import type { GitPushSpec } from "../../source-control";
+import type { EventRepository } from "../event-repository";
+import type { SessionMessenger } from "../messenger";
+import type { SessionWebSocketManager } from "../websocket-manager";
+import { persistSandboxEvent, type SandboxEventContext } from "./context";
+
+type PushResolver = { resolve: () => void; reject: (err: Error) => void };
+export type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
+
+/** How long a pending push waits for its terminal event before rejecting. */
+const PUSH_TIMEOUT_MS = 360_000;
+
+/**
+ * Push-protocol family: both halves of the sandbox push exchange — sending
+ * the push command and awaiting its outcome (`pushBranchToRemote`), and
+ * settling that wait when the terminal event arrives. The pending-resolver
+ * map is the reason request and event sides live in one class: the state a
+ * `push_complete`/`push_error` resolves is created by the request side.
+ */
+export class SandboxPushCoordinator {
+  private pendingPushResolvers = new Map<string, PushResolver>();
+
+  constructor(
+    private readonly log: Logger,
+    private readonly eventRepository: EventRepository,
+    private readonly messenger: SessionMessenger,
+    private readonly wsManager: SessionWebSocketManager
+  ) {}
+
+  /**
+   * Push a branch to its remote via the sandbox.
+   *
+   * Sends the push command over the sandbox socket and waits for the sandbox to
+   * report completion or an error.
+   *
+   * @returns Success result or error message
+   */
+  async pushBranchToRemote(
+    pushSpec: GitPushSpec
+  ): Promise<{ success: true } | { success: false; error: string }> {
+    const sandboxWs = this.wsManager.getSandboxSocket();
+
+    if (!sandboxWs) {
+      this.log.info("No sandbox connected, assuming branch was pushed manually");
+      return { success: true };
+    }
+
+    const resolverKey = this.pushResolverKey(
+      pushSpec.repoOwner,
+      pushSpec.repoName,
+      pushSpec.targetBranch
+    );
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const pushPromise = new Promise<void>((resolve, reject) => {
+      this.pendingPushResolvers.set(resolverKey, { resolve, reject });
+
+      timeoutId = setTimeout(() => {
+        if (this.pendingPushResolvers.has(resolverKey)) {
+          this.pendingPushResolvers.delete(resolverKey);
+          reject(new Error(`Push operation timed out after ${PUSH_TIMEOUT_MS / 1000} seconds`));
+        }
+      }, PUSH_TIMEOUT_MS);
+    });
+
+    this.log.info("Sending push command", {
+      branch_name: pushSpec.targetBranch,
+      repo_owner: pushSpec.repoOwner,
+      repo_name: pushSpec.repoName,
+    });
+    this.wsManager.send(sandboxWs, {
+      type: "push",
+      pushSpec,
+    });
+
+    try {
+      await pushPromise;
+      this.log.info("Push completed successfully", { branch_name: pushSpec.targetBranch });
+      return { success: true };
+    } catch (pushError) {
+      this.log.error("Push failed", {
+        branch_name: pushSpec.targetBranch,
+        error: pushError instanceof Error ? pushError : String(pushError),
+      });
+      return { success: false, error: `Failed to push branch: ${pushError}` };
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  handleTerminalEvent(event: PushTerminalEvent, context: SandboxEventContext): void {
+    persistSandboxEvent(this.eventRepository, event, context);
+    this.settlePendingPush(event);
+    this.messenger.broadcast({ type: "sandbox_event", event });
+  }
+
+  private settlePendingPush(event: PushTerminalEvent): void {
+    const entry = this.findPushResolver(event);
+    if (!entry) {
+      this.log.warn("Push event matched no pending resolver", {
+        event_type: event.type,
+        branch_name: event.branchName ?? null,
+        repo_owner: event.repoOwner ?? null,
+        repo_name: event.repoName ?? null,
+        pending_resolvers: Array.from(this.pendingPushResolvers.keys()),
+      });
+      return;
+    }
+
+    const [resolverKey, resolver] = entry;
+    if (event.type === "push_complete") {
+      this.log.info("Push completed, resolving promise", {
+        branch_name: event.branchName ?? null,
+        pending_resolvers: Array.from(this.pendingPushResolvers.keys()),
+      });
+      resolver.resolve();
+    } else {
+      const error = event.error || "Push failed";
+      this.log.warn("Push failed for branch", {
+        branch_name: event.branchName ?? null,
+        error,
+      });
+      resolver.reject(new Error(error));
+    }
+
+    this.pendingPushResolvers.delete(resolverKey);
+  }
+
+  /**
+   * Match a terminal push event to its pending resolver. Events carrying the
+   * full identity match strictly by key — a fully identified miss is a stale
+   * or wrong-repo event and must not settle anything. Only events missing
+   * identity (legacy single-repo runtimes echo no repo identity, and their
+   * "no repository found" push_error carries no branchName either) settle
+   * the sole pending push — by construction only one can be in flight when
+   * identity is missing.
+   */
+  private findPushResolver(event: PushTerminalEvent): [string, PushResolver] | null {
+    if (event.repoOwner && event.repoName && event.branchName) {
+      const resolverKey = this.pushResolverKey(event.repoOwner, event.repoName, event.branchName);
+      const resolver = this.pendingPushResolvers.get(resolverKey);
+      return resolver ? [resolverKey, resolver] : null;
+    }
+    if (this.pendingPushResolvers.size === 1) {
+      const [sole] = this.pendingPushResolvers.entries();
+      return sole;
+    }
+    return null;
+  }
+
+  private pushResolverKey(repoOwner: string, repoName: string, branchName: string): string {
+    return `${repoOwner.toLowerCase()}/${repoName.toLowerCase()}::${branchName.trim().toLowerCase()}`;
+  }
+}
