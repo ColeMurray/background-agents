@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ParticipantRow } from "../../types";
-import { createParticipantsHandler } from "./participants.handler";
+import { ParticipantsHandler } from "./participants.handler";
+import type { ParticipantRepository } from "../../participant-repository";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -27,7 +28,7 @@ function createHandler() {
     listParticipants: vi.fn(),
   };
 
-  const handler = createParticipantsHandler({ repository });
+  const handler = new ParticipantsHandler(repository as unknown as ParticipantRepository);
 
   return {
     handler,
@@ -35,7 +36,7 @@ function createHandler() {
   };
 }
 
-describe("createParticipantsHandler", () => {
+describe("ParticipantsHandler", () => {
   it("returns an empty list when there are no participants", async () => {
     const { handler, repository } = createHandler();
     repository.listParticipants.mockReturnValue([]);

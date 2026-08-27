@@ -25,6 +25,7 @@ export interface SessionInternalRouteHandlers {
   snapshot: SessionInternalRouteHandler;
   sandboxAccess: SessionInternalRouteHandler;
   prompt: SessionInternalRouteHandler;
+  autofix: SessionInternalRouteHandler;
   stop: SessionInternalRouteHandler;
   sandboxEvent: SessionInternalRouteHandler;
   createMediaArtifact: SessionInternalRouteHandler;
@@ -41,6 +42,7 @@ export interface SessionInternalRouteHandlers {
   updateTitle: SessionInternalRouteHandler;
   archive: SessionInternalRouteHandler;
   unarchive: SessionInternalRouteHandler;
+  expireDraft: SessionInternalRouteHandler;
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
   xaiTokenRefresh: SessionInternalRouteHandler;
@@ -76,6 +78,7 @@ export function createSessionInternalRoutes(
       handler: handlers.sandboxAccess,
     },
     { method: "POST", path: SessionInternalPaths.prompt, handler: handlers.prompt },
+    { method: "POST", path: SessionInternalPaths.autofix, handler: handlers.autofix },
     { method: "POST", path: SessionInternalPaths.stop, handler: handlers.stop },
     { method: "POST", path: SessionInternalPaths.sandboxEvent, handler: handlers.sandboxEvent },
     {
@@ -112,6 +115,7 @@ export function createSessionInternalRoutes(
     { method: "POST", path: SessionInternalPaths.updateTitle, handler: handlers.updateTitle },
     { method: "POST", path: SessionInternalPaths.archive, handler: handlers.archive },
     { method: "POST", path: SessionInternalPaths.unarchive, handler: handlers.unarchive },
+    { method: "POST", path: SessionInternalPaths.expireDraft, handler: handlers.expireDraft },
     {
       method: "POST",
       path: SessionInternalPaths.verifySandboxToken,

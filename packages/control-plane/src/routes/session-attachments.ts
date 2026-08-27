@@ -44,7 +44,15 @@ import {
   createRangeNotSatisfiableResponse,
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
-import { error, json, parsePattern, type Route } from "./shared";
+import {
+  defineRoute,
+  error,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  json,
+  parsePattern,
+  type Route,
+} from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-attachments");
@@ -230,14 +238,20 @@ async function handleAttachmentGet(
 }
 
 export const sessionAttachmentRoutes: Route[] = [
-  sessionRoute({
-    method: "POST",
-    pattern: parsePattern("/sessions/:id/attachments"),
-    handler: handleAttachmentPost,
-  }),
-  sessionRoute({
-    method: "GET",
-    pattern: parsePattern("/sessions/:id/attachments/:attachmentId"),
-    handler: handleAttachmentGet,
-  }),
+  defineRoute(
+    GITHUB_USER_OR_SERVICE_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/attachments"),
+      handler: handleAttachmentPost,
+    })
+  ),
+  defineRoute(
+    GITHUB_SANDBOX_FALLBACK_ROUTE,
+    sessionRoute({
+      method: "GET",
+      pattern: parsePattern("/sessions/:id/attachments/:attachmentId"),
+      handler: handleAttachmentGet,
+    })
+  ),
 ];

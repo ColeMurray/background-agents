@@ -8,9 +8,9 @@
  * - Enabled-scope and status queries
  */
 
-import type {
-  ImageBuildRecordView,
-  ImageBuildStatusResponse,
+import {
+  type ImageBuildStatusResponse,
+  repositoryShaEntrySchema,
 } from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
 import { ImageBuildStore } from "../db/image-builds";
@@ -24,7 +24,6 @@ import {
   type ImageBuildScope,
 } from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
-import { repositoryShaEntrySchema } from "../image-builds/provenance";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
@@ -43,6 +42,9 @@ import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
   type Route,
+  defineRoute,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   error,
   extractRepoParams,
   json,
@@ -399,7 +401,7 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
 async function readStatusRows(
   db: SqlDatabase,
   scope: ImageBuildScope | null
-): Promise<ImageBuildRecordView[]> {
+): Promise<ImageBuildStatusResponse["images"]> {
   const store = new ImageBuildStore(db);
   if (scope) return store.getStatus(scope);
   return store.getStatusForEnabledScopes(await listEnabledScopes(db));
@@ -410,9 +412,9 @@ async function readStatusRows(
  * With a scope: that scope's recent non-superseded rows (the settings UI /
  * debugging view). Without: the cron's cross-scope view over every
  * prebuild-enabled scope — non-superseded, so failed builds are visible in
- * the aggregate feed. Rows are the `ImageBuildRecordView` projection
- * (snake_case columns; repository_shas is a JSON document) — the store drops
- * internal columns, so no callback token or provider id reaches a client.
+ * the aggregate feed. The store maps its public-safe projection to
+ * `ImageBuildRecordView`, so no storage encoding, callback token, or provider
+ * id reaches a client.
  */
 async function handleGetStatus(
   request: Request,
@@ -500,44 +502,44 @@ async function handleGetEnabledRepos(
 }
 
 export const imageBuildRoutes: Route[] = [
-  {
+  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/build-complete"),
     handler: handleBuildComplete,
-  },
-  {
+  }),
+  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/build-failed"),
     handler: handleBuildFailed,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/environment/:id"),
     handler: handleTriggerEnvironmentBuild,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/repo/:owner/:name"),
     handler: handleTriggerRepoBuild,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "PUT",
     pattern: parsePattern("/image-builds/toggle/repo/:owner/:name"),
     handler: handleToggleRepoImageBuilds,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/status"),
     handler: handleGetStatus,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/enabled"),
     handler: handleGetEnabledUnits,
-  },
-  {
+  }),
+  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/enabled-repos"),
     handler: handleGetEnabledRepos,
-  },
+  }),
 ];

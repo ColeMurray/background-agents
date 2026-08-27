@@ -58,7 +58,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("golden vectors (cross-language contract with service_auth.py)", () => {
+describe("golden vectors", () => {
   it.each(vectors.map((v) => [v.name, v] as const))("%s", async (_name, vector) => {
     const url = new URL(vector.url);
     expect(url.pathname).toBe(vector.expected.pathname);

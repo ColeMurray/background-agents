@@ -14,6 +14,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("prompt"),
     clientRequestId: clientRequestIdSchema,
   }),
+  z.object({
+    type: z.literal("cancel_prompt"),
+    messageId: z.string().min(1),
+    clientRequestId: clientRequestIdSchema,
+  }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),
   z.object({

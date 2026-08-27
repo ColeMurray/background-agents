@@ -132,6 +132,11 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     position: z.number().int().positive().nullable(),
   }),
   z.object({
+    type: z.literal("prompt_cancelled"),
+    clientRequestId: clientRequestIdSchema,
+    messageId: z.string(),
+  }),
+  z.object({
     type: z.literal("prompt_queue_updated"),
     promptQueue: z.array(promptQueueItemSchema),
   }),

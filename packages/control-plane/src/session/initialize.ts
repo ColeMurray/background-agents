@@ -6,6 +6,9 @@ import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { createLogger } from "../logger";
+import type { SessionSkillManifestInput } from "./skill-resolution";
+import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 const logger = createLogger("session-init");
 
@@ -68,6 +71,10 @@ export interface SessionInitInput {
   spawnDepth?: number;
   automationId?: string | null;
   automationRunId?: string | null;
+  managedSkillsManifest?: SessionSkillManifestInput;
+  managedSkillsSourceSessionId?: string;
+  /** Complete, immutable provider routing snapshot resolved by the caller. */
+  providerAuth: SessionModelProviderAuthInput[];
 }
 
 /**
@@ -100,7 +107,7 @@ export async function initializeSession(
   const defaultBranch = hasRepoOwner ? input.defaultBranch : null;
 
   const now = Date.now();
-  const baseBranch = hasRepoOwner ? branch || defaultBranch || "main" : null;
+  const baseBranch = hasRepoOwner ? branch || defaultBranch || DEFAULT_BASE_BRANCH : null;
 
   if (input.repositories?.length) {
     const primary = input.repositories[0];
@@ -148,6 +155,9 @@ export async function initializeSession(
     userId: input.platformUserId,
     createdAt: now,
     updatedAt: now,
+    skillManifest: input.managedSkillsManifest,
+    skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
+    providerAuth: input.providerAuth,
   });
 
   // Step 2: DO init

@@ -42,6 +42,22 @@ locals {
     local.web_custom_domain_zone_id != ""
   )
 
+  # The bots derive their classifier's provider from the model id, so the
+  # deployment binds exactly one provider credential to them: an Anthropic model
+  # gets ANTHROPIC_API_KEY, an OpenAI model gets OPENAI_API_KEY. This is scoped
+  # to the classifier — var.anthropic_api_key is still what Claude coding
+  # sessions and the opencomputer control-plane path use.
+  classifier_uses_openai = (
+    startswith(var.classification_model, "openai/") ||
+    startswith(var.classification_model, "gpt-")
+  )
+
+  # Exactly one provider binding for the classifier bots.
+  classifier_secret_bindings = (local.classifier_uses_openai
+    ? [{ name = "OPENAI_API_KEY", value = var.classification_openai_api_key }]
+    : [{ name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key }]
+  )
+
   # Host the Cloudflare web Worker is served from: custom domain when configured,
   # otherwise its default workers.dev hostname.
   web_cloudflare_host = (local.web_custom_domain_enabled

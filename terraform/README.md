@@ -164,6 +164,14 @@ terraform init \
 
 ### 3. Plan Changes
 
+Terraform generates and persists a dedicated provider-account credential encryption key by default.
+Existing local installations may set `provider_accounts_encryption_key` in `terraform.tfvars` to
+retain their current key; Actions deployments use the `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` repository
+or production-environment secret instead. Do not change this value after storing provider account
+credentials unless every credential has first been re-encrypted and verified through the documented
+old-key-to-new-key migration before the Worker binding is updated. Back up the remote Terraform
+state because it is the recovery source for an automatically generated key.
+
 ```bash
 terraform plan
 ```
@@ -261,10 +269,12 @@ LINEAR_WEBHOOK_SECRET
 
 # API Keys
 ANTHROPIC_API_KEY
+CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
+PROVIDER_ACCOUNTS_ENCRYPTION_KEY # Optional existing provider-account key override
 NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 
 # Access control
@@ -413,6 +423,12 @@ Use the built-in two-phase flags instead of editing Terraform modules:
 2. Run `terraform apply` to create the initial workers and migrations.
 3. Set both values back to `true`.
 4. Run `terraform apply` again to attach the Durable Object and service bindings.
+
+Class removal does not disable surviving bindings. Remove the retired binding, set a new migration
+tag and previous tag, list the class in `control_plane_deleted_classes`, and apply with
+`enable_durable_object_bindings = true`. The migration and surviving bindings are emitted together.
+The production workflow stages the `SchedulerDO` v2-to-v3 deletion only when Terraform state still
+reports v2, so the release-specific migration is not a permanent default for fresh deployments.
 
 See
 [Cloudflare's documentation](https://developers.cloudflare.com/workers/platform/infrastructure-as-code/)

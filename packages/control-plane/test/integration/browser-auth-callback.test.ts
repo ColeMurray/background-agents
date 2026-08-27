@@ -1,4 +1,6 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
+import { getSetCookies } from "./helpers";
+import { createCloudflareBackgroundTasks } from "../../src/cloudflare/background-tasks";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +8,7 @@ import { getUserAuth } from "../../src/auth/user/runtime";
 import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";
 import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
-import { handleRequest } from "../../src/router";
+import { handleRequest as routeRequest } from "../../src/router";
 import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
@@ -18,6 +20,17 @@ const GOOGLE_CLIENT_ID = "google-client-id";
 const GOOGLE_SUBJECT = "google-subject";
 const MS_PER_SECOND = 1000;
 const GOOGLE_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * MS_PER_SECOND;
+
+function handleRequest(
+  request: Request,
+  requestEnv: Parameters<typeof routeRequest>[1]
+): Promise<Response> {
+  return routeRequest(
+    request,
+    requestEnv,
+    createCloudflareBackgroundTasks(createExecutionContext())
+  );
+}
 
 let googleIdToken = "";
 let googlePublicKey: JsonWebKey;
@@ -51,9 +64,9 @@ async function signedWebRequest(
 }
 
 function cookiePair(response: Response, cookieName: string): string {
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith(`${cookieName}=`));
+  const cookie = getSetCookies(response.headers).find((value) =>
+    value.startsWith(`${cookieName}=`)
+  );
   if (!cookie) throw new Error(`Missing ${cookieName} cookie`);
   return cookie.split(";", 1)[0];
 }
@@ -265,9 +278,9 @@ describe("browser auth callback", () => {
     expect(callbackResponse.status).toBe(302);
     expect(callbackResponse.headers.get("Location")).toBe("/after-sign-in");
     expect(
-      callbackResponse.headers
-        .getSetCookie()
-        .some((cookie) => cookie.startsWith("__Secure-openinspect.state="))
+      getSetCookies(callbackResponse.headers).some((cookie) =>
+        cookie.startsWith("__Secure-openinspect.state=")
+      )
     ).toBe(true);
     const sessionCookie = cookiePair(callbackResponse, "__Secure-openinspect.session_token");
 

@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { sessionSkillSelectionSchema } from "./skills";
 import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
+import { modelProviderSelectionsSchema } from "./provider-accounts";
 import {
   messageSourceSchema,
   sessionStatusSchema,
@@ -80,6 +82,37 @@ export const linearStartCallbackSchema = z.strictObject({
 });
 
 export type LinearStartCallback = z.infer<typeof linearStartCallbackSchema>;
+
+export const linearCompletionCallbackPayloadSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  messageId: nonEmptyStringSchema,
+  success: z.boolean(),
+  error: z.string().optional(),
+  timestamp: z.number().refine(Number.isFinite),
+  context: linearCallbackContextSchema,
+});
+
+export const linearCompletionCallbackSchema = linearCompletionCallbackPayloadSchema.extend({
+  signature: nonEmptyStringSchema,
+});
+
+export type LinearCompletionCallback = z.infer<typeof linearCompletionCallbackSchema>;
+
+export const linearToolCallCallbackPayloadSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  tool: nonEmptyStringSchema,
+  args: z.record(z.string(), z.unknown()),
+  callId: nonEmptyStringSchema,
+  status: z.string().optional(),
+  timestamp: z.number().refine(Number.isFinite),
+  context: linearCallbackContextSchema,
+});
+
+export const linearToolCallCallbackSchema = linearToolCallCallbackPayloadSchema.extend({
+  signature: nonEmptyStringSchema,
+});
+
+export type LinearToolCallCallback = z.infer<typeof linearToolCallCallbackSchema>;
 
 export const automationCallbackContextSchema = z.object({
   source: z.literal("automation"),
@@ -195,6 +228,10 @@ const createSessionRequestBaseSchema = z.object({
    * fields.
    */
   environmentId: z.string().trim().min(1).nullish(),
+  /** Managed skills are resolved and pinned when the session is created. */
+  skillSelection: sessionSkillSelectionSchema.optional(),
+  /** Explicit account/API-key choices. Omission resolves provider policy. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema

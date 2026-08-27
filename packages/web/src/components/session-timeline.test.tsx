@@ -67,6 +67,32 @@ function toolCall(callId: string, tool: string, filePath: string): SandboxEvent 
 }
 
 describe("user message authors", () => {
+  it("presents Autofix provenance and links to the originating review", () => {
+    render(
+      <EventItem
+        event={{
+          ...event("user-2"),
+          origin: {
+            kind: "review",
+            authorType: "bot",
+            feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+          },
+        }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.getByText("Resumed by PR feedback")).toBeInTheDocument();
+    expect(screen.getByText("Review · Bot")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open feedback" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widgets/pull/42#pullrequestreview-5678"
+    );
+  });
+
   it("uses the canonical profile name and avatar when available", () => {
     render(
       <EventItem
@@ -635,6 +661,7 @@ describe("terminal message visibility", () => {
     const outcomeTarget = observedTargets.find(
       (target) => target.getAttribute("data-terminal-message-id") === "message-1"
     );
+    expect(outcomeTarget).toHaveClass("space-y-2");
     expect(outcomeTarget).toHaveTextContent("The complete agent result");
     expect(outcomeTarget).toHaveTextContent("Execution complete");
   });

@@ -1,6 +1,10 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as SandboxProviderModuleNamespace from "@/lib/sandbox-provider";
+
+type SandboxProviderModule = typeof SandboxProviderModuleNamespace;
+
 const mocks = vi.hoisted(() => ({
   supportsRepoImagesValue: true,
 }));
@@ -13,12 +17,16 @@ vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-vi.mock("@/lib/sandbox-provider", () => ({
+// Only the provider probe is stubbed; the 501 copy comes from the real module so
+// the assertion below pins the message routes actually answer with.
+vi.mock("@/lib/sandbox-provider", async (importOriginal) => ({
+  ...(await importOriginal<SandboxProviderModule>()),
   supportsRepoImages: () => mocks.supportsRepoImagesValue,
 }));
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { REPO_IMAGES_UNSUPPORTED_MESSAGE } from "@/lib/sandbox-provider";
 import { GET as getEnvironmentStatus } from "./[id]/images/route";
 import { POST as triggerBuild } from "./[id]/images/trigger/route";
 
@@ -59,6 +67,9 @@ describe.each(routes)("$name", ({ call }) => {
     const response = await call();
 
     expect(response.status).toBe(501);
+    // Every image-build route answers with the one derived message, so adding a
+    // provider cannot leave a stale list behind on some subset of routes.
+    expect(await response.json()).toEqual({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE });
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
@@ -83,16 +94,16 @@ describe("unified route consumption", () => {
   it("status reads the per-scope unified status and filters superseded rows", async () => {
     const readyRow = {
       id: "build-1",
-      scope_kind: "environment",
-      scope_id: "env-1",
+      scopeKind: "environment",
+      scopeId: "env-1",
       provider: "modal",
       status: "ready",
-      repositories_fingerprint: "fp-env",
-      repository_shas: "[]",
-      runtime_version: "60",
-      build_duration_seconds: 10,
-      error_message: null,
-      created_at: 1700000000000,
+      repositoriesFingerprint: "fp-env",
+      repositoryShas: [],
+      runtimeVersion: "60",
+      buildDurationSeconds: 10,
+      errorMessage: null,
+      createdAt: 1700000000000,
     };
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ images: [readyRow, { ...readyRow, id: "build-0", status: "superseded" }] })

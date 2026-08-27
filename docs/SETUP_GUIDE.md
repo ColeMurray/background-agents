@@ -192,6 +192,13 @@ pytest tests/ -v
 
 ## Path C: Full Self-Hosted Deployment
 
+Follow the full deployment guide and generate `token_encryption_key` and
+`repo_secrets_encryption_key`. Terraform generates and persists the independent provider-account
+credential key unless an existing `provider_accounts_encryption_key` override is supplied. After
+deployment, connect subscriptions in **Settings > Provider Accounts**, configure defaults and
+unattended modes, and rebuild every runtime image. Legacy scoped OAuth can coexist with provider
+accounts; defaults affect only sessions created afterward.
+
 For full infrastructure setup, use:
 
 - [docs/GETTING_STARTED.md](./GETTING_STARTED.md)
@@ -204,6 +211,8 @@ Critical notes before deploy:
 - For Modal deployments, eagerly build the Sandbox image with
   `uv run python deploy.py --build-sandbox-image`, then deploy with `uv run modal deploy deploy.py`
   (not `src/app.py`).
+- Existing sessions keep their pinned authentication. Remove legacy OAuth keys only after dependent
+  legacy-bound sessions are no longer needed.
 
 ## Common Issues and Fixes
 
@@ -240,6 +249,7 @@ configured/deployed.
 - Linear integration usage: [docs/integrations/LINEAR.md](./integrations/LINEAR.md)
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - Available models: [docs/AVAILABLE_MODELS.md](./AVAILABLE_MODELS.md)
+- Managed skills: [docs/MANAGED_SKILLS.md](./MANAGED_SKILLS.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
 - SuperGrok model setup: [docs/GROK_MODELS.md](./GROK_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

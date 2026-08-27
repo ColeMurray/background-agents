@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { callbacksRouter } from "./callbacks";
-import { createStartCallbackRouter } from "./callbacks/start-callback";
+import {
+  createStartCallbackRouter,
+  START_CALLBACK_LINEAR_TIMEOUT_MS,
+} from "./callbacks/start-callback";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
 import type { LinearApiClient } from "./utils/linear-client";
@@ -13,6 +16,10 @@ const client: LinearApiClient = {
   organizationId: "org-1",
   renewAccessToken: vi.fn(async () => "renewed-token"),
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 async function signedPayload(overrides: Record<string, unknown> = {}) {
   const data = {
@@ -69,7 +76,7 @@ describe("POST /start", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, outcome: "transitioned" });
     expect(getLinearClient).toHaveBeenCalledWith(expect.anything(), "org-1", "app-user-1");
-    expect(transitionIssueToStarted).toHaveBeenCalledWith(client, "issue-1");
+    expect(transitionIssueToStarted).toHaveBeenCalledWith(client, "issue-1", expect.anything());
   });
 
   it("verifies the original callback field order after schema validation", async () => {
@@ -147,6 +154,21 @@ describe("POST /start", () => {
     expect(response.status).toBe(502);
   });
 
+  it("returns a timeout response when the transition GraphQL request times out", async () => {
+    const router = createStartCallbackRouter({
+      getLinearClient: vi.fn(async () => client),
+      transitionIssueToStarted: vi.fn(async () => {
+        throw new DOMException("timed out", "TimeoutError");
+      }),
+      now: () => NOW,
+    });
+
+    const response = await postStart(router);
+
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "Linear request timed out" });
+  });
+
   it("acknowledges a message that did not opt into the transition", async () => {
     const getLinearClient = vi.fn();
     const transitionIssueToStarted = vi.fn();
@@ -187,6 +209,22 @@ describe("POST /start", () => {
     const response = await postStart(router);
 
     expect(response.status).toBe(503);
+  });
+
+  it("returns within the callback deadline when credential lookup stalls", async () => {
+    const timeoutSignal = AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    const router = createStartCallbackRouter({
+      getLinearClient: vi.fn(() => new Promise<LinearApiClient | null>(() => undefined)),
+      transitionIssueToStarted: vi.fn(),
+      now: () => NOW,
+    });
+
+    const response = await postStart(router);
+
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "Linear request timed out" });
+    expect(timeoutSpy).toHaveBeenCalledWith(START_CALLBACK_LINEAR_TIMEOUT_MS);
   });
 
   it("rejects malformed identity fields before credential lookup", async () => {

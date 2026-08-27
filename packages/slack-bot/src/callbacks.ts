@@ -285,7 +285,7 @@ callbacksRouter.post("/tool_call", async (c) => {
 /**
  * Callback endpoint for Slack-triggered automation completion. Posts the agent's
  * final response into the triggering message's thread and clears the `eyes`
- * reaction. The SchedulerDO owns this fan-out (it holds the message coordinates).
+ * reaction. The scheduler owns this fan-out (it holds the message coordinates).
  */
 callbacksRouter.post("/automation-complete", async (c) => {
   const startTime = Date.now();
@@ -351,12 +351,12 @@ callbacksRouter.post("/automation-skip", async (c) => {
   }
 
   const parsed = automationSkipSchema.safeParse(payload);
-  if (!parsed.success) {
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
     return rejectInvalidPayload(c, "/callbacks/automation-skip", traceId, startTime);
   }
   const valid = parsed.data;
 
-  const rejection = await rejectInvalidCallback(c, valid, {
+  const rejection = await rejectInvalidCallback(c, payload, {
     path: "/callbacks/automation-skip",
     traceId,
     startTime,

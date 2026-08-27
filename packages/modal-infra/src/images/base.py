@@ -16,6 +16,7 @@ from pathlib import Path
 import modal
 
 import sandbox_runtime
+from sandbox_runtime.runtime_manifest import RUNTIME_VERSION
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
@@ -24,7 +25,14 @@ SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 #
 # OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
 # eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.18.11"
+#
+# Never pin below 1.18.15: OpenCode's message-ID counter is a 48-bit truncation
+# of `Date.now() * 0x1000`, so it wraps roughly every 795 days (most recently
+# 2026-08-14) and IDs minted afterwards sort below every older one. Earlier
+# releases order the turn loop by comparing those IDs as strings, which makes
+# any session carrying pre-wraparound history exit the loop without calling the
+# model. 1.18.15 orders by message creation time instead.
+OPENCODE_VERSION = "1.18.18"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -36,9 +44,14 @@ AGENT_BROWSER_VERSION = "0.21.2"
 TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
-# Cache buster - change this to force Modal image rebuild
-# v58: run gated image builds with the VNC/noVNC desktop toolchain
-CACHE_BUSTER = "v58-image-build-stdin-launch-vnc"
+# Cache buster - change this to force Modal image rebuild.
+# The numeric generation is one sequence shared by every image-build provider,
+# and MIN_REBUILD_RUNTIME_VERSION gates which prebuilt images get rebuilt onto
+# it, so bump every provider's label together.
+# v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
+# v60: generic provider-account token broker plugin
+# v61: account/init helpers and /usr/sbin on PATH
+CACHE_BUSTER = RUNTIME_VERSION
 
 # Base image with all development tools
 base_image = (
@@ -53,6 +66,13 @@ base_image = (
         "openssh-client",
         "jq",
         "unzip",  # Required for Bun installation
+        # Account and init helpers. debian_slim ships without them, so nothing in
+        # a sandbox can create a system user, and services that refuse to run as
+        # root (Elasticsearch, Postgres, nginx) have no account to drop to.
+        "passwd",
+        "adduser",
+        "sysvinit-utils",
+        "procps",
         "ffmpeg",
         "xvfb",
         "fluxbox",
@@ -203,7 +223,11 @@ base_image = (
             "HOME": "/root",
             "NODE_ENV": "development",
             "PNPM_HOME": "/root/.local/share/pnpm",
-            "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
+            # /usr/sbin and /sbin carry useradd, service, and daemons like nginx.
+            # Sandbox commands run in non-interactive, non-login shells that never
+            # source /etc/profile, so without them on PATH those commands fail with
+            # "command not found" rather than anything that names the real problem.
+            "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "PYTHONPATH": "/app",
             "SANDBOX_VERSION": CACHE_BUSTER,
             # NODE_PATH for globally installed modules (used by custom tools)

@@ -47,6 +47,13 @@ describe("formatToolCall summaries", () => {
     expect(formatToolCall(toolCall("webfetch", { url })).summary).toBe(url);
   });
 
+  it("renders skill calls with the skill name", () => {
+    expect(formatToolCall(toolCall("skill", { name: "visual-verification" }))).toMatchObject({
+      toolName: "skill",
+      summary: '"visual-verification"',
+    });
+  });
+
   it("does not render full task prompts or unknown-tool arguments in collapsed summaries", () => {
     const prompt = "x".repeat(1_000);
     const args = { query: "y".repeat(1_000), limit: 10 };

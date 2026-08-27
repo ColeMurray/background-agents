@@ -43,6 +43,11 @@ async def _yielding_sleep(_delay: float) -> None:
     await _ORIGINAL_ASYNCIO_SLEEP(0)
 
 
+async def _yielding_shutdown_wait(supervisor, _delay: float) -> bool:
+    await _ORIGINAL_ASYNCIO_SLEEP(0)
+    return supervisor.shutdown_event.is_set()
+
+
 class TestStartVnc:
     def test_configures_display_for_workload_processes(self):
         with patch.dict(
@@ -78,6 +83,21 @@ class TestStartVnc:
 
         create_process.assert_not_called()
         assert not password_path.exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("name", "level"), [("fluxbox", "debug"), ("xvfb", "info")])
+    async def test_forwards_fluxbox_logs_at_debug_and_other_desktop_logs_at_info(self, name, level):
+        log = MagicMock()
+        desktop = BrowserDesktop(log, password="secret")
+        process = _process()
+        process.stdout = asyncio.StreamReader()
+        process.stdout.feed_data(b"child output\n")
+        process.stdout.feed_eof()
+
+        await desktop._forward_logs(name, process)
+
+        getattr(log, level).assert_called_once_with(f"{name}.stdout", line="child output")
+        getattr(log, "info" if level == "debug" else "debug").assert_not_called()
 
     @pytest.mark.asyncio
     async def test_starts_dependencies_in_order_with_internal_raw_vnc(self, tmp_path):
@@ -262,7 +282,7 @@ class TestVncLifecycle:
         supervisor.browser_desktop.start = AsyncMock(side_effect=[RuntimeError("not ready"), None])
         supervisor.browser_desktop.stop = AsyncMock()
 
-        with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
+        with patch.object(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False)):
             assert await supervisor._start_desktop_with_retries()
 
         assert supervisor.browser_desktop.start.await_count == 2
@@ -282,7 +302,14 @@ class TestVncLifecycle:
         supervisor.browser_desktop.start = AsyncMock(side_effect=restart)
         supervisor._report_fatal_error = AsyncMock()
 
-        with patch("sandbox_runtime.supervisor.asyncio.sleep", side_effect=_yielding_sleep):
+        async def wait_for_shutdown(delay):
+            return await _yielding_shutdown_wait(supervisor, delay)
+
+        with patch.object(
+            supervisor,
+            "_wait_for_shutdown",
+            AsyncMock(side_effect=wait_for_shutdown),
+        ):
             await supervisor.monitor_processes()
 
         supervisor.browser_desktop.stop.assert_awaited_once()
@@ -305,7 +332,14 @@ class TestVncLifecycle:
         supervisor._start_desktop_with_retries = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
-        with patch("sandbox_runtime.supervisor.asyncio.sleep", side_effect=_yielding_sleep):
+        async def wait_for_shutdown(delay):
+            return await _yielding_shutdown_wait(supervisor, delay)
+
+        with patch.object(
+            supervisor,
+            "_wait_for_shutdown",
+            AsyncMock(side_effect=wait_for_shutdown),
+        ):
             await supervisor.monitor_processes()
 
         supervisor._start_desktop_with_retries.assert_not_awaited()
@@ -327,12 +361,31 @@ class TestVncLifecycle:
         supervisor.browser_desktop.start = AsyncMock(side_effect=restart)
         supervisor._report_fatal_error = AsyncMock()
 
-        with patch("sandbox_runtime.supervisor.asyncio.sleep", side_effect=_yielding_sleep):
+        async def wait_for_shutdown(delay):
+            return await _yielding_shutdown_wait(supervisor, delay)
+
+        with patch.object(
+            supervisor,
+            "_wait_for_shutdown",
+            AsyncMock(side_effect=wait_for_shutdown),
+        ):
             await supervisor.monitor_processes()
 
         assert supervisor.browser_desktop.start.await_count == 2
         assert supervisor.browser_desktop.stop.await_count == 2
         supervisor._report_fatal_error.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_initial_start_stops_retrying_when_shutdown_set_during_backoff(self):
+        supervisor = _make_lifecycle_supervisor()
+        supervisor.browser_desktop.start = AsyncMock(side_effect=RuntimeError("not ready"))
+        supervisor.browser_desktop.stop = AsyncMock()
+
+        with patch.object(supervisor, "_wait_for_shutdown", AsyncMock(return_value=True)):
+            assert not await supervisor._start_desktop_with_retries()
+
+        supervisor.browser_desktop.start.assert_awaited_once()
+        supervisor.browser_desktop.stop.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_cleanup_continues_when_a_process_exits_before_terminate(self, tmp_path):

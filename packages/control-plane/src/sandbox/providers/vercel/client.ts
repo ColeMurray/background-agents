@@ -9,72 +9,20 @@
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
 import { z } from "zod";
+import { withRequestDeadline } from "../../request-deadline";
 
 const log = createLogger("vercel-sandbox-client");
 
 const DEFAULT_VERCEL_API_BASE_URL = "https://vercel.com/api";
 const USER_AGENT = "open-inspect/vercel-sandbox";
-const vercelSandboxSessionStatusSchema = z.enum([
-  "pending",
-  "running",
-  "stopping",
-  "stopped",
-  "failed",
-  "aborted",
-  "snapshotting",
-]);
-const vercelSandboxSessionSchema = z.object({
-  id: z.string(),
-  status: vercelSandboxSessionStatusSchema,
-  createdAt: z.number(),
-  cwd: z.string(),
-  timeout: z.number(),
-});
-const vercelSandboxRouteSchema = z.object({
-  url: z.string().optional(),
-  subdomain: z.string(),
-  port: z.number(),
-});
-const vercelSandboxMetadataSchema = z.object({
-  name: z.string(),
-  currentSessionId: z.string(),
-  currentSnapshotId: z.string().optional(),
-  createdAt: z.number(),
-  status: vercelSandboxSessionStatusSchema,
-});
-const vercelCreateSandboxResponseSchema = z.object({
-  sandbox: vercelSandboxMetadataSchema,
-  session: vercelSandboxSessionSchema,
-  routes: z.array(vercelSandboxRouteSchema),
-});
-const vercelCommandResponseSchema = z.object({
-  command: z.object({ id: z.string(), exitCode: z.number().nullable() }),
-});
-const vercelSnapshotResponseSchema = z.object({
-  snapshot: z.object({
-    id: z.string(),
-    status: z.enum(["created", "deleted", "failed"]),
-    createdAt: z.number(),
-  }),
-  session: vercelSandboxSessionSchema,
-});
-const vercelSnapshotMetadataSchema = z.object({
-  id: z.string(),
-  sourceSessionId: z.string(),
-  status: z.enum(["created", "deleted", "failed"]),
-  region: z.string(),
-  sizeBytes: z.number(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  expiresAt: z.number().optional(),
-  lastUsedAt: z.number().optional(),
-  creationMethod: z.string().optional(),
-  parentId: z.string().optional(),
-});
-const vercelListSnapshotsResponseSchema = z.object({
-  snapshots: z.array(vercelSnapshotMetadataSchema),
-});
-const unknownResponseSchema = z.unknown();
+
+export const VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS = 60_000;
+export const VERCEL_COMMAND_REQUEST_DEADLINE_MS = 60_000;
+// Exceeds the lifecycle's snapshot budget so caller cancellation retains precedence.
+export const VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
+export const VERCEL_API_REQUEST_DEADLINE_MS = 60_000;
+export const VERCEL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
+export const VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS = 10_000;
 
 export interface VercelSandboxClientConfig {
   token: string;
@@ -83,11 +31,43 @@ export interface VercelSandboxClientConfig {
   apiBaseUrl?: string;
 }
 
+const vercelSandboxStatusSchema = z.enum([
+  "pending",
+  "running",
+  "stopping",
+  "stopped",
+  "failed",
+  "aborted",
+  "snapshotting",
+]);
+
+const vercelSandboxRouteSchema = z.object({
+  url: z.string().optional(),
+  subdomain: z.string(),
+  port: z.number(),
+});
+
 export type VercelSandboxRoute = z.infer<typeof vercelSandboxRouteSchema>;
+
+const vercelSandboxSessionSchema = z.object({
+  id: z.string(),
+  status: vercelSandboxStatusSchema,
+  createdAt: z.number(),
+  cwd: z.string(),
+  timeout: z.number(),
+});
 
 export type VercelSandboxSession = z.infer<typeof vercelSandboxSessionSchema>;
 
 export type VercelVcpus = 1 | 2 | 4 | 8;
+
+const vercelSandboxMetadataSchema = z.object({
+  name: z.string(),
+  currentSessionId: z.string(),
+  currentSnapshotId: z.string().optional(),
+  createdAt: z.number(),
+  status: vercelSandboxStatusSchema,
+});
 
 export type VercelSandboxMetadata = z.infer<typeof vercelSandboxMetadataSchema>;
 
@@ -100,7 +80,14 @@ export interface VercelCreateSandboxRequest {
   env?: Record<string, string>;
   tags?: Record<string, string>;
   sourceSnapshotId?: string;
+  signal?: AbortSignal;
 }
+
+const vercelCreateSandboxResponseSchema = z.object({
+  sandbox: vercelSandboxMetadataSchema,
+  session: vercelSandboxSessionSchema,
+  routes: z.array(vercelSandboxRouteSchema),
+});
 
 export type VercelCreateSandboxResponse = z.infer<typeof vercelCreateSandboxResponseSchema>;
 
@@ -112,18 +99,21 @@ export interface VercelRunCommandRequest {
   env?: Record<string, string>;
   sudo?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface VercelWriteFileArchiveRequest {
   sessionId: string;
   archive: Uint8Array;
   extractDir: string;
+  signal?: AbortSignal;
 }
 
 export interface VercelListSnapshotsRequest {
   name?: string;
   limit?: number;
   sortOrder?: "asc" | "desc";
+  signal?: AbortSignal;
 }
 
 export interface VercelCommandResult {
@@ -131,9 +121,45 @@ export interface VercelCommandResult {
   exitCode: number | null;
 }
 
+const vercelSnapshotStatusSchema = z.enum(["created", "deleted", "failed"]);
+
+const vercelSnapshotMetadataSchema = z.object({
+  id: z.string(),
+  sourceSessionId: z.string(),
+  status: vercelSnapshotStatusSchema,
+  region: z.string().optional(),
+  sizeBytes: z.number(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  expiresAt: z.number().optional(),
+  lastUsedAt: z.number().optional(),
+  creationMethod: z.string().optional(),
+  parentId: z.string().optional(),
+});
+
 export type VercelSnapshotMetadata = z.infer<typeof vercelSnapshotMetadataSchema>;
 
+const vercelSnapshotResponseSchema = z.object({
+  snapshot: z.object({
+    id: z.string(),
+    status: vercelSnapshotStatusSchema,
+    createdAt: z.number(),
+  }),
+  session: vercelSandboxSessionSchema,
+});
+
 export type VercelSnapshotResponse = z.infer<typeof vercelSnapshotResponseSchema>;
+
+const vercelStartCommandResponseSchema = z.object({
+  command: z.object({
+    id: z.string(),
+    exitCode: z.number().nullable(),
+  }),
+});
+
+const vercelListSnapshotsResponseSchema = z.object({
+  snapshots: z.array(vercelSnapshotMetadataSchema),
+});
 
 export class VercelSandboxApiError extends Error {
   constructor(
@@ -159,10 +185,11 @@ export class VercelSandboxClient {
     request: VercelCreateSandboxRequest,
     correlation?: CorrelationContext
   ): Promise<VercelCreateSandboxResponse> {
-    const response = await this.request(
+    const response = await this.requestJson(
       "/v2/sandboxes",
       {
         method: "POST",
+        signal: request.signal,
         body: JSON.stringify({
           projectId: this.config.projectId,
           name: request.name,
@@ -177,9 +204,10 @@ export class VercelSandboxClient {
             : undefined,
         }),
       },
+      vercelCreateSandboxResponseSchema,
       correlation,
       "createSandbox",
-      vercelCreateSandboxResponseSchema
+      VERCEL_SANDBOX_START_REQUEST_DEADLINE_MS
     );
 
     return response;
@@ -189,10 +217,11 @@ export class VercelSandboxClient {
     request: VercelRunCommandRequest,
     correlation?: CorrelationContext
   ): Promise<VercelCommandResult> {
-    const response = await this.request(
+    const response = await this.requestJson(
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/cmd`,
       {
         method: "POST",
+        signal: request.signal,
         body: JSON.stringify({
           command: request.command,
           args: request.args ?? [],
@@ -202,9 +231,10 @@ export class VercelSandboxClient {
           timeout: request.timeoutMs,
         }),
       },
+      vercelStartCommandResponseSchema,
       correlation,
       "startCommand",
-      vercelCommandResponseSchema
+      VERCEL_COMMAND_REQUEST_DEADLINE_MS
     );
 
     return { commandId: response.command.id, exitCode: response.command.exitCode };
@@ -218,6 +248,7 @@ export class VercelSandboxClient {
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/cmd`,
       {
         method: "POST",
+        signal: request.signal,
         body: JSON.stringify({
           command: request.command,
           args: request.args ?? [],
@@ -229,7 +260,10 @@ export class VercelSandboxClient {
         }),
       },
       correlation,
-      "runCommandAndWait"
+      "runCommandAndWait",
+      request.timeoutMs === undefined
+        ? VERCEL_COMMAND_REQUEST_DEADLINE_MS
+        : request.timeoutMs + VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS
     );
   }
 
@@ -237,7 +271,7 @@ export class VercelSandboxClient {
     request: VercelWriteFileArchiveRequest,
     correlation?: CorrelationContext
   ): Promise<void> {
-    await this.requestText(
+    await this.requestVoid(
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/fs/write`,
       {
         method: "POST",
@@ -245,10 +279,12 @@ export class VercelSandboxClient {
           "content-type": "application/gzip",
           "x-cwd": request.extractDir,
         },
+        signal: request.signal,
         body: request.archive,
       },
       correlation,
-      "writeFileArchive"
+      "writeFileArchive",
+      VERCEL_API_REQUEST_DEADLINE_MS
     );
   }
 
@@ -261,12 +297,13 @@ export class VercelSandboxClient {
       opts.expirationMs === undefined
         ? undefined
         : JSON.stringify({ expiration: opts.expirationMs });
-    return this.request(
+    return this.requestJson(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/snapshot`,
       { method: "POST", body, signal: opts.signal },
+      vercelSnapshotResponseSchema,
       correlation,
       "snapshotSession",
-      vercelSnapshotResponseSchema
+      VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS
     );
   }
 
@@ -274,17 +311,18 @@ export class VercelSandboxClient {
     request: VercelListSnapshotsRequest = {},
     correlation?: CorrelationContext
   ): Promise<VercelSnapshotMetadata[]> {
-    const response = await this.request(
+    const response = await this.requestJson(
       buildQueryPath("/v2/sandboxes/snapshots", {
         project: this.config.projectId,
         name: request.name,
         limit: request.limit,
         sortOrder: request.sortOrder,
       }),
-      { method: "GET" },
+      { method: "GET", signal: request.signal },
+      vercelListSnapshotsResponseSchema,
       correlation,
       "listSnapshots",
-      vercelListSnapshotsResponseSchema
+      VERCEL_API_REQUEST_DEADLINE_MS
     );
     return response.snapshots;
   }
@@ -294,12 +332,12 @@ export class VercelSandboxClient {
     correlation?: CorrelationContext,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.request(
+    await this.requestVoid(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/stop`,
       { method: "POST", signal },
       correlation,
       "stopSession",
-      unknownResponseSchema
+      VERCEL_CLEANUP_REQUEST_DEADLINE_MS
     );
   }
 
@@ -308,90 +346,93 @@ export class VercelSandboxClient {
     correlation?: CorrelationContext,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.request(
+    await this.requestVoid(
       `/v2/sandboxes/snapshots/${encodeURIComponent(snapshotId)}`,
       { method: "DELETE", signal },
       correlation,
       "deleteSnapshot",
-      unknownResponseSchema
+      VERCEL_CLEANUP_REQUEST_DEADLINE_MS
     );
   }
 
-  private async request<T>(
+  private requestJson<T>(
+    path: string,
+    init: RequestInit,
+    schema: z.ZodType<T>,
+    correlation: CorrelationContext | undefined,
+    endpoint: string,
+    deadlineMs: number
+  ): Promise<T> {
+    return this.send(
+      path,
+      init,
+      correlation,
+      endpoint,
+      async (response) => this.parseJson(schema, await response.text(), response.status, endpoint),
+      deadlineMs
+    );
+  }
+
+  private requestVoid(
     path: string,
     init: RequestInit,
     correlation: CorrelationContext | undefined,
     endpoint: string,
-    schema: z.ZodType<T>
-  ): Promise<T> {
-    const text = await this.requestText(path, init, correlation, endpoint);
-    let parsed: unknown;
+    deadlineMs: number
+  ): Promise<void> {
+    return this.send(
+      path,
+      init,
+      correlation,
+      endpoint,
+      async (response) => {
+        await response.arrayBuffer();
+      },
+      deadlineMs
+    );
+  }
+
+  private parseJson<T>(schema: z.ZodType<T>, text: string, status: number, endpoint: string): T {
+    let payload: unknown;
     try {
-      parsed = JSON.parse(text || "{}");
+      payload = JSON.parse(text);
     } catch (error) {
       throw new VercelSandboxApiError(
         `Vercel Sandbox API returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
-        200,
+        status,
         text
       );
     }
-    const result = schema.safeParse(parsed);
-    if (!result.success) {
+
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) {
       throw new VercelSandboxApiError(
-        "Vercel Sandbox API returned an unexpected response shape",
-        200,
+        `Vercel Sandbox API returned an invalid ${endpoint} response: ${z.prettifyError(parsed.error)}`,
+        status,
         text
       );
     }
-    return result.data;
+    return parsed.data;
   }
 
-  private async requestText(
+  private requestCommandStream(
     path: string,
     init: RequestInit,
     correlation: CorrelationContext | undefined,
-    endpoint: string
-  ): Promise<string> {
-    const startTime = Date.now();
-    let httpStatus: number | undefined;
-    let outcome: "success" | "error" = "error";
-
-    try {
-      const url = this.buildUrl(path);
-      const headers = this.buildHeaders(init, correlation);
-
-      const response = await fetch(url.toString(), { ...init, headers });
-      httpStatus = response.status;
-      const text = await response.text();
-      if (!response.ok) {
-        throw new VercelSandboxApiError(
-          `Vercel Sandbox API error: ${response.status} ${text}`,
-          response.status,
-          text
-        );
-      }
-
-      outcome = "success";
-      return text;
-    } finally {
-      log.info("vercel_sandbox.request", {
-        event: "vercel_sandbox.request",
-        endpoint,
-        trace_id: correlation?.trace_id,
-        request_id: correlation?.request_id,
-        http_status: httpStatus,
-        duration_ms: Date.now() - startTime,
-        outcome,
-      });
-    }
-  }
-
-  private async requestCommandStream(
-    path: string,
-    init: RequestInit,
-    correlation: CorrelationContext | undefined,
-    endpoint: string
+    endpoint: string,
+    deadlineMs: number
   ): Promise<VercelCommandResult> {
+    return this.send(path, init, correlation, endpoint, parseCommandNdjsonStream, deadlineMs);
+  }
+
+  private async send<T>(
+    path: string,
+    init: RequestInit,
+    correlation: CorrelationContext | undefined,
+    endpoint: string,
+    consume: (response: Response) => T | Promise<T>,
+    deadlineMs: number
+  ): Promise<T> {
     const startTime = Date.now();
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
@@ -399,19 +440,27 @@ export class VercelSandboxClient {
     try {
       const url = this.buildUrl(path);
       const headers = this.buildHeaders(init, correlation);
-      const response = await fetch(url.toString(), { ...init, headers });
-      httpStatus = response.status;
+      const result = await withRequestDeadline(
+        "Vercel Sandbox",
+        endpoint,
+        deadlineMs,
+        init.signal,
+        async (signal) => {
+          const response = await fetch(url.toString(), { ...init, headers, signal });
+          httpStatus = response.status;
 
-      if (!response.ok) {
-        const text = await readResponseText(response);
-        throw new VercelSandboxApiError(
-          `Vercel Sandbox API error: ${response.status} ${text}`,
-          response.status,
-          text
-        );
-      }
+          if (!response.ok) {
+            const text = await readResponseText(response);
+            throw new VercelSandboxApiError(
+              `Vercel Sandbox API error: ${response.status} ${text}`,
+              response.status,
+              text
+            );
+          }
 
-      const result = await parseCommandNdjsonStream(response);
+          return await consume(response);
+        }
+      );
       outcome = "success";
       return result;
     } finally {
@@ -448,7 +497,7 @@ export class VercelSandboxClient {
   }
 }
 
-function parseCommandNdjson(text: string): VercelCommandResult {
+function parseCommandNdjson(text: string, status: number): VercelCommandResult {
   let commandId = "";
   let exitCode: number | null = null;
 
@@ -462,7 +511,7 @@ function parseCommandNdjson(text: string): VercelCommandResult {
   if (!commandId) {
     throw new VercelSandboxApiError(
       "Vercel command stream did not include a command id",
-      200,
+      status,
       text
     );
   }
@@ -472,7 +521,7 @@ function parseCommandNdjson(text: string): VercelCommandResult {
 
 async function parseCommandNdjsonStream(response: Response): Promise<VercelCommandResult> {
   if (!response.body) {
-    return parseCommandNdjson(await response.text());
+    return parseCommandNdjson(await response.text(), response.status);
   }
 
   const reader = response.body.getReader();
@@ -509,7 +558,7 @@ async function parseCommandNdjsonStream(response: Response): Promise<VercelComma
   if (!commandId) {
     throw new VercelSandboxApiError(
       "Vercel command stream did not include a command id",
-      200,
+      response.status,
       responseExcerpt
     );
   }

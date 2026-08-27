@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   applyScmCloneEnv,
+  BOOT_MODE_ENV_KEYS,
   buildImageBuildCallbackEnv,
   buildImageBuildEnvVars,
   buildSandboxEnvVars,
@@ -257,6 +258,32 @@ describe("buildSandboxEnvVars", () => {
     );
     expect(enabled.VNC_PASSWORD).toBe("derived-password");
     expect(enabled.NOVNC_PORT).toBe("6099");
+  });
+
+  it("strips boot-mode markers from the user layer", () => {
+    // Providers add these after buildSandboxEnvVars returns, and only when the
+    // mode is real, so they are not part of the system overlay that shadows user
+    // vars. A repo secret of the same name would otherwise reach
+    // BootMode.from_env and let a plain session claim it booted from a repo
+    // image, a snapshot, or an image build.
+    const envVars = buildSandboxEnvVars(
+      {
+        ...baseConfig,
+        userEnvVars: {
+          FROM_REPO_IMAGE: "true",
+          REPO_IMAGE_SHA: "deadbeef",
+          RESTORED_FROM_SNAPSHOT: "true",
+          IMAGE_BUILD_MODE: "true",
+          LEGITIMATE_SECRET: "keep-me",
+        },
+      },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+
+    for (const marker of BOOT_MODE_ENV_KEYS) {
+      expect(envVars).not.toHaveProperty(marker);
+    }
+    expect(envVars.LEGITIMATE_SECRET).toBe("keep-me");
   });
 
   it("sets the slack-notify flag only when enabled", () => {

@@ -55,12 +55,26 @@ module "control_plane_worker" {
     }
   ]
 
-  queue_bindings = [
-    {
-      binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
-      queue_name   = cloudflare_queue.image_build_finalization.queue_name
-    }
-  ]
+  # These bindings provide read-only queue metrics to the operator health
+  # check. Autofix production remains owned by the GitHub bot.
+  queue_bindings = concat(
+    [
+      {
+        binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
+        queue_name   = cloudflare_queue.image_build_finalization.queue_name
+      }
+    ],
+    var.enable_github_bot ? [
+      {
+        binding_name = "AUTOFIX_QUEUE"
+        queue_name   = cloudflare_queue.github_autofix[0].queue_name
+      },
+      {
+        binding_name = "AUTOFIX_DLQ"
+        queue_name   = cloudflare_queue.github_autofix_dlq[0].queue_name
+      }
+    ] : []
+  )
 
   service_bindings = concat(
     var.enable_slack_bot ? [
@@ -90,6 +104,7 @@ module "control_plane_worker" {
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
+      { name = "GITHUB_BOT_USERNAME", value = var.github_bot_username },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
       { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
     ],
@@ -154,6 +169,7 @@ module "control_plane_worker" {
       { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
+      { name = "PROVIDER_ACCOUNTS_ENCRYPTION_KEY", value = local.effective_provider_accounts_encryption_key },
       # Pepper for image-build callback token hashes (see service-auth.tf)
       { name = "IMAGE_CALLBACK_TOKEN_PEPPER", value = random_password.image_callback_token_pepper.result },
       # Per-service sig1 verification keys
@@ -198,7 +214,6 @@ module "control_plane_worker" {
 
   durable_objects = [
     { binding_name = "SESSION", class_name = "SessionDO" },
-    { binding_name = "SCHEDULER", class_name = "SchedulerDO" },
   ]
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
@@ -208,10 +223,15 @@ module "control_plane_worker" {
   migration_tag       = var.control_plane_migration_tag
   migration_old_tag   = var.control_plane_migration_old_tag
   new_sqlite_classes  = var.control_plane_new_sqlite_classes
+  deleted_classes     = var.control_plane_deleted_classes
 
-  # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts.
-  cron_triggers = ["* * * * *", "7,37 * * * *"]
+  # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts,
+  # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
+  cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
+  # module.e2b_infra is deliberately absent: its template build depends on THIS
+  # worker instead (see e2b.tf), so control-plane deploys land before template
+  # rebuilds — the compatible order for E2B boots.
   depends_on = [
     null_resource.control_plane_build,
     module.session_index_kv,
@@ -220,7 +240,6 @@ module "control_plane_worker" {
     module.daytona_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
-    module.e2b_infra,
     module.modal_app,
   ]
 }

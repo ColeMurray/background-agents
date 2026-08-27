@@ -1,11 +1,10 @@
 import subprocess
 import textwrap
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
-from sandbox_runtime.git_signing import GitSigningRuntime
+from sandbox_runtime.git_signing import GitSigningError, GitSigningRuntime
 from sandbox_runtime.repo_config import RepoEntry, dump_repo_manifest
 from sandbox_runtime.types import GitUser
 
@@ -23,6 +22,16 @@ ENABLED_CONFIGURATION = {
     "committerEmail": "open-inspect@example.com",
     "publicKey": PUBLIC_KEY,
 }
+OWNED_SIGNING_CONFIG_KEYS = (
+    "author.name",
+    "author.email",
+    "committer.name",
+    "committer.email",
+    "gpg.format",
+    "gpg.ssh.program",
+    "user.signingkey",
+    "commit.gpgsign",
+)
 
 
 def git(repo, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -298,32 +307,74 @@ async def test_enabled_configuration_applies_to_every_manifest_repository(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_participant_change_updates_only_author_identity(tmp_path, monkeypatch):
+async def test_reapplying_enabled_configuration_repairs_drift_and_updates_participant(tmp_path):
     repo = create_repository(tmp_path / "repo")
     manifest = create_manifest(tmp_path, [repo])
     runtime = create_runtime(tmp_path, manifest)
     await runtime.apply_configuration(
         ENABLED_CONFIGURATION, GitUser(name="Jane Dev", email="123+jane@users.noreply.github.com")
     )
-    set_git_config = AsyncMock(side_effect=runtime._set_git_config)
-    monkeypatch.setattr(runtime, "_set_git_config", set_git_config)
+    git(repo, "config", "--add", "user.signingkey", "key::externally-added")
+    git(repo, "config", "--add", "commit.gpgsign", "false")
 
     await runtime.apply_configuration(
         ENABLED_CONFIGURATION, GitUser(name="Ada Dev", email="456+ada@users.noreply.github.com")
     )
 
-    assert [call.args[1] for call in set_git_config.await_args_list] == [
-        "author.name",
-        "author.email",
-        "user.name",
-        "user.email",
+    assert git(repo, "config", "--get-all", "user.signingkey").stdout.splitlines() == [
+        f"key::{PUBLIC_KEY}"
     ]
+    assert git(repo, "config", "--get-all", "commit.gpgsign").stdout.splitlines() == ["true"]
     assert git(repo, "config", "author.name").stdout.strip() == "Ada Dev"
     assert git(repo, "config", "author.email").stdout.strip() == (
         "456+ada@users.noreply.github.com"
     )
+    assert git(repo, "config", "user.name").stdout.strip() == "Ada Dev"
+    assert git(repo, "config", "user.email").stdout.strip() == "456+ada@users.noreply.github.com"
     assert git(repo, "config", "committer.name").stdout.strip() == "Open Inspect"
     assert git(repo, "config", "committer.email").stdout.strip() == ("open-inspect@example.com")
+
+
+@pytest.mark.asyncio
+async def test_reapplying_disabled_configuration_removes_external_signing_state(tmp_path):
+    repo = create_repository(tmp_path / "repo")
+    manifest = create_manifest(tmp_path, [repo])
+    runtime = create_runtime(tmp_path, manifest)
+    await runtime.apply_configuration({"enabled": False}, None)
+    git(repo, "config", "user.signingkey", "key::externally-added")
+    git(repo, "config", "commit.gpgsign", "true")
+
+    await runtime.apply_configuration({"enabled": False}, None)
+
+    assert git(repo, "config", "--get", "user.signingkey", check=False).returncode == 1
+    assert git(repo, "config", "--get", "commit.gpgsign", check=False).returncode == 1
+
+
+@pytest.mark.asyncio
+async def test_enabled_disabled_transition_reconciles_owned_config_only(tmp_path):
+    repo = create_repository(tmp_path / "repo")
+    unowned_key = "gpg.ssh.allowedSignersFile"
+    unowned_value = str(tmp_path / "allowed-signers")
+    git(repo, "config", unowned_key, unowned_value)
+    runtime = create_runtime(tmp_path, create_manifest(tmp_path, [repo]))
+    await runtime.apply_configuration(ENABLED_CONFIGURATION, None)
+
+    await runtime.apply_configuration({"enabled": False}, None)
+
+    for key in OWNED_SIGNING_CONFIG_KEYS:
+        assert git(repo, "config", "--get", key, check=False).returncode == 1
+    assert git(repo, "config", unowned_key).stdout.strip() == unowned_value
+    assert git(repo, "config", "user.name").stdout.strip() == "OpenInspect"
+    assert git(repo, "config", "user.email").stdout.strip() == "open-inspect@noreply.github.com"
+
+    await runtime.apply_configuration(ENABLED_CONFIGURATION, None)
+
+    assert git(repo, "config", "author.name").stdout.strip() == "Open Inspect"
+    assert git(repo, "config", "committer.name").stdout.strip() == "Open Inspect"
+    assert git(repo, "config", "gpg.format").stdout.strip() == "ssh"
+    assert git(repo, "config", "user.signingkey").stdout.strip() == f"key::{PUBLIC_KEY}"
+    assert git(repo, "config", "commit.gpgsign").stdout.strip() == "true"
+    assert git(repo, "config", unowned_key).stdout.strip() == unowned_value
 
 
 @pytest.mark.asyncio
@@ -363,6 +414,71 @@ async def test_refresh_blocks_on_non_success_or_malformed_broker_results(
 
     with pytest.raises(RuntimeError, match=r"commit signing configuration|Commit signing"):
         await runtime.refresh(GitUser(name="OpenInspect", email="open-inspect@example.com"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [
+        (400, False),
+        (401, False),
+        (403, False),
+        (404, False),
+        (408, True),
+        (410, False),
+        (429, True),
+        (503, True),
+    ],
+)
+async def test_refresh_preserves_broker_http_status_without_response_details(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, status: int, retryable: bool
+):
+    manifest = create_manifest(tmp_path)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text="secret upstream details")
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "sandbox_runtime.git_signing.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    runtime = create_runtime(tmp_path, manifest)
+
+    with pytest.raises(GitSigningError) as exc_info:
+        await runtime.refresh(None)
+
+    assert exc_info.value.status_code == status
+    assert exc_info.value.retryable is retryable
+    assert str(exc_info.value) == "Commit signing configuration unavailable"
+    assert "secret upstream details" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_refresh_network_failure_has_no_http_status_or_secret_details(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest = create_manifest(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("sandbox-token", request=request)
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "sandbox_runtime.git_signing.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    runtime = create_runtime(tmp_path, manifest)
+
+    with pytest.raises(GitSigningError) as exc_info:
+        await runtime.refresh(None)
+
+    assert exc_info.value.status_code is None
+    assert exc_info.value.retryable is True
+    assert str(exc_info.value) == "Commit signing configuration unavailable"
+    assert "sandbox-token" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

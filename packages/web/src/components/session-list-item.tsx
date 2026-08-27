@@ -9,7 +9,7 @@ import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { formatRelativeTime } from "@/lib/time";
 import { MoreIcon, ArchiveIcon, BranchIcon, BoxIcon } from "@/components/ui/icons";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useSessionRename } from "@/hooks/use-session-rename";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +29,6 @@ export function SessionListItem({
   isMobile,
   onArchive,
   onSessionSelect,
-  onSessionRenamed,
   onMarkLatestMessageRead,
 }: {
   session: SessionItem;
@@ -38,7 +37,6 @@ export function SessionListItem({
   isMobile: boolean;
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
-  onSessionRenamed: (sessionId: string, title: string) => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
@@ -49,7 +47,11 @@ export function SessionListItem({
     session.repositories
   );
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
-  const displayTitle = session.title || repoInfo;
+  const { optimisticTitle, renameSession } = useSessionRename({
+    sessionId: session.id,
+    currentTitle: session.title,
+  });
+  const displayTitle = optimisticTitle ?? session.title ?? repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);
@@ -133,21 +135,10 @@ export function SessionListItem({
       return;
     }
 
-    const previousTitle = displayTitle;
     setIsRenaming(false);
 
-    try {
-      const response = await browserApiFetch(`/api/sessions/${session.id}/title`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: trimmed }),
-      });
-      if (!response.ok) {
-        throw new Error("Failed to update session title");
-      }
-      onSessionRenamed(session.id, trimmed);
-    } catch {
-      setTitle(previousTitle);
+    const success = await renameSession(trimmed);
+    if (!success) {
       setIsRenaming(true);
     }
   };
@@ -263,7 +254,7 @@ export function SessionListItem({
             className="block pr-8"
           >
             <div className="flex items-center gap-1.5 text-sm text-foreground">
-              {session.readState?.unread && (
+              {session.readState.unread && (
                 <>
                   <span
                     aria-hidden="true"
@@ -276,10 +267,13 @@ export function SessionListItem({
                 <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />
               )}
               <span
-                className={`truncate ${session.readState?.unread ? "font-semibold" : "font-medium"}`}
+                className={`truncate ${session.readState.unread ? "font-semibold" : "font-medium"}`}
               >
                 {displayTitle}
               </span>
+              {session.status === "failed" && (
+                <span className="shrink-0 text-xs font-medium text-destructive">Failed</span>
+              )}
             </div>
             <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
               <span>{relativeTime}</span>
@@ -315,11 +309,11 @@ export function SessionListItem({
               <button
                 type="button"
                 aria-label="Session actions"
-                aria-hidden={isMobile && !session.readState?.unread ? "true" : undefined}
-                tabIndex={isMobile && !session.readState?.unread ? -1 : undefined}
+                aria-hidden={isMobile && !session.readState.unread ? "true" : undefined}
+                tabIndex={isMobile && !session.readState.unread ? -1 : undefined}
                 className={`items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
                   isMobile
-                    ? session.readState?.unread
+                    ? session.readState.unread
                       ? "flex h-10 w-10"
                       : "pointer-events-none flex h-6 w-6 opacity-0"
                     : "flex h-6 w-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -338,7 +332,7 @@ export function SessionListItem({
               }}
             >
               <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
-              {session.readState?.unread && (
+              {session.readState.unread && (
                 <DropdownMenuItem
                   onSelect={handleMarkLatestMessageRead}
                   disabled={isMarkingLatestRead}
@@ -409,7 +403,7 @@ export function ChildSessionListItem({
         style={{ paddingLeft: `${paddingLeftRem}rem` }}
       >
         <div className="flex items-center gap-1.5 text-xs">
-          {session.readState?.unread && (
+          {session.readState.unread && (
             <>
               <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
               <span className="sr-only">Unread</span>
@@ -418,13 +412,16 @@ export function ChildSessionListItem({
           <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
           {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
           <span
-            className={`truncate text-foreground ${session.readState?.unread ? "font-semibold" : "font-medium"}`}
+            className={`truncate text-foreground ${session.readState.unread ? "font-semibold" : "font-medium"}`}
           >
             {displayTitle}
           </span>
+          {session.status === "failed" && (
+            <span className="shrink-0 font-medium text-destructive">Failed</span>
+          )}
         </div>
       </Link>
-      {session.readState?.unread && (
+      {session.readState.unread && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button

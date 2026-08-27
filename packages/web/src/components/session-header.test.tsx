@@ -214,6 +214,63 @@ describe("SessionHeader", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Connected");
   });
 
+  it("shows the provider's reason inside the failed sandbox popover", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "failed" })}
+        sandboxError={
+          'Failed to create E2B sandbox: {"code":400,"message":"Timeout cannot be greater than 1 hours"}'
+        }
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Failed sandbox" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Failed" }));
+
+    // The generic label is not actionable on its own; the provider's message is
+    // what tells someone the plan cap was exceeded.
+    expect(await screen.findByText("The sandbox could not start or recover.")).toBeInTheDocument();
+    expect(screen.getByText(/Timeout cannot be greater than 1 hours/)).toBeInTheDocument();
+  });
+
+  it("omits the error block when the control plane reported no reason", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "failed" })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Failed sandbox" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Failed" }));
+
+    expect(await screen.findByText("The sandbox could not start or recover.")).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to create/)).not.toBeInTheDocument();
+  });
+
   it("reveals the connection label on keyboard focus", async () => {
     render(
       <SessionHeader

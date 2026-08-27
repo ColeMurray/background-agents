@@ -2,6 +2,118 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 22, 2026
+
+**Unified model and reasoning selection.** New-session and follow-up composers now combine model and
+reasoning-effort selection in one responsive control, with nested desktop menus and an in-place
+mobile drill-down.
+
+## August 21, 2026
+
+**Configurable keyboard shortcuts.** Set per-user shortcuts for sending prompts, opening search or a
+new session, and toggling the sidebar. Settings can record, validate, reset, and persist bindings.
+
+**Recent automation activity.** Automation rows now show the latest execution outcomes at a glance,
+alongside clearer compact schedules, responsive mobile actions, and confirmation before deletion.
+
+**OpenCode Zen GLM 5.2.** Adds `opencode/glm-5.2` to the opt-in OpenCode Zen catalog.
+
+## August 20, 2026
+
+**Managed provider accounts.** Connect and manage multiple ChatGPT and SuperGrok subscription
+accounts from Settings using device authorization, choose accounts for sessions and automations, and
+configure defaults for unattended runs. These installation-wide accounts and defaults are available
+to every admitted user, while sandboxes receive short-lived access without exposing stored refresh
+credentials.
+
+**Prebuilt images for E2B.** E2B can now build, snapshot, reuse, and delete repository and
+environment images, with reliable startup from prebuilt snapshots and configurable template CPU and
+memory.
+
+**Actionable sandbox failures.** Session status now shows the provider's startup or recovery error
+when available and preserves it across reloads, while clearing stale details when a retry begins.
+
+**Automatic retirement of stale sandbox snapshots.** Session snapshots now record their runtime
+version and restore only when compatible. Incompatible or unknown snapshots trigger a fresh sandbox
+instead of repeatedly reviving a broken runtime, which may discard uncommitted filesystem state.
+
+## August 16, 2026
+
+**Session attention inbox.** The sidebar now groups session trees into Needs attention, In progress,
+and Recent, prioritizing unread terminal outcomes. Each section has independent pagination and retry
+behavior while preserving parent and child-session grouping.
+
+**Managed skill autocomplete.** Type `/skill-name` or `$skill-name` in new-session and follow-up
+prompts to search applicable skills, with keyboard and pointer selection. Existing sessions suggest
+from their pinned skill manifest so completions stay reproducible.
+
+## August 15, 2026
+
+**Managed skills.** Create and edit reusable Agent Skills in Settings, assign them globally or to
+specific repositories and environments, and organize personal profiles. When starting a session,
+choose all applicable skills, none, or a profile; Open-Inspect pins and securely installs the exact
+revisions before the agent starts, while the session sidebar records each skill's revision and
+assignment source so existing sessions stay reproducible as the shared catalog changes.
+
+**Multiple pull requests per session.** The `create-pull-request` tool now opens one PR per head
+branch instead of one per repository: agents can create stacked PRs (each level passing the previous
+branch as `baseBranch`), open a fresh PR after the previous one merges, and calling the tool again
+from the same branch updates that branch's open PR with the latest commits instead of failing. Every
+PR is tracked with full lifecycle state and listed in the session sidebar with its live status, and
+stale artifacts heal when the provider reports a PR already merged. Sessions holding several PRs get
+a Pull requests sidebar section with one sync control for all of them, and the View PR action
+becomes a picker naming each PR by number and head branch.
+
+**Claude Sonnet 5 and Grok 4.6.** Adds `anthropic/claude-sonnet-5` to the model picker and
+integrations with adaptive thinking and reasoning efforts from low through max, and `xai/grok-4.6`
+to the opt-in xAI / SuperGrok catalog with low, medium, and high efforts.
+
+**Kimi K3 and GLM 5.3.** Adds `opencode/kimi-k3` to the opt-in OpenCode Zen catalog and
+`zai-coding-plan/glm-5.3` to the opt-in Z.AI Coding Plan catalog.
+
+**Cancel queued prompts.** Pending web prompts can now be removed before they start processing,
+freeing queue capacity and restoring the removed text to an empty composer after server
+confirmation.
+
+## August 14, 2026
+
+**OpenCode runtime upgraded to 1.18.18.** Newly built images across all sandbox providers now use a
+release that fixes a message-ID wraparound which prevented older sessions from recognizing new
+prompts after August 14. Sessions restored from pre-upgrade snapshots retain their existing runtime.
+
+**Automatic abandoned-draft cleanup.** Warmed sessions that never receive a prompt are archived
+after an eight-hour grace period, while sessions that have started work or contain messages or
+queued prompts are left untouched.
+
+**More adaptable session controls.** Desktop users can hide the session details sidebar, with the
+preference preserved across visits. Mobile headers now show separate connection and sandbox states,
+including lifecycle details and provider-dashboard access when available.
+
+**Search and paginate automations.** The automation list now supports URL-backed name search and
+stable cursor pagination, with responsive rows and distinct empty, no-results, and error states.
+
+## August 13, 2026
+
+**Cleaner, more responsive session timelines.** Completed turns collapse intermediate activity
+behind a “Worked for” disclosure while keeping the prompt and final response visible. Long text and
+expanded tool details now wrap or scroll within mobile layouts without widening the page.
+
+## August 12, 2026
+
+**Queue web follow-up prompts.** Submit up to ten follow-ups while a session is processing, with
+durable FIFO ordering, state synchronized across tabs and reloads, and idempotent retries that avoid
+duplicate work.
+
+**Correct child-session attribution.** Child sessions and parent-to-child follow-ups now use the
+active prompt author's identity and SCM credentials instead of always inheriting the parent session
+owner, including prompts started from bot integrations.
+
+## August 11, 2026
+
+**Clear Slack speaker attribution.** Slack-started sessions and follow-ups now label the current
+message with the sender's display name and stable Slack ID, preserving who gave an instruction in
+multi-person threads and across repository clarification.
+
 ## August 9, 2026
 
 **Browser-based sandbox desktops.** Opt in to a full VNC desktop for sessions, available from the

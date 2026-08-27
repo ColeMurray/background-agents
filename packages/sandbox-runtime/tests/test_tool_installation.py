@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from sandbox_runtime.opencode_server import OpenCodeServer
+from sandbox_runtime.opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from tests.runtime_helpers import make_opencode_server
 
 
@@ -521,29 +521,26 @@ def _make_opencode_deps_staging(tmp_path: Path) -> Path:
 
 
 class TestResolveGlobalConfigDir:
-    """Cases for _resolve_opencode_global_config_dir() — OpenCode's xdg-basedir resolution."""
+    """Cases for OpenCode's xdg-basedir resolution."""
 
     def test_uses_opencode_config_dir_override(self, tmp_path, monkeypatch):
         """OPENCODE_CONFIG_DIR wins over XDG_CONFIG_HOME and is used verbatim."""
         monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "custom"))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert OpenCodeServer._resolve_opencode_global_config_dir() == tmp_path / "custom"
+        assert resolve_opencode_global_config_dir() == tmp_path / "custom"
 
     def test_uses_xdg_config_home(self, tmp_path, monkeypatch):
         """Without the override, $XDG_CONFIG_HOME/opencode is used."""
         monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert OpenCodeServer._resolve_opencode_global_config_dir() == tmp_path / "xdg" / "opencode"
+        assert resolve_opencode_global_config_dir() == tmp_path / "xdg" / "opencode"
 
     def test_falls_back_to_home_config(self, tmp_path, monkeypatch):
         """With neither set, ~/.config/opencode is used."""
         monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        assert (
-            OpenCodeServer._resolve_opencode_global_config_dir()
-            == tmp_path / "home" / ".config" / "opencode"
-        )
+        assert resolve_opencode_global_config_dir() == tmp_path / "home" / ".config" / "opencode"
 
 
 class TestSeedGlobalOpencodeDeps:

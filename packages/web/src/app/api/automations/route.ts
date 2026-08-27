@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
       sentryClientSecret: body.sentryClientSecret,
       repositories: body.repositories,
       environmentIds: body.environmentIds,
+      providerSelections: body.providerSelections,
     };
 
     const response = await controlPlaneUserFetch("/automations", {

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from .constants import REPO_MANIFEST_FILE_PATH
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
+from .repository_sync import RepositorySyncStatus
 from .runtime_config import BootMode, RepositoryConfig
 
 if TYPE_CHECKING:
@@ -125,7 +126,11 @@ class RepositoryBoot:
         lines.extend(
             [
                 "To open a pull request, call the `create-pull-request` tool once per repository "
-                f'with changes, passing its `repo` argument (e.g. `repo: "{primary.owner}/{primary.name}"`).',
+                f'with changes, passing its `repo` argument (e.g. `repo: "{primary.owner}/{primary.name}"`). '
+                "Calling it again from the same branch updates that repository's open pull "
+                "request; to open an additional pull request, create a new branch first. "
+                "For a stacked pull request, pass the previous pull request's head branch "
+                "as `baseBranch`.",
                 "",
             ]
         )
@@ -154,16 +159,34 @@ class RepositoryBoot:
         git_sync_success = not sync_result.failures
         if sync_result.failures:
             if boot_mode in (BootMode.FRESH, BootMode.BUILD):
-                failed_names = ", ".join(
-                    f"{repo.owner}/{repo.name}" for repo in sync_result.failures
-                )
-                raise RuntimeError(f"git sync failed for {failed_names}")
-            for repo in sync_result.failures:
-                self.warnings.record(
-                    "sync",
-                    f"Could not update {repo.owner}/{repo.name} from origin; the checkout may be stale.",
-                    repo,
-                )
+                messages = []
+                if sync_result.timed_out:
+                    timed_out_names = ", ".join(
+                        f"{repo.owner}/{repo.name}" for repo in sync_result.timed_out
+                    )
+                    messages.append(f"git sync timed out for {timed_out_names}")
+                if sync_result.non_timeout_failures:
+                    failed_names = ", ".join(
+                        f"{repo.owner}/{repo.name}" for repo in sync_result.non_timeout_failures
+                    )
+                    messages.append(f"git sync failed for {failed_names}")
+                raise RuntimeError("; ".join(messages))
+            else:
+                for outcome in sync_result.outcomes:
+                    repo = outcome.repository
+                    if outcome.status is RepositorySyncStatus.SUCCEEDED:
+                        continue
+                    if outcome.status is RepositorySyncStatus.TIMED_OUT:
+                        message = (
+                            f"Timed out updating {repo.owner}/{repo.name} from origin; "
+                            "the checkout may be stale."
+                        )
+                    else:
+                        message = (
+                            f"Could not update {repo.owner}/{repo.name} from origin; "
+                            "the checkout may be stale."
+                        )
+                    self.warnings.record("sync", message, repo)
         self._write_repo_manifest()
 
         repository_shas: list[dict[str, str]] = []
