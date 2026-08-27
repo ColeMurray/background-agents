@@ -14,6 +14,13 @@ import { loadTargetCatalog, type TargetCatalog } from "./catalog";
 import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
+import {
+  CLASSIFICATION_REQUEST_TIMEOUT_MS,
+  DEFAULT_CLASSIFICATION_MODEL,
+  callOpenAIStructured,
+  requireClassificationProviderKey,
+  resolveClassificationProvider,
+} from "@open-inspect/shared/classification";
 import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 
@@ -116,7 +123,7 @@ Consider:
 
 ## Response Format
 
-Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
+Respond with a JSON object with these fields:
 - targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
@@ -192,17 +199,68 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
 }
 
 /**
+ * Call OpenAI's Chat Completions API with strict JSON-schema structured
+ * output, then funnel the parsed object through the same
+ * {@link normalizeModelResponse} validation as the Anthropic tool-use path.
+ *
+ * The Anthropic tool's `input_schema` already carries
+ * `additionalProperties: false`, which is what OpenAI's `strict` mode requires,
+ * so both providers are driven from that one declaration.
+ */
+async function callOpenAI(apiKey: string, model: string, prompt: string): Promise<LLMResponse> {
+  const parsed = await callOpenAIStructured(apiKey, model, prompt, {
+    name: CLASSIFY_TARGET_TOOL_NAME,
+    schema: CLASSIFY_TARGET_TOOL.input_schema,
+  });
+
+  return normalizeModelResponse(parsed);
+}
+
+/**
  * Repository classifier class.
  */
 export class RepoClassifier {
-  private client: Anthropic;
+  private anthropicClient: Anthropic | null = null;
   private env: Env;
 
   constructor(env: Env) {
     this.env = env;
-    this.client = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-    });
+  }
+
+  /**
+   * Lazily construct the Anthropic client so an OpenAI-configured deployment
+   * (no `ANTHROPIC_API_KEY`) never reaches `new Anthropic({ apiKey: undefined })`.
+   */
+  private getAnthropicClient(apiKey: string): Anthropic {
+    if (!this.anthropicClient) {
+      this.anthropicClient = new Anthropic({ apiKey });
+    }
+    return this.anthropicClient;
+  }
+
+  /**
+   * Call Anthropic's Messages API with the classification tool, then funnel the
+   * tool input through the same {@link normalizeModelResponse} validation as
+   * the OpenAI structured-output path.
+   */
+  private async callAnthropic(apiKey: string, model: string, prompt: string): Promise<LLMResponse> {
+    const response = await this.getAnthropicClient(apiKey).messages.create(
+      {
+        model,
+        max_tokens: 500,
+        temperature: 0,
+        tools: [CLASSIFY_TARGET_TOOL],
+        tool_choice: {
+          type: "tool",
+          name: CLASSIFY_TARGET_TOOL_NAME,
+          disable_parallel_tool_use: true,
+        },
+        messages: [{ role: "user", content: prompt }],
+      },
+      { signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS) }
+    );
+
+    return extractStructuredResponse(response);
   }
 
   /**
@@ -352,26 +410,25 @@ export class RepoClassifier {
     // Use LLM for classification
     try {
       const prompt = buildClassificationPrompt(message, catalog, context);
+      const modelId = this.env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
+      const { provider, model } = resolveClassificationProvider(modelId);
 
-      const response = await this.client.messages.create({
-        model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
-        max_tokens: 500,
-        temperature: 0,
-        tools: [CLASSIFY_TARGET_TOOL],
-        tool_choice: {
-          type: "tool",
-          name: CLASSIFY_TARGET_TOOL_NAME,
-          disable_parallel_tool_use: true,
-        },
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      });
-
-      const llmResult = extractStructuredResponse(response);
+      const llmResult =
+        provider === "anthropic"
+          ? await this.callAnthropic(
+              requireClassificationProviderKey(
+                this.env.ANTHROPIC_API_KEY,
+                "ANTHROPIC_API_KEY",
+                modelId
+              ),
+              model,
+              prompt
+            )
+          : await callOpenAI(
+              requireClassificationProviderKey(this.env.OPENAI_API_KEY, "OPENAI_API_KEY", modelId),
+              model,
+              prompt
+            );
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 

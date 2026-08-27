@@ -49,10 +49,10 @@ export function ImagesSettings() {
     (data?.enabledRepos ?? []).map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
   );
 
-  // Repo scope_ids are lowercase `owner/name` pairs.
+  // Repo scope ids are lowercase `owner/name` pairs.
   const getLatestImage = (owner: string, name: string): ImageBuildRecordView | undefined => {
     const key = `${owner}/${name}`.toLowerCase();
-    return data?.images.find((img) => img.scope_kind === "repo" && img.scope_id === key);
+    return data?.images.find((img) => img.scopeKind === "repo" && img.scopeId === key);
   };
 
   const handleToggle = async (owner: string, name: string, enabled: boolean) => {
@@ -166,12 +166,12 @@ export function ImagesSettings() {
                     image={
                       image && {
                         status: image.status,
-                        createdAt: image.created_at,
+                        createdAt: image.createdAt,
                         readyDetails: formatReadyDetails(
-                          parsePrimaryBuildSha(image.repository_shas),
-                          image.build_duration_seconds
+                          parsePrimaryBuildSha(image.repositoryShas),
+                          image.buildDurationSeconds
                         ),
-                        errorMessage: image.error_message,
+                        errorMessage: image.errorMessage,
                       }
                     }
                   />

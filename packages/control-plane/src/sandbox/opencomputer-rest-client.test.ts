@@ -6,6 +6,7 @@ import {
   openComputerSandboxApiResponseSchema,
   openComputerSecretStoreResponseSchema,
 } from "./opencomputer-rest-client";
+import { SANDBOX_RUNTIME_VERSION } from "./runtime-manifest";
 
 const config = {
   apiUrl: "https://api.opencomputer.dev",
@@ -45,7 +46,7 @@ describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain("/sandboxes/sb-1/exec/run");
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.args[1]).toContain("SANDBOX_VERSION=v60-provider-account-broker");
+    expect(body.args[1]).toContain(`SANDBOX_VERSION=${SANDBOX_RUNTIME_VERSION}`);
   });
 
   it("runRuntimeForeground (image build path) exports SANDBOX_VERSION", async () => {
@@ -55,7 +56,7 @@ describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
     await client.runRuntimeForeground("sb-1", 60);
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
-    expect(body.args[1]).toContain("SANDBOX_VERSION=v60-provider-account-broker");
+    expect(body.args[1]).toContain(`SANDBOX_VERSION=${SANDBOX_RUNTIME_VERSION}`);
   });
 });
 

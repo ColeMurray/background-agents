@@ -3,7 +3,7 @@ import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, sqlDatabase } from "./helpers";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
 
 function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -11,10 +11,6 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Slack triage",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
     schedule_cron: null,
@@ -168,7 +164,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     const channels = new SlackChannelStore(env.DB);
     const auto = makeSlackAutomation();
     await store.create(auto);
-    await env.DB.batch(channels.bindChannelStatements(auto.id, ["C1"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(auto.id, ["C1"]));
 
     const res = await putAutomation(auto.id, {
       triggerConfig: {
@@ -223,7 +219,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
       }),
     });
     await store.create(auto);
-    await env.DB.batch(channels.bindChannelStatements(auto.id, ["C1"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(auto.id, ["C1"]));
 
     const res = await putAutomation(auto.id, { triggerConfig: null });
     expect(res.status).toBe(400);
@@ -257,8 +253,8 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
     const b = makeSlackAutomation();
     await store.create(a);
     await store.create(b);
-    await env.DB.batch(channels.bindChannelStatements(a.id, ["C1", "C2"]));
-    await env.DB.batch(channels.bindChannelStatements(b.id, ["C2", "C3"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(a.id, ["C1", "C2"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(b.id, ["C2", "C3"]));
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);
@@ -271,7 +267,7 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
     const channels = new SlackChannelStore(env.DB);
     const disabled = makeSlackAutomation({ enabled: 0 });
     await store.create(disabled);
-    await env.DB.batch(channels.bindChannelStatements(disabled.id, ["C9"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements(disabled.id, ["C9"]));
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);

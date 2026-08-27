@@ -45,22 +45,9 @@ const SANDBOX_STATUS_PRESENTATION: Record<
     dot: "bg-warning",
     pulse: true,
   },
-  syncing: {
-    label: "Syncing...",
-    detail: "Synchronizing the sandbox workspace.",
-    color: "text-accent",
-    dot: "bg-accent",
-    pulse: true,
-  },
   ready: {
     label: "Ready",
     detail: "The sandbox is available.",
-    color: "text-success",
-    dot: "bg-success",
-  },
-  running: {
-    label: "Running",
-    detail: "The sandbox is active.",
     color: "text-success",
     dot: "bg-success",
   },

@@ -49,24 +49,34 @@ export class SessionSkillStore {
   /**
    * Project the pinned snapshot into the narrow sandbox installation contract.
    * Persisted revisions fail closed if their generated SKILL.md is missing.
+   *
+   * `page` narrows the response to one window of manifest positions. Pinned
+   * revisions are immutable, so paging by position is stable and every page
+   * carries the same `manifestSha256`; omitting `page` returns the whole
+   * installation, which is the contract older sandbox runtimes expect.
    */
-  async getSandboxInstallation(sessionId: string): Promise<SandboxSkillInstallation | null> {
-    const loaded = await this.load(sessionId);
+  async getSandboxInstallation(
+    sessionId: string,
+    page?: { after: number; limit: number }
+  ): Promise<SandboxSkillInstallation | null> {
+    // One extra row distinguishes "page is full" from "more remain" without a
+    // second count query.
+    const loaded = await this.load(sessionId, page && { ...page, limit: page.limit + 1 });
     if (!loaded) return null;
-    const skillStore = new SkillStore(this.db);
-    const filesByRevision = await skillStore.filesForRevisions(
-      loaded.revisions.map((row) => row.revision_id)
-    );
+    const hasMore = page !== undefined && loaded.revisions.length > page.limit;
+    const revisions = hasMore ? loaded.revisions.slice(0, page.limit) : loaded.revisions;
+    const filesByRevision = await new SkillStore(this.db).filesForSessionRevisions(sessionId, page);
     const installation = {
       schemaVersion: 1,
       manifestSha256: loaded.manifest.manifest_sha256,
-      skills: loaded.revisions.map((row) => {
+      skills: revisions.map((row) => {
         const files = filesByRevision.get(row.revision_id);
         if (!files?.some((file) => file.path === "SKILL.md")) {
           throw new Error(`Missing files for session skill revision ${row.revision_id}`);
         }
         return { name: row.skill_name, files };
       }),
+      nextCursor: hasMore ? String(revisions[revisions.length - 1]?.position) : null,
     };
     const parsed = sandboxSkillInstallationSchema.safeParse(installation);
     if (!parsed.success) {
@@ -78,7 +88,8 @@ export class SessionSkillStore {
   }
 
   private async load(
-    sessionId: string
+    sessionId: string,
+    page?: { after: number; limit: number }
   ): Promise<{ manifest: ManifestRow; revisions: RevisionRow[] } | null> {
     const manifest = await this.db
       .prepare("SELECT * FROM session_skill_manifests WHERE session_id = ?")
@@ -86,8 +97,13 @@ export class SessionSkillStore {
       .first<ManifestRow>();
     if (!manifest) return null;
     const revisions = await this.db
-      .prepare("SELECT * FROM session_skill_revisions WHERE session_id = ? ORDER BY position")
-      .bind(sessionId)
+      .prepare(
+        page
+          ? `SELECT * FROM session_skill_revisions
+             WHERE session_id = ? AND position > ? ORDER BY position LIMIT ?`
+          : "SELECT * FROM session_skill_revisions WHERE session_id = ? ORDER BY position"
+      )
+      .bind(...(page ? [sessionId, page.after, page.limit] : [sessionId]))
       .all<RevisionRow>();
     return { manifest, revisions: revisions.results ?? [] };
   }

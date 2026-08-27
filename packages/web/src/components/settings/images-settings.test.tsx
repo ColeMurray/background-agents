@@ -55,25 +55,23 @@ afterEach(() => {
 });
 
 describe("ImagesSettings", () => {
-  it("renders ready details from the primary repository_shas entry", () => {
+  it("renders ready details from the primary repository provenance entry", () => {
     renderWithFeed({
       units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [
         {
           id: "build-1",
-          scope_kind: "repo",
-          scope_id: "acme/web",
+          scopeKind: "repo",
+          scopeId: "acme/web",
           provider: "modal",
           status: "ready",
-          repositories_fingerprint: "fp",
-          repository_shas: JSON.stringify([
-            { repoOwner: "acme", repoName: "web", baseSha: "abc1234def5678" },
-          ]),
-          runtime_version: "60",
-          build_duration_seconds: 42,
-          error_message: null,
-          created_at: Date.now(),
+          repositoriesFingerprint: "fp",
+          repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc1234def5678" }],
+          runtimeVersion: "60",
+          buildDurationSeconds: 42,
+          errorMessage: null,
+          createdAt: Date.now(),
         },
       ],
     });
@@ -89,16 +87,16 @@ describe("ImagesSettings", () => {
       images: [
         {
           id: "build-1",
-          scope_kind: "repo",
-          scope_id: "acme/web",
+          scopeKind: "repo",
+          scopeId: "acme/web",
           provider: "modal",
           status: "failed",
-          repositories_fingerprint: "fp",
-          repository_shas: "[]",
-          runtime_version: "60",
-          build_duration_seconds: null,
-          error_message: "clone exploded",
-          created_at: Date.now(),
+          repositoriesFingerprint: "fp",
+          repositoryShas: [],
+          runtimeVersion: "60",
+          buildDurationSeconds: null,
+          errorMessage: "clone exploded",
+          createdAt: Date.now(),
         },
       ],
     });

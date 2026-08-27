@@ -4,14 +4,14 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Automation, ListAutomationsResponse } from "@open-inspect/shared";
+import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
 import { useAutomations } from "./use-automations";
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
 }));
 
-function automation(id: string, name: string): Automation {
+function automation(id: string, name: string): AutomationListItem {
   return {
     id,
     name,
@@ -33,6 +33,7 @@ function automation(id: string, name: string): Automation {
     repositories: [],
     environmentIds: [],
     providerSelections: {},
+    recentExecutions: [],
   };
 }
 

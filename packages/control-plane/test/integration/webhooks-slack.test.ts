@@ -3,7 +3,7 @@ import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, sqlDatabase } from "./helpers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -29,10 +29,6 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
   return {
     id: `auto-slack-${Math.random().toString(36).slice(2, 8)}`,
     name: "Slack triage",
-    repo_owner: null,
-    repo_name: null,
-    base_branch: null,
-    repo_id: null,
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
     schedule_cron: null,
@@ -64,7 +60,7 @@ async function seedSlackAutomation(): Promise<string> {
   const automation = makeSlackAutomation();
   await store.create(automation);
   const channels = new SlackChannelStore(env.DB);
-  await env.DB.batch(channels.bindChannelStatements(automation.id, ["C1"]));
+  await sqlDatabase(env.DB).batch(channels.bindChannelStatements(automation.id, ["C1"]));
   return automation.id;
 }
 

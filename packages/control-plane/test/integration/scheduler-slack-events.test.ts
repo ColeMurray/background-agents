@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -7,15 +8,6 @@ import { cleanD1Tables } from "./cleanup";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import type { Env } from "../../src/types";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-
-function getSchedulerStub() {
-  const scheduler = new Scheduler(env.DB, env as Env, { submit() {} });
-  return {
-    fetch(input: RequestInfo | URL, init?: RequestInit) {
-      return scheduler.dispatch(new Request(input, init));
-    },
-  };
-}
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -65,20 +57,8 @@ function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomat
   };
 }
 
-async function sendEvent(event: SlackAutomationEvent): Promise<Response> {
-  const opts = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  };
-  try {
-    return await getSchedulerStub().fetch("http://internal/internal/event", opts);
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("invalidating this Durable Object")) {
-      return getSchedulerStub().fetch("http://internal/internal/event", opts);
-    }
-    throw e;
-  }
+function sendEvent(event: SlackAutomationEvent) {
+  return new Scheduler(env.DB, env as Env, { submit() {} }).event(event);
 }
 
 /** Create a watched slack_event automation (channel C1, text_match contains "deploy"). */
@@ -89,7 +69,7 @@ async function seedSlackAutomation(
   const id = `auto-slack-${Math.random().toString(36).slice(2, 8)}`;
   await store.create(makeAutomation({ id, ...overrides }));
   const channels = new SlackChannelStore(env.DB);
-  await env.DB.batch(channels.bindChannelStatements(id, ["C1"]));
+  await sqlDatabase(env.DB).batch(channels.bindChannelStatements(id, ["C1"]));
   return id;
 }
 
@@ -107,8 +87,8 @@ describe("Scheduler slack event handling (integration)", () => {
     const id = await seedSlackAutomation(store);
 
     const event = makeSlackEvent({ text: "please deploy the api" });
-    const res = await sendEvent(event);
-    expect(res.status).toBe(200);
+    const result = await sendEvent(event);
+    expect(result.triggered).toBe(1);
 
     const runs = await fetchRuns(id);
     expect(runs.length).toBeGreaterThanOrEqual(1);
@@ -124,10 +104,8 @@ describe("Scheduler slack event handling (integration)", () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
-    const res = await sendEvent(makeSlackEvent({ text: "good morning team" }));
-    const body = await res.json<{ triggered: number; skipped: number }>();
-    expect(body.triggered).toBe(0);
-    expect(body.skipped).toBe(0);
+    const result = await sendEvent(makeSlackEvent({ text: "good morning team" }));
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -137,7 +115,7 @@ describe("Scheduler slack event handling (integration)", () => {
     const id = await seedSlackAutomation(store);
 
     // Event in an unwatched channel — the join table returns no candidate.
-    const res = await sendEvent(
+    const result = await sendEvent(
       makeSlackEvent({
         channelId: "C2",
         text: "please deploy",
@@ -145,9 +123,7 @@ describe("Scheduler slack event handling (integration)", () => {
         concurrencyKey: "slack:C2:1",
       })
     );
-    const body = await res.json<{ triggered: number; skipped: number }>();
-    expect(body.triggered).toBe(0);
-    expect(body.skipped).toBe(0);
+    expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
     expect(await fetchRuns(id)).toHaveLength(0);
   });
@@ -181,13 +157,10 @@ describe("Scheduler slack event handling (integration)", () => {
       })
     );
 
-    const res = await sendEvent(
+    const result = await sendEvent(
       makeSlackEvent({ text: "deploy", concurrencyKey, triggerKey: "slack:msg:C1:second" })
     );
-    const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-    expect(body.skipped).toBe(1);
-    expect(body.triggered).toBe(0);
-    expect(body.steered).toBe(0);
+    expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
 
     // The skip is a childless invocation carrying the message coordinates.
     const invocations = await fetchInvocations(store, id);
@@ -207,27 +180,21 @@ describe("Scheduler slack event handling (integration)", () => {
 
     const concurrencyKey = "slack:C1:thread-steer";
     // Root message triggers the run and creates its session.
-    const rootRes = await sendEvent(
+    const rootResult = await sendEvent(
       makeSlackEvent({ text: "deploy the api", concurrencyKey, triggerKey: "slack:msg:C1:root" })
     );
-    const rootBody = await rootRes.json<{ triggered: number }>();
-    expect(rootBody.triggered).toBe(1);
+    expect(rootResult.triggered).toBe(1);
 
     // A follow-up reply in the same thread (same concurrency key, new message)
     // is routed to the running session as a steering turn — not skipped.
-    const followRes = await sendEvent(
+    const followResult = await sendEvent(
       makeSlackEvent({
         text: "also update the changelog",
         concurrencyKey,
         triggerKey: "slack:msg:C1:reply",
       })
     );
-    const followBody = await followRes.json<{
-      triggered: number;
-      skipped: number;
-      steered: number;
-    }>();
-    expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(followResult).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
     // No concurrency-skip invocation recorded — the follow-up was steered.
     const invocations = await fetchInvocations(store, id);
@@ -242,14 +209,14 @@ describe("Scheduler slack event handling (integration)", () => {
 
     const concurrencyKey = "slack:C1:thread-done";
     // Root message triggers the run and creates its session.
-    const rootRes = await sendEvent(
+    const rootResult = await sendEvent(
       makeSlackEvent({
         text: "deploy the api",
         concurrencyKey,
         triggerKey: "slack:msg:C1:root-done",
       })
     );
-    expect((await rootRes.json<{ triggered: number }>()).triggered).toBe(1);
+    expect(rootResult.triggered).toBe(1);
 
     // Simulate the run finishing. Its session stays steerable within the window,
     // just like an @mention thread after a turn completes.
@@ -262,19 +229,18 @@ describe("Scheduler slack event handling (integration)", () => {
     // A reply after completion — with text that does NOT match the trigger
     // conditions — still continues the same session, proving the steer bypasses
     // both condition matching and the run-status filter.
-    const followRes = await sendEvent(
+    const followResult = await sendEvent(
       makeSlackEvent({
         text: "thanks! can you also bump the version?",
         concurrencyKey,
         triggerKey: "slack:msg:C1:reply-done",
       })
     );
-    const followBody = await followRes.json<{
-      triggered: number;
-      skipped: number;
-      steered: number;
-    }>();
-    expect(followBody).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(followResult).toEqual({
+      triggered: 0,
+      skipped: 0,
+      steered: 1,
+    });
 
     // The reply created no new run and recorded no skip — it reused the
     // completed run's session. Exactly one materialized run remains.

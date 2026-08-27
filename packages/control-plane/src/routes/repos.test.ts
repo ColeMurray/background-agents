@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { reposRoutes } from "./repos";
@@ -116,7 +117,7 @@ describe("repository list route", () => {
     // CONTROL_PLANE_FETCH_TIMEOUT_MS, which cancels the worker — so unless the
     // refresh is registered with waitUntil, the KV write never lands and every
     // later request repeats the same slow path against an empty cache.
-    const waitUntil = vi.fn();
+    const backgroundTasks = createTestBackgroundTasks();
     const { handler, match } = getListHandler();
     const ctx = createContext();
 
@@ -126,14 +127,15 @@ describe("repository list route", () => {
       match,
       {
         ...ctx,
-        executionCtx: { submit: waitUntil },
+        executionCtx: backgroundTasks,
       }
     );
 
     expect(response.status).toBe(200);
     expect(mockCachePut).toHaveBeenCalledTimes(1);
-    expect(waitUntil).toHaveBeenCalledTimes(1);
-    await expect(waitUntil.mock.calls[0][0]).resolves.not.toThrow();
+    expect(backgroundTasks.submissions).toHaveLength(1);
+    await backgroundTasks.settle();
+    expect(backgroundTasks.failures).toEqual([]);
   });
 });
 

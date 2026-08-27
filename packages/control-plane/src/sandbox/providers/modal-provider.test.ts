@@ -47,7 +47,6 @@ function createMockModalClient(
       async (): Promise<CreateSandboxResponse> => ({
         sandboxId: "sandbox-123",
         modalObjectId: "modal-obj-123",
-        status: "created",
         createdAt: Date.now(),
       })
     ),
@@ -481,7 +480,6 @@ describe("ModalSandboxProvider", () => {
       const expectedResult = {
         sandboxId: "sandbox-abc",
         modalObjectId: "modal-obj-xyz",
-        status: "created",
         createdAt: 1234567890,
         vncUrl: "https://vnc.test",
         vncPassword: "vnc-pw",
@@ -496,7 +494,6 @@ describe("ModalSandboxProvider", () => {
 
       expect(result.sandboxId).toBe("sandbox-abc");
       expect(result.providerObjectId).toBe("modal-obj-xyz");
-      expect(result.status).toBe("created");
       expect(result.createdAt).toBe(1234567890);
       expect(result).toMatchObject({
         vncAccess: { url: "https://vnc.test", password: "vnc-pw" },

@@ -108,6 +108,81 @@ describe("useProviderDeviceAuthorization", () => {
     expect(result.current.remainingMs).toBe(59_000);
   });
 
+  it("expires and aborts a poll that never settles", async () => {
+    vi.mocked(startProviderDeviceAuthorization).mockResolvedValue({
+      transactionId,
+      provider: "xai",
+      operation: "create",
+      userCode: "ABCD-EFGH",
+      verificationUrl: "https://example.com/device",
+      expiresAt: 3_000,
+      expiresInMs: 2_000,
+      pollIntervalMs: 1_000,
+    });
+    let pollSignal: AbortSignal | undefined;
+    vi.mocked(pollProviderDeviceAuthorization).mockImplementation((_provider, _id, signal) => {
+      pollSignal = signal;
+      return new Promise(() => undefined);
+    });
+    const { result } = renderHook(() =>
+      useProviderDeviceAuthorization("xai", createTarget, vi.fn())
+    );
+    await flushEffects();
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(pollSignal?.aborted).toBe(false);
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(pollSignal?.aborted).toBe(true);
+    expect(result.current.status).toBe("expired");
+    expect(result.current.remainingMs).toBe(0);
+    expect(result.current.failure).toEqual({
+      message: "Provider authorization expired.",
+      retryable: true,
+    });
+  });
+
+  it("retries a transient poll without replacing the device transaction", async () => {
+    const onConnected = vi.fn();
+    vi.mocked(pollProviderDeviceAuthorization)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Gateway unavailable"), { status: 502, retryable: true })
+      )
+      .mockResolvedValueOnce({
+        status: "connected",
+        account: {
+          id: "a".repeat(32),
+          provider: "xai",
+          displayName: "SuperGrok account",
+          externalAccountId: "account-1",
+          status: "active",
+          createdBy: null,
+          updatedBy: null,
+          lastVerifiedAt: null,
+          lastUsedAt: null,
+          createdAt: 1,
+          updatedAt: 1,
+          archivedAt: null,
+        },
+        reconnectedExisting: false,
+        completedAt: 5_000,
+      });
+
+    const { result } = renderHook(() =>
+      useProviderDeviceAuthorization("xai", createTarget, onConnected)
+    );
+    await flushEffects();
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(result.current.status).toBe("pending");
+    expect(result.current.authorization?.userCode).toBe("ABCD-EFGH");
+    expect(startProviderDeviceAuthorization).toHaveBeenCalledOnce();
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(onConnected).toHaveBeenCalledOnce();
+    expect(cancelProviderDeviceAuthorization).not.toHaveBeenCalled();
+  });
+
   it("keeps its initial target immutable across rerenders", async () => {
     vi.mocked(pollProviderDeviceAuthorization).mockImplementation(
       () => new Promise(() => undefined)

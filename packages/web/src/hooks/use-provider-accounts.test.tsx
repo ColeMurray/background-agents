@@ -180,7 +180,7 @@ describe("provider account API response boundaries", () => {
   it("falls back when the error response body is malformed", async () => {
     vi.mocked(browserApiFetch)
       .mockResolvedValueOnce(
-        Response.json({ error: { message: "wrong shape" }, retryable: "no" }, { status: 502 })
+        Response.json({ error: "Untrusted error", retryable: "no" }, { status: 502 })
       )
       .mockResolvedValueOnce(Response.json({ defaults: [] }));
 

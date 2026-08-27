@@ -13,6 +13,7 @@ import type { Principal } from "../auth/principal";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { AutomationTriggerBlockedError } from "../scheduler/scheduler";
 
 const mockProviderAdapterGet = vi.hoisted(() => vi.fn());
 
@@ -42,6 +43,7 @@ const mockStore = {
   bindEnvironmentInserts: vi.fn(),
   bindReplaceEnvironments: vi.fn(),
   listInvocations: vi.fn(),
+  listRecentExecutionsForAutomationIds: vi.fn(),
 };
 
 const mockProviderAuthStore = {
@@ -74,8 +76,18 @@ vi.mock("../db/model-provider-accounts", () => ({
 /** Shared D1 batch spy — createEnv wires it as env.DB.batch. */
 const mockBatch = vi.fn();
 const mockSchedulerTrigger = vi.hoisted(() => vi.fn());
+const MockAutomationTriggerBlockedError = vi.hoisted(
+  () =>
+    class AutomationTriggerBlockedError extends Error {
+      constructor() {
+        super("An active run already exists");
+        this.name = "AutomationTriggerBlockedError";
+      }
+    }
+);
 
 vi.mock("../scheduler/scheduler", () => ({
+  AutomationTriggerBlockedError: MockAutomationTriggerBlockedError,
   Scheduler: vi.fn().mockImplementation(function () {
     return { trigger: mockSchedulerTrigger };
   }),
@@ -241,6 +253,7 @@ describe("automation route handlers", () => {
     mockStore.getRepositoriesForAutomationIds.mockResolvedValue(new Map());
     mockStore.getEnvironmentsForAutomation.mockResolvedValue([]);
     mockStore.getEnvironmentsForAutomationIds.mockResolvedValue(new Map());
+    mockStore.listRecentExecutionsForAutomationIds.mockResolvedValue(new Map());
     mockProviderAuthStore.list.mockResolvedValue([]);
     mockProviderAuthStore.listForAutomationIds.mockResolvedValue(new Map());
     mockStore.bindAutomationInsert.mockReturnValue({ sql: "insert-automation" });
@@ -252,9 +265,10 @@ describe("automation route handlers", () => {
     mockProviderAuthStore.bindInserts.mockReturnValue([{ sql: "insert-provider-auth" }]);
     mockProviderAuthStore.bindReplace.mockReturnValue([{ sql: "replace-provider-auth" }]);
     mockBatch.mockResolvedValue([]);
-    mockSchedulerTrigger.mockResolvedValue(
-      Response.json({ run: { id: "run-1" } }, { status: 201 })
-    );
+    mockSchedulerTrigger.mockResolvedValue({
+      invocationId: "inv-1",
+      runs: [{ id: "run-1" }],
+    });
     mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
     mockProviderAccountStore.getById.mockResolvedValue({
       id: "0123456789abcdef0123456789abcdef",
@@ -291,6 +305,8 @@ describe("automation route handlers", () => {
       expect(body.hasMore).toBe(false);
       expect(body.nextCursor).toBeNull();
       expect(mockStore.list).toHaveBeenCalledWith({ limit: 25, cursor: null });
+      expect(mockStore.listRecentExecutionsForAutomationIds).toHaveBeenCalledWith(["auto-1"], 10);
+      expect(body.automations[0]).toMatchObject({ recentExecutions: [] });
     });
 
     it("passes name search and pagination params to the store", async () => {
@@ -1362,6 +1378,10 @@ describe("automation route handlers", () => {
 
       const res = await callRoute("POST", "/automations/auto-1/trigger");
       expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({
+        invocationId: "inv-1",
+        runs: [{ id: "run-1" }],
+      });
     });
 
     it("returns 404 when automation not found", async () => {
@@ -1375,9 +1395,7 @@ describe("automation route handlers", () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const env = createEnv();
-      mockSchedulerTrigger.mockResolvedValue(
-        Response.json({ error: "concurrent_run_active" }, { status: 409 })
-      );
+      mockSchedulerTrigger.mockRejectedValue(new AutomationTriggerBlockedError());
 
       const { handler, match } = getHandler("POST", "/automations/auto-1/trigger");
       const request = new Request("https://test.local/automations/auto-1/trigger", {
@@ -1385,6 +1403,19 @@ describe("automation route handlers", () => {
       });
       const res = await handler(request, env, match, createCtx());
       expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "A run is already active for this automation",
+      });
+    });
+
+    it("returns 500 when the scheduler cannot launch the automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockSchedulerTrigger.mockRejectedValue(new Error("launch failed"));
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "Failed to trigger automation" });
     });
   });
 

@@ -24,6 +24,19 @@ export type {
   SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
+export {
+  githubAutofixEnvelopeSchema,
+  githubAutofixOriginSchema,
+  githubAutofixSessionCommandSchema,
+  githubAutofixSessionResponseSchema,
+} from "./github-autofix";
+export type {
+  GitHubAutofixEnvelope,
+  GitHubAutofixOrigin,
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "./github-autofix";
+
 export { clientMessageSchema, clientRequestIdSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
@@ -163,11 +176,14 @@ export {
   createAutomationRequestSchema,
   updateAutomationRequestSchema,
   listAutomationsResponseSchema,
+  automationInvocationStatusSchema,
 } from "./automations";
 export type {
   AutomationRepository,
   AutomationRepositoryInput,
   Automation,
+  AutomationExecutionSummary,
+  AutomationListItem,
   CreateAutomationRequest,
   UpdateAutomationRequest,
   AutomationRun,
@@ -232,6 +248,7 @@ export type {
   RepositoryShaEntry,
   ImageBuildRecordView,
 } from "./image-builds";
+export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {
@@ -266,7 +283,6 @@ export {
   MAX_SKILL_REVISION_BYTES,
   MAX_SKILL_PATH_BYTES,
   MAX_SKILL_PATH_DEPTH,
-  MAX_MANAGED_SKILLS_PER_SESSION,
   MAX_MANAGED_SKILL_MANIFEST_BYTES,
   skillNameSchema,
   skillFileInputSchema,

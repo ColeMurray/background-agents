@@ -7,6 +7,7 @@
 
 import type {
   Automation,
+  AutomationExecutionSummary,
   AutomationInvocation,
   AutomationInvocationSource,
   AutomationInvocationStatus,
@@ -409,6 +410,56 @@ export class AutomationStore {
     };
   }
 
+  async listRecentExecutionsForAutomationIds(
+    automationIds: string[],
+    limit: number
+  ): Promise<Map<string, AutomationExecutionSummary[]>> {
+    const executionsByAutomation = new Map<string, AutomationExecutionSummary[]>();
+    for (const id of automationIds) executionsByAutomation.set(id, []);
+    if (automationIds.length === 0) return executionsByAutomation;
+
+    const placeholders = automationIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `WITH ranked_invocations AS (
+           SELECT i.id, i.automation_id, i.created_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY i.automation_id
+                    ORDER BY i.created_at DESC, i.id DESC
+                  ) AS position
+           FROM automation_invocations i
+           WHERE i.automation_id IN (${placeholders})
+         ),
+         recent_invocations AS (
+           SELECT id, automation_id, created_at
+           FROM ranked_invocations
+           WHERE position <= ?
+         )
+         SELECT i.id, i.automation_id, i.created_at,
+                ${DERIVED_INVOCATION_STATUS_SQL} AS derived_status
+         FROM recent_invocations i
+         LEFT JOIN automation_runs r ON r.invocation_id = i.id
+         GROUP BY i.id
+         ORDER BY i.automation_id, i.created_at DESC, i.id DESC`
+      )
+      .bind(...automationIds, limit)
+      .all<{
+        id: string;
+        automation_id: string;
+        created_at: number;
+        derived_status: AutomationInvocationStatus;
+      }>();
+
+    for (const row of result.results ?? []) {
+      executionsByAutomation.get(row.automation_id)?.push({
+        id: row.id,
+        status: row.derived_status,
+        createdAt: row.created_at,
+      });
+    }
+    return executionsByAutomation;
+  }
+
   /**
    * Build the dynamic UPDATE statement for the allowed automation fields, or
    * null when `fields` carries nothing to write. Public so a route can compose it
@@ -735,17 +786,42 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  /** Fail stuck runs. Same SQL guard as updateRun — sweeps must never flip terminal rows. */
-  async bulkFailRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+  /** Atomically assign a session only while a run still awaits launch. */
+  async claimRunSession(id: string, sessionId: string, startedAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = 'running', session_id = ?, started_at = ?
+         WHERE id = ? AND status = 'starting'`
+      )
+      .bind(sessionId, startedAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async bulkFailStartingRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+    await this.bulkFailRunsInStatus(runIds, "starting", reason, completedAt);
+  }
+
+  async bulkFailRunningRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
+    await this.bulkFailRunsInStatus(runIds, "running", reason, completedAt);
+  }
+
+  private async bulkFailRunsInStatus(
+    runIds: string[],
+    status: "starting" | "running",
+    reason: string,
+    completedAt: number
+  ): Promise<void> {
     if (runIds.length === 0) return;
     const placeholders = runIds.map(() => "?").join(", ");
     await this.db
       .prepare(
         `UPDATE automation_runs
          SET status = 'failed', failure_reason = ?, completed_at = ?
-         WHERE id IN (${placeholders}) AND status IN ('starting', 'running')`
+         WHERE id IN (${placeholders}) AND status = ?`
       )
-      .bind(reason, completedAt, ...runIds)
+      .bind(reason, completedAt, ...runIds, status)
       .run();
   }
 

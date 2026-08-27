@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import type { ZodType } from "zod";
+import { z, type ZodType } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
@@ -30,6 +30,10 @@ import {
 const ACCOUNTS_KEY = "/api/model-provider-accounts";
 const DEFAULTS_KEY = "/api/model-provider-account-defaults";
 const LEGACY_CREDENTIALS_KEY = "/api/model-provider-accounts/legacy-credentials";
+const providerErrorResponseSchema = z.object({
+  error: z.string(),
+  retryable: z.boolean().optional(),
+});
 
 export type { LegacyProviderKeyLocation };
 
@@ -44,29 +48,22 @@ export class ProviderResourceError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 async function requestProviderResponse(
   path: BrowserApiPath,
-  init?: { method?: string; body?: unknown }
+  init?: { method?: string; body?: unknown; signal?: AbortSignal }
 ): Promise<Response> {
   const response = await browserApiFetch(path, {
     method: init?.method,
     headers: init?.body === undefined ? undefined : { "Content-Type": "application/json" },
     body: init?.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: init?.signal,
   });
   if (!response.ok) {
-    const payload: unknown = await response.json().catch(() => ({}));
-    const errorMessage =
-      isRecord(payload) && typeof payload.error === "string" ? payload.error : undefined;
-    const retryable =
-      isRecord(payload) && typeof payload.retryable === "boolean" ? payload.retryable : undefined;
+    const parsed = providerErrorResponseSchema.safeParse(await response.json().catch(() => null));
     throw new ProviderResourceError(
-      errorMessage || "Provider account request failed",
+      (parsed.success && parsed.data.error) || "Provider account request failed",
       response.status,
-      retryable
+      parsed.success ? parsed.data.retryable : undefined
     );
   }
   return response;
@@ -75,7 +72,7 @@ async function requestProviderResponse(
 async function requestProviderResource<T>(
   path: BrowserApiPath,
   schema: ZodType<T>,
-  init?: { method?: string; body?: unknown }
+  init?: { method?: string; body?: unknown; signal?: AbortSignal }
 ): Promise<T> {
   const response = await requestProviderResponse(path, init);
   const parsed = schema.safeParse(await response.json().catch(() => null));
@@ -154,14 +151,15 @@ export async function startProviderDeviceAuthorization(
 
 export async function pollProviderDeviceAuthorization(
   provider: SubscriptionProviderId,
-  transactionId: string
+  transactionId: string,
+  signal?: AbortSignal
 ) {
   const parsedProvider = subscriptionProviderIdSchema.parse(provider);
   const id = providerDeviceAuthorizationIdSchema.parse(transactionId);
   return requestProviderResource(
     `${ACCOUNTS_KEY}/device-authorizations/${parsedProvider}/${id}/poll`,
     providerDeviceAuthorizationStatusResponseSchema,
-    { method: "POST", body: {} }
+    { method: "POST", body: {}, signal }
   );
 }
 

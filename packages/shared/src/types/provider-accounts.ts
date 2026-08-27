@@ -18,6 +18,8 @@ export const modelProviderAccountIdSchema = z.string().regex(MODEL_PROVIDER_ACCO
 
 /** Device authorization transaction IDs use 32 random bytes encoded as lowercase hex. */
 export const PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN = /^[0-9a-f]{64}$/;
+export const PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS = 1_000;
+export const PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS = 60_000;
 export const providerDeviceAuthorizationIdSchema = z
   .string()
   .regex(PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN);
@@ -241,7 +243,11 @@ export const startProviderDeviceAuthorizationResponseSchema = z.strictObject({
   verificationUrl: z.url(),
   expiresAt: z.number().int().positive(),
   expiresInMs: z.number().int().positive(),
-  pollIntervalMs: z.number().int().min(1_000).max(60_000),
+  pollIntervalMs: z
+    .number()
+    .int()
+    .min(PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS)
+    .max(PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS),
 });
 export type StartProviderDeviceAuthorizationResponse = z.infer<
   typeof startProviderDeviceAuthorizationResponseSchema
@@ -250,7 +256,11 @@ export type StartProviderDeviceAuthorizationResponse = z.infer<
 const pendingProviderDeviceAuthorizationSchema = z.strictObject({
   status: z.literal("pending"),
   expiresAt: z.number().int().positive(),
-  pollIntervalMs: z.number().int().min(1_000).max(60_000),
+  pollIntervalMs: z
+    .number()
+    .int()
+    .min(PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS)
+    .max(PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS),
   nextPollAt: z.number().int().positive(),
 });
 

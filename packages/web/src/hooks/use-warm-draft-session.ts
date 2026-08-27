@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { createSessionResponseSchema } from "@open-inspect/shared/types/session-api";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
 import { retireWarmDraftSession } from "@/lib/warm-session";
+import type { InteractiveProviderRoutingIdentity } from "@/lib/provider-selection";
 
 export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   model: string;
@@ -14,7 +16,10 @@ export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   providerSelections: ModelProviderSelections;
 };
 
-export function warmDraftSessionIdentity(request: WarmDraftSessionRequest | null): string | null {
+export function warmDraftSessionIdentity(
+  request: WarmDraftSessionRequest | null,
+  routingIdentity?: InteractiveProviderRoutingIdentity
+): string | null {
   if (!request) return null;
   const canonicalize = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(canonicalize);
@@ -28,15 +33,14 @@ export function warmDraftSessionIdentity(request: WarmDraftSessionRequest | null
     }
     return value;
   };
-  return JSON.stringify(canonicalize(request));
+  return JSON.stringify(canonicalize({ request, routingIdentity }));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-export function useWarmDraftSession(request: WarmDraftSessionRequest | null) {
-  const identity = warmDraftSessionIdentity(request);
+export function useWarmDraftSession(
+  request: WarmDraftSessionRequest | null,
+  routingIdentity?: InteractiveProviderRoutingIdentity
+) {
+  const identity = warmDraftSessionIdentity(request, routingIdentity);
   const requestRef = useRef(request);
   const identityRef = useRef(identity);
   const sessionIdRef = useRef<string | null>(null);
@@ -93,22 +97,19 @@ export function useWarmDraftSession(request: WarmDraftSessionRequest | null) {
         });
         if (!response.ok) return null;
 
-        const payload: unknown = await response.json();
-        if (
-          !isRecord(payload) ||
-          typeof payload.sessionId !== "string" ||
-          payload.sessionId.length === 0
-        ) {
-          return null;
-        }
+        const parsed = createSessionResponseSchema.safeParse(
+          await response.json().catch(() => null)
+        );
+        if (!parsed.success) return null;
+        const { sessionId } = parsed.data;
         if (identityRef.current !== launchIdentity) {
-          void retireWarmDraftSession(payload.sessionId);
+          void retireWarmDraftSession(sessionId);
           return null;
         }
 
-        sessionIdRef.current = payload.sessionId;
-        setSessionId(payload.sessionId);
-        return payload.sessionId;
+        sessionIdRef.current = sessionId;
+        setSessionId(sessionId);
+        return sessionId;
       } catch (error) {
         if (!(error instanceof Error && error.name === "AbortError")) {
           console.error("Failed to create session for warming:", error);

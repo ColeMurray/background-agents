@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
-import { SandboxDeliveryUnavailableError } from "../connections";
+import { SandboxDeliveryUnavailableError } from "../messenger";
 import type { SessionMessenger } from "../messenger";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SqlResult, SqlStorage } from "../sql-storage";

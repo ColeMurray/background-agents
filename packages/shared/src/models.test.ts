@@ -52,6 +52,7 @@ const ZEN_MODELS = [
   "opencode/qwen3.7-max",
   "opencode/glm-5",
   "opencode/glm-5.1",
+  "opencode/glm-5.2",
 ] as const;
 
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
@@ -281,7 +282,9 @@ describe("model utilities", () => {
     expect(getDefaultReasoningEffort("anthropic/claude-fable-5")).toBe("high");
     expect(getDefaultReasoningEffort("openai/gpt-5.3-codex")).toBe("high");
     expect(getDefaultReasoningEffort("openai/gpt-5.5")).toBeUndefined();
-    expect(getDefaultReasoningEffort("openai/gpt-5.6-luna")).toBeUndefined();
+    expect(getDefaultReasoningEffort("openai/gpt-5.6-sol")).toBe("medium");
+    expect(getDefaultReasoningEffort("openai/gpt-5.6-terra")).toBe("medium");
+    expect(getDefaultReasoningEffort("openai/gpt-5.6-luna")).toBe("medium");
     expect(getDefaultReasoningEffort("xai/grok-build-0.1")).toBeUndefined();
     expect(getDefaultReasoningEffort("deepseek/deepseek-v4-pro")).toBeUndefined();
   });
@@ -313,11 +316,15 @@ describe("model utilities", () => {
     });
     expect(getReasoningConfig("openai/gpt-5.6-sol")).toEqual({
       efforts: ["none", "low", "medium", "high", "xhigh"],
-      default: undefined,
+      default: "medium",
+    });
+    expect(getReasoningConfig("openai/gpt-5.6-terra")).toEqual({
+      efforts: ["none", "low", "medium", "high", "xhigh"],
+      default: "medium",
     });
     expect(getReasoningConfig("openai/gpt-5.6-luna")).toEqual({
       efforts: ["none", "low", "medium", "high", "xhigh", "max"],
-      default: undefined,
+      default: "medium",
     });
     expect(getReasoningConfig("openai/gpt-5.3-codex")).toEqual({
       efforts: ["low", "medium", "high", "xhigh"],

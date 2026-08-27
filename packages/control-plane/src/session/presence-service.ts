@@ -14,8 +14,31 @@ import type {
   ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import type { ClientInfo } from "../types";
-import { projectConnectedParticipants } from "./connections";
 import type { SessionMessenger } from "./messenger";
+
+/** Project one participant per identity from one or more client connections. */
+export function projectConnectedParticipants(
+  connections: Iterable<ClientInfo>
+): ParticipantPresence[] {
+  const participants = new Map<string, ParticipantPresence>();
+  for (const connection of connections) {
+    const existing = participants.get(connection.participantId);
+    if (!existing) {
+      participants.set(connection.participantId, {
+        participantId: connection.participantId,
+        userId: connection.userId,
+        name: connection.name,
+        avatar: connection.avatar,
+        status: connection.status,
+        lastSeen: connection.lastSeen,
+      });
+      continue;
+    }
+    if (connection.status === "active") existing.status = "active";
+    if (connection.lastSeen > existing.lastSeen) existing.lastSeen = connection.lastSeen;
+  }
+  return Array.from(participants.values());
+}
 
 /**
  * Dependencies injected into PresenceService.
