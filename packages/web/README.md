@@ -117,15 +117,13 @@ npm run benchmark:timeline
 
 While the development server is running, open `/dev/timeline-performance` to load the deterministic
 100,000-event fixture. The page initially renders the latest 500 events and can add older pages or
-render the complete fixture. Its diagnostics panel reports derivation and React commit duration, DOM
-and row counts, visible range and anchor offset, scroll geometry, history requests, resize deltas,
-layout shifts, long tasks, and Chromium heap usage when supported.
+render the complete fixture. Its diagnostics panel reports React render duration, rendered and
+visible children, anchor offset, scroll geometry, resize deltas, layout shifts, long tasks, and
+Chromium heap usage when supported. Full DOM-node counting runs only when explicitly sampled.
 
-Diagnostics add row markers and profiling observers, so use them for comparison and debugging rather
-than as zero-overhead production measurements.
-
-Add `?timelineDebug=1` to a normal `/session/[id]` URL to show the same diagnostics against a live
-session. The lab route returns 404 in production unless `ENABLE_TIMELINE_PERFORMANCE_LAB=true`.
+The lab renders the production timeline tree unchanged and owns its observers outside the timeline.
+React render timing requires a development or profiling build. The lab route returns 404 in
+production unless `ENABLE_TIMELINE_PERFORMANCE_LAB=true`.
 
 ## Pages
 

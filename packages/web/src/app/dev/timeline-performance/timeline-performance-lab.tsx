@@ -1,13 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  Profiler,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ProfilerOnRenderCallback,
+} from "react";
 import { SessionTimeline } from "@/components/session-timeline";
+import { TimelineDebugPanel } from "@/components/timeline-debug-panel";
 import {
   generateTimelinePerformanceFixture,
   LARGE_SESSION_EVENT_COUNT,
   summarizeTimelinePerformanceFixture,
 } from "@/lib/timeline-performance-fixture";
-import { publishTimelineHistoryMetric } from "@/lib/timeline-diagnostics";
+import {
+  createTimelineRuntimeMetrics,
+  type TimelineRuntimeMetrics,
+} from "@/lib/timeline-diagnostics";
 
 const INITIAL_LOADED_EVENTS = 500;
 const HISTORY_PAGE_SIZE = 200;
@@ -17,6 +29,18 @@ export function TimelinePerformanceLab() {
   const [sessionEventCount, setSessionEventCount] = useState<number>(LARGE_SESSION_EVENT_COUNT);
   const [loadedEventCount, setLoadedEventCount] = useState(INITIAL_LOADED_EVENTS);
   const [mounted, setMounted] = useState(false);
+  const timelineHostRef = useRef<HTMLDivElement>(null);
+  const runtimeMetricsRef = useRef<TimelineRuntimeMetrics>(createTimelineRuntimeMetrics());
+  const handleProfilerRender = useCallback<ProfilerOnRenderCallback>(
+    (_id, _phase, actualDuration) => {
+      runtimeMetricsRef.current.renderDurationMs = actualDuration;
+      runtimeMetricsRef.current.maxRenderDurationMs = Math.max(
+        runtimeMetricsRef.current.maxRenderDurationMs,
+        actualDuration
+      );
+    },
+    []
+  );
   useEffect(() => setMounted(true), []);
   const fixture = useMemo(() => {
     const startedAt = performance.now();
@@ -31,19 +55,8 @@ export function TimelinePerformanceLab() {
     () => fixture.events.slice(-loadedEventCount),
     [fixture.events, loadedEventCount]
   );
-  const loadOlder = () => {
-    const startedAt = performance.now();
-    const nextCount = Math.min(fixture.events.length, loadedEventCount + HISTORY_PAGE_SIZE);
-    const addedEvents = fixture.events.slice(
-      fixture.events.length - nextCount,
-      fixture.events.length - loadedEventCount
-    );
-    setLoadedEventCount(nextCount);
-    publishTimelineHistoryMetric({
-      latencyMs: performance.now() - startedAt,
-      payloadBytes: new TextEncoder().encode(JSON.stringify(addedEvents)).byteLength,
-    });
-  };
+  const loadOlder = () =>
+    setLoadedEventCount((count) => Math.min(fixture.events.length, count + HISTORY_PAGE_SIZE));
 
   return (
     <main className="h-screen overflow-hidden bg-background text-foreground">
@@ -97,19 +110,27 @@ export function TimelinePerformanceLab() {
           </button>
         </div>
       </section>
-      <SessionTimeline
-        events={visibleEvents}
-        sessionId="timeline-performance-lab"
-        currentParticipantId="participant-performance"
-        participantProfiles={{}}
-        isProcessing={false}
-        loadingHistory={false}
-        showSkeleton={false}
-        onLoadOlder={loadOlder}
-        onOpenMedia={() => {}}
-        debugEnabled
-        debugLoadedRangeStart={fixture.events.length - visibleEvents.length}
-      />
+      <div ref={timelineHostRef} className="h-full">
+        <Profiler id="session-timeline" onRender={handleProfilerRender}>
+          <SessionTimeline
+            events={visibleEvents}
+            sessionId="timeline-performance-lab"
+            currentParticipantId="participant-performance"
+            participantProfiles={{}}
+            isProcessing={false}
+            loadingHistory={false}
+            showSkeleton={false}
+            onLoadOlder={loadOlder}
+            onOpenMedia={() => {}}
+          />
+        </Profiler>
+        <TimelineDebugPanel
+          hostRef={timelineHostRef}
+          eventCount={visibleEvents.length}
+          runtimeMetricsRef={runtimeMetricsRef}
+          loadedRangeStart={fixture.events.length - visibleEvents.length}
+        />
+      </div>
     </main>
   );
 }

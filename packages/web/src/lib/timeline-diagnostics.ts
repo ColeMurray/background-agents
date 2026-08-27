@@ -1,10 +1,6 @@
 export interface TimelineRuntimeMetrics {
-  commitDurationMs: number;
-  maxCommitDurationMs: number;
-  historyRequestCount: number;
-  lastHistoryLatencyMs: number;
-  lastHistoryPayloadBytes: number;
-  totalHistoryPayloadBytes: number;
+  renderDurationMs: number;
+  maxRenderDurationMs: number;
   resizeCount: number;
   lastResizeDeltaPx: number;
   layoutShiftScore: number;
@@ -12,21 +8,17 @@ export interface TimelineRuntimeMetrics {
   longTaskDurationMs: number;
 }
 
-export const TIMELINE_HISTORY_METRIC_EVENT = "open-inspect:timeline-history-metric";
-
-export interface TimelineHistoryMetric {
-  latencyMs: number;
-  payloadBytes: number;
+export interface VisibleTimelineChild {
+  index: number;
+  top: number;
 }
 
 export interface TimelineDiagnosticsSnapshot extends TimelineRuntimeMetrics {
   eventCount: number;
-  itemCount: number;
-  derivationDurationMs: number;
-  domNodeCount: number;
-  rowCount: number;
+  renderedChildCount: number;
+  domNodeCount: number | null;
   visibleRange: [number, number] | null;
-  anchorId: string | null;
+  anchorIndex: number | null;
   anchorOffsetPx: number | null;
   scrollTop: number;
   scrollHeight: number;
@@ -40,12 +32,8 @@ interface ChromiumPerformanceMemory {
 
 export function createTimelineRuntimeMetrics(): TimelineRuntimeMetrics {
   return {
-    commitDurationMs: 0,
-    maxCommitDurationMs: 0,
-    historyRequestCount: 0,
-    lastHistoryLatencyMs: 0,
-    lastHistoryPayloadBytes: 0,
-    totalHistoryPayloadBytes: 0,
+    renderDurationMs: 0,
+    maxRenderDurationMs: 0,
     resizeCount: 0,
     lastResizeDeltaPx: 0,
     layoutShiftScore: 0,
@@ -54,60 +42,37 @@ export function createTimelineRuntimeMetrics(): TimelineRuntimeMetrics {
   };
 }
 
-export function timelineDiagnosticsRequested(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("timelineDebug") === "1"
-  );
-}
-
-export function publishTimelineHistoryMetric(metric: TimelineHistoryMetric): void {
-  window.dispatchEvent(
-    new CustomEvent<TimelineHistoryMetric>(TIMELINE_HISTORY_METRIC_EVENT, { detail: metric })
-  );
-}
-
-export function collectTimelineDiagnostics({
+export function createTimelineDiagnosticsSnapshot({
   container,
-  content,
   eventCount,
-  itemCount,
-  derivationDurationMs,
+  renderedChildCount,
+  domNodeCount,
+  visibleChildren,
   runtime,
 }: {
   container: HTMLElement | null;
-  content: HTMLElement | null;
   eventCount: number;
-  itemCount: number;
-  derivationDurationMs: number;
+  renderedChildCount: number;
+  domNodeCount: number | null;
+  visibleChildren: Iterable<VisibleTimelineChild>;
   runtime: TimelineRuntimeMetrics;
 }): TimelineDiagnosticsSnapshot {
-  const rows = content
-    ? Array.from(content.querySelectorAll<HTMLElement>("[data-timeline-row]"))
-    : [];
-  const containerRect = container?.getBoundingClientRect();
-  const visibleRows = containerRect
-    ? rows
-        .map((row, index) => ({ index, row, rect: row.getBoundingClientRect() }))
-        .filter(({ rect }) => rect.bottom > containerRect.top && rect.top < containerRect.bottom)
-    : [];
-  const anchor = visibleRows[0];
+  const visible = Array.from(visibleChildren).sort((left, right) => left.index - right.index);
+  const anchor = visible.reduce<VisibleTimelineChild | null>(
+    (topmost, child) => (!topmost || child.top < topmost.top ? child : topmost),
+    null
+  );
   const memory = (performance as typeof performance & { memory?: ChromiumPerformanceMemory })
     .memory;
 
   return {
     ...runtime,
     eventCount,
-    itemCount,
-    derivationDurationMs,
-    domNodeCount: content?.querySelectorAll("*").length ?? 0,
-    rowCount: rows.length,
-    visibleRange:
-      visibleRows.length > 0
-        ? [visibleRows[0].index, visibleRows[visibleRows.length - 1].index]
-        : null,
-    anchorId: anchor?.row.dataset.timelineRow ?? null,
-    anchorOffsetPx: anchor && containerRect ? anchor.rect.top - containerRect.top : null,
+    renderedChildCount,
+    domNodeCount,
+    visibleRange: visible.length ? [visible[0].index, visible[visible.length - 1].index] : null,
+    anchorIndex: anchor?.index ?? null,
+    anchorOffsetPx: anchor?.top ?? null,
     scrollTop: container?.scrollTop ?? 0,
     scrollHeight: container?.scrollHeight ?? 0,
     clientHeight: container?.clientHeight ?? 0,

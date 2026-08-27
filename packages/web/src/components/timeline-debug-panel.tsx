@@ -1,14 +1,12 @@
 "use client";
 
-import type { RefObject } from "react";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import {
-  collectTimelineDiagnostics,
+  createTimelineDiagnosticsSnapshot,
   formatMetricBytes,
-  TIMELINE_HISTORY_METRIC_EVENT,
-  type TimelineHistoryMetric,
   type TimelineDiagnosticsSnapshot,
   type TimelineRuntimeMetrics,
+  type VisibleTimelineChild,
 } from "@/lib/timeline-diagnostics";
 
 interface LayoutShiftEntry extends PerformanceEntry {
@@ -17,85 +15,100 @@ interface LayoutShiftEntry extends PerformanceEntry {
 }
 
 export function TimelineDebugPanel({
-  containerRef,
-  contentRef,
+  hostRef,
   eventCount,
-  itemCount,
-  derivationDurationMs,
   runtimeMetricsRef,
   loadedRangeStart,
 }: {
-  containerRef: RefObject<HTMLDivElement | null>;
-  contentRef: RefObject<HTMLDivElement | null>;
+  hostRef: RefObject<HTMLDivElement | null>;
   eventCount: number;
-  itemCount: number;
-  derivationDurationMs: number;
   runtimeMetricsRef: RefObject<TimelineRuntimeMetrics>;
-  loadedRangeStart?: number;
+  loadedRangeStart: number;
 }) {
+  const containerRef = useRef<HTMLElement | null>(null);
+  const contentRef = useRef<HTMLElement | null>(null);
+  const visibleChildrenRef = useRef(new Map<Element, VisibleTimelineChild>());
+  const renderedChildCountRef = useRef(0);
+  const domNodeCountRef = useRef<number | null>(null);
+  const frameRef = useRef<number | null>(null);
   const [snapshot, setSnapshot] = useState<TimelineDiagnosticsSnapshot | null>(null);
 
-  useLayoutEffect(() => {
+  const collectSnapshot = useCallback(() => {
     setSnapshot(
-      collectTimelineDiagnostics({
+      createTimelineDiagnosticsSnapshot({
         container: containerRef.current,
-        content: contentRef.current,
         eventCount,
-        itemCount,
-        derivationDurationMs,
+        renderedChildCount: renderedChildCountRef.current,
+        domNodeCount: domNodeCountRef.current,
+        visibleChildren: visibleChildrenRef.current.values(),
         runtime: runtimeMetricsRef.current,
       })
     );
-  }, [containerRef, contentRef, derivationDurationMs, eventCount, itemCount, runtimeMetricsRef]);
+  }, [eventCount, runtimeMetricsRef]);
 
-  useEffect(() => {
-    const recordHistoryPage = (event: Event) => {
-      const metric = (event as CustomEvent<TimelineHistoryMetric>).detail;
-      runtimeMetricsRef.current.historyRequestCount += 1;
-      runtimeMetricsRef.current.lastHistoryLatencyMs = metric.latencyMs;
-      runtimeMetricsRef.current.lastHistoryPayloadBytes = metric.payloadBytes;
-      runtimeMetricsRef.current.totalHistoryPayloadBytes += metric.payloadBytes;
-    };
-    window.addEventListener(TIMELINE_HISTORY_METRIC_EVENT, recordHistoryPage);
-    return () => window.removeEventListener(TIMELINE_HISTORY_METRIC_EVENT, recordHistoryPage);
-  }, [runtimeMetricsRef]);
-
-  useEffect(() => {
-    const collect = () =>
-      setSnapshot(
-        collectTimelineDiagnostics({
-          container: containerRef.current,
-          content: contentRef.current,
-          eventCount,
-          itemCount,
-          derivationDurationMs,
-          runtime: runtimeMetricsRef.current,
-        })
-      );
-    const interval = window.setInterval(collect, 500);
-    const container = containerRef.current;
-    container?.addEventListener("scroll", collect, { passive: true });
-    return () => {
-      window.clearInterval(interval);
-      container?.removeEventListener("scroll", collect);
-    };
-  }, [containerRef, contentRef, derivationDurationMs, eventCount, itemCount, runtimeMetricsRef]);
-
-  useEffect(() => {
-    const content = contentRef.current;
-    if (!content || typeof ResizeObserver === "undefined") return;
-    let previousHeight = content.getBoundingClientRect().height;
-    const observer = new ResizeObserver(() => {
-      const height = content.getBoundingClientRect().height;
-      const delta = height - previousHeight;
-      previousHeight = height;
-      if (delta === 0) return;
-      runtimeMetricsRef.current.resizeCount += 1;
-      runtimeMetricsRef.current.lastResizeDeltaPx = delta;
+  const scheduleSnapshot = useCallback(() => {
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      collectSnapshot();
     });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [contentRef, runtimeMetricsRef]);
+  }, [collectSnapshot]);
+
+  useEffect(() => {
+    const container = hostRef.current?.querySelector<HTMLElement>(".overflow-y-auto") ?? null;
+    const content = container?.firstElementChild as HTMLElement | null;
+    containerRef.current = container;
+    contentRef.current = content;
+    visibleChildrenRef.current.clear();
+    domNodeCountRef.current = null;
+    if (!container || !content) {
+      renderedChildCountRef.current = 0;
+      collectSnapshot();
+      return;
+    }
+
+    // The first and last children are timeline scroll sentinels, not rendered events.
+    const children = Array.from(content.children).slice(1, -1);
+    renderedChildCountRef.current = children.length;
+    const indexes = new Map(children.map((child, index) => [child, index]));
+    const intersectionObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const index = indexes.get(entry.target);
+          if (index === undefined) continue;
+          if (entry.isIntersecting) {
+            visibleChildrenRef.current.set(entry.target, {
+              index,
+              top: entry.boundingClientRect.top - (entry.rootBounds?.top ?? 0),
+            });
+          } else {
+            visibleChildrenRef.current.delete(entry.target);
+          }
+        }
+        scheduleSnapshot();
+      },
+      { root: container }
+    );
+    children.forEach((child) => intersectionObserver.observe(child));
+
+    let previousHeight: number | null = null;
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      const height = entry.contentRect.height;
+      if (previousHeight !== null && height !== previousHeight) {
+        runtimeMetricsRef.current.resizeCount += 1;
+        runtimeMetricsRef.current.lastResizeDeltaPx = height - previousHeight;
+      }
+      previousHeight = height;
+      scheduleSnapshot();
+    });
+    resizeObserver.observe(content);
+    collectSnapshot();
+
+    return () => {
+      intersectionObserver.disconnect();
+      resizeObserver.disconnect();
+    };
+  }, [collectSnapshot, eventCount, hostRef, runtimeMetricsRef, scheduleSnapshot]);
 
   useEffect(() => {
     if (typeof PerformanceObserver === "undefined") return;
@@ -110,6 +123,7 @@ export function TimelineDebugPanel({
       for (const entry of entries as LayoutShiftEntry[]) {
         if (!entry.hadRecentInput) runtimeMetricsRef.current.layoutShiftScore += entry.value;
       }
+      scheduleSnapshot();
     });
     observe("longtask", (entries) => {
       runtimeMetricsRef.current.longTaskCount += entries.length;
@@ -117,9 +131,22 @@ export function TimelineDebugPanel({
         (duration, entry) => duration + entry.duration,
         0
       );
+      scheduleSnapshot();
     });
     return () => observers.forEach((observer) => observer.disconnect());
-  }, [runtimeMetricsRef]);
+  }, [runtimeMetricsRef, scheduleSnapshot]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    },
+    []
+  );
+
+  const sampleDomNodes = () => {
+    domNodeCountRef.current = contentRef.current?.querySelectorAll("*").length ?? 0;
+    collectSnapshot();
+  };
 
   if (!snapshot) return null;
   const visibleRange = snapshot.visibleRange
@@ -135,38 +162,31 @@ export function TimelineDebugPanel({
       <Metric
         label="Loaded range"
         value={
-          loadedRangeStart !== undefined && snapshot.eventCount
+          snapshot.eventCount
             ? `${loadedRangeStart}-${loadedRangeStart + snapshot.eventCount - 1}`
-            : `${snapshot.eventCount} contiguous events`
+            : "empty"
         }
       />
-      <Metric label="Events / items" value={`${snapshot.eventCount} / ${snapshot.itemCount}`} />
-      <Metric label="Rows / DOM nodes" value={`${snapshot.rowCount} / ${snapshot.domNodeCount}`} />
-      <Metric label="Visible rows" value={visibleRange} />
-      <Metric label="Anchor" value={snapshot.anchorId ?? "none"} />
+      <Metric
+        label="Events / rendered children"
+        value={`${snapshot.eventCount} / ${snapshot.renderedChildCount}`}
+      />
+      <Metric label="Visible children" value={visibleRange} />
+      <Metric label="Anchor child" value={snapshot.anchorIndex?.toString() ?? "none"} />
       <Metric
         label="Anchor offset"
         value={
           snapshot.anchorOffsetPx === null ? "n/a" : `${snapshot.anchorOffsetPx.toFixed(1)} px`
         }
       />
-      <Metric label="Derivation" value={`${snapshot.derivationDurationMs.toFixed(2)} ms`} />
-      <Metric label="Last commit" value={`${snapshot.commitDurationMs.toFixed(2)} ms`} />
-      <Metric label="Max commit" value={`${snapshot.maxCommitDurationMs.toFixed(2)} ms`} />
+      <Metric label="Last React render" value={`${snapshot.renderDurationMs.toFixed(2)} ms`} />
+      <Metric label="Max React render" value={`${snapshot.maxRenderDurationMs.toFixed(2)} ms`} />
+      <div className="text-muted-foreground">
+        React timing requires a development/profiling build.
+      </div>
       <Metric
         label="Scroll"
         value={`${snapshot.scrollTop} / ${snapshot.scrollHeight - snapshot.clientHeight}`}
-      />
-      <Metric label="History requests" value={String(snapshot.historyRequestCount)} />
-      <Metric
-        label="Last history page"
-        value={`${snapshot.lastHistoryLatencyMs.toFixed(1)} ms / ${formatMetricBytes(
-          snapshot.lastHistoryPayloadBytes
-        )}`}
-      />
-      <Metric
-        label="History bytes total"
-        value={formatMetricBytes(snapshot.totalHistoryPayloadBytes)}
       />
       <Metric
         label="Resizes / last delta"
@@ -178,6 +198,16 @@ export function TimelineDebugPanel({
         value={`${snapshot.longTaskCount} / ${snapshot.longTaskDurationMs.toFixed(1)} ms`}
       />
       <Metric label="JS heap" value={formatMetricBytes(snapshot.heapUsedBytes)} />
+      <div className="mt-2 flex items-center justify-between gap-3 border-t border-border/50 pt-2">
+        <button
+          type="button"
+          className="rounded border border-border px-2 py-0.5 hover:bg-muted"
+          onClick={sampleDomNodes}
+        >
+          Sample DOM nodes
+        </button>
+        <span>{snapshot.domNodeCount === null ? "not sampled" : snapshot.domNodeCount}</span>
+      </div>
     </aside>
   );
 }

@@ -58,20 +58,6 @@ function toolEvent(
 }
 
 describe("timeline auto-scrolling", () => {
-  it("reports loaded and rendered state when diagnostics are enabled", () => {
-    const { getByTestId } = render(
-      <SessionTimeline
-        {...baseTimelineProps}
-        events={[toolEvent("Read", "call-1", 1)]}
-        debugEnabled
-        debugLoadedRangeStart={499}
-      />
-    );
-
-    expect(getByTestId("timeline-debug-panel")).toHaveTextContent("499-499");
-    expect(getByTestId("timeline-debug-panel")).toHaveTextContent("1 / 1");
-  });
-
   it("does not scroll the timeline when the pending prompt stack changes", () => {
     const events: SandboxEvent[] = [];
     const { container, rerender } = render(
