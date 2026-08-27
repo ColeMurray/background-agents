@@ -1,6 +1,8 @@
 import asyncio
 import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -77,7 +79,10 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
     bridge = _bridge()
     bridge.repo_manifest_path = _manifest(tmp_path)
 
-    assert bridge._build_ready_event() == {
+    with patch.dict(os.environ, {"SANDBOX_VERSION": ""}, clear=False):
+        event = bridge._build_ready_event()
+
+    assert event == {
         "type": "ready",
         "sandboxId": "sandbox-1",
         "opencodeSessionId": None,
@@ -90,6 +95,17 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
             }
         ],
     }
+
+
+def test_ready_event_reports_the_image_runtime_version(tmp_path: Path) -> None:
+    """The control plane stamps snapshots with this, so a restore can be gated on it."""
+    bridge = _bridge()
+    bridge.repo_manifest_path = _manifest(tmp_path)
+
+    with patch.dict(os.environ, {"SANDBOX_VERSION": "v59-opencode-1-18-18"}, clear=False):
+        event = bridge._build_ready_event()
+
+    assert event["runtimeVersion"] == "v59-opencode-1-18-18"
 
 
 @pytest.mark.asyncio

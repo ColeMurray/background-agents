@@ -148,15 +148,16 @@ export async function handlePromptChild(
       trace_id: ctx.trace_id,
     });
     ctx.executionCtx.submit(
-      sessionStore.touchUpdatedAt(childId).catch((error) => {
-        logger.error("session_index.touch_updated_at.background_error", {
-          parent_id: parentId,
-          child_id: childId,
-          request_id: ctx.request_id,
-          trace_id: ctx.trace_id,
-          error,
-        });
-      }),
+      () =>
+        sessionStore.touchUpdatedAt(childId).catch((error) => {
+          logger.error("session_index.touch_updated_at.background_error", {
+            parent_id: parentId,
+            child_id: childId,
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+            error,
+          });
+        }),
       {
         name: "session_index.touch_updated_at",
         context: {

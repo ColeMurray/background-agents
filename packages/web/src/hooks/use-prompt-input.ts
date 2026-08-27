@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { mutate } from "swr";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import type { KeyboardShortcutBinding } from "@open-inspect/shared/types/keyboard-shortcuts";
 import {
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
   useSessionAttachments,
@@ -16,6 +17,7 @@ import {
   type PromptRequestIdentity,
 } from "@/lib/prompt-request-id";
 import { restoreQueuedPrompt } from "@/lib/restore-queued-prompt";
+import { matchesShortcut } from "@/lib/keyboard-shortcuts";
 
 const TYPING_DEBOUNCE_MS = 300;
 
@@ -28,7 +30,8 @@ export function usePromptInput(
   reasoningEffort: string | undefined,
   loadingEnabledModels: boolean,
   sessionStatus: SessionStatus,
-  canSubmit: boolean
+  canSubmit: boolean,
+  sendShortcut: KeyboardShortcutBinding
 ) {
   const [prompt, setPromptState] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -139,7 +142,7 @@ export function usePromptInput(
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
 
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    if (matchesShortcut(e.nativeEvent, sendShortcut)) {
       e.preventDefault();
       handleSubmit(e);
     }

@@ -439,6 +439,43 @@ describe("applyMigrations", () => {
     );
   });
 
+  it("adds Autofix admission metadata and indexes for fresh and migrated sessions", () => {
+    const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
+      ");"
+    )[0];
+    expect(messagesTable).toContain("autofix_feedback_key TEXT");
+    expect(messagesTable).toContain("autofix_pr_key TEXT");
+    expect(messagesTable).toContain("origin_context TEXT");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 45);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL)");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+      expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "autofix_feedback_key", type: "TEXT" }),
+          expect.objectContaining({ name: "autofix_pr_key", type: "TEXT" }),
+          expect.objectContaining({ name: "origin_context", type: "TEXT" }),
+        ])
+      );
+      expect(
+        db
+          .prepare("PRAGMA index_list(messages)")
+          .all()
+          .map((row) => row.name)
+      ).toEqual(
+        expect.arrayContaining(["idx_messages_autofix_feedback", "idx_messages_autofix_pr_created"])
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it("allows only one processing message per session", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 42);
     expect(typeof migration?.run).toBe("function");

@@ -11,14 +11,16 @@ the template image, not runtime operations.
   `opencode-ai`, `code-server`, `agent-browser`, bun) plus `packages/sandbox-runtime` copied to
   `/app/sandbox_runtime`. **Toolchain versions are pinned — keep them in sync with the other sandbox
   providers when bumping.**
-- **`oi-launch.py`** — the template **start command**. E2B runs the start command once at build,
-  snapshots it, and resumes it per create — so it cannot receive per-session env. This launcher
-  waits for the control plane to drop `/tmp/oi-session.env` (via envd), loads it, and `exec`s the
-  supervisor (`python -m sandbox_runtime.entrypoint`) with that env +
-  `HOME=/home/user`/`PYTHONPATH`/`NODE_PATH`.
 - **`build-template.py`** — stages `sandbox_runtime`, then builds the template programmatically via
   the **E2B Template SDK** (`Template().from_dockerfile(...).copy(...).set_start_cmd(...)`),
   authenticated with the runtime API key. Used both for manual builds and by the Terraform module.
+
+The template runs nothing of its own (its start command is an inert `sleep infinity`, kept only so
+the ready command can gate the build on the baked toolchain). On every sandbox create the control
+plane passes the per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, auth token, user secrets —
+as create-time `envVars` and starts the supervisor (`python -m sandbox_runtime.entrypoint`) via
+envd, detached, with its output in `/tmp/oi-supervisor.log`. Prebuilt repo images (snapshot
+templates baked by the image-build workflow) boot the same way.
 
 ## Auth: one credential
 
@@ -36,7 +38,7 @@ export E2B_TEMPLATE_ID=open-inspect-sandbox
 uv run python build-template.py
 ```
 
-Optional: `E2B_TEMPLATE_CPU` (default 2), `E2B_TEMPLATE_MEM` (default 1024).
+Optional: `E2B_TEMPLATE_CPU` (default 2), `E2B_TEMPLATE_MEMORY_MB` (default 4096).
 
 Rebuild whenever `packages/sandbox-runtime` or this directory changes.
 
@@ -45,8 +47,8 @@ Rebuild whenever `packages/sandbox-runtime` or this directory changes.
 > and rebuilds the template on `terraform apply` when either changes. Manual runs are only for
 > initial setup or debugging.
 >
-> E2B runs sandboxes as non-root `user` (HOME=`/home/user`) via a login shell and does not propagate
-> Docker `ENV` — the Dockerfile and launcher account for this.
+> E2B runs sandboxes as non-root `user` (HOME=`/home/user`) and does not propagate Docker `ENV` —
+> the control plane pins `HOME`/`PYTHONPATH`/`NODE_PATH` in every sandbox's create-time env.
 
 ## Verification
 

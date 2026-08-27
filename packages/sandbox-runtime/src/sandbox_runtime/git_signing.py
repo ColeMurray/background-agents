@@ -34,6 +34,17 @@ UNSIGNED_GIT_USER = GitUser(name="OpenInspect", email="open-inspect@noreply.gith
 class GitSigningError(RuntimeError):
     """Bounded runtime error that never includes secret configuration values."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+
 
 class DisabledCommitSigningConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -129,7 +140,18 @@ class GitSigningRuntime:
                 )
                 response.raise_for_status()
                 payload = response.json()
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPStatusError as error:
+            status_code = error.response.status_code
+            raise GitSigningError(
+                "Commit signing configuration unavailable",
+                status_code=status_code,
+                retryable=status_code in {408, 429} or status_code >= 500,
+            ) from None
+        except httpx.HTTPError:
+            raise GitSigningError(
+                "Commit signing configuration unavailable", retryable=True
+            ) from None
+        except ValueError:
             raise GitSigningError("Commit signing configuration unavailable") from None
 
         return parse_commit_signing_configuration(payload)

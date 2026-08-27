@@ -417,12 +417,12 @@ function EnvironmentImageStatus({ environment }: { environment: Environment }) {
       image={
         image && {
           status: image.status,
-          createdAt: image.created_at,
+          createdAt: image.createdAt,
           readyDetails: formatReadyDetails(
-            parsePrimaryBuildSha(image.repository_shas),
-            image.build_duration_seconds
+            parsePrimaryBuildSha(image.repositoryShas),
+            image.buildDurationSeconds
           ),
-          errorMessage: image.error_message,
+          errorMessage: image.errorMessage,
         }
       }
     />

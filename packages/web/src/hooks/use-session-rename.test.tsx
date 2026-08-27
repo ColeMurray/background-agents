@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { PropsWithChildren } from "react";
+import { useLayoutEffect, type PropsWithChildren } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig, useSWRConfig } from "swr";
 import useSWR from "swr";
@@ -281,6 +281,59 @@ describe("useSessionRename", () => {
 
     await waitFor(() => {
       expect(result.current.cache.get(listKey)?.data.sessions[0].title).toBe("Rename B");
+      expect(result.current.optimisticTitle).toBeUndefined();
+    });
+  });
+
+  it("captures the current title when renamed from a layout effect after it changes", async () => {
+    const listKey = buildSessionsPageKey({ excludeStatus: "archived" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") return new Response(null, { status: 500 });
+        return new Response(
+          JSON.stringify({
+            sessions: [createSession("Updated", "session-layout")],
+            hasMore: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      })
+    );
+    let rename: Promise<boolean> | undefined;
+
+    const { result, rerender } = renderHook(
+      ({ currentTitle, renameInLayout }) => {
+        useSWR<SessionListResponse>(listKey);
+        const sessionRename = useSessionRename({ sessionId: "session-layout", currentTitle });
+        const { renameSession } = sessionRename;
+        useLayoutEffect(() => {
+          if (renameInLayout) rename = renameSession("Optimistic");
+        }, [renameInLayout, renameSession]);
+        return { ...sessionRename, cache: useSWRConfig().cache };
+      },
+      {
+        initialProps: { currentTitle: "Original", renameInLayout: false },
+        wrapper: ({ children }: PropsWithChildren) => (
+          <SWRConfig
+            value={{
+              provider: () => new Map(),
+              dedupingInterval: 0,
+              fetcher: async (url: string) => (await fetch(url)).json(),
+            }}
+          >
+            {children}
+          </SWRConfig>
+        ),
+      }
+    );
+    await waitFor(() => expect(result.current.cache.get(listKey)?.data).toBeDefined());
+
+    rerender({ currentTitle: "Updated", renameInLayout: true });
+    await expect(rename).resolves.toBe(false);
+
+    await waitFor(() => {
+      expect(result.current.cache.get(listKey)?.data.sessions[0].title).toBe("Updated");
       expect(result.current.optimisticTitle).toBeUndefined();
     });
   });

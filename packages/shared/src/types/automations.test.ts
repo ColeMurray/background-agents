@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { listAutomationsResponseSchema } from "./automations";
+import {
+  createAutomationRequestSchema,
+  listAutomationsResponseSchema,
+  updateAutomationRequestSchema,
+} from "./automations";
+
+const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
 
 const automation = {
   id: "auto-1",
@@ -21,6 +27,8 @@ const automation = {
   triggerConfig: { conditions: [] },
   repositories: [{ repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" }],
   environmentIds: [],
+  providerSelections: {},
+  recentExecutions: [],
 };
 
 describe("listAutomationsResponseSchema", () => {
@@ -59,6 +67,23 @@ describe("listAutomationsResponseSchema", () => {
     ).toBe(false);
   });
 
+  it("validates recent execution summaries", () => {
+    const result = listAutomationsResponseSchema.parse({
+      automations: [
+        {
+          ...automation,
+          recentExecutions: [{ id: "inv-1", status: "partial_failed", createdAt: 123 }],
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    expect(result.automations[0].recentExecutions).toEqual([
+      { id: "inv-1", status: "partial_failed", createdAt: 123 },
+    ]);
+  });
+
   it("rejects malformed trigger-condition records", () => {
     expect(
       listAutomationsResponseSchema.safeParse({
@@ -70,6 +95,56 @@ describe("listAutomationsResponseSchema", () => {
             },
           },
         ],
+        hasMore: false,
+        nextCursor: null,
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe("automation provider selection contracts", () => {
+  it("accepts complete create selections and returns selections in responses", () => {
+    expect(
+      createAutomationRequestSchema.safeParse({
+        name: "Daily sync",
+        instructions: "Run the sync",
+        providerSelections: {
+          openai: { mode: "provider_account", accountId: ACCOUNT_ID },
+          xai: { mode: "api_key" },
+        },
+      }).success
+    ).toBe(true);
+    expect(
+      listAutomationsResponseSchema.safeParse({
+        automations: [automation],
+        hasMore: false,
+        nextCursor: null,
+      }).success
+    ).toBe(true);
+  });
+
+  it("distinguishes omitted patch selections from an explicit clear", () => {
+    expect(updateAutomationRequestSchema.parse({ name: "Renamed" })).not.toHaveProperty(
+      "providerSelections"
+    );
+    expect(updateAutomationRequestSchema.parse({ providerSelections: {} })).toEqual({
+      providerSelections: {},
+    });
+  });
+
+  it("rejects unknown providers in create, update, and response records", () => {
+    const providerSelections = { anthropic: { mode: "api_key" } };
+    expect(
+      createAutomationRequestSchema.safeParse({
+        name: "Daily sync",
+        instructions: "Run the sync",
+        providerSelections,
+      }).success
+    ).toBe(false);
+    expect(updateAutomationRequestSchema.safeParse({ providerSelections }).success).toBe(false);
+    expect(
+      listAutomationsResponseSchema.safeParse({
+        automations: [{ ...automation, providerSelections }],
         hasMore: false,
         nextCursor: null,
       }).success

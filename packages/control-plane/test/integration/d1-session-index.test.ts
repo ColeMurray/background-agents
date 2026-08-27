@@ -35,6 +35,73 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.status).toBe("created");
   });
 
+  it("atomically snapshots provider auth with the session", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    const providerAuth = [
+      {
+        provider: "openai" as const,
+        authMode: "api_key" as const,
+        selectionSource: "fallback_api_key",
+      },
+      {
+        provider: "xai" as const,
+        authMode: "api_key" as const,
+        selectionSource: "unattended_policy",
+      },
+    ];
+
+    await store.create({
+      id: "session-provider-auth",
+      title: null,
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      providerAuth,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const authRows = await env.DB.prepare(
+      "SELECT * FROM session_model_provider_auth WHERE session_id = ? ORDER BY provider"
+    )
+      .bind("session-provider-auth")
+      .all();
+    expect(authRows.results).toEqual([
+      {
+        session_id: "session-provider-auth",
+        provider: "openai",
+        auth_mode: "api_key",
+        provider_account_id: null,
+        selection_source: "fallback_api_key",
+        inherited_from_session_id: null,
+        created_at: now,
+      },
+      {
+        session_id: "session-provider-auth",
+        provider: "xai",
+        auth_mode: "api_key",
+        provider_account_id: null,
+        selection_source: "unattended_policy",
+        inherited_from_session_id: null,
+        created_at: now,
+      },
+    ]);
+    await expect(store.getCompleteProviderAuth("session-provider-auth")).resolves.toEqual(
+      providerAuth
+    );
+    await expect(store.getProviderAuthForProvider("session-provider-auth", "xai")).resolves.toEqual(
+      providerAuth[1]
+    );
+    await expect(
+      store.getProviderAuthForProvider("session-provider-auth", "openai")
+    ).resolves.toEqual(providerAuth[0]);
+    await expect(store.getCompleteProviderAuth("missing-session")).rejects.toThrow(/incomplete/);
+  });
+
   it("atomically admits only one concurrent terminal-child resume for one remaining slot", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();

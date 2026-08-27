@@ -95,6 +95,59 @@ export class SourceControlProviderError extends Error {
   }
 }
 
+function blobLimitError(
+  blobId: string,
+  actualBytes: number,
+  maxBytes: number
+): SourceControlProviderError {
+  return new SourceControlProviderError(
+    `Blob ${blobId} is ${actualBytes} bytes, over the ${maxBytes}-byte limit`,
+    "permanent",
+    413
+  );
+}
+
+/** Read a response body without ever retaining more than the caller's byte budget. */
+export async function readResponseBytesWithinLimit(
+  response: Response,
+  maxBytes: number,
+  blobId: string
+): Promise<Uint8Array> {
+  const contentLength = response.headers.get("content-length");
+  const declared = contentLength === null ? null : Number(contentLength);
+  if (declared !== null && Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw blobLimitError(blobId, declared, maxBytes);
+  }
+  if (!response.body) return new Uint8Array();
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw blobLimitError(blobId, totalBytes, maxBytes);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 /**
  * Parse a provider API response body against its wire schema.
  *

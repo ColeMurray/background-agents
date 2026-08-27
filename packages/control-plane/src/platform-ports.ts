@@ -4,8 +4,14 @@ export type { FetchClient } from "@open-inspect/shared/service-auth";
 
 /** Capability consumed by application services that defer background work. */
 export interface BackgroundTasks {
+  /**
+   * Start `task` and let it run past the current request. The factory is
+   * invoked synchronously inside `submit`, and a synchronous throw is absorbed
+   * and logged exactly like a rejection — building the task can never fail the
+   * caller.
+   */
   submit(
-    task: Promise<unknown>,
+    task: () => Promise<unknown>,
     metadata: { name: string; context?: Record<string, unknown> }
   ): void;
 }
