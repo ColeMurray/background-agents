@@ -181,6 +181,21 @@ describe("sig1 service-credential authentication", () => {
     expect(response.status).toBe(401);
   });
 
+  it("denies actor assertions from mcp, which may impersonate no one", async () => {
+    // The read-only inspection credential lives on an operator's machine, so it
+    // must reach every route as a bare service principal. Asserting any actor
+    // at all is rejected, not just one outside a namespace it owns.
+    for (const actor of ["github:1", "slack:U1", "linear:1"]) {
+      const response = await signedFetch({
+        service: "mcp",
+        method: "GET",
+        url: "https://test.local/sessions",
+        actor,
+      });
+      expect(response.status, actor).toBe(401);
+    }
+  });
+
   it("denies actor assertions from web", async () => {
     const response = await signedFetch({
       service: "web",
