@@ -54,16 +54,15 @@ function useCategoryPagination(
     pages: [],
   });
   const [paginationRequest, setPaginationRequest] = useState<PaginationRequest | null>(null);
+  const [previousCanonicalRootIds, setPreviousCanonicalRootIds] = useState(canonicalRootIds);
+  const activePaginationRequest =
+    paginationRequest?.filterIdentity === filterIdentity ? paginationRequest : null;
   const firstPage = snapshot?.categories[category];
   const additionalPages =
     additionalPagesState.filterIdentity === filterIdentity ? additionalPagesState.pages : [];
 
-  useEffect(() => {
-    setAdditionalPagesState({ filterIdentity, pages: [] });
-    setPaginationRequest(null);
-  }, [filterIdentity]);
-
-  useEffect(() => {
+  if (previousCanonicalRootIds !== canonicalRootIds) {
+    setPreviousCanonicalRootIds(canonicalRootIds);
     setAdditionalPagesState((state) => {
       if (state.filterIdentity !== filterIdentity) return state;
       const pages = state.pages.map(({ page, sequence }) => ({
@@ -75,47 +74,47 @@ function useCategoryPagination(
       }));
       return { filterIdentity, pages };
     });
-  }, [canonicalRootIds, filterIdentity]);
+  }
 
   const {
-    data: loadedPage,
     error,
     isLoading: loadingMore,
     mutate: retryPage,
   } = useSWR<SessionInboxPage>(
-    paginationRequest ? [paginationRequest.key, paginationRequest.filterIdentity] : null,
-    paginationRequest
+    activePaginationRequest
+      ? [activePaginationRequest.key, activePaginationRequest.filterIdentity]
+      : null,
+    activePaginationRequest
       ? () => {
           if (!fetcher) throw new Error("Missing SWR fetcher");
-          return fetcher(paginationRequest.key) as Promise<SessionInboxPage>;
+          return fetcher(activePaginationRequest.key) as Promise<SessionInboxPage>;
         }
       : null,
-    { shouldRetryOnError: false }
-  );
-
-  useEffect(() => {
-    if (!loadedPage || !paginationRequest) return;
-    if (paginationRequest.filterIdentity === filterIdentity) {
-      const sequence = nextPageSequence.current++;
-      const page = {
-        ...loadedPage,
-        items: loadedPage.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
-      };
-      setAdditionalPagesState((state) => ({
-        filterIdentity,
-        pages: [
-          ...(state.filterIdentity === filterIdentity ? state.pages : []),
-          { page, sequence },
-        ],
-      }));
+    {
+      shouldRetryOnError: false,
+      onSuccess: (loadedPage) => {
+        if (!activePaginationRequest) return;
+        const sequence = nextPageSequence.current++;
+        const page = {
+          ...loadedPage,
+          items: loadedPage.items.filter((item) => !canonicalRootIds.has(item.rootSession.id)),
+        };
+        setAdditionalPagesState((state) => ({
+          filterIdentity,
+          pages: [
+            ...(state.filterIdentity === filterIdentity ? state.pages : []),
+            { page, sequence },
+          ],
+        }));
+        setPaginationRequest(null);
+      },
     }
-    setPaginationRequest(null);
-  }, [canonicalRootIds, filterIdentity, loadedPage, nextPageSequence, paginationRequest]);
+  );
 
   const lastPage = additionalPages.at(-1)?.page ?? firstPage;
   const hasMore = lastPage?.hasMore ?? false;
   const loadMore = useCallback(() => {
-    if (!snapshot || !lastPage?.nextCursor || paginationRequest) return;
+    if (!snapshot || !lastPage?.nextCursor || activePaginationRequest) return;
     setPaginationRequest({
       filterIdentity,
       key: buildSessionInboxKey({
@@ -124,11 +123,11 @@ function useCategoryPagination(
         mine,
       }),
     });
-  }, [category, filterIdentity, lastPage, mine, paginationRequest, snapshot]);
+  }, [activePaginationRequest, category, filterIdentity, lastPage, mine, snapshot]);
 
   const retry = useCallback(
-    () => (error && paginationRequest ? retryPage() : refreshSnapshot()),
-    [error, paginationRequest, refreshSnapshot, retryPage]
+    () => (error && activePaginationRequest ? retryPage() : refreshSnapshot()),
+    [activePaginationRequest, error, refreshSnapshot, retryPage]
   );
 
   // Archive and read-state mutations revalidate the head snapshot, but pages
