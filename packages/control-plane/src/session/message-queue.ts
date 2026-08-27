@@ -79,6 +79,12 @@ interface EnqueuedPrompt {
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
+type EnqueueAutofixResponse = Extract<
+  GitHubAutofixSessionResponse,
+  { kind: "enqueued" | "duplicate" | "rejected" }
+>;
+type LookupAutofixResponse = Extract<GitHubAutofixSessionResponse, { kind: "found" | "not_found" }>;
+
 type UserMessageEventWithOrigin = Extract<SandboxEvent, { type: "user_message" }> & {
   origin?: GitHubAutofixOrigin;
 };
@@ -167,7 +173,7 @@ export class SessionMessageQueue {
 
   async enqueueAutofix(
     command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
-  ): Promise<GitHubAutofixSessionResponse> {
+  ): Promise<EnqueueAutofixResponse> {
     const session = this.repository.getSession();
     const userId = `github:${command.author.id}`;
     let participant = this.participantService.getByUserId(userId);
@@ -213,7 +219,7 @@ export class SessionMessageQueue {
     return admission;
   }
 
-  async lookupAutofix(feedbackKey: string): Promise<GitHubAutofixSessionResponse> {
+  async lookupAutofix(feedbackKey: string): Promise<LookupAutofixResponse> {
     const messageId = this.messageRepository.getAutofixMessageId(feedbackKey);
     if (!messageId) return { kind: "not_found" };
 
