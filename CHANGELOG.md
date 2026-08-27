@@ -2,13 +2,6 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
-## August 27, 2026
-
-**Always-on Slack message triggers.** Slack channel-message trigger ingestion is now always enabled
-when the Slack bot is deployed. Before upgrading, audit enabled Slack Message automations because
-they can begin processing matching ambient messages and starting sessions immediately. Remove the
-retired `slack_triggers_enabled` variable from Terraform inputs.
-
 ## August 22, 2026
 
 **Unified model and reasoning selection.** New-session and follow-up composers now combine model and
