@@ -22,12 +22,23 @@ export const IMAGE_BUILDS_KEY = "/api/image-builds";
 export const IMAGE_BUILD_POLL_INTERVAL_MS = 30_000;
 
 /**
- * SWR `refreshInterval` for build-row feeds: poll while any row is still
- * building. Terminal rows only change through user actions, which mutate the
- * key directly, so an all-terminal feed doesn't poll.
+ * Background cadence for a loaded, all-terminal feed. Builds also start
+ * without any client action — the cron scheduler, and save hooks that run
+ * detached from the CRUD response that scheduled them — so a terminal feed
+ * keeps refreshing slowly to discover new builds.
+ */
+export const IMAGE_BUILD_IDLE_POLL_INTERVAL_MS = 120_000;
+
+/**
+ * SWR `refreshInterval` for build-row feeds: fast while a build is visibly in
+ * progress, slow discovery otherwise. Before the first response (or after an
+ * error) this returns 0 — SWR's own retry and revalidation own that phase.
  */
 export function imageBuildPollInterval(images: ImageBuildRecordView[] | undefined): number {
-  return images?.some((image) => image.status === "building") ? IMAGE_BUILD_POLL_INTERVAL_MS : 0;
+  if (!images) return 0;
+  return images.some((image) => image.status === "building")
+    ? IMAGE_BUILD_POLL_INTERVAL_MS
+    : IMAGE_BUILD_IDLE_POLL_INTERVAL_MS;
 }
 
 /** One prebuild-enabled scope as served by GET /api/image-builds. */

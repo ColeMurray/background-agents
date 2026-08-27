@@ -4,6 +4,7 @@ import {
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
+  IMAGE_BUILD_IDLE_POLL_INTERVAL_MS,
   IMAGE_BUILD_POLL_INTERVAL_MS,
   imageBuildPollInterval,
   imageBuildScopeKey,
@@ -200,16 +201,24 @@ describe("parsePrimaryBuildSha", () => {
 });
 
 describe("imageBuildPollInterval", () => {
-  it("polls while any row is still building", () => {
+  it("polls fast while any row is still building", () => {
     const images = [record({ status: "ready" }), record({ id: "build-2", status: "building" })];
 
     expect(imageBuildPollInterval(images)).toBe(IMAGE_BUILD_POLL_INTERVAL_MS);
   });
 
-  it("does not poll an all-terminal feed", () => {
+  it("keeps a slow discovery poll on an all-terminal feed", () => {
+    // Builds also start without any client action (cron scheduler, detached
+    // save hooks), so a terminal feed must still discover new building rows.
     const images = [record({ status: "ready" }), record({ id: "build-2", status: "failed" })];
 
-    expect(imageBuildPollInterval(images)).toBe(0);
+    expect(imageBuildPollInterval(images)).toBe(IMAGE_BUILD_IDLE_POLL_INTERVAL_MS);
+  });
+
+  it("keeps the slow discovery poll on an empty feed", () => {
+    // The detached save hook can lose the race against the toggle response's
+    // immediate mutate — an empty feed still has to discover the first build.
+    expect(imageBuildPollInterval([])).toBe(IMAGE_BUILD_IDLE_POLL_INTERVAL_MS);
   });
 
   it("does not poll before the feed has loaded", () => {

@@ -1,21 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import useSWR, { mutate } from "swr";
+import { mutate } from "swr";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import { useImageBuilds } from "@/hooks/use-image-builds";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import {
-  IMAGE_BUILDS_KEY,
-  formatReadyDetails,
-  imageBuildPollInterval,
-  parsePrimaryBuildSha,
-  type ImageBuildsFeed,
-} from "@/lib/image-builds";
+import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { ImageBuildStatus } from "./image-build-status";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -23,13 +18,7 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 export function ImagesSettings() {
   const repoImagesSupported = supportsRepoImages();
   const { repos, loading: reposLoading } = useRepos();
-  const {
-    data,
-    error: feedError,
-    isLoading: imagesLoading,
-  } = useSWR<ImageBuildsFeed>(repoImagesSupported ? IMAGE_BUILDS_KEY : null, {
-    refreshInterval: (latest) => imageBuildPollInterval(latest?.images),
-  });
+  const { data, error: feedError, isLoading: imagesLoading } = useImageBuilds();
   const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
   const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
