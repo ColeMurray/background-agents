@@ -16,6 +16,8 @@ import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
   type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
   type RequestContext,
   parsePattern,
   json,
@@ -156,13 +158,16 @@ async function handleListRepos(
   if (cached) {
     const isFresh = cached.freshUntil && Date.now() < cached.freshUntil;
 
-    if (!isFresh && ctx.executionCtx) {
+    if (!isFresh) {
       // Stale — serve immediately but refresh in background
       logger.info("Serving stale repos cache, refreshing in background", {
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.waitUntil(refreshReposCache(env, ctx.db, ctx.trace_id));
+      ctx.executionCtx.submit(() => refreshReposCache(env, ctx.db, ctx.trace_id), {
+        name: "repos_cache.refresh",
+        context: { trace_id: ctx.trace_id },
+      });
     }
 
     return json({
@@ -178,10 +183,15 @@ async function handleListRepos(
   // cancel the Worker before the KV write, leaving the cache empty so the next
   // request repeats the same slow path — a miss that can never self-heal,
   // because the stale-while-revalidate branch above needs an entry to exist.
+  // The refresh promise is created once and shared: the factory hands it to
+  // waitUntil while the response below awaits the same run.
   const refresh = refreshReposCache(env, ctx.db, ctx.trace_id, (fn) =>
     ctx.metrics.time("scm_api", fn)
   );
-  ctx.executionCtx?.waitUntil(refresh);
+  ctx.executionCtx.submit(() => refresh, {
+    name: "repos_cache.refresh",
+    context: { trace_id: ctx.trace_id },
+  });
 
   const result = await refresh;
   if (!result.ok) {
@@ -315,7 +325,7 @@ async function handleListBranches(
   }
 }
 
-export const reposRoutes: Route[] = [
+export const reposRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
     pattern: parsePattern("/repos"),
@@ -336,4 +346,4 @@ export const reposRoutes: Route[] = [
     pattern: parsePattern("/repos/:owner/:name/branches"),
     handler: handleListBranches,
   },
-];
+]);

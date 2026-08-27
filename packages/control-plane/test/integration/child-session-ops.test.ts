@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
@@ -12,6 +14,7 @@ import {
   openClientWs,
   collectMessages,
   seedMessage,
+  TEST_SESSION_PROVIDER_AUTH,
 } from "./helpers";
 
 describe("Child session operations (list, get, cancel)", () => {
@@ -23,9 +26,43 @@ describe("Child session operations (list, get, cancel)", () => {
    * Helper to set up a parent+child pair.
    * Creates both DOs (via initNamedSession) and D1 rows.
    */
-  async function setupParentAndChild(opts?: { childStatus?: string }) {
+  async function setupParentAndChild(opts?: { childStatus?: SessionStatus }) {
     const pName = parentName();
     const childName = `child-ops-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    // Seed D1 before initializing the DOs because sandbox warming reads provider auth from D1.
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: pName,
+      title: "Parent Session",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      spawnDepth: 0,
+      providerAuth: TEST_SESSION_PROVIDER_AUTH,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.create({
+      id: childName,
+      title: "Child Session",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: "anthropic/claude-sonnet-4-6",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: opts?.childStatus ?? "created",
+      parentSessionId: pName,
+      spawnSource: "agent",
+      spawnDepth: 1,
+      providerAuth: TEST_SESSION_PROVIDER_AUTH,
+      createdAt: now + 1,
+      updatedAt: now + 1,
+    });
 
     // Create parent DO
     const { stub: parentStub } = await initNamedSessionDO(pName, {
@@ -62,40 +99,6 @@ describe("Child session operations (list, get, cancel)", () => {
       parentSessionId: pName,
       spawnSource: "agent",
       spawnDepth: 1,
-    });
-
-    // Seed D1 rows for both parent and child
-    const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
-
-    await store.create({
-      id: pName,
-      title: "Parent Session",
-      repoOwner: "acme",
-      repoName: "web-app",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: "active",
-      spawnDepth: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await store.create({
-      id: childName,
-      title: "Child Session",
-      repoOwner: "acme",
-      repoName: "web-app",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: opts?.childStatus ?? "created",
-      parentSessionId: pName,
-      spawnSource: "agent",
-      spawnDepth: 1,
-      createdAt: now + 1,
-      updatedAt: now + 1,
     });
 
     return { pName, childName, parentStub, childStub, sandboxToken, store };
@@ -543,8 +546,8 @@ describe("Child session operations (list, get, cancel)", () => {
         "SELECT id FROM messages WHERE status = 'processing'"
       );
       if (!processing) throw new Error("Expected processing parent prompt");
-      await runInDurableObject(parentStub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec(
+      await runInSessionDO(parentStub, (instance: SessionDO, state) => {
+        state.storage.sql.exec(
           `INSERT INTO participants (
              id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email,
              role, joined_at
@@ -564,8 +567,8 @@ describe("Child session operations (list, get, cancel)", () => {
         "SELECT id FROM participants WHERE user_id = 'slack:U2'"
       );
       if (!secondUser) throw new Error("Expected second participant");
-      await runInDurableObject(parentStub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec(
+      await runInSessionDO(parentStub, (instance: SessionDO, state) => {
+        state.storage.sql.exec(
           "UPDATE messages SET author_id = ? WHERE id = ?",
           secondUser.id,
           processing.id

@@ -5,6 +5,11 @@ import type {
   SessionAttachmentReference,
   ResolvedSessionAttachment,
 } from "@open-inspect/shared/types/session-attachments";
+import type {
+  GitHubAutofixOrigin,
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -12,13 +17,14 @@ import {
   isValidModel,
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
-import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
+import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import { STOP_CONFIRMATION_TIMEOUT_MS, type MessageRepository } from "./message-repository";
 import {
@@ -33,6 +39,7 @@ import type { SessionStatusService } from "./session-status-service";
 import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
+import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -70,6 +77,18 @@ interface EnqueuedPrompt {
   position: number | null;
 }
 
+const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
+type EnqueueAutofixResponse = Extract<
+  GitHubAutofixSessionResponse,
+  { kind: "enqueued" | "duplicate" | "rejected" }
+>;
+type LookupAutofixResponse = Extract<GitHubAutofixSessionResponse, { kind: "found" | "not_found" }>;
+
+type UserMessageEventWithOrigin = Extract<SandboxEvent, { type: "user_message" }> & {
+  origin?: GitHubAutofixOrigin;
+};
+
 export class SessionNotPromptableError extends Error {
   constructor(readonly sessionStatus: SessionRow["status"]) {
     super(`Cannot prompt a ${sessionStatus} session`);
@@ -105,19 +124,6 @@ export async function fingerprintWebPrompt(
   return hashToken(canonicalRequest);
 }
 
-export function isPromptableSessionStatus(status: SessionRow["status"]): boolean {
-  switch (status) {
-    case "created":
-    case "active":
-    case "completed":
-    case "failed":
-      return true;
-    case "archived":
-    case "cancelled":
-      return false;
-  }
-}
-
 function resolveParticipantGitIdentity(
   participant: ParticipantRow | null,
   scmProvider: SourceControlProviderName
@@ -140,9 +146,9 @@ function resolveParticipantGitIdentity(
 
 export class SessionMessageQueue {
   constructor(
-    private readonly ctx: DurableObjectState,
+    private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
@@ -151,6 +157,7 @@ export class SessionMessageQueue {
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
+    private readonly getProviderAuthenticationError: (model: string) => Promise<string | null>,
     private readonly projectTerminalMessage: (
       messageId: string,
       messageCreatedAt: number,
@@ -160,8 +167,75 @@ export class SessionMessageQueue {
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
-    private readonly executionTimeoutMs: number
+    /** Resolved per use so it honors settings persisted after construction. */
+    private readonly getExecutionTimeoutMs: () => number
   ) {}
+
+  async enqueueAutofix(
+    command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
+  ): Promise<EnqueueAutofixResponse> {
+    const session = this.repository.getSession();
+    const userId = `github:${command.author.id}`;
+    let participant = this.participantService.getByUserId(userId);
+    if (!participant) {
+      participant = this.participantService.create(userId, command.author.login);
+    }
+    this.participantRepository.updateParticipantCoalesce(participant.id, {
+      scmUserId: command.author.id,
+      scmLogin: command.author.login,
+      scmName: command.author.login,
+    });
+
+    const now = Date.now();
+    const admission = this.messageRepository.admitAutofixMessage({
+      message: {
+        id: generateId(),
+        authorId: participant.id,
+        content: command.prompt,
+        source: "github",
+        status: "pending",
+        createdAt: now,
+      },
+      feedbackKey: command.feedbackKey,
+      pullRequestKey: `github:${command.pullRequest.repositoryId}:${command.pullRequest.number}`,
+      originContext: JSON.stringify(command.origin),
+      attemptLimit: command.attemptLimit,
+      windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
+      sessionClosed: !session || session.status === "archived" || session.status === "cancelled",
+    });
+    if (admission.kind === "rejected") return admission;
+
+    if (admission.kind === "enqueued") {
+      this.broadcastPromptQueue();
+      this.log.info("autofix.enqueue", {
+        event: "autofix.enqueue",
+        feedback_key: command.feedbackKey,
+        message_id: admission.messageId,
+        pull_request_number: command.pullRequest.number,
+        artifact_id: command.pullRequest.artifactId,
+      });
+    }
+    await this.redrivePendingAutofix(admission.messageId);
+    return admission;
+  }
+
+  async lookupAutofix(feedbackKey: string): Promise<LookupAutofixResponse> {
+    const messageId = this.messageRepository.getAutofixMessageId(feedbackKey);
+    if (!messageId) return { kind: "not_found" };
+
+    await this.redrivePendingAutofix(messageId);
+    return { kind: "found", messageId };
+  }
+
+  private async redrivePendingAutofix(messageId: string): Promise<void> {
+    if (this.messageRepository.getMessageStatus(messageId) !== "pending") return;
+
+    const session = this.repository.getSession();
+    if (!session || session.status === "archived" || session.status === "cancelled") return;
+
+    await this.sessionStatus.transition("active");
+    await this.processMessageQueue();
+  }
 
   async handlePromptMessage(
     ws: WebSocket,
@@ -232,14 +306,10 @@ export class SessionMessageQueue {
       const session = this.repository.getSession();
       const sessionId = session?.session_name || session?.id;
       if (sessionId) {
-        this.ctx.waitUntil(
-          sessionIndex.touchUpdatedAt(sessionId).catch((error) => {
-            this.log.error("session_index.touch_updated_at.background_error", {
-              session_id: sessionId,
-              error,
-            });
-          })
-        );
+        this.backgroundTasks.submit(() => sessionIndex.touchUpdatedAt(sessionId), {
+          name: "session_index.touch_updated_at",
+          context: { session_id: sessionId },
+        });
       }
     }
 
@@ -283,7 +353,7 @@ export class SessionMessageQueue {
 
   async processMessageQueue(): Promise<void> {
     const currentSession = this.repository.getSession();
-    if (!currentSession || !isPromptableSessionStatus(currentSession.status)) {
+    if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
     }
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
@@ -291,7 +361,7 @@ export class SessionMessageQueue {
       if (awaitingStop.deadline <= Date.now()) {
         await this.recoverStopConfirmationTimeout();
       } else {
-        await this.alarmScheduler.scheduleAlarm(awaitingStop.deadline);
+        await this.alarmScheduler.schedule(awaitingStop.deadline);
       }
       this.log.debug("processMessageQueue: waiting for sandbox stop confirmation");
       return;
@@ -306,6 +376,21 @@ export class SessionMessageQueue {
       return;
     }
     const now = Date.now();
+    const session = this.repository.getSession();
+    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
+    const authenticationError = await this.getProviderAuthenticationError(resolvedModel);
+    if (authenticationError) {
+      this.log.error("provider_auth.unavailable", {
+        event: "provider_auth.unavailable",
+        model: resolvedModel,
+      });
+      if (this.failMessage(message, authenticationError, now, "pending")) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
+      }
+      return;
+    }
 
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
@@ -320,21 +405,22 @@ export class SessionMessageQueue {
       // and awaiting it here holds the prompt HTTP response open past bot
       // callers' request timeouts. The message is already persisted as
       // pending and dispatches when the sandbox WebSocket connects.
-      this.ctx.waitUntil(
-        this.sandboxLifecycle.spawnSandbox().catch((error) => {
-          // Expected provider failures broadcast sandbox_error inside the
-          // lifecycle manager; this catch only sees throws from before those
-          // handlers. Surface them the same way so clients aren't left
-          // watching a silent "sandbox_spawning" forever.
-          this.log.error("prompt.spawn.background_error", {
-            message_id: message.id,
-            error: error instanceof Error ? error : String(error),
-          });
-          this.messenger.broadcast({
-            type: "sandbox_error",
-            error: error instanceof Error ? error.message : "Failed to spawn sandbox",
-          });
-        })
+      this.backgroundTasks.submit(
+        () =>
+          this.sandboxLifecycle.spawnSandbox().catch((error) => {
+            // Expected provider failures report themselves inside the lifecycle
+            // manager; this catch only sees throws from before those handlers.
+            // Route it through the same call so the reason is persisted as well
+            // as broadcast — otherwise it survives only until the tab reloads.
+            this.sandboxLifecycle.reportSandboxError(
+              error instanceof Error ? error.message : "Failed to spawn sandbox"
+            );
+            throw error;
+          }),
+        {
+          name: "sandbox.spawn",
+          context: { message_id: message.id },
+        }
       );
       return;
     }
@@ -350,11 +436,10 @@ export class SessionMessageQueue {
       now,
       parseStoredSessionAttachments(message.attachments, () =>
         this.log.error("prompt.invalid_stored_attachments")
-      )
+      ),
+      message.origin_context
     );
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
-    const session = this.repository.getSession();
-    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     const requestedEffort =
       message.reasoning_effort ??
       session?.reasoning_effort ??
@@ -377,29 +462,36 @@ export class SessionMessageQueue {
       ),
     };
 
+    const claimed = this.messageRepository.startMessageProcessing(
+      message.id,
+      now,
+      userMessageEvent
+    );
+    if (!claimed) {
+      this.log.debug("processMessageQueue: prompt claim lost", { message_id: message.id });
+      return;
+    }
+
     const sent = this.wsManager.send(sandboxWs, command);
 
     if (!sent) {
+      this.messageRepository.updateMessageToPending(message.id);
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
+      await this.resumeAfterSandboxTermination();
     } else {
-      this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent);
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
       this.broadcastPromptQueue();
       this.sandboxLifecycle.updateLastActivity(now);
 
       // Execution timeout shares the DO's single alarm slot with lifecycle checks.
-      const deadline = now + this.executionTimeoutMs;
-      await this.alarmScheduler.scheduleAlarm(deadline);
+      const deadline = now + this.getExecutionTimeoutMs();
+      await this.alarmScheduler.schedule(deadline);
 
-      this.ctx.waitUntil(
-        this.callbackService.notifyStarted(message.id).catch((error) => {
-          this.log.error("callback.started.background_error", {
-            message_id: message.id,
-            error,
-          });
-        })
-      );
+      this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
+        name: "callback.notify_started",
+        context: { message_id: message.id },
+      });
     }
 
     this.log.info("prompt.dispatch", {
@@ -418,6 +510,13 @@ export class SessionMessageQueue {
     });
   }
 
+  /**
+   * Stop the current execution.
+   *
+   * Marks the processing message as failed, upserts a synthetic
+   * execution_complete, broadcasts that synthetic event so every client flushes
+   * its buffered tokens, and forwards the stop to the sandbox.
+   */
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
@@ -433,7 +532,7 @@ export class SessionMessageQueue {
         processingMessage.id,
         stopConfirmationDeadline
       );
-      await this.alarmScheduler.scheduleAlarm(stopConfirmationDeadline);
+      await this.alarmScheduler.schedule(stopConfirmationDeadline);
       this.broadcastPromptQueue();
       this.log.info("prompt.stopped", {
         event: "prompt.stopped",
@@ -449,6 +548,7 @@ export class SessionMessageQueue {
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (stoppedMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
+      await this.resumeAfterSandboxTermination();
     }
   }
 
@@ -460,6 +560,7 @@ export class SessionMessageQueue {
       message_id: awaitingStop.id,
     });
     await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_confirmation_timeout");
+    await this.resumeAfterSandboxTermination();
   }
 
   async resumeAfterSandboxTermination(): Promise<void> {
@@ -536,15 +637,32 @@ export class SessionMessageQueue {
     );
     if (!completion) return false;
 
-    this.ctx.waitUntil(
-      this.projectTerminalMessage(
-        completion.messageId,
-        completion.messageCreatedAt,
-        completion.completedAt
-      )
+    this.backgroundTasks.submit(
+      () =>
+        this.projectTerminalMessage(
+          completion.messageId,
+          completion.messageCreatedAt,
+          completion.completedAt
+        )
+          .catch((projectionError) => {
+            this.log.error("terminal_message.projection_failed", {
+              message_id: message.id,
+              error: projectionError,
+            });
+          })
+          .then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
+      {
+        name: "terminal_message.project",
+        context: { message_id: message.id },
+      }
     );
-    this.messenger.broadcast({ type: "sandbox_event", event });
-    this.ctx.waitUntil(this.callbackService.notifyComplete(message.id, false, error));
+    this.backgroundTasks.submit(
+      () => this.callbackService.notifyComplete(message.id, false, error),
+      {
+        name: "callback.notify_complete",
+        context: { message_id: message.id },
+      }
+    );
     return true;
   }
 
@@ -553,8 +671,17 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: ResolvedSessionAttachment[]
-  ): Extract<SandboxEvent, { type: "user_message" }> {
+    attachments?: ResolvedSessionAttachment[],
+    originContext?: string | null
+  ): UserMessageEventWithOrigin {
+    let origin: GitHubAutofixOrigin | undefined;
+    if (originContext) {
+      try {
+        origin = JSON.parse(originContext) as GitHubAutofixOrigin;
+      } catch {
+        this.log.error("prompt.invalid_origin_context", { message_id: messageId });
+      }
+    }
     return {
       type: "user_message",
       content,
@@ -564,9 +691,10 @@ export class SessionMessageQueue {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
-        avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
+        avatar: getAvatarUrl(participant.scm_login, this.scmProvider, participant.scm_user_id),
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(origin ? { origin } : {}),
     };
   }
 
@@ -741,7 +869,7 @@ export class SessionMessageQueue {
 
   private assertPromptableSession(): void {
     const session = this.repository.getSession();
-    if (session && !isPromptableSessionStatus(session.status)) {
+    if (session && !isSessionPromptable(session.status)) {
       throw new SessionNotPromptableError(session.status);
     }
   }

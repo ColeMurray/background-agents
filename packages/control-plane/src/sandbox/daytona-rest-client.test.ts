@@ -175,6 +175,32 @@ describe("DaytonaRestClient", () => {
     });
   });
 
+  describe("deleteSandbox", () => {
+    it("sends DELETE /sandbox/{id}", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(emptyResponse(204));
+
+      await client.deleteSandbox("sb-1");
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://daytona.test/api/sandbox/sb-1",
+        expect.objectContaining({ method: "DELETE" })
+      );
+    });
+
+    it("combines a caller abort signal with the request timeout", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      const controller = new AbortController();
+      controller.abort();
+      fetchSpy.mockResolvedValue(emptyResponse(204));
+
+      await client.deleteSandbox("sb-1", controller.signal);
+
+      expect(fetchSpy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+      expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+    });
+  });
+
   describe("recoverSandbox", () => {
     it("sends POST /sandbox/{id}/recover", async () => {
       const client = new DaytonaRestClient(defaultConfig);

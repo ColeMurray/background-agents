@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import {
   AttachmentClaimConflictError,
   SessionAttachmentRepository,
@@ -10,6 +11,7 @@ import type { SqlResult, SqlStorage } from "./sql-storage";
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const data = new Map<string, unknown[]>();
+  const matchingData: Array<{ pattern: RegExp; rows: unknown[] }> = [];
   let oneValue: unknown = null;
   let rowsWritten = 0;
   const sql: SqlStorage = {
@@ -19,7 +21,9 @@ function createMockSql() {
       return {
         toArray: () => {
           consumed = true;
-          return data.get(query) ?? [];
+          return (
+            data.get(query) ?? matchingData.find(({ pattern }) => pattern.test(query))?.rows ?? []
+          );
         },
         one: () => oneValue,
         get rowsWritten() {
@@ -32,6 +36,7 @@ function createMockSql() {
     sql,
     calls,
     setData: (query: string, rows: unknown[]) => data.set(query, rows),
+    setMatchingData: (pattern: RegExp, rows: unknown[]) => matchingData.push({ pattern, rows }),
     setOne: (value: unknown) => (oneValue = value),
     setRowsWritten: (value: number) => (rowsWritten = value),
   };
@@ -151,9 +156,142 @@ describe("MessageRepository", () => {
       '{"channel":"C123"}',
       null,
       null,
+      null,
+      null,
+      null,
       "pending",
       1000,
     ]);
+  });
+
+  it("atomically deduplicates Autofix feedback before other admission checks", () => {
+    mock.setData(`SELECT id FROM messages WHERE autofix_feedback_key = ? LIMIT 1`, [
+      { id: "msg-existing" },
+    ]);
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: true,
+      })
+    ).toEqual({ kind: "duplicate", messageId: "msg-existing" });
+    expect(transactionSyncCalls).toBe(1);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it("rejects new Autofix feedback for a closed session", () => {
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: true,
+      })
+    ).toEqual({ kind: "rejected", reason: "session_closed" });
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it("rejects Autofix admission when the rolling PR cap is reached", () => {
+    mock.setOne({ count: 3 });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "attempt_limit" });
+    expect(mock.calls).toHaveLength(3);
+  });
+
+  it("rejects Autofix admission when the session queue is full", () => {
+    mock.setOne({ count: MAX_UNFINISHED_PROMPTS });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 50,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "queue_full" });
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  it("admits Autofix metadata without creating an admission-time event", () => {
+    mock.setOne({ count: 2 });
+    const originContext = JSON.stringify({
+      kind: "review",
+      authorType: "human",
+      feedbackUrl: "https://github.com/acme/repo/pull/42#pullrequestreview-1",
+    });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext,
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "enqueued", messageId: "msg-new" });
+    const insert = mock.calls.find(({ query }) => query.includes("INSERT INTO messages"));
+    expect(insert?.params).toEqual(
+      expect.arrayContaining(["github:review:1", "github:99:42", originContext])
+    );
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO events"))).toBe(false);
   });
 
   it("atomically claims attachments and creates a message", () => {
@@ -212,22 +350,46 @@ describe("MessageRepository", () => {
   });
 
   it("atomically starts processing and creates the canonical user event", () => {
-    repository.startMessageProcessing("msg-1", 2000, {
-      type: "user_message",
-      content: "Hello",
-      messageId: "msg-1",
-      timestamp: 2,
-      author: { participantId: "p-1", userId: "u-1", name: "User" },
-    });
+    mock.setMatchingData(/UPDATE messages SET status = 'processing'[\s\S]*RETURNING id/, [
+      { id: "msg-1" },
+    ]);
+    expect(
+      repository.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      })
+    ).toBe(true);
     expect(transactionSyncCalls).toBe(1);
     expect(mock.calls[0].query).toContain("status = 'processing'");
+    expect(mock.calls[0].query).toContain("status = 'pending'");
+    expect(mock.calls[0].query).toContain("NOT EXISTS");
     expect(mock.calls[1].params[0]).toBe("user_message:msg-1");
   });
 
-  it("returns a processing message to pending", () => {
+  it("does not create a user event when the processing claim is lost", () => {
+    expect(
+      repository.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      })
+    ).toBe(false);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it("returns an undispatched processing message to pending and removes its user event", () => {
+    mock.setMatchingData(/UPDATE messages SET status = 'pending'[\s\S]*RETURNING id/, [
+      { id: "msg-1" },
+    ]);
     repository.updateMessageToPending("msg-1");
     expect(mock.calls[0].query).toContain("status = 'pending'");
     expect(mock.calls[0].params).toEqual(["msg-1"]);
+    expect(mock.calls[1].params).toEqual(["user_message:msg-1"]);
   });
 
   it("atomically records message completion and its canonical event", () => {

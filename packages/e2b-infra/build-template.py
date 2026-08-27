@@ -4,25 +4,25 @@ Build (and pre-warm) the Open-Inspect E2B sandbox template — programmatically,
 via the E2B Python SDK. Authenticates with the runtime API key (E2B_API_KEY).
 
 The base image layers live in e2b.Dockerfile (FROM + apt/npm/pip); this script
-adds the context-dependent steps the SDK owns: copying the staged sandbox_runtime
-and the oi-launch launcher, the workdir, and the start/ready commands.
+adds the context-dependent steps the SDK owns: copying the staged sandbox_runtime,
+the workdir, and the start/ready commands.
 
 Env:
   E2B_TEMPLATE_ID   (required) — template name to create/rebuild.
   E2B_API_KEY       (required) — runtime API key; authenticates the build AND
                                  the post-build pre-warm.
   E2B_API_URL       (optional) — REST API base URL (default https://api.e2b.app).
-  E2B_TEMPLATE_CPU  (optional) — vCPU count (default 2).
-  E2B_TEMPLATE_MEM  (optional) — memory MB, even number (default 1024).
+  E2B_TEMPLATE_CPU        (optional) — vCPU count (default 2).
+  E2B_TEMPLATE_MEMORY_MB  (optional) — memory MB, even number (default 4096).
 """
 
+import atexit
+import json
 import os
 import shutil
 import sys
-import urllib.request
 import urllib.error
-import json
-import atexit
+import urllib.request
 from pathlib import Path
 
 from e2b import Template, default_build_logger
@@ -33,16 +33,27 @@ TEMPLATE_ID = os.environ.get("E2B_TEMPLATE_ID")
 API_KEY = os.environ.get("E2B_API_KEY")
 API_URL = os.environ.get("E2B_API_URL", "https://api.e2b.app").rstrip("/")
 CPU = int(os.environ.get("E2B_TEMPLATE_CPU", "2"))
-MEM = int(os.environ.get("E2B_TEMPLATE_MEM", "1024"))
+MEM = int(os.environ.get("E2B_TEMPLATE_MEMORY_MB", "4096"))
 
-# Start command = the launcher. E2B runs the start command once at build,
-# snapshots it, and resumes it per create, so the launcher waits for the control
-# plane to drop the per-session env file then execs the supervisor. Ready command
-# just confirms the baked toolchain is present — real session readiness is tracked
-# by the control plane when the bridge phones home.
-START_CMD = "python /usr/local/bin/oi-launch"
+# Mirror the e2b-infra Terraform module's validation so manual builds fail
+# fast locally instead of with a late remote build error.
+if CPU < 1:
+    print("Error: E2B_TEMPLATE_CPU must be a positive integer", file=sys.stderr)
+    sys.exit(1)
+if MEM < 2 or MEM % 2 != 0:
+    print("Error: E2B_TEMPLATE_MEMORY_MB must be a positive even number", file=sys.stderr)
+    sys.exit(1)
+
+# The template runs nothing of its own: the control plane execs the supervisor
+# entrypoint via envd on every sandbox create (per-sandbox env rides the create
+# call), so the start command is inert. It is kept (rather than omitted) only
+# so the ready command still gates the build: E2B evaluates READY_CMD during
+# template finalization, which is the one place a broken toolchain layer can
+# fail the build instead of every later session. E2B resumes the captured
+# `sleep` on each create from the base template — one harmless idle process.
+START_CMD = "sleep infinity"
 READY_CMD = (
-    "command -v python && command -v node && command -v opencode "
+    "command -v python && command -v node && command -v bun && command -v opencode "
     "&& command -v code-server "
     '&& test "$(command -v gh)" = /usr/local/bin/gh && test -x /usr/bin/gh '
     "&& PYTHONPATH=/app python -c 'import sandbox_runtime'"
@@ -82,13 +93,12 @@ dockerfile = (SCRIPT_DIR / "e2b.Dockerfile").read_text()
 print(f"Building E2B template: {TEMPLATE_ID} (cpu={CPU}, mem={MEM})")
 
 template = (
-    Template().from_dockerfile(dockerfile)
+    Template()
+    .from_dockerfile(dockerfile)
     # Staged into this dir above; imported via PYTHONPATH=/app as `sandbox_runtime`.
     .copy("sandbox_runtime", "/app/sandbox_runtime")
     # E2B's non-root runtime cannot install this into /usr/local/bin itself.
     .copy("sandbox_runtime/gh-wrapper.sh", "/usr/local/bin/gh", mode=0o755)
-    # The launcher = the template start command (see oi-launch.py).
-    .copy("oi-launch.py", "/usr/local/bin/oi-launch", mode=0o755)
     .set_workdir("/workspace")
     .set_start_cmd(START_CMD, READY_CMD)
 )

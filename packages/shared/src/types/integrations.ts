@@ -18,6 +18,33 @@ export interface IntegrationEntry<
 }
 
 /** Overridable behavior settings for the GitHub bot. Used at both global (defaults) and per-repo (overrides) levels. */
+export interface GitHubAutofixSettings {
+  enabled?: boolean;
+  reviewsEnabled?: boolean;
+  prCommentsEnabled?: boolean;
+  openInspectReviewsEnabled?: boolean;
+  allowedReviewBots?: string[];
+  maxAttemptsPerPrPer24Hours?: number;
+}
+
+export interface ResolvedGitHubAutofixSettings {
+  enabled: boolean;
+  reviewsEnabled: boolean;
+  prCommentsEnabled: boolean;
+  openInspectReviewsEnabled: boolean;
+  allowedReviewBots: string[];
+  maxAttemptsPerPrPer24Hours: number;
+}
+
+export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
+  enabled: false,
+  reviewsEnabled: true,
+  prCommentsEnabled: true,
+  openInspectReviewsEnabled: true,
+  allowedReviewBots: [],
+  maxAttemptsPerPrPer24Hours: 10,
+};
+
 export interface GitHubBotSettings {
   autoReviewOnOpen?: boolean;
   model?: string;
@@ -25,6 +52,7 @@ export interface GitHubBotSettings {
   allowedTriggerUsers?: string[];
   codeReviewInstructions?: string;
   commentActionInstructions?: string;
+  autofix?: GitHubAutofixSettings;
 }
 
 /**
@@ -412,9 +440,63 @@ export interface McpServerConfig {
   enabled: boolean;
 }
 
+export const DEFAULT_MCP_SERVER_ENABLED = true;
+
+const mcpServerCommonFields = {
+  name: z.string().trim().min(1),
+  repoScopes: z.array(z.string()).nullable().optional(),
+  enabled: z.boolean().optional(),
+};
+
+export const createMcpServerInputSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      ...mcpServerCommonFields,
+      type: z.literal("local"),
+      command: z.array(z.string()).min(1),
+      env: z.record(z.string(), z.string()).optional(),
+      enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
+    })
+    .strict(),
+  z
+    .object({
+      ...mcpServerCommonFields,
+      type: z.literal("remote"),
+      url: z.url(),
+      headers: z.record(z.string(), z.string()).optional(),
+      enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
+    })
+    .strict(),
+]);
+
+export const updateMcpServerInputSchema = z
+  .object({
+    ...mcpServerCommonFields,
+    revision: z.number().int().positive(),
+    type: z.enum(["local", "remote"]),
+    command: z.array(z.string()),
+    url: z.url(),
+    env: z.record(z.string(), z.string()),
+    headers: z.record(z.string(), z.string()),
+  })
+  .partial()
+  .strict();
+
+export type CreateMcpServerRequest = z.input<typeof createMcpServerInputSchema>;
+export type UpdateMcpServerRequest = Omit<
+  z.input<typeof updateMcpServerInputSchema>,
+  "revision"
+> & { revision: number };
+export type ValidatedCreateMcpServerInput = z.output<typeof createMcpServerInputSchema>;
+export type ValidatedUpdateMcpServerInput = Omit<
+  z.output<typeof updateMcpServerInputSchema>,
+  "revision"
+>;
+
 /** MCP server metadata for API responses — no decrypted credentials. */
 export interface McpServerMetadata {
   id: string;
+  revision: number;
   name: string;
   type: "local" | "remote";
   command?: string[];

@@ -1,16 +1,12 @@
 import { z } from "zod";
-import {
-  automationTriggerTypeSchema,
-  triggerConfigSchema,
-  type AutomationTriggerType,
-  type TriggerConfig,
-} from "../triggers/types";
+import { automationTriggerTypeSchema, triggerConfigSchema } from "../triggers/types";
 import {
   MAX_TARGET_REPOSITORIES,
   repositoriesInputSchema,
   repositoryInputSchema,
 } from "./repositories";
 import type { RepositoryInput, RepositoryRef } from "./repositories";
+import { modelProviderSelectionsSchema } from "./provider-accounts";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
@@ -21,13 +17,16 @@ export type AutomationInvocationSource = "schedule" | "manual" | "event";
  * skipped; `partial_failed` means the runs finished terminal with a mix of
  * completed and failed.
  */
-export type AutomationInvocationStatus =
-  | "starting"
-  | "running"
-  | "completed"
-  | "failed"
-  | "partial_failed"
-  | "skipped";
+export const automationInvocationStatusSchema = z.enum([
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "partial_failed",
+  "skipped",
+]);
+
+export type AutomationInvocationStatus = z.infer<typeof automationInvocationStatusSchema>;
 
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
@@ -87,41 +86,62 @@ const automationSchema = z.object({
   triggerConfig: triggerConfigSchema.nullable(),
   repositories: z.array(automationRepositorySchema),
   environmentIds: z.array(z.string()),
+  providerSelections: modelProviderSelectionsSchema,
 });
 
 export type Automation = z.infer<typeof automationSchema>;
 
-export interface CreateAutomationRequest {
-  name: string;
-  instructions: string;
-  triggerType?: AutomationTriggerType;
-  scheduleCron?: string;
-  scheduleTz?: string;
-  model?: string;
-  reasoningEffort?: string | null;
-  eventType?: string;
-  triggerConfig?: TriggerConfig;
-  sentryClientSecret?: string;
-  /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
-  repositories?: AutomationRepositoryInput[];
-  /** Environments to fan out over, one workspace session each (design §13.3). */
-  environmentIds?: string[];
-}
+const automationExecutionSummarySchema = z.object({
+  id: z.string(),
+  status: automationInvocationStatusSchema,
+  createdAt: z.number(),
+});
 
-export interface UpdateAutomationRequest {
-  name?: string;
-  instructions?: string;
-  scheduleCron?: string;
-  scheduleTz?: string;
-  model?: string;
-  reasoningEffort?: string | null;
-  eventType?: string;
-  triggerConfig?: TriggerConfig;
+export type AutomationExecutionSummary = z.infer<typeof automationExecutionSummarySchema>;
+
+const automationListItemSchema = automationSchema.extend({
+  recentExecutions: z.array(automationExecutionSummarySchema),
+});
+
+export type AutomationListItem = z.infer<typeof automationListItemSchema>;
+
+export const createAutomationRequestSchema = z.object({
+  name: z.string(),
+  instructions: z.string(),
+  triggerType: automationTriggerTypeSchema.optional(),
+  scheduleCron: z.string().optional(),
+  scheduleTz: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().nullable().optional(),
+  eventType: z.string().optional(),
+  triggerConfig: triggerConfigSchema.optional(),
+  sentryClientSecret: z.string().optional(),
+  /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
+  repositories: automationRepositoriesInputSchema.optional(),
+  /** Environments to fan out over, one workspace session each (design §13.3). */
+  environmentIds: z.array(z.string()).optional(),
+  /** Complete pin set. Omission creates the automation without pins. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
+});
+export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
+
+export const updateAutomationRequestSchema = z.object({
+  name: z.string().optional(),
+  instructions: z.string().optional(),
+  scheduleCron: z.string().optional(),
+  scheduleTz: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().nullable().optional(),
+  eventType: z.string().optional(),
+  triggerConfig: triggerConfigSchema.optional(),
   /** Replaces the full repository selection when present. */
-  repositories?: AutomationRepositoryInput[];
+  repositories: automationRepositoriesInputSchema.optional(),
   /** Replaces the full environment selection when present (empty clears). */
-  environmentIds?: string[];
-}
+  environmentIds: z.array(z.string()).optional(),
+  /** Replaces every provider pin when present; an empty map clears all pins. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
+});
+export type UpdateAutomationRequest = z.input<typeof updateAutomationRequestSchema>;
 
 export interface AutomationRun {
   id: string;
@@ -155,12 +175,12 @@ export interface AutomationRun {
 
 export const listAutomationsResponseSchema = z.discriminatedUnion("hasMore", [
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(false),
     nextCursor: z.null(),
   }),
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(true),
     nextCursor: z.string().min(1),
   }),

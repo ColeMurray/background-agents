@@ -15,6 +15,8 @@ export {
   postMessage,
   publishView,
   removeReaction,
+  SLACK_PAGINATION_TIMEOUT_MS,
+  SLACK_REQUEST_TIMEOUT_MS,
   slackMessageAttachmentSchema,
   slackMessageFileSchema,
   updateMessage,
@@ -30,6 +32,7 @@ export type {
   ExternalUploadUrlOptions,
   SlackMessageAttachment,
   SlackMessageFile,
+  SlackRequestOptions,
   SlackThreadMessage,
   SlackUser,
 } from "./client";

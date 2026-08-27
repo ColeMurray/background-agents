@@ -3,6 +3,11 @@
  */
 
 import type { SlackCompletionJob } from "../completion/job";
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+
+export interface SlackCompletionQueue {
+  send(message: SlackCompletionJob, options?: { contentType?: "json" }): Promise<unknown>;
+}
 
 /**
  * Cloudflare Worker environment bindings.
@@ -12,10 +17,10 @@ export interface Env {
   SLACK_KV: KVNamespace;
 
   // Service binding to control plane
-  CONTROL_PLANE: Fetcher;
+  CONTROL_PLANE: ControlPlaneFetcher;
 
   // Durable completion handoff. All Slack completion callbacks enqueue here.
-  SLACK_COMPLETION_QUEUE: Queue<SlackCompletionJob>;
+  SLACK_COMPLETION_QUEUE: SlackCompletionQueue;
 
   // Environment variables
   DEPLOYMENT_NAME: string;
@@ -35,7 +40,13 @@ export interface Env {
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
   SLACK_APP_TOKEN?: string;
-  ANTHROPIC_API_KEY: string;
+  /**
+   * Classifier provider credentials. The deployment binds exactly the one
+   * `CLASSIFICATION_MODEL` selects, so each is optional on its own and the
+   * classifier guards the branch it needs.
+   */
+  ANTHROPIC_API_KEY?: string;
+  OPENAI_API_KEY?: string;
   CONTROL_PLANE_API_KEY?: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;

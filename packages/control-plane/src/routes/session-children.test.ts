@@ -7,6 +7,7 @@ import type { Env } from "../types";
 import { handleCancelChild, handlePromptChild } from "./session-children";
 import type { SessionRouteContext } from "./session-route";
 import { parsePattern } from "./shared";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 vi.mock("../session/integration-settings-resolution", () => ({
   resolveSandboxSettings: vi.fn(),
@@ -36,6 +37,7 @@ function routeContext(
     metrics: {} as SessionRouteContext["metrics"],
     request_id: "request-id",
     trace_id: "trace-id",
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     sessionRuntime: {
       fetch: async (sessionId, path, init, search) => {
         if (sessionId === "parent" && path === "/internal/active-prompt-author") {

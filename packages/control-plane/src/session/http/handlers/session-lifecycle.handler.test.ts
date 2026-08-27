@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
+import { SessionLifecycleHandler } from "./session-lifecycle.handler";
+import type { SessionTitleService } from "../../title-service";
+import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatusService } from "../../session-status-service";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
+import type { SandboxRepository } from "../../sandbox-repository";
+import type { SessionCoreRepository } from "../../session-core-repository";
 import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -44,9 +48,11 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     modal_object_id: null,
     snapshot_id: null,
     snapshot_image_id: null,
+    snapshot_runtime_version: null,
+    runtime_version: null,
     auth_token: null,
     auth_token_hash: null,
-    status: "running",
+    status: "ready",
     git_sync_status: "pending",
     last_heartbeat: 999,
     last_activity: null,
@@ -85,17 +91,26 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 }
 
 function createHandler() {
+  const getSession = vi.fn<() => SessionRow | null>();
+  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const repository = {
     upsertSession: vi.fn(),
     replaceSessionRepositories: vi.fn(),
-    createSandbox: vi.fn(),
+    transaction: vi.fn((callback: () => void) => callback()),
     createParticipant: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 0),
+    getSession,
+    getParticipantByUserId,
   };
-  const getDurableObjectId = vi.fn(() => "session-do-id");
+  const getSandbox = vi.fn<() => SandboxRow | null>();
+  const updateSandboxStatus = vi.fn();
+  const sandboxRepository = {
+    createSandbox: vi.fn(),
+    getSandbox,
+    updateSandboxStatus,
+  } as unknown as SandboxRepository;
   const encryptToken = vi.fn();
-  const validateReasoningEffort = vi.fn();
   const generateId = vi.fn();
   const now = vi.fn(() => 1234);
   const scheduleWarmSandbox = vi.fn();
@@ -106,63 +121,68 @@ function createHandler() {
     error: vi.fn(),
     child: vi.fn(),
   } as unknown as Logger;
-  const getSession = vi.fn<() => SessionRow | null>();
-  const getSandbox = vi.fn<() => SandboxRow | null>();
-  const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
-  const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
-  const statusService = { transition } as unknown as SessionStatusService;
+  const repairIndexStatus = vi.fn<() => Promise<void>>();
+  const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
+  const statusService = {
+    transition,
+    repairIndexStatus,
+    settleFromMessageState,
+  } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
-  const updateSandboxStatus = vi.fn();
 
-  const lifecycleHandler = createSessionLifecycleHandler({
-    repository,
-    messageRepository: repository as unknown as MessageRepository,
-    participantRepository: repository as unknown as ParticipantRepository,
-    getDurableObjectId,
-    tokenEncryptionKey: "encryption-key",
-    encryptToken,
-    validateReasoningEffort,
-    generateId,
-    now,
-    scheduleWarmSandbox,
-    getSession,
-    getSandbox,
-    getPublicSessionId,
-    getParticipantByUserId,
+  const lifecycleHandler = new SessionLifecycleHandler(
+    repository as unknown as SessionCoreRepository,
+    sandboxRepository,
+    repository as unknown as MessageRepository,
+    repository as unknown as ParticipantRepository,
     statusService,
-    applySessionTitleUpdate,
+    { applySessionTitleUpdate } as unknown as SessionTitleService,
+    {
+      getSandboxWebSocket: getSandboxSocket,
+      detachSandboxWebSocket: vi.fn(),
+      sendToSandbox,
+      getConnectedClientCount: vi.fn(() => 0),
+    } as unknown as WebSocketManager,
+    "session-do-id",
+    "encryption-key",
+    scheduleWarmSandbox,
     cancelSession,
-    getSandboxSocket,
-    sendToSandbox,
-    updateSandboxStatus,
-  });
+    encryptToken,
+    generateId,
+    now
+  );
 
   // Bind the request-scoped log so call sites exercise the threading without
   // repeating it at every invocation.
   const handler = {
-    ...lifecycleHandler,
     init: (request: Request) => lifecycleHandler.init(request, log),
+    getState: () => lifecycleHandler.getState(),
+    updateTitle: (request: Request) => lifecycleHandler.updateTitle(request),
+    archive: (request: Request) => lifecycleHandler.archive(request),
+    unarchive: (request: Request) => lifecycleHandler.unarchive(request),
+    expireDraft: () => lifecycleHandler.expireDraft(),
+    cancel: () => lifecycleHandler.cancel(),
   };
 
   return {
     handler,
     repository,
-    getDurableObjectId,
+    sandboxRepository,
     encryptToken,
-    validateReasoningEffort,
     generateId,
     now,
     scheduleWarmSandbox,
     log,
     getSession,
     getSandbox,
-    getPublicSessionId,
     getParticipantByUserId,
     transition,
+    repairIndexStatus,
+    settleFromMessageState,
     applySessionTitleUpdate,
     cancelSession,
     getSandboxSocket,
@@ -171,13 +191,13 @@ function createHandler() {
   };
 }
 
-describe("createSessionLifecycleHandler", () => {
+describe("SessionLifecycleHandler", () => {
   it.each([
     ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
     ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
     ["repository context without repoId", { repoOwner: "acme", repoName: "repo", repoId: null }],
   ])("rejects partial repository contexts during init: %s", async (_name, repoFields) => {
-    const { handler, repository, scheduleWarmSandbox } = createHandler();
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
 
     const response = await handler.init(
       new Request("http://internal/internal/init", {
@@ -196,7 +216,7 @@ describe("createSessionLifecycleHandler", () => {
       error: "Repository context must include repoOwner, repoName, and repoId together",
     });
     expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
     expect(repository.createParticipant).not.toHaveBeenCalled();
     expect(scheduleWarmSandbox).not.toHaveBeenCalled();
   });
@@ -205,16 +225,13 @@ describe("createSessionLifecycleHandler", () => {
     const {
       handler,
       repository,
-      getDurableObjectId,
+      sandboxRepository,
       encryptToken,
-      validateReasoningEffort,
       generateId,
       scheduleWarmSandbox,
       log,
     } = createHandler();
-    getDurableObjectId.mockReturnValue("session-do-id");
     encryptToken.mockResolvedValue("encrypted-scm-token");
-    validateReasoningEffort.mockReturnValue("high");
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -271,7 +288,7 @@ describe("createSessionLifecycleHandler", () => {
       createdAt: 1234,
       updatedAt: 1234,
     });
-    expect(repository.createSandbox).toHaveBeenCalledWith({
+    expect(sandboxRepository.createSandbox).toHaveBeenCalledWith({
       id: "sandbox-1",
       status: "pending",
       gitSyncStatus: "pending",
@@ -301,13 +318,13 @@ describe("createSessionLifecycleHandler", () => {
         baseBranch: "feature/work",
       },
     ]);
+    expect(repository.transaction).toHaveBeenCalledOnce();
     expect(scheduleWarmSandbox).toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
   });
 
   it("persists the repositories list in position order", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -337,8 +354,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("persists an empty member set for repo-less sessions", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -359,8 +375,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("accepts nullable init fields and sandbox settings", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -420,8 +435,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("preserves optional init fields the schema must not silently drop", async () => {
-    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
-    validateReasoningEffort.mockReturnValue("high");
+    const { handler, repository, generateId } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -458,7 +472,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("rejects malformed init bodies before creating records", async () => {
-    const { handler, repository, scheduleWarmSandbox } = createHandler();
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
 
     const response = await handler.init(
       new Request("http://internal/internal/init", {
@@ -476,7 +490,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid request body" });
     expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
     expect(repository.createParticipant).not.toHaveBeenCalled();
     expect(scheduleWarmSandbox).not.toHaveBeenCalled();
   });
@@ -558,10 +572,8 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("falls back to pre-encrypted token when plain-token encryption fails", async () => {
-    const { handler, repository, encryptToken, validateReasoningEffort, generateId, log } =
-      createHandler();
+    const { handler, repository, encryptToken, generateId, log } = createHandler();
     encryptToken.mockRejectedValue(new Error("encrypt failed"));
-    validateReasoningEffort.mockReturnValue(null);
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -593,8 +605,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("logs invalid model warning and stores normalized model", async () => {
-    const { handler, repository, validateReasoningEffort, generateId, log } = createHandler();
-    validateReasoningEffort.mockReturnValue(null);
+    const { handler, repository, generateId, log } = createHandler();
     generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
 
     const response = await handler.init(
@@ -635,10 +646,9 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("maps state response with sandbox details", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId } = createHandler();
+    const { handler, getSession, getSandbox } = createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
-    getPublicSessionId.mockReturnValue("public-session-1");
 
     const response = handler.getState();
 
@@ -661,7 +671,7 @@ describe("createSessionLifecycleHandler", () => {
       sandbox: {
         id: "sandbox-1",
         modalSandboxId: "modal-1",
-        status: "running",
+        status: "ready",
         gitSyncStatus: "pending",
         lastHeartbeat: 999,
       },
@@ -863,28 +873,57 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
-  it("leaves a draft alone once it has a message", async () => {
-    const { handler, getSession, repository, transition } = createHandler();
+  // `created` with messages is unreachable under current code: enqueuePromptCore
+  // inserts the message and transitions to `active` in the same durable object
+  // turn. Returning the session unchanged is what let legacy rows in that shape
+  // pin the head of the sweep's oldest-first batch forever, so the invariant
+  // under test is that every one of these branches leaves `created` behind.
+  it("settles a draft that still holds queued work", async () => {
+    const { handler, getSession, repository, transition, settleFromMessageState } = createHandler();
     getSession.mockReturnValue(createSession({ status: "created" }));
-    repository.getMessageCount.mockReturnValue(1);
+    repository.getPendingOrProcessingCount.mockReturnValue(1);
+    settleFromMessageState.mockResolvedValue("active");
 
     const response = await handler.expireDraft();
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ outcome: "has_work", status: "created" });
-    expect(transition).not.toHaveBeenCalled();
+    expect(await response.json()).toEqual({ outcome: "has_work", status: "active" });
+    expect(settleFromMessageState).toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalledWith("archived");
   });
 
-  it("leaves a draft alone once work is queued", async () => {
+  it("settles a draft whose latest terminal message failed", async () => {
+    const { handler, getSession, repository, settleFromMessageState } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "created" }));
+    repository.getMessageCount.mockReturnValue(2);
+    repository.getPendingOrProcessingCount.mockReturnValue(0);
+    settleFromMessageState.mockResolvedValue("failed");
+
+    const response = await handler.expireDraft();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "has_work", status: "failed" });
+    expect(settleFromMessageState).toHaveBeenCalled();
+  });
+
+  it("never archives a draft that holds work", async () => {
+    // Archiving would discard a real queued request, and `archived` is not
+    // promptable, so the request could not even be resumed afterwards.
     const { handler, getSession, repository, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "created" }));
     repository.getPendingOrProcessingCount.mockReturnValue(1);
 
-    const response = await handler.expireDraft();
+    await handler.expireDraft();
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ outcome: "has_work", status: "created" });
-    expect(transition).not.toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalledWith("archived");
+  });
+
+  it("reports failure when stale index repair fails", async () => {
+    const { handler, getSession, repairIndexStatus } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "archived" }));
+    repairIndexStatus.mockRejectedValue(new Error("d1 down"));
+
+    await expect(handler.expireDraft()).rejects.toThrow(/d1 down/);
   });
 
   it("does not expire a session that has left the draft status", async () => {
@@ -898,17 +937,20 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).not.toHaveBeenCalledWith("archived");
   });
 
-  it("repairs a stale index rather than re-selecting the session forever", async () => {
+  it("repairs a stale index without claiming new activity", async () => {
     // A session reaches this branch when the index still reads `created` while
-    // the durable object has moved on — the shape left behind by a swallowed D1
-    // projection failure. Re-projecting is what stops the sweep looping on it.
-    const { handler, getSession, transition } = createHandler();
+    // the durable object has moved on. Repairing through `transition` would send
+    // the durable object's own `updated_at`, which the index rejects whenever D1
+    // is the newer of the two — a silent no-op that leaves the row selectable
+    // forever. The repair projects status alone instead.
+    const { handler, getSession, transition, repairIndexStatus } = createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
 
     const response = await handler.expireDraft();
 
     expect(await response.json()).toEqual({ outcome: "not_draft", status: "archived" });
-    expect(transition).toHaveBeenCalledWith("archived");
+    expect(repairIndexStatus).toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it("returns 404 when expiring a missing session", async () => {
@@ -954,11 +996,22 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).not.toHaveBeenCalled();
   });
 
-  it("unarchives successfully for participant", async () => {
-    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+  // Unarchive must not assert a status of its own. Forcing "active" left a
+  // session with no queued work claiming to be working: nothing settles an idle
+  // `active` session, because every settle path is driven by execution events,
+  // so it stayed in the sidebar's in-progress group until the next prompt.
+  // Deriving the status from message state is what makes the restore honest.
+  //
+  // The settle service is mocked here, so this asserts delegation and
+  // pass-through only -- one behaviour, not four. Which status each message
+  // state actually produces is covered against real DO storage in
+  // test/integration/session-lifecycle.test.ts.
+  it("delegates to the settle service and returns whatever it decides", async () => {
+    const { handler, getSession, getParticipantByUserId, transition, settleFromMessageState } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
     getParticipantByUserId.mockReturnValue(createParticipant());
-    transition.mockResolvedValue(true);
+    settleFromMessageState.mockResolvedValue("completed");
 
     const response = await handler.unarchive(
       new Request("http://internal/internal/unarchive", {
@@ -969,8 +1022,9 @@ describe("createSessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "active" });
-    expect(transition).toHaveBeenCalledWith("active");
+    expect(await response.json()).toEqual({ status: "completed" });
+    expect(settleFromMessageState).toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it("returns 409 when unarchiving a session that is not archived", async () => {
@@ -1011,7 +1065,7 @@ describe("createSessionLifecycleHandler", () => {
     } = createHandler();
     const ws = {} as WebSocket;
     getSession.mockReturnValue(createSession({ status: "active" }));
-    getSandbox.mockReturnValue(createSandbox({ status: "running" }));
+    getSandbox.mockReturnValue(createSandbox({ status: "ready" }));
     cancelSession.mockResolvedValue(undefined);
     getSandboxSocket.mockReturnValue(ws);
 
@@ -1020,7 +1074,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
     expect(cancelSession).toHaveBeenCalledOnce();
-    expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
+    expect(sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
   });
 });

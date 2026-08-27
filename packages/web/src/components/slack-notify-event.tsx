@@ -37,6 +37,10 @@ const DENIAL_COPY: Record<SlackDenialReason, { headline: string; hint?: string }
   slack_api_error: {
     headline: "Slack returned an unexpected error.",
   },
+  delivery_unknown: {
+    headline: "Slack may have posted the notification, but confirmation timed out.",
+    hint: "Check the channel before retrying to avoid posting it twice.",
+  },
   invalid_input: {
     headline: "The notification arguments were invalid.",
   },

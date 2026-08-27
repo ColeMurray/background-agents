@@ -6,10 +6,12 @@ import { createLogger } from "../logger";
 import { rejectInvalidCallback } from "./reject-invalid-callback";
 import { getLinearClient } from "../utils/linear-client";
 import { transitionIssueToStarted } from "../utils/issue-start-transition";
+import { abortable } from "../utils/abortable";
 
 const log = createLogger("callback");
 const START_CALLBACK_MAX_AGE_MS = 5 * 60 * 1000;
 const START_CALLBACK_MAX_FUTURE_SKEW_MS = 60 * 1000;
+export const START_CALLBACK_LINEAR_TIMEOUT_MS = 20_000;
 
 interface StartCallbackDependencies {
   getLinearClient: typeof getLinearClient;
@@ -76,9 +78,14 @@ export function createStartCallbackRouter(
       return c.json({ ok: true, outcome: "not_eligible" });
     }
 
+    const linearSignal = AbortSignal.timeout(START_CALLBACK_LINEAR_TIMEOUT_MS);
+
     let client;
     try {
-      client = await dependencies.getLinearClient(c.env, context.organizationId, context.appUserId);
+      client = await abortable(
+        dependencies.getLinearClient(c.env, context.organizationId, context.appUserId),
+        linearSignal
+      );
     } catch (error) {
       log.warn("callback.started", {
         ...callbackLogFields,
@@ -86,12 +93,17 @@ export function createStartCallbackRouter(
         error: error instanceof Error ? error : new Error(String(error)),
         duration_ms: dependencies.now() - requestStartedAt,
       });
-      return c.json({ error: "Linear authentication failed" }, 503);
+      return linearSignal.aborted
+        ? c.json({ error: "Linear request timed out" }, 504)
+        : c.json({ error: "Linear authentication failed" }, 503);
     }
     if (!client) return c.json({ error: "Linear authentication failed" }, 503);
 
     try {
-      const result = await dependencies.transitionIssueToStarted(client, context.issueId);
+      const result = await abortable(
+        dependencies.transitionIssueToStarted(client, context.issueId, linearSignal),
+        linearSignal
+      );
       log.info("callback.started", {
         ...callbackLogFields,
         issue_identifier: context.issueIdentifier,
@@ -112,7 +124,11 @@ export function createStartCallbackRouter(
         error: error instanceof Error ? error : new Error(String(error)),
         duration_ms: dependencies.now() - requestStartedAt,
       });
-      return c.json({ error: "Linear issue transition failed" }, 502);
+      const timedOut =
+        linearSignal.aborted || (error instanceof DOMException && error.name === "TimeoutError");
+      return timedOut
+        ? c.json({ error: "Linear request timed out" }, 504)
+        : c.json({ error: "Linear issue transition failed" }, 502);
     }
   });
 

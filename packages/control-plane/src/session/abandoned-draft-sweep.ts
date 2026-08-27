@@ -49,16 +49,24 @@ export const ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS = 10_000;
 export const draftExpiryOutcomeSchema = z.enum(["archived", "not_draft", "has_work"]);
 export type DraftExpiryOutcome = z.infer<typeof draftExpiryOutcomeSchema>;
 
+/**
+ * What the sweep saw for one candidate. `missing` is not one of the protocol
+ * outcomes above: the Durable Object answered 404, so no session exists behind
+ * the index row at all.
+ */
+export type DraftSweepOutcome = DraftExpiryOutcome | "missing";
+
 const draftExpiryResponseSchema = z.object({ outcome: draftExpiryOutcomeSchema });
 
-/** The index read the sweep needs; `SessionIndexStore` satisfies it. */
+/** The index access the sweep needs; `SessionIndexStore` satisfies it. */
 export interface AbandonedDraftIndex {
   listAbandonedDraftSessionIds(staleBefore: number, limit: number): Promise<string[]>;
+  archiveOrphanedDraft(id: string): Promise<boolean>;
 }
 
 /** Asks one session to retire itself. */
 export interface DraftExpiryClient {
-  expireDraft(sessionId: string): Promise<DraftExpiryOutcome>;
+  expireDraft(sessionId: string): Promise<DraftSweepOutcome>;
 }
 
 /**
@@ -76,6 +84,8 @@ export interface AbandonedDraftSweepResult {
   notDraft: number;
   /** Session still `created` but holds messages — a prompt that never dispatched. */
   hasWork: number;
+  /** Index row with no Durable Object session behind it; retired in the index. */
+  missing: number;
   errored: number;
   /** The query is capped, so a full batch means more remain for the next sweep. */
   truncated: boolean;
@@ -85,12 +95,18 @@ export interface AbandonedDraftSweepResult {
 export class SessionDraftExpiryClient implements DraftExpiryClient {
   constructor(private readonly sessions: DurableObjectNamespace) {}
 
-  async expireDraft(sessionId: string): Promise<DraftExpiryOutcome> {
+  async expireDraft(sessionId: string): Promise<DraftSweepOutcome> {
     const stub = this.sessions.get(this.sessions.idFromName(sessionId));
     const response = await stub.fetch(buildSessionInternalUrl(SessionInternalPaths.expireDraft), {
       method: "POST",
       signal: AbortSignal.timeout(ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS),
     });
+
+    // Reported rather than thrown: a 404 is a definitive answer about this row,
+    // so the sweep can retire it, where an error would have it retried forever.
+    if (response.status === 404) {
+      return "missing";
+    }
 
     if (!response.ok) {
       throw new Error(`Draft expiry failed with status ${response.status}`);
@@ -118,6 +134,11 @@ export class AbandonedDraftSweep {
    * Candidates come from the index, which may have been read before a prompt
    * arrived, so each session re-checks the invariant inside its own Durable
    * Object before transitioning.
+   *
+   * The batch is read oldest-first, which only drains while every visited row
+   * leaves the candidate set. Each outcome is therefore a state change: expired
+   * and repaired sessions leave `created` in the Durable Object, and a session
+   * that turns out not to exist is retired in the index here.
    */
   async run(now: number): Promise<AbandonedDraftSweepResult> {
     const empty: AbandonedDraftSweepResult = {
@@ -125,6 +146,7 @@ export class AbandonedDraftSweep {
       archived: 0,
       notDraft: 0,
       hasWork: 0,
+      missing: 0,
       errored: 0,
       truncated: false,
     };
@@ -143,7 +165,7 @@ export class AbandonedDraftSweep {
     if (candidates.length === 0) return empty;
 
     const outcomes = await Promise.allSettled(
-      candidates.map((sessionId) => this.client.expireDraft(sessionId))
+      candidates.map((sessionId) => this.expireOne(sessionId))
     );
 
     const result: AbandonedDraftSweepResult = {
@@ -151,6 +173,7 @@ export class AbandonedDraftSweep {
       archived: 0,
       notDraft: 0,
       hasWork: 0,
+      missing: 0,
       errored: 0,
       truncated: candidates.length === this.limit,
     };
@@ -167,23 +190,50 @@ export class AbandonedDraftSweep {
         result.archived += 1;
       } else if (outcome.value === "not_draft") {
         result.notDraft += 1;
-      } else {
+      } else if (outcome.value === "has_work") {
         result.hasWork += 1;
+      } else {
+        result.missing += 1;
       }
     }
 
     // Serialized field by field rather than spread: log fields are snake_case
-    // here, and these two share their names with the protocol outcomes.
+    // here, and several share their names with the protocol outcomes.
     this.log.info("Abandoned draft sweep completed", {
       event: "scheduler.abandoned_draft_sweep",
       candidates: result.candidates,
       archived: result.archived,
       not_draft: result.notDraft,
       has_work: result.hasWork,
+      missing: result.missing,
       errored: result.errored,
       truncated: result.truncated,
     });
 
+    // Only a failure leaves a row in place, so a full batch where nothing else
+    // happened means the next run reads exactly these rows again. Raised loudly
+    // because the symptom is otherwise indistinguishable from routine work: the
+    // sweep spun on the same 50 rows for a day logging `truncated` at info.
+    if (result.truncated && result.candidates === result.errored) {
+      this.log.error("Abandoned draft sweep made no progress", {
+        event: "scheduler.abandoned_draft_sweep_stalled",
+        candidates: result.candidates,
+        errored: result.errored,
+      });
+    }
+
     return result;
+  }
+
+  /**
+   * A missing session is retired here rather than by its Durable Object: there
+   * is no Durable Object to do it, which is exactly what the 404 established.
+   */
+  private async expireOne(sessionId: string): Promise<DraftSweepOutcome> {
+    const outcome = await this.client.expireDraft(sessionId);
+    if (outcome === "missing") {
+      await this.index.archiveOrphanedDraft(sessionId);
+    }
+    return outcome;
   }
 }

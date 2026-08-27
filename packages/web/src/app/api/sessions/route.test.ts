@@ -205,6 +205,60 @@ describe("sessions API route (POST)", () => {
     expect(sent.environmentId).toBeUndefined();
   });
 
+  it("forwards only the managed skill selection from the browser", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ id: "sess-skills" }, { status: 201 })
+    );
+
+    await POST(
+      postRequest({
+        repoOwner: "acme",
+        repoName: "web",
+        skillSelection: { mode: "profile", profileId: "profile-1" },
+        skillIds: ["caller-controlled-id"],
+      })
+    );
+
+    expect(controlPlaneBody()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      skillSelection: { mode: "profile", profileId: "profile-1" },
+    });
+  });
+
+  it("forwards bounded provider selections without forwarding adjacent hostile fields", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ id: "sess-provider" }, { status: 201 })
+    );
+
+    await POST(
+      postRequest({
+        repoOwner: "acme",
+        repoName: "web",
+        providerSelections: {
+          openai: { mode: "provider_account", accountId: "a".repeat(32) },
+          xai: { mode: "api_key" },
+        },
+        providerAuth: [{ credential: "must-not-forward" }],
+      })
+    );
+
+    expect(controlPlaneBody()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      providerSelections: {
+        openai: { mode: "provider_account", accountId: "a".repeat(32) },
+        xai: { mode: "api_key" },
+      },
+    });
+  });
+
   it("still strips fields outside the allowlist", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "0123456789abcdef0123456789abcdef" },

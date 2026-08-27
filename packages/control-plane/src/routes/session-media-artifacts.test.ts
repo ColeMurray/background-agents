@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { SessionRouteContext } from "./session-route";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import {
   getSessionArtifactFromRuntime,
   listSessionArtifactsFromRuntime,
@@ -17,6 +18,7 @@ function createContext(response: Response): SessionRouteContext {
     trace_id: "trace-1",
     request_id: "request-1",
     db: {} as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},

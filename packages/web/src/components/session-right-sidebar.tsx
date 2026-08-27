@@ -24,6 +24,7 @@ import type {
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -199,6 +200,8 @@ export function SessionRightSidebarContent({
 
       {/* Child Sessions */}
       <ChildSessionsSection sessionId={sessionState.id} />
+
+      <ManagedSkillsSection sessionId={sessionState.id} />
 
       {/* Canonical durable checkout changes */}
       {diffView.kind !== "hidden" && (

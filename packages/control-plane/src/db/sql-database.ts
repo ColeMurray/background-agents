@@ -16,7 +16,7 @@
  * exists exactly because wrapped statements cross into the raw db.batch()).
  *
  * Not to be confused with the session Durable Object's synchronous
- * `SqlStorage` (src/session/repository.ts) — that is a different engine with
+ * `SqlStorage` (src/session/sql-storage.ts) — that is a different engine with
  * a load-bearing sync contract, and is intentionally not covered by this port.
  */
 

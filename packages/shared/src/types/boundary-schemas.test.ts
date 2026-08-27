@@ -18,6 +18,8 @@ import {
   createSessionRequestSchema,
   createSessionResponseSchema,
   MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
+  linearCompletionCallbackSchema,
+  linearToolCallCallbackSchema,
   sendPromptRequestSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
@@ -415,6 +417,55 @@ describe("boundary schemas", () => {
         }).success
       ).toBe(false);
       expect(callbackContextSchema.safeParse({ source: "github" }).success).toBe(false);
+    });
+  });
+
+  describe("Linear callback schemas", () => {
+    const context = {
+      source: "linear",
+      issueId: "issue-1",
+      issueIdentifier: "OI-123",
+      issueUrl: "https://linear.app/open-inspect/issue/OI-123/test",
+      model: "anthropic/claude-sonnet-4-6",
+    };
+
+    it("requires a complete completion callback and valid Linear context", () => {
+      const callback = {
+        sessionId: "session-1",
+        messageId: "message-1",
+        success: true,
+        timestamp: 123,
+        context,
+        signature: "signature",
+      };
+
+      expect(linearCompletionCallbackSchema.safeParse(callback).success).toBe(true);
+      expect(
+        linearCompletionCallbackSchema.safeParse({
+          ...callback,
+          context: { source: "linear", issueId: "issue-1" },
+        }).success
+      ).toBe(false);
+    });
+
+    it("requires tool args and callId", () => {
+      const callback = {
+        sessionId: "session-1",
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "call-1",
+        timestamp: 123,
+        context,
+        signature: "signature",
+      };
+
+      expect(linearToolCallCallbackSchema.safeParse(callback).success).toBe(true);
+      const { args: _args, ...withoutArgs } = callback;
+      expect(linearToolCallCallbackSchema.safeParse(withoutArgs).success).toBe(false);
+      expect(linearToolCallCallbackSchema.safeParse({ ...callback, callId: "" }).success).toBe(
+        false
+      );
+      expect(linearToolCallCallbackSchema.safeParse({ ...callback, tool: "" }).success).toBe(false);
     });
   });
 

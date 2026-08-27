@@ -13,7 +13,10 @@ import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
+import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
+import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -25,6 +28,8 @@ import {
   resolveRepoOrError,
   type RequestContext,
   type Route,
+  GITHUB_USER_OR_SERVICE_ROUTE,
+  defineRoutes,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -182,6 +187,32 @@ async function handleCreateSession(
   );
 
   const sessionId = generateId();
+  let providerAuth;
+  try {
+    providerAuth = await resolveSessionProviderAuth(ctx.db, {
+      explicit: body.providerSelections,
+      unattended: spawnSource !== undefined && spawnSource !== "user",
+    });
+  } catch (e) {
+    if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
+    throw e;
+  }
+
+  let managedSkillsManifest;
+  try {
+    managedSkillsManifest = await resolveManagedSkills(
+      ctx.db,
+      {
+        repositories: scopeMembers,
+        environmentId,
+      },
+      body.skillSelection ?? { mode: "all" },
+      resolvedUserId
+    );
+  } catch (e) {
+    if (e instanceof SkillResolutionError) return error(e.message, e.status);
+    throw e;
+  }
 
   const input: SessionInitInput = {
     sessionId,
@@ -208,6 +239,8 @@ async function handleCreateSession(
     vncEnabled,
     sandboxSettings,
     spawnSource,
+    managedSkillsManifest,
+    providerAuth,
   };
 
   try {
@@ -229,10 +262,10 @@ async function handleCreateSession(
   return json(result, 201);
 }
 
-export const sessionCreateRoutes: Route[] = [
+export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "POST",
     pattern: parsePattern("/sessions"),
     handler: handleCreateSession,
   },
-];
+]);

@@ -146,7 +146,7 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
 
   const repository: PullRequestRepository = {
     getSession: () => session,
-    // Mirrors SessionRepository.getSessionRepositories: members derive from the
+    // Mirrors SessionCoreRepository.getSessionRepositories: members derive from the
     // session scalars plus whatever rows the test seeds.
     getSessionRepositories: () =>
       session?.repo_owner && session.repo_name
@@ -203,7 +203,7 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
     log,
     generateId: () => `id-${++idCounter}`,
     pushBranchToRemote: vi.fn(async () => ({ success: true as const })),
-    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
+    messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) },
     appName: "Open-Inspect",
     sessionPullRequests,
     resolveScmSettings: vi.fn(async () => options.scmSettings ?? {}),

@@ -15,7 +15,6 @@ import {
   postMessage,
   publishView,
   removeReaction,
-  SLACK_USER_INFO_TIMEOUT_MS,
   updateMessage,
   uploadToExternalUrl,
 } from "./client";
@@ -63,7 +62,8 @@ describe("external file uploads", () => {
     );
     expect(init?.method).toBe("GET");
     expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer xoxb-token");
-    expect(init?.signal).toBe(signal);
+    expect(init?.signal).not.toBe(signal);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(init?.body).toBeUndefined();
   });
 
@@ -86,7 +86,8 @@ describe("external file uploads", () => {
     expect(init?.method).toBe("POST");
     expect(init?.body).toBe(body);
     expect(init?.headers).toEqual({ "Content-Type": "image/png" });
-    expect(init?.signal).toBe(signal);
+    expect(init?.signal).not.toBe(signal);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("normalizes raw upload HTTP and network failures", async () => {
@@ -123,7 +124,8 @@ describe("external file uploads", () => {
     expect(result.ok).toBe(true);
     const [url, init] = fetchSpy.mock.calls[0]!;
     expect(url).toBe("https://slack.com/api/files.completeUploadExternal");
-    expect(init?.signal).toBe(signal);
+    expect(init?.signal).not.toBe(signal);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(String(init?.body))).toEqual({
       files: [
         { id: "F123", title: "Revenue chart" },
@@ -619,8 +621,6 @@ describe("getUserInfo", () => {
   });
 
   it("fetches user info via GET with user query", async () => {
-    const timeoutSignal = new AbortController().signal;
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
         ok: true,
@@ -637,8 +637,6 @@ describe("getUserInfo", () => {
     }
     const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toBe("https://slack.com/api/users.info?user=U1");
-    expect(timeoutSpy).toHaveBeenCalledWith(SLACK_USER_INFO_TIMEOUT_MS);
-    expect(fetchSpy.mock.calls[0]![1]?.signal).toBe(timeoutSignal);
   });
 
   it("returns Slack's error envelope on user_not_found", async () => {
