@@ -1,14 +1,15 @@
 import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
 import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import { isEnvironmentId } from "@open-inspect/shared/types/environments";
+import { type z } from "zod";
 import {
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
-  integrationGlobalSettingsSchemas,
-  integrationRepoSettingsSchemas,
+  getIntegrationGlobalSettingsSchema,
+  getIntegrationRepoSettingsSchema,
   normalizeRoutingRules,
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
@@ -27,6 +28,12 @@ import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
 
 type SettingsLevel = "global" | "repo";
+type IntegrationSettingsAtLevel<
+  K extends keyof IntegrationSettingsMap,
+  L extends SettingsLevel,
+> = L extends "global"
+  ? NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>
+  : IntegrationSettingsMap[K]["repo"];
 
 const SLACK_MENTIONS_POLICIES = ["allow", "escape", "strip"] as const;
 
@@ -45,36 +52,35 @@ export function isValidIntegrationId(id: string): id is IntegrationId {
 
 const ENVIRONMENT_SETTINGS_INTEGRATIONS = new Set<string>(ENVIRONMENT_SETTINGS_INTEGRATION_IDS);
 
-function parseStoredGlobalSettings<K extends keyof IntegrationSettingsMap>(
-  integrationId: K,
-  raw: string
-): IntegrationSettingsMap[K]["global"] {
-  const parsed = JSON.parse(raw) as unknown;
-  const result = integrationGlobalSettingsSchemas[integrationId].safeParse(parsed);
+function parseSettings<TSchema extends z.ZodType<object>>(
+  schema: TSchema,
+  value: unknown,
+  description: string
+): z.output<TSchema> {
+  const result = schema.safeParse(value);
   if (!result.success) {
-    throw new IntegrationSettingsValidationError(
-      `Stored global integration settings are invalid: ${result.error.issues[0]?.message ?? "invalid shape"}`
-    );
+    const issue = result.error.issues[0];
+    const detail =
+      issue?.code === "invalid_type" && issue.expected === "boolean" && issue.path.length > 0
+        ? `${issue.path.join(".")} must be a boolean`
+        : (issue?.message ?? "invalid shape");
+    throw new IntegrationSettingsValidationError(`${description} are invalid: ${detail}`);
   }
-
-  // SAFETY: The schema is selected by the same integration id as the generic return type.
-  return result.data as IntegrationSettingsMap[K]["global"];
+  return result.data;
 }
 
-function parseStoredRepoSettings<K extends keyof IntegrationSettingsMap>(
-  integrationId: K,
-  raw: string
-): IntegrationSettingsMap[K]["repo"] {
-  const parsed = JSON.parse(raw) as unknown;
-  const result = integrationRepoSettingsSchemas[integrationId].safeParse(parsed);
-  if (!result.success) {
-    throw new IntegrationSettingsValidationError(
-      `Stored repo integration settings are invalid: ${result.error.issues[0]?.message ?? "invalid shape"}`
-    );
+function parseStoredSettings<TSchema extends z.ZodType<object>>(
+  schema: TSchema,
+  raw: string,
+  description: string
+): z.output<TSchema> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new IntegrationSettingsValidationError(`${description} are invalid: malformed JSON`);
   }
-
-  // SAFETY: The schema is selected by the same integration id as the generic return type.
-  return result.data as IntegrationSettingsMap[K]["repo"];
+  return parseSettings(schema, parsed, description);
 }
 
 /** Whether an integration accepts environment-level setting overrides (design §13.5). */
@@ -96,7 +102,11 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = parseStoredGlobalSettings(integrationId, row.settings);
+    const settings = parseStoredSettings(
+      getIntegrationGlobalSettingsSchema(integrationId),
+      row.settings,
+      "Stored global integration settings"
+    );
     return this.normalizeStoredGlobalSettings(integrationId, settings);
   }
 
@@ -104,6 +114,12 @@ export class IntegrationSettingsStore {
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): Promise<void> {
+    settings = parseSettings(
+      getIntegrationGlobalSettingsSchema(integrationId),
+      settings,
+      "Global integration settings"
+    );
+
     if (settings.enabledRepos !== undefined && settings.enabledRepos !== null) {
       if (
         !Array.isArray(settings.enabledRepos) ||
@@ -156,7 +172,11 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = parseStoredRepoSettings(integrationId, row.settings);
+    const settings = parseStoredSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      row.settings,
+      "Stored repo integration settings"
+    );
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
@@ -165,7 +185,12 @@ export class IntegrationSettingsStore {
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
+    const structurallyValid = parseSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      settings,
+      "Repo integration settings"
+    );
+    const normalized = this.validateAndNormalizeSettings(integrationId, structurallyValid, "repo");
 
     const now = Date.now();
     await this.db
@@ -202,7 +227,11 @@ export class IntegrationSettingsStore {
       repo: row.repo,
       settings: this.normalizeStoredRepoSettings(
         integrationId,
-        JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"]
+        parseStoredSettings(
+          getIntegrationRepoSettingsSchema(integrationId),
+          row.settings,
+          "Stored repo integration settings"
+        )
       ),
     }));
   }
@@ -225,7 +254,11 @@ export class IntegrationSettingsStore {
       .first<{ settings: string }>();
 
     if (!row) return null;
-    const settings = parseStoredRepoSettings(integrationId, row.settings);
+    const settings = parseStoredSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      row.settings,
+      "Stored environment integration settings"
+    );
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
@@ -234,7 +267,12 @@ export class IntegrationSettingsStore {
     environmentId: string,
     settings: IntegrationSettingsMap[K]["repo"]
   ): Promise<void> {
-    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
+    const structurallyValid = parseSettings(
+      getIntegrationRepoSettingsSchema(integrationId),
+      settings,
+      "Environment integration settings"
+    );
+    const normalized = this.validateAndNormalizeSettings(integrationId, structurallyValid, "repo");
 
     const now = Date.now();
     await this.db
@@ -334,15 +372,18 @@ export class IntegrationSettingsStore {
     }) as IntegrationSettingsMap[K]["repo"];
   }
 
-  private validateAndNormalizeSettings<K extends keyof IntegrationSettingsMap>(
+  private validateAndNormalizeSettings<
+    K extends keyof IntegrationSettingsMap,
+    L extends SettingsLevel,
+  >(
     integrationId: K,
-    settings: IntegrationSettingsMap[K]["repo"],
-    level: SettingsLevel
-  ): IntegrationSettingsMap[K]["repo"] {
+    settings: IntegrationSettingsAtLevel<K, L>,
+    level: L
+  ): IntegrationSettingsAtLevel<K, L> {
     if (integrationId === "github") {
       return this.validateAndNormalizeGitHubSettings(
         settings as GitHubBotSettings
-      ) as IntegrationSettingsMap[K]["repo"];
+      ) as IntegrationSettingsAtLevel<K, L>;
     }
 
     if (integrationId === "linear") {
@@ -361,14 +402,14 @@ export class IntegrationSettingsStore {
       return normalizeSandboxSettings(settings, {
         invalid: "throw",
         createError: (message) => new IntegrationSettingsValidationError(message),
-      }) as IntegrationSettingsMap[K]["repo"];
+      }) as IntegrationSettingsAtLevel<K, L>;
     }
 
     if (integrationId === "slack") {
       return this.validateSlackSettings(
         settings as SlackGlobalSettings,
         level
-      ) as IntegrationSettingsMap[K]["repo"];
+      ) as IntegrationSettingsAtLevel<K, L>;
     }
 
     return settings;

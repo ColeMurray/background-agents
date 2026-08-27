@@ -10,8 +10,7 @@ import {
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
-  integrationGlobalSettingsSchemas,
-  integrationRepoSettingsSchemas,
+  integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "./integrations";
@@ -196,31 +195,47 @@ describe("slackIntegrationSettingsRoutingResponseSchema", () => {
 describe("integration settings schemas", () => {
   it("parses valid global and repo settings", () => {
     expect(
-      integrationGlobalSettingsSchemas.github.safeParse({
+      integrationSettingsSchemas.github.global.safeParse({
         enabledRepos: null,
         defaults: { autoReviewOnOpen: false, allowedTriggerUsers: ["alice"] },
       }).success
     ).toBe(true);
     expect(
-      integrationRepoSettingsSchemas.slack.safeParse({ agentNotificationsEnabled: true }).success
+      integrationSettingsSchemas.slack.repo.safeParse({ agentNotificationsEnabled: true }).success
     ).toBe(true);
   });
 
   it("rejects malformed stored settings", () => {
     expect(
-      integrationGlobalSettingsSchemas.github.safeParse({
+      integrationSettingsSchemas.github.global.safeParse({
         enabledRepos: [42],
         defaults: { autoReviewOnOpen: false },
       }).success
     ).toBe(false);
     expect(
-      integrationRepoSettingsSchemas.slack.safeParse({ agentNotificationsEnabled: "yes" }).success
+      integrationSettingsSchemas.slack.repo.safeParse({ agentNotificationsEnabled: "yes" }).success
+    ).toBe(false);
+  });
+
+  it("rejects unknown keys without stripping them", () => {
+    expect(
+      integrationSettingsSchemas.github.global.safeParse({
+        defaults: { autoReviewOnOpen: false, autoReviewOnOpened: true },
+      }).success
+    ).toBe(false);
+    expect(
+      integrationSettingsSchemas.github.repo.safeParse({
+        autofix: { enabled: true, unknownPolicy: true },
+      }).success
+    ).toBe(false);
+    expect(
+      integrationSettingsSchemas.scm.global.safeParse({ enabledRepos: ["acme/widgets"] }).success
     ).toBe(false);
   });
 
   it("parses nullable sandbox resource settings", () => {
     expect(
-      integrationRepoSettingsSchemas.sandbox.safeParse({ cpuCores: null, memoryMib: null }).success
+      integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
     ).toBe(true);
   });
 });

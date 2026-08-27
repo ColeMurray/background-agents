@@ -11,21 +11,23 @@ export interface IntegrationEntry<
   TGlobalDefaults extends object = TRepo,
 > {
   global: {
-    enabledRepos?: string[] | null;
+    enabledRepos?: string[];
     defaults?: TGlobalDefaults;
   };
   repo: TRepo;
 }
 
-/** Overridable behavior settings for the GitHub bot. Used at both global (defaults) and per-repo (overrides) levels. */
-export interface GitHubAutofixSettings {
-  enabled?: boolean;
-  reviewsEnabled?: boolean;
-  prCommentsEnabled?: boolean;
-  openInspectReviewsEnabled?: boolean;
-  allowedReviewBots?: string[];
-  maxAttemptsPerPrPer24Hours?: number;
-}
+/** Overridable behavior settings for GitHub Autofix. */
+export const githubAutofixSettingsSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  reviewsEnabled: z.boolean().optional(),
+  prCommentsEnabled: z.boolean().optional(),
+  openInspectReviewsEnabled: z.boolean().optional(),
+  allowedReviewBots: z.array(z.string()).optional(),
+  maxAttemptsPerPrPer24Hours: z.number().optional(),
+});
+
+export type GitHubAutofixSettings = z.infer<typeof githubAutofixSettingsSchema>;
 
 export interface ResolvedGitHubAutofixSettings {
   enabled: boolean;
@@ -45,16 +47,8 @@ export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
   maxAttemptsPerPrPer24Hours: 10,
 };
 
-export const githubAutofixSettingsSchema = z.object({
-  enabled: z.boolean().optional(),
-  reviewsEnabled: z.boolean().optional(),
-  prCommentsEnabled: z.boolean().optional(),
-  openInspectReviewsEnabled: z.boolean().optional(),
-  allowedReviewBots: z.array(z.string()).optional(),
-  maxAttemptsPerPrPer24Hours: z.number().optional(),
-});
-
-export const githubBotSettingsSchema = z.object({
+/** Overridable behavior settings for the GitHub bot. Used at both global and repo levels. */
+export const githubBotSettingsSchema = z.strictObject({
   autoReviewOnOpen: z.boolean().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
@@ -71,7 +65,7 @@ export type GitHubBotSettings = z.infer<typeof githubBotSettingsSchema>;
  *
  * Provider-agnostic: applies to both GitHub and GitLab.
  */
-export const scmSettingsSchema = z.object({
+export const scmSettingsSchema = z.strictObject({
   /** Always open pull/merge requests created by sessions as drafts. */
   alwaysUseDraftMode: z.boolean().optional(),
   /** Label applied to pull/merge requests created by sessions. */
@@ -84,7 +78,7 @@ export type ScmSettings = z.infer<typeof scmSettingsSchema>;
 export type ScmRepoSettings = ScmSettings;
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
-export const linearBotSettingsSchema = z.object({
+export const linearBotSettingsSchema = z.strictObject({
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   allowUserPreferenceOverride: z.boolean().optional(),
@@ -103,14 +97,14 @@ export type LinearBotSettings = z.infer<typeof linearBotSettingsSchema>;
 export const MAX_SESSION_INSTRUCTIONS_LENGTH = 10000;
 
 /** Overridable behavior settings for the code-server integration. */
-export const codeServerSettingsSchema = z.object({
+export const codeServerSettingsSchema = z.strictObject({
   enabled: z.boolean().optional(),
 });
 
 export type CodeServerSettings = z.infer<typeof codeServerSettingsSchema>;
 
 /** Overridable behavior settings for the VNC desktop integration. */
-export const vncSettingsSchema = z.object({
+export const vncSettingsSchema = z.strictObject({
   enabled: z.boolean().optional(),
 });
 
@@ -221,7 +215,7 @@ export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
  * unset, the provider's own default applies. At repo scope, `null` explicitly
  * uses the provider default instead of inheriting a global resource default.
  */
-export const sandboxSettingsSchema = z.object({
+export const sandboxSettingsSchema = z.strictObject({
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
   tunnelPorts: z.array(z.number()).optional(),
   /** Enable a browser-based terminal (ttyd) in sandbox sessions. */
@@ -315,7 +309,7 @@ export const MAX_SLACK_ROUTING_RULES = 100;
 export const MAX_SLACK_ROUTING_KEYWORD_LENGTH = 100;
 
 /** Per-repo Slack overrides. Mentions policy is workspace-wide and cannot be overridden per repo. */
-export const slackRepoSettingsSchema = z.object({
+export const slackRepoSettingsSchema = z.strictObject({
   agentNotificationsEnabled: z.boolean().optional(),
 });
 
@@ -326,7 +320,7 @@ export const slackGlobalSettingsSchema = slackRepoSettingsSchema.extend({
   model: z.string().optional(),
   mentionsPolicy: z.enum(["allow", "escape", "strip"]).optional(),
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
-  routingRules: z.array(slackRoutingRuleSchema).optional(),
+  routingRules: z.array(slackRoutingRuleSchema.strict()).optional(),
   /** Custom instructions appended to the first prompt of every Slack-initiated session. */
   sessionInstructions: z.string().optional(),
 });
@@ -401,56 +395,81 @@ export const ENVIRONMENT_SETTINGS_INTEGRATION_IDS = ["sandbox", "code-server", "
 export type EnvironmentSettingsIntegrationId =
   (typeof ENVIRONMENT_SETTINGS_INTEGRATION_IDS)[number];
 
-/** Maps each integration ID to its global and per-repo settings types. */
-export interface IntegrationSettingsMap {
-  github: IntegrationEntry<GitHubBotSettings>;
-  linear: IntegrationEntry<LinearBotSettings>;
-  "code-server": IntegrationEntry<CodeServerSettings>;
-  vnc: IntegrationEntry<VncSettings>;
-  sandbox: IntegrationEntry<SandboxSettings>;
-  slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
-  scm: IntegrationEntry<ScmSettings>;
+function integrationGlobalSettingsSchema<T extends z.ZodType<object>>(defaults: T) {
+  return z.strictObject({
+    enabledRepos: z.array(z.string()).nullable().optional(),
+    defaults: defaults.optional(),
+  });
 }
 
-export const integrationRepoSettingsSchemas = {
-  github: githubBotSettingsSchema,
-  linear: linearBotSettingsSchema,
-  "code-server": codeServerSettingsSchema,
-  vnc: vncSettingsSchema,
-  sandbox: sandboxSettingsSchema,
-  slack: slackRepoSettingsSchema,
-  scm: scmSettingsSchema,
+/** Runtime schemas are the source of truth for every persisted settings type. */
+export const integrationSettingsSchemas = {
+  github: {
+    global: integrationGlobalSettingsSchema(githubBotSettingsSchema),
+    repo: githubBotSettingsSchema,
+  },
+  linear: {
+    global: integrationGlobalSettingsSchema(linearBotSettingsSchema),
+    repo: linearBotSettingsSchema,
+  },
+  "code-server": {
+    global: integrationGlobalSettingsSchema(codeServerSettingsSchema),
+    repo: codeServerSettingsSchema,
+  },
+  vnc: {
+    global: integrationGlobalSettingsSchema(vncSettingsSchema),
+    repo: vncSettingsSchema,
+  },
+  sandbox: {
+    global: integrationGlobalSettingsSchema(sandboxSettingsSchema),
+    repo: sandboxSettingsSchema,
+  },
+  slack: {
+    global: integrationGlobalSettingsSchema(slackGlobalSettingsSchema),
+    repo: slackRepoSettingsSchema,
+  },
+  scm: {
+    global: z.strictObject({
+      enabledRepos: z.never().optional(),
+      defaults: scmSettingsSchema.optional(),
+    }),
+    repo: scmSettingsSchema,
+  },
 } as const;
 
-export const integrationGlobalSettingsSchemas = {
-  github: z.object({
-    enabledRepos: z.array(z.string()).nullable().optional(),
-    defaults: githubBotSettingsSchema.optional(),
-  }),
-  linear: z.object({
-    enabledRepos: z.array(z.string()).nullable().optional(),
-    defaults: linearBotSettingsSchema.optional(),
-  }),
-  "code-server": z.object({
-    enabledRepos: z.array(z.string()).nullable().optional(),
-    defaults: codeServerSettingsSchema.optional(),
-  }),
-  vnc: z.object({
-    enabledRepos: z.array(z.string()).nullable().optional(),
-    defaults: vncSettingsSchema.optional(),
-  }),
-  sandbox: z.object({
-    enabledRepos: z.array(z.string()).nullable().optional(),
-    defaults: sandboxSettingsSchema.optional(),
-  }),
-  slack: z.object({
-    enabledRepos: z.array(z.string()).nullable().optional(),
-    defaults: slackGlobalSettingsSchema.optional(),
-  }),
-  scm: z.object({
-    defaults: scmSettingsSchema.optional(),
-  }),
-} as const;
+export type IntegrationGlobalSettings<K extends keyof typeof integrationSettingsSchemas> = z.output<
+  (typeof integrationSettingsSchemas)[K]["global"]
+>;
+
+export type IntegrationRepoSettings<K extends keyof typeof integrationSettingsSchemas> = z.output<
+  (typeof integrationSettingsSchemas)[K]["repo"]
+>;
+
+export function getIntegrationGlobalSettingsSchema<
+  K extends keyof typeof integrationSettingsSchemas,
+>(integrationId: K): z.ZodType<IntegrationGlobalSettings<K>>;
+export function getIntegrationGlobalSettingsSchema(
+  integrationId: keyof typeof integrationSettingsSchemas
+) {
+  return integrationSettingsSchemas[integrationId].global;
+}
+
+export function getIntegrationRepoSettingsSchema<K extends keyof typeof integrationSettingsSchemas>(
+  integrationId: K
+): z.ZodType<IntegrationRepoSettings<K>>;
+export function getIntegrationRepoSettingsSchema(
+  integrationId: keyof typeof integrationSettingsSchemas
+) {
+  return integrationSettingsSchemas[integrationId].repo;
+}
+
+/** Maps each storage key to types inferred from its runtime schemas. */
+export type IntegrationSettingsMap = {
+  [K in keyof typeof integrationSettingsSchemas]: {
+    global: IntegrationGlobalSettings<K>;
+    repo: IntegrationRepoSettings<K>;
+  };
+};
 
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
