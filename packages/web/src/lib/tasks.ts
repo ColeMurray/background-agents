@@ -12,12 +12,16 @@ const todoWriteArgsSchema = z.object({
     .array(
       z.object({
         content: z.string().optional(),
-        status: z.enum(["pending", "in_progress", "completed"]).optional(),
+        status: z.string().optional(),
         activeForm: z.string().optional(),
       })
     )
     .optional(),
 });
+
+function normalizeTaskStatus(status: string | undefined): Task["status"] {
+  return status === "in_progress" || status === "completed" ? status : "pending";
+}
 
 /**
  * Extract the latest task list from sandbox events
@@ -46,7 +50,7 @@ export function extractLatestTasks(events: SandboxEvent[]): Task[] {
 
   return parsedArgs.data.todos.map((todo) => ({
     content: todo.content || "",
-    status: todo.status || "pending",
+    status: normalizeTaskStatus(todo.status),
     activeForm: todo.activeForm,
   }));
 }

@@ -41,4 +41,20 @@ describe("extractLatestTasks", () => {
       { content: "", status: "pending", activeForm: undefined },
     ]);
   });
+
+  it("normalizes producer statuses without discarding the todo list", () => {
+    expect(
+      extractLatestTasks([
+        toolCall({
+          todos: [
+            { content: "Stopped work", status: "cancelled" },
+            { content: "Kept result", status: "completed" },
+          ],
+        }),
+      ])
+    ).toEqual([
+      { content: "Stopped work", status: "pending", activeForm: undefined },
+      { content: "Kept result", status: "completed", activeForm: undefined },
+    ]);
+  });
 });

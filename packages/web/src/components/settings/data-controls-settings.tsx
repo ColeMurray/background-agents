@@ -4,14 +4,15 @@ import { useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
-import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
   buildSessionHref,
   buildSessionsPageKey,
+  fetchSessionListPage,
   isUnarchivedSessionListKey,
   removeSessionFromList,
+  type SessionListItem,
   type SessionListResponse,
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
@@ -24,36 +25,23 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
   offset: 0,
 });
 
-const archivedSessionSchema = z.object({
-  id: z.string(),
-  title: z.string().nullable(),
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-});
-
-const archivedSessionsPageSchema = z.object({
-  sessions: z.array(archivedSessionSchema),
-  hasMore: z.boolean(),
-});
-
-type ArchivedSession = z.infer<typeof archivedSessionSchema>;
-
 export function DataControlsSettings() {
-  const [extraSessions, setExtraSessions] = useState<ArchivedSession[]>([]);
+  const [extraSessions, setExtraSessions] = useState<SessionListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const offsetRef = useRef(0);
 
-  const { data, isLoading: loading } = useSWR<SessionListResponse>(ARCHIVED_SESSIONS_KEY, {
-    onSuccess: (data) => {
-      const fetched = data.sessions || [];
-      setHasMore(data.hasMore);
-      offsetRef.current = fetched.length;
-      setExtraSessions([]);
-    },
-  });
+  const { data, isLoading: loading } = useSWR<SessionListResponse>(
+    ARCHIVED_SESSIONS_KEY,
+    fetchSessionListPage,
+    {
+      onSuccess: (data) => {
+        setHasMore(data.hasMore);
+        offsetRef.current = data.sessions.length;
+        setExtraSessions([]);
+      },
+    }
+  );
 
   const firstPageSessions = data?.sessions ?? [];
   const sessions = [...firstPageSessions, ...extraSessions];
@@ -61,23 +49,16 @@ export function DataControlsSettings() {
   const handleLoadMore = useCallback(async () => {
     setLoadingMore(true);
     try {
-      const res = await browserApiFetch(
+      const page = await fetchSessionListPage(
         buildSessionsPageKey({
           status: "archived",
           limit: PAGE_SIZE,
           offset: offsetRef.current,
         })
       );
-      if (res.ok) {
-        const parsed = archivedSessionsPageSchema.safeParse(await res.json());
-        if (!parsed.success) {
-          throw new Error("Invalid archived sessions response");
-        }
-        const fetched = parsed.data.sessions;
-        setExtraSessions((prev) => [...prev, ...fetched]);
-        setHasMore(parsed.data.hasMore);
-        offsetRef.current += fetched.length;
-      }
+      setExtraSessions((prev) => [...prev, ...page.sessions]);
+      setHasMore(page.hasMore);
+      offsetRef.current += page.sessions.length;
     } catch (error) {
       console.error("Failed to fetch archived sessions:", error);
     } finally {
@@ -171,7 +152,7 @@ function ArchivedSessionRow({
   session,
   onUnarchive,
 }: {
-  session: ArchivedSession;
+  session: SessionListItem;
   onUnarchive: (id: string) => void;
 }) {
   const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);

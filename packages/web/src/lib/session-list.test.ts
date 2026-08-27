@@ -1,16 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyTitleUpdate,
   applySessionReadState,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
+  fetchSessionListPage,
   isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
   type SessionListResponse,
 } from "./session-list";
 import type { Session } from "@open-inspect/shared/types/sessions";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function session(id: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -55,6 +61,34 @@ describe("buildSessionsPageKey", () => {
     ).toBe(
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
+  });
+});
+
+describe("fetchSessionListPage", () => {
+  it("parses the session-list boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          sessions: [session("session-1")],
+          hasMore: false,
+        })
+      )
+    );
+
+    await expect(fetchSessionListPage(buildSessionsPageKey())).resolves.toMatchObject({
+      sessions: [{ id: "session-1", status: "active" }],
+      hasMore: false,
+    });
+  });
+
+  it("rejects malformed pages", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ sessions: [{ id: "session-1" }], hasMore: false }))
+    );
+
+    await expect(fetchSessionListPage(buildSessionsPageKey())).rejects.toThrow();
   });
 });
 
