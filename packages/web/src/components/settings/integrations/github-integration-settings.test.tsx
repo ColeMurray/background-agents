@@ -6,9 +6,10 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
-import type {
-  GitHubBotSettings,
-  GitHubGlobalConfig,
+import {
+  GITHUB_AUTOFIX_DEFAULTS,
+  type GitHubBotSettings,
+  type GitHubGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
@@ -247,9 +248,13 @@ describe("GitHubIntegrationSettings", () => {
           settings: {
             defaults: {
               autoReviewOnOpen: false,
-              autofix: { enabled: true, reviewsEnabled: false },
               model: "anthropic/claude-sonnet-4-6",
               reasoningEffort: "high",
+              autofix: {
+                ...GITHUB_AUTOFIX_DEFAULTS,
+                enabled: true,
+                reviewsEnabled: false,
+              },
             },
           },
         }),
@@ -339,7 +344,10 @@ describe("GitHubIntegrationSettings", () => {
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
-          settings: { autofix: { enabled: true }, autoReviewOnOpen: false },
+          settings: {
+            autoReviewOnOpen: false,
+            autofix: { ...GITHUB_AUTOFIX_DEFAULTS, enabled: true },
+          },
         }),
       })
     );
