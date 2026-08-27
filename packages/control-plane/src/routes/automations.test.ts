@@ -1163,6 +1163,34 @@ describe("automation route handlers", () => {
       expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
     });
 
+    it("rejects appending a duplicate grandfathered condition", async () => {
+      const legacyCondition = {
+        type: "path_glob",
+        operator: "any_match",
+        value: ["src/**"],
+      } as const;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "pull_request.opened",
+        trigger_config: JSON.stringify({ conditions: [legacyCondition] }),
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          triggerConfig: { conditions: [legacyCondition, legacyCondition] },
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Condition "path_glob" does not apply to github triggers',
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
     it("updates reasoning effort when valid for the selected model", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 

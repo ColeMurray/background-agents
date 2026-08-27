@@ -7,6 +7,7 @@ import {
   triggerConfigSchema,
   validateConditions,
   conditionRegistry,
+  isGitHubConditionSupported,
   TRIGGER_TYPE_TO_SOURCE,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
@@ -119,6 +120,7 @@ function parseTriggerConfig(value: unknown): ParseTriggerConfigResult {
 
 interface TriggerConditionError {
   condition: TriggerConfig["conditions"][number];
+  code: "event_incompatible" | "invalid";
   message: string;
 }
 
@@ -129,20 +131,34 @@ function getTriggerConditionErrors(
 ): TriggerConditionError[] {
   const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
   if (!source) return [];
-  return triggerConfig.conditions.flatMap((condition) =>
-    validateConditions([condition], source, conditionRegistry, eventType).map((message) => ({
+  return triggerConfig.conditions.flatMap((condition) => {
+    const code =
+      source === "github" &&
+      eventType !== undefined &&
+      !isGitHubConditionSupported(eventType, condition.type)
+        ? "event_incompatible"
+        : "invalid";
+    return validateConditions([condition], source, conditionRegistry, eventType).map((message) => ({
       condition,
+      code,
       message,
-    }))
-  );
+    }));
+  });
 }
 
-function hasCondition(
+function consumeCondition(
   triggerConfig: TriggerConfig,
-  condition: TriggerConditionError["condition"]
+  condition: TriggerConditionError["condition"],
+  consumedIndexes: Set<number>
 ): boolean {
   const serialized = JSON.stringify(condition);
-  return triggerConfig.conditions.some((existing) => JSON.stringify(existing) === serialized);
+  const index = triggerConfig.conditions.findIndex(
+    (existing, candidateIndex) =>
+      !consumedIndexes.has(candidateIndex) && JSON.stringify(existing) === serialized
+  );
+  if (index === -1) return false;
+  consumedIndexes.add(index);
+  return true;
 }
 
 /** Warn if next run is more than 31 days away. */
@@ -962,9 +978,11 @@ async function handleUpdateAutomation(
       try {
         const parsedExisting = triggerConfigSchema.safeParse(JSON.parse(existing.trigger_config));
         if (parsedExisting.success) {
-          conditionErrors = conditionErrors.filter(
-            ({ condition }) => !hasCondition(parsedExisting.data, condition)
-          );
+          const consumedIndexes = new Set<number>();
+          conditionErrors = conditionErrors.filter(({ code, condition }) => {
+            if (code !== "event_incompatible") return true;
+            return !consumeCondition(parsedExisting.data, condition, consumedIndexes);
+          });
         }
       } catch {
         // A valid replacement should be able to repair malformed stored JSON.
