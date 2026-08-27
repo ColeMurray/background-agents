@@ -392,9 +392,8 @@ async def api_create_sandbox(
         manager = SandboxManager()
         repo_owner = parsed_request.repo_owner
         repo_name = parsed_request.repo_name
-        request_data = parsed_request.model_dump(exclude_none=True)
         session_config = _session_config_from_create_request(
-            request_data, repo_owner=repo_owner, repo_name=repo_name
+            request, repo_owner=repo_owner, repo_name=repo_name
         )
 
         config = SandboxConfig(

@@ -153,14 +153,23 @@ async def test_sandbox_requests_reject_invalid_typed_fields(monkeypatch, call, p
 
 
 @pytest.mark.asyncio
-async def test_create_sandbox_ignores_unknown_top_level_fields(monkeypatch):
+async def test_create_sandbox_passes_unknown_fields_to_session_config_helper(monkeypatch):
     captured = {}
+    helper_requests = []
     _patch_auth(monkeypatch)
     _patch_manager(monkeypatch, captured)
+    original_helper = web_api._session_config_from_create_request
+
+    def capture_helper(request, **kwargs):
+        helper_requests.append(request)
+        return original_helper(request, **kwargs)
+
+    monkeypatch.setattr(web_api, "_session_config_from_create_request", capture_helper)
 
     result = await _call_create_sandbox({**CREATE_REQUEST, "future_launch_option": True})
 
     assert result["success"] is True
+    assert helper_requests[0]["future_launch_option"] is True
 
 
 @pytest.mark.asyncio
