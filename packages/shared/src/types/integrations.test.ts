@@ -8,6 +8,9 @@ import {
   isValidSandboxTimeoutMs,
   findSandboxPortConflict,
   matchRoutingRules,
+  mcpServerCommandSchema,
+  mcpServerCredentialMapSchema,
+  mcpServerTypeSchema,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
   slackIntegrationSettingsRoutingResponseSchema,
@@ -70,6 +73,24 @@ describe("resolveBuildTimeoutSeconds", () => {
 
   it("keeps the default below the maximum", () => {
     expect(DEFAULT_BUILD_TIMEOUT_SECONDS).toBeLessThan(MAX_BUILD_TIMEOUT_SECONDS);
+  });
+});
+
+describe("MCP server schemas", () => {
+  it("accepts canonical persisted MCP fields", () => {
+    expect(mcpServerTypeSchema.parse("local")).toBe("local");
+    expect(mcpServerCommandSchema.parse(["npx", "-y", "@playwright/mcp"])).toEqual([
+      "npx",
+      "-y",
+      "@playwright/mcp",
+    ]);
+    expect(mcpServerCredentialMapSchema.parse({ DEBUG: "1" })).toEqual({ DEBUG: "1" });
+  });
+
+  it("rejects malformed MCP command and credential fields", () => {
+    expect(mcpServerCommandSchema.safeParse([]).success).toBe(false);
+    expect(mcpServerCommandSchema.safeParse(["npx", 1]).success).toBe(false);
+    expect(mcpServerCredentialMapSchema.safeParse({ DEBUG: 1 }).success).toBe(false);
   });
 });
 

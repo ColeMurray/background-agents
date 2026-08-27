@@ -5,6 +5,7 @@ import {
   clientMessageSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
+  repositoryPairInputSchema,
   RepositoryPairValidationError,
   serverMessageSchema,
   sessionAttachmentUploadResponseSchema,
@@ -1103,6 +1104,23 @@ describe("boundary schemas", () => {
 });
 
 describe("automation repository schemas", () => {
+  describe("repositoryPairInputSchema", () => {
+    it("normalizes a required repository pair", () => {
+      expect(
+        repositoryPairInputSchema.parse({ repoOwner: "  Acme  ", repoName: "  Web-App " })
+      ).toEqual({ repoOwner: "acme", repoName: "web-app" });
+    });
+
+    it("rejects blank repository identifiers", () => {
+      expect(
+        repositoryPairInputSchema.safeParse({ repoOwner: "   ", repoName: "web" }).success
+      ).toBe(false);
+      expect(
+        repositoryPairInputSchema.safeParse({ repoOwner: "acme", repoName: "\t" }).success
+      ).toBe(false);
+    });
+  });
+
   describe("normalizeOptionalRepositoryPair", () => {
     it("trims and lowercases a complete pair", () => {
       expect(

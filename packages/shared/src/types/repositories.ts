@@ -75,20 +75,35 @@ export function prArtifactBelongsToRepo(
   );
 }
 
+const repositoryOwnerInputSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((owner) => owner.toLowerCase());
+const repositoryNameInputSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((name) => name.toLowerCase());
+
+/** Required, normalized repository identity at request boundaries. */
+export const repositoryPairInputSchema = z.object({
+  repoOwner: repositoryOwnerInputSchema,
+  repoName: repositoryNameInputSchema,
+});
+
 /**
  * One repository entry on a create/update request. Identifiers are normalized
  * (trim + lowercase) by the schema, matching normalizeOptionalRepositoryPair —
  * the list-entry twin of that scalar helper.
  */
-export const repositoryInputSchema = z
-  .object({
-    repoOwner: z.string().trim().min(1),
-    repoName: z.string().trim().min(1),
+export const repositoryInputSchema = repositoryPairInputSchema
+  .extend({
     baseBranch: z.string().trim().min(1).nullish(),
   })
   .transform((entry) => ({
-    repoOwner: entry.repoOwner.toLowerCase(),
-    repoName: entry.repoName.toLowerCase(),
+    repoOwner: entry.repoOwner,
+    repoName: entry.repoName,
     baseBranch: entry.baseBranch ?? null,
   }));
 
