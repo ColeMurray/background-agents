@@ -1,5 +1,6 @@
 """Tests for Modal create-sandbox API request assembly."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock
 
@@ -261,6 +262,34 @@ async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, c
         request_id="request-1",
         session_id="sess-1",
         sandbox_id="sandbox-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_endpoint_execution_logs_cancellation_as_error(monkeypatch):
+    _patch_auth(monkeypatch)
+    info = MagicMock()
+    monkeypatch.setattr(web_api.log, "info", info)
+
+    with pytest.raises(asyncio.CancelledError):
+        async with web_api._execute_endpoint(
+            endpoint_name="api_test",
+            authorization="Bearer test",
+            trace_id="trace-1",
+            request_id="request-1",
+        ):
+            raise asyncio.CancelledError
+
+    info.assert_called_once_with(
+        "modal.http_request",
+        http_method="POST",
+        http_path="/api_test",
+        http_status=499,
+        duration_ms=ANY,
+        outcome="error",
+        endpoint_name="api_test",
+        trace_id="trace-1",
+        request_id="request-1",
     )
 
 

@@ -11,6 +11,7 @@ SECURITY: All sensitive endpoints require authentication via HMAC-signed tokens.
 The control plane must include an Authorization header with a valid token.
 """
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -175,8 +176,8 @@ class _EndpointExecution:
     request_id: str | None
     log_fields: dict[str, object] = field(default_factory=dict)
     start_time: float = field(default_factory=time.time)
-    http_status: int = 200
-    outcome: str = "success"
+    http_status: int = 500
+    outcome: str = "error"
 
 
 @asynccontextmanager
@@ -197,6 +198,11 @@ async def _execute_endpoint(
     try:
         require_auth(authorization)
         yield execution
+        execution.http_status = 200
+        execution.outcome = "success"
+    except asyncio.CancelledError:
+        execution.http_status = 499
+        raise
     except HTTPException as e:
         execution.http_status = e.status_code
         execution.outcome = "error"
