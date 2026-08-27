@@ -5,6 +5,34 @@ import type { ConditionType } from "../types";
 
 type GitHubWebhookEvent = Extract<keyof WebhookEventMap, string>;
 
+export const DEFAULT_GITHUB_CONCLUSION = "success" as const;
+
+const SHARED_GITHUB_CONCLUSIONS = [
+  DEFAULT_GITHUB_CONCLUSION,
+  "failure",
+  "neutral",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "stale",
+] as const;
+
+export const CHECK_SUITE_CONCLUSIONS = [
+  ...SHARED_GITHUB_CONCLUSIONS,
+  "skipped",
+  "startup_failure",
+] as const;
+
+export const WORKFLOW_RUN_CONCLUSIONS = [...SHARED_GITHUB_CONCLUSIONS, "skipped"] as const;
+
+const NO_GITHUB_CONCLUSIONS: readonly string[] = [];
+
+export function getGitHubConclusionOptions(eventType?: string): readonly string[] {
+  if (eventType === "check_suite.completed") return CHECK_SUITE_CONCLUSIONS;
+  if (eventType === "workflow_run.completed") return WORKFLOW_RUN_CONCLUSIONS;
+  return NO_GITHUB_CONCLUSIONS;
+}
+
 type GitHubEventCatalogEntry<E extends GitHubWebhookEvent = GitHubWebhookEvent> = {
   event: E;
   action: Extract<WebhookEventMap[E], { action: string }>["action"];
@@ -187,7 +215,7 @@ const issueObjectSchema = z.object({
 
 const checkSuiteObjectSchema = z.object({
   id: z.number(),
-  conclusion: z.string().nullable().optional(),
+  conclusion: z.enum(CHECK_SUITE_CONCLUSIONS).nullable().optional(),
   head_branch: z.string().nullable().optional(),
   head_sha: z.string().optional(),
   pull_requests: z.array(z.object({ number: z.number() })).optional(),
@@ -197,7 +225,7 @@ const workflowRunObjectSchema = z.object({
   id: z.number(),
   run_attempt: z.number().int().positive(),
   name: z.string(),
-  conclusion: z.string().nullable().optional(),
+  conclusion: z.enum(WORKFLOW_RUN_CONCLUSIONS).nullable().optional(),
   head_branch: z.string().nullable().optional(),
   head_sha: z.string().optional(),
   path: z.string().optional(),

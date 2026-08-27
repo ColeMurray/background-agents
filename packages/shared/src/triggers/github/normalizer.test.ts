@@ -280,6 +280,18 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.contextBlock).toContain("failure");
       expect(event!.meta).toMatchObject({ checkSuiteId: 77777, conclusion: "failure" });
     });
+
+    it.each(["skipped", "startup_failure"] as const)(
+      "accepts the %s provider conclusion",
+      (conclusion) => {
+        const event = normalizeGitHubEvent("check_suite", {
+          ...checkSuiteCompletedPayload,
+          check_suite: { ...checkSuiteCompletedPayload.check_suite, conclusion },
+        });
+
+        expect(event?.conclusion).toBe(conclusion);
+      }
+    );
   });
 
   describe("workflow_run.completed", () => {
@@ -324,6 +336,18 @@ describe("normalizeGitHubEvent", () => {
 
       expect(otherRun?.triggerKey).toBe("workflow_run:987654321:1");
       expect(otherRun?.concurrencyKey).toBe("workflow_run:987654321");
+    });
+
+    it("rejects check-suite-only conclusions", () => {
+      const event = normalizeGitHubEvent("workflow_run", {
+        ...workflowRunCompletedPayload,
+        workflow_run: {
+          ...workflowRunCompletedPayload.workflow_run,
+          conclusion: "startup_failure",
+        },
+      });
+
+      expect(event).toBeNull();
     });
   });
 

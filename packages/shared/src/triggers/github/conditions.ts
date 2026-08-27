@@ -3,34 +3,7 @@
 import type { ConditionRegistry } from "../conditions";
 import { matchGlob } from "../glob";
 import type { AutomationEvent } from "../types";
-
-export const DEFAULT_GITHUB_CONCLUSION = "success" as const;
-
-const SHARED_GITHUB_CONCLUSIONS = [
-  DEFAULT_GITHUB_CONCLUSION,
-  "failure",
-  "neutral",
-  "cancelled",
-  "timed_out",
-  "action_required",
-  "stale",
-] as const;
-
-export const CHECK_SUITE_CONCLUSIONS = [
-  ...SHARED_GITHUB_CONCLUSIONS,
-  "skipped",
-  "startup_failure",
-] as const;
-
-export const WORKFLOW_RUN_CONCLUSIONS = [...SHARED_GITHUB_CONCLUSIONS, "skipped"] as const;
-
-const NO_GITHUB_CONCLUSIONS: readonly string[] = [];
-
-export function getGitHubConclusionOptions(eventType?: string): readonly string[] {
-  if (eventType === "check_suite.completed") return CHECK_SUITE_CONCLUSIONS;
-  if (eventType === "workflow_run.completed") return WORKFLOW_RUN_CONCLUSIONS;
-  return NO_GITHUB_CONCLUSIONS;
-}
+import { getGitHubConclusionOptions } from "./webhook-types";
 
 function validateGitHubConclusion(condition: { value: string }, eventType?: string): string | null {
   return getGitHubConclusionOptions(eventType).includes(condition.value)

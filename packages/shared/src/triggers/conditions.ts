@@ -11,8 +11,7 @@ import type {
   ConditionType,
   TriggerCondition,
 } from "./types";
-import { getGitHubConclusionOptions } from "./github/conditions";
-import { isGitHubConditionSupported } from "./github/webhook-types";
+import { getGitHubConclusionOptions, isGitHubConditionSupported } from "./github/webhook-types";
 
 type ConditionOf<K extends ConditionType> = Extract<TriggerCondition, { type: K }>;
 

@@ -5,16 +5,14 @@
 import type { TriggerSourceDefinition } from "../types";
 import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
 
+export { githubConditions } from "./conditions";
+export { normalizeGitHubEvent } from "./normalizer";
 export {
-  githubConditions,
+  GITHUB_WEBHOOK_EVENT_CATALOG,
   DEFAULT_GITHUB_CONCLUSION,
   CHECK_SUITE_CONCLUSIONS,
   WORKFLOW_RUN_CONCLUSIONS,
   getGitHubConclusionOptions,
-} from "./conditions";
-export { normalizeGitHubEvent } from "./normalizer";
-export {
-  GITHUB_WEBHOOK_EVENT_CATALOG,
   getGitHubEventConditionTypes,
   isGitHubConditionSupported,
 } from "./webhook-types";
