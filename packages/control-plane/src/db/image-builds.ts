@@ -1,4 +1,5 @@
 import {
+  type ImageBuildRecordView,
   type ImageBuildScopeKind,
   type ImageBuildStatus,
   type RepositoryShaEntry,
@@ -11,6 +12,7 @@ import type {
 } from "../image-builds/model";
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
 import type { SqlDatabase } from "./sql-database";
+import { parseRepositoryShasJson } from "../image-builds/provenance";
 
 /** D1 caps bound parameters per statement; IN-list queries chunk below it. */
 const MAX_SCOPE_IDS_PER_QUERY = 50;
@@ -63,7 +65,7 @@ export interface ImageBuildRegistration {
 }
 
 /** Public-safe D1 projection retained in storage encoding inside persistence. */
-export interface ImageBuildStatusRow {
+interface ImageBuildStatusRow {
   id: string;
   scope_kind: ImageBuildScopeKind;
   scope_id: string;
@@ -75,6 +77,22 @@ export interface ImageBuildStatusRow {
   build_duration_seconds: number | null;
   error_message: string | null;
   created_at: number;
+}
+
+function toImageBuildRecordView(row: ImageBuildStatusRow): ImageBuildRecordView {
+  return {
+    id: row.id,
+    scopeKind: row.scope_kind,
+    scopeId: row.scope_id,
+    provider: row.provider,
+    status: row.status,
+    repositoriesFingerprint: row.repositories_fingerprint,
+    repositoryShas: parseRepositoryShasJson(row.repository_shas),
+    runtimeVersion: row.runtime_version,
+    buildDurationSeconds: row.build_duration_seconds,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+  };
 }
 
 /**
@@ -597,7 +615,7 @@ export class ImageBuildStore {
   }
 
   /** Per-scope recent non-superseded rows (settings UI / debugging view). */
-  async getStatus(scope: ImageBuildScope): Promise<ImageBuildStatusRow[]> {
+  async getStatus(scope: ImageBuildScope): Promise<ImageBuildRecordView[]> {
     const result = await this.db
       .prepare(
         `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10`
@@ -605,7 +623,7 @@ export class ImageBuildStore {
       .bind(scope.kind, scope.id)
       .all<ImageBuildStatusRow>();
 
-    return result.results || [];
+    return (result.results || []).map(toImageBuildRecordView);
   }
 
   /**
@@ -616,7 +634,7 @@ export class ImageBuildStore {
   async getReconciliationStatus(
     scope: ImageBuildScope,
     provider: ImageBuildProvider
-  ): Promise<ImageBuildStatusRow[]> {
+  ): Promise<ImageBuildRecordView[]> {
     const result = await this.db
       .prepare(
         `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
@@ -627,7 +645,7 @@ export class ImageBuildStore {
       .bind(scope.kind, scope.id, provider)
       .all<ImageBuildStatusRow>();
 
-    return result.results || [];
+    return (result.results || []).map(toImageBuildRecordView);
   }
 
   /**
@@ -639,7 +657,7 @@ export class ImageBuildStore {
    * via the cleanup pass, and a row cap would just reintroduce the risk of
    * ready images dropping out of the cron's view and re-triggering forever.
    */
-  async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildStatusRow[]> {
+  async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildRecordView[]> {
     const idsByKind = new Map<ImageBuildScopeKind, string[]>();
     for (const scope of scopes) {
       const ids = idsByKind.get(scope.kind) ?? [];
@@ -647,7 +665,7 @@ export class ImageBuildStore {
       idsByKind.set(scope.kind, ids);
     }
 
-    const rows: ImageBuildStatusRow[] = [];
+    const rows: ImageBuildRecordView[] = [];
     for (const [kind, ids] of idsByKind) {
       for (let offset = 0; offset < ids.length; offset += MAX_SCOPE_IDS_PER_QUERY) {
         const chunk = ids.slice(offset, offset + MAX_SCOPE_IDS_PER_QUERY);
@@ -659,11 +677,11 @@ export class ImageBuildStore {
           )
           .bind(kind, ...chunk)
           .all<ImageBuildStatusRow>();
-        rows.push(...(result.results || []));
+        rows.push(...(result.results || []).map(toImageBuildRecordView));
       }
     }
 
-    rows.sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? 1 : -1));
+    rows.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1));
     return rows;
   }
 
