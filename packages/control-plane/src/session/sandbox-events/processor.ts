@@ -1,11 +1,11 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
 import type { MessageRepository } from "../message-repository";
+import type { SandboxPushService } from "../sandbox-push-service";
 import type { SessionWebSocketManager } from "../websocket-manager";
 import type { SandboxArtifactEventHandler } from "./artifact.handler";
 import type { SandboxEventContext } from "./context";
 import type { SandboxExecutionEventHandler } from "./execution.handler";
-import type { SandboxPushCoordinator } from "./push.coordinator";
 import type { SandboxRuntimeEventHandler } from "./runtime.handler";
 import type { SandboxStreamingEventHandler } from "./streaming.handler";
 
@@ -36,7 +36,7 @@ export class SessionSandboxEventProcessor {
     private readonly artifacts: SandboxArtifactEventHandler,
     private readonly execution: SandboxExecutionEventHandler,
     private readonly runtime: SandboxRuntimeEventHandler,
-    private readonly push: SandboxPushCoordinator
+    private readonly pushService: SandboxPushService
   ) {}
 
   async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
@@ -97,7 +97,11 @@ export class SessionSandboxEventProcessor {
         return;
       case "push_complete":
       case "push_error":
-        this.push.handleTerminalEvent(event, context);
+        // Observed like any other timeline event; additionally answers the
+        // push the sandbox was asked to perform. The settle continuation runs
+        // on a microtask, so it cannot observe this dispatch mid-flight.
+        this.streaming.recordTimelineEvent(event, context);
+        this.pushService.settlePush(event);
         return;
       case "tool_result":
       case "error":

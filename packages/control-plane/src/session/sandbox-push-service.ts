@@ -1,10 +1,7 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import type { Logger } from "../../logger";
-import type { GitPushSpec } from "../../source-control";
-import type { EventRepository } from "../event-repository";
-import type { SessionMessenger } from "../messenger";
-import type { SessionWebSocketManager } from "../websocket-manager";
-import { persistSandboxEvent, type SandboxEventContext } from "./context";
+import type { Logger } from "../logger";
+import type { GitPushSpec } from "../source-control";
+import type { SessionWebSocketManager } from "./websocket-manager";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 export type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
@@ -13,19 +10,23 @@ export type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | 
 const PUSH_TIMEOUT_MS = 360_000;
 
 /**
- * Push-protocol family: both halves of the sandbox push exchange — sending
- * the push command and awaiting its outcome (`pushBranchToRemote`), and
- * settling that wait when the terminal event arrives. The pending-resolver
- * map is the reason request and event sides live in one class: the state a
- * `push_complete`/`push_error` resolves is created by the request side.
+ * Pushes a branch by commanding the sandbox and awaiting its answer.
+ *
+ * This is the sandbox protocol's only request/response exchange — every other
+ * message in either direction is one-way. The pending-resolver table is what
+ * turns the command plus its later `push_complete`/`push_error` event into a
+ * promise, and it is why this lives as session-scoped state: the caller
+ * (`SessionPullRequestService`) is constructed per request and cannot hold the
+ * table, while the event router must be able to reach it to settle waits.
+ * Should a second reply-carrying command ever appear, generalize this with
+ * per-request correlation ids (see the protocol gaps noted in issue #1630)
+ * rather than growing a sibling table.
  */
-export class SandboxPushCoordinator {
+export class SandboxPushService {
   private pendingPushResolvers = new Map<string, PushResolver>();
 
   constructor(
     private readonly log: Logger,
-    private readonly eventRepository: EventRepository,
-    private readonly messenger: SessionMessenger,
     private readonly wsManager: SessionWebSocketManager
   ) {}
 
@@ -92,13 +93,8 @@ export class SandboxPushCoordinator {
     }
   }
 
-  handleTerminalEvent(event: PushTerminalEvent, context: SandboxEventContext): void {
-    persistSandboxEvent(this.eventRepository, event, context);
-    this.settlePendingPush(event);
-    this.messenger.broadcast({ type: "sandbox_event", event });
-  }
-
-  private settlePendingPush(event: PushTerminalEvent): void {
+  /** Settle the pending push a terminal event answers, if one is waiting. */
+  settlePush(event: PushTerminalEvent): void {
     const entry = this.findPushResolver(event);
     if (!entry) {
       this.log.warn("Push event matched no pending resolver", {

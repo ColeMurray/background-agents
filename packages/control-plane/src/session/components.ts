@@ -86,9 +86,9 @@ import { SessionMessageQueue } from "./message-queue";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
-import { SandboxPushCoordinator } from "./sandbox-events/push.coordinator";
 import { SandboxRuntimeEventHandler } from "./sandbox-events/runtime.handler";
 import { SandboxStreamingEventHandler } from "./sandbox-events/streaming.handler";
+import { SandboxPushService } from "./sandbox-push-service";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
 import { createAutofixHandler } from "./http/handlers/autofix.handler";
@@ -179,7 +179,7 @@ export interface SessionComponents {
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
-  pushCoordinator: SandboxPushCoordinator;
+  pushService: SandboxPushService;
   sessionLifecycleHandler: SessionLifecycleHandler;
 }
 
@@ -471,7 +471,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     (title, options) => titleService.applySessionTitleUpdate(title, options),
     updateLastActivity
   );
-  const pushCoordinator = new SandboxPushCoordinator(log, eventRepository, messenger, wsManager);
+  const pushService = new SandboxPushService(log, wsManager);
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     log,
     messageRepository,
@@ -480,7 +480,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     artifactEventHandler,
     executionEventHandler,
     runtimeEventHandler,
-    pushCoordinator
+    pushService
   );
 
   const alarmHandler = createAlarmHandler({
@@ -625,7 +625,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         sourceControlProvider: sourceControlProvider(),
         log: requestLog,
         generateId: () => generateId(),
-        pushBranchToRemote: (pushSpec) => pushCoordinator.pushBranchToRemote(pushSpec),
+        pushBranchToRemote: (pushSpec) => pushService.pushBranchToRemote(pushSpec),
         messenger,
         appName: resolveAppName(env),
         sessionPullRequests: sessionPullRequestStore ?? undefined,
@@ -804,7 +804,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     presenceService,
     sandboxEventProcessor,
-    pushCoordinator,
+    pushService,
     sessionLifecycleHandler,
   };
 

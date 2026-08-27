@@ -3,8 +3,8 @@ import { createTestBackgroundTasks } from "../../background-tasks.test-support";
 import { SessionSandboxEventProcessor } from "./processor";
 import { SandboxArtifactEventHandler } from "./artifact.handler";
 import { SandboxExecutionEventHandler } from "./execution.handler";
-import { SandboxPushCoordinator } from "./push.coordinator";
 import { SandboxRuntimeEventHandler } from "./runtime.handler";
+import { SandboxPushService } from "../sandbox-push-service";
 import { SandboxStreamingEventHandler } from "./streaming.handler";
 import type { GitPushSpec } from "../../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
@@ -92,12 +92,7 @@ function createProcessor() {
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
-  const pushCoordinator = new SandboxPushCoordinator(
-    log,
-    eventRepository,
-    messenger,
-    wsManager as unknown as SessionWebSocketManager
-  );
+  const pushService = new SandboxPushService(log, wsManager as unknown as SessionWebSocketManager);
   const processor = new SessionSandboxEventProcessor(
     log,
     repository as unknown as MessageRepository,
@@ -139,12 +134,12 @@ function createProcessor() {
       applySessionTitleUpdate,
       updateLastActivity
     ),
-    pushCoordinator
+    pushService
   );
 
   return {
     processor,
-    pushCoordinator,
+    pushService,
     artifactRepository,
     repository,
     eventRepository,
@@ -578,7 +573,7 @@ describe("SessionSandboxEventProcessor", () => {
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    const pushPromise = h.pushCoordinator.pushBranchToRemote(
+    const pushPromise = h.pushService.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")
     );
 
@@ -608,10 +603,10 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.pushCoordinator.pushBranchToRemote(
+      const webPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "open-inspect/session-1")
       );
-      const backendPush = h.pushCoordinator.pushBranchToRemote(
+      const backendPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "backend", "open-inspect/session-1")
       );
 
@@ -642,7 +637,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.pushCoordinator.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -660,7 +655,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.pushCoordinator.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -683,7 +678,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.pushCoordinator.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -713,10 +708,8 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.pushCoordinator.pushBranchToRemote(
-        createPushSpec("acme", "web", "feature/a")
-      );
-      const backendPush = h.pushCoordinator.pushBranchToRemote(
+      const webPush = h.pushService.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
+      const backendPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "backend", "feature/b")
       );
 

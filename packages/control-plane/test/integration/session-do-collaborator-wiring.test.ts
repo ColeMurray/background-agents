@@ -37,7 +37,7 @@ function collaboratorsOf(
   instance: SessionDO
 ): Pick<
   SessionComponents,
-  "lifecycleManager" | "presenceService" | "sandboxEventProcessor" | "pushCoordinator"
+  "lifecycleManager" | "presenceService" | "sandboxEventProcessor" | "pushService"
 > {
   return componentsOf(instance);
 }
@@ -189,7 +189,7 @@ describe("SessionDO collaborator wiring", () => {
       // Without a connected sandbox the real implementation short-circuits to
       // `{ success: true }`, which is exactly what a dropped edge would return.
       // Spying is the only way to tell the two apart from out here.
-      collaboratorsOf(instance).pushCoordinator.pushBranchToRemote = vi.fn(
+      collaboratorsOf(instance).pushService.pushBranchToRemote = vi.fn(
         async (_pushSpec: GitPushSpec) => ({ success: true as const })
       );
     });
@@ -202,7 +202,7 @@ describe("SessionDO collaborator wiring", () => {
     expect(response.status).toBe(200);
 
     const pushSpecs = await runInSessionDO(stub, (instance: SessionDO) => {
-      const spy = collaboratorsOf(instance).pushCoordinator.pushBranchToRemote as unknown as Mock<
+      const spy = collaboratorsOf(instance).pushService.pushBranchToRemote as unknown as Mock<
         (pushSpec: GitPushSpec) => Promise<{ success: true }>
       >;
       return spy.mock.calls.map((call) => ({

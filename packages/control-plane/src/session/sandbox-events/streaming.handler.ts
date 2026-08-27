@@ -84,7 +84,8 @@ export class SandboxStreamingEventHandler {
 
   /**
    * Persist-and-broadcast for the router's timeline-observer cases
-   * (`tool_result`, `error`, `warning`, `user_message`).
+   * (`tool_result`, `error`, `warning`, `user_message`, and the push
+   * terminal events, which additionally settle `SandboxPushService`).
    */
   recordTimelineEvent(event: SandboxEvent, context: SandboxEventContext): void {
     persistSandboxEvent(this.eventRepository, event, context);
