@@ -91,7 +91,7 @@ const regenerateSentrySecretBodySchema = z.object({
   sentryClientSecret: sentryClientSecretSchema,
 });
 
-function formatAutomationRequestError(parseError: z.ZodError): string {
+function formatAutomationRequestError(parseError: z.ZodError, rawBody: unknown): string {
   const issue = parseError.issues[0];
   const field = issue?.path[0];
 
@@ -107,8 +107,31 @@ function formatAutomationRequestError(parseError: z.ZodError): string {
   }
 
   if (field === "triggerConfig") {
+    if (issue.path.length === 2 && issue.path[1] === "conditions") {
+      return "triggerConfig.conditions must be an array";
+    }
+
     const path = issue.path.map(String).join(".");
-    return `${path}: ${issue.message}`;
+    const conditionIndex = issue.path[1] === "conditions" ? issue.path[2] : undefined;
+    const conditions =
+      rawBody &&
+      typeof rawBody === "object" &&
+      "triggerConfig" in rawBody &&
+      rawBody.triggerConfig &&
+      typeof rawBody.triggerConfig === "object" &&
+      "conditions" in rawBody.triggerConfig &&
+      Array.isArray(rawBody.triggerConfig.conditions)
+        ? rawBody.triggerConfig.conditions
+        : undefined;
+    const condition = typeof conditionIndex === "number" ? conditions?.[conditionIndex] : undefined;
+    const conditionType =
+      condition &&
+      typeof condition === "object" &&
+      "type" in condition &&
+      typeof condition.type === "string"
+        ? `${condition.type}: `
+        : "";
+    return `${path}: ${conditionType}${issue.message}`;
   }
 
   return "Invalid automation request";
@@ -426,7 +449,9 @@ async function handleCreateAutomation(
   const enforced = enforcement.enforced;
 
   const parsedBody = createAutomationBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) return error(formatAutomationRequestError(parsedBody.error), 400);
+  if (!parsedBody.success) {
+    return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
+  }
   const body: CreateAutomationBody = parsedBody.data;
 
   // Validate required fields
@@ -693,7 +718,9 @@ async function handleUpdateAutomation(
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
   const parsedBody = updateAutomationRequestSchema.safeParse(rawBody);
-  if (!parsedBody.success) return error(formatAutomationRequestError(parsedBody.error), 400);
+  if (!parsedBody.success) {
+    return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
+  }
   const body = parsedBody.data;
 
   if (body.triggerConfig !== undefined && existing.trigger_type === "schedule") {
