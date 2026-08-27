@@ -798,6 +798,25 @@ describe("automation route handlers", () => {
       expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
     });
 
+    it.each([
+      [undefined, "eventType is required for github_event triggers"],
+      ["workflow_run.typo", "Unsupported eventType for github_event: workflow_run.typo"],
+    ])("rejects an invalid GitHub event type without conditions", async (eventType, message) => {
+      const response = await callRoute("POST", "/automations", {
+        body: {
+          name: "GitHub watcher",
+          instructions: "Inspect the event.",
+          triggerType: "github_event",
+          eventType,
+          repositories: [{ repoOwner: "acme", repoName: "web-app" }],
+        },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: message });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
     it("stores the user principal's canonical id without consulting the user store", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
@@ -1083,6 +1102,26 @@ describe("automation route handlers", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
         error: "eventType must be a non-empty string",
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unsupported explicit event type", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "github_event",
+        schedule_cron: null,
+        schedule_tz: null,
+        event_type: "workflow_run.completed",
+      });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { eventType: "workflow_run.typo" },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Unsupported eventType for github_event: workflow_run.typo",
       });
       expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
     });

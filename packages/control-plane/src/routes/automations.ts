@@ -8,6 +8,7 @@ import {
   validateConditions,
   conditionRegistry,
   isGitHubConditionSupported,
+  triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
@@ -159,6 +160,25 @@ function consumeCondition(
   if (index === -1) return false;
   consumedIndexes.add(index);
   return true;
+}
+
+function getTriggerEventTypeError(
+  triggerType: AutomationTriggerType,
+  eventType: unknown
+): string | null {
+  if (eventType !== undefined && (typeof eventType !== "string" || eventType.trim().length === 0)) {
+    return "eventType must be a non-empty string";
+  }
+
+  const source = triggerSources.find((candidate) => candidate.triggerType === triggerType);
+  if (!source?.supportsEventTypes) return null;
+  if (typeof eventType !== "string" || eventType.trim().length === 0) {
+    return `eventType is required for ${triggerType} triggers`;
+  }
+  if (!source.eventTypes.some((candidate) => candidate.eventType === eventType)) {
+    return `Unsupported eventType for ${triggerType}: ${eventType}`;
+  }
+  return null;
 }
 
 /** Warn if next run is more than 31 days away. */
@@ -583,10 +603,8 @@ async function handleCreateAutomation(
     }
   }
 
-  // Event-type validation for sentry triggers
-  if (triggerType === "sentry" && !body.eventType) {
-    return error("eventType is required for sentry triggers", 400);
-  }
+  const eventTypeError = getTriggerEventTypeError(triggerType, body.eventType);
+  if (eventTypeError) return error(eventTypeError, 400);
 
   // Validate conditions
   if (body.triggerConfig) {
@@ -923,14 +941,19 @@ async function handleUpdateAutomation(
 
   // Update event type — only for non-schedule types
   if (body.eventType !== undefined) {
-    if (typeof body.eventType !== "string" || body.eventType.trim().length === 0) {
-      return error("eventType must be a non-empty string", 400);
-    }
     if (existing.trigger_type === "schedule") {
       return error("Cannot set eventType on schedule automations", 400);
     }
     updateFields.event_type = body.eventType;
   }
+
+  const effectiveEventType =
+    body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
+  const eventTypeError = getTriggerEventTypeError(
+    existing.trigger_type as AutomationTriggerType,
+    effectiveEventType
+  );
+  if (eventTypeError) return error(eventTypeError, 400);
 
   let triggerConfigToValidate = body.triggerConfig;
   if (
@@ -962,8 +985,6 @@ async function handleUpdateAutomation(
   }
 
   if (triggerConfigToValidate) {
-    const effectiveEventType =
-      body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
     let conditionErrors = getTriggerConditionErrors(
       existing.trigger_type as AutomationTriggerType,
       triggerConfigToValidate,
