@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -200,6 +200,7 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         "openinspect_scope_kind": "repo",
         "openinspect_scope_id": "acme/repo",
         "openinspect_launch_protocol": "stdin-token-v1",
+        "openinspect_create_id": ANY,
     }
     assert kwargs["env"]["FOO"] == "bar"
     assert "OI_REPO_IMAGE_CALLBACK_TOKEN" not in kwargs["env"]

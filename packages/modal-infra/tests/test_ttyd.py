@@ -83,7 +83,7 @@ class TestResolveTunnelsTerminal:
         tunnel.url = "https://ttyd.example.com"
 
         sandbox = MagicMock()
-        sandbox.tunnels.return_value = {TTYD_PROXY_PORT: tunnel}
+        sandbox.tunnels.aio = AsyncMock(return_value={TTYD_PROXY_PORT: tunnel})
 
         cs_url, vnc_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
             sandbox,
@@ -128,10 +128,12 @@ class TestResolveTunnelsTerminal:
         ttyd_tunnel.url = "https://ttyd.example.com"
 
         sandbox = MagicMock()
-        sandbox.tunnels.return_value = {
-            CODE_SERVER_PORT: cs_tunnel,
-            TTYD_PROXY_PORT: ttyd_tunnel,
-        }
+        sandbox.tunnels.aio = AsyncMock(
+            return_value={
+                CODE_SERVER_PORT: cs_tunnel,
+                TTYD_PROXY_PORT: ttyd_tunnel,
+            }
+        )
 
         cs_url, vnc_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
             sandbox,

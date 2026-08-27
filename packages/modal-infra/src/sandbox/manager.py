@@ -38,6 +38,12 @@ from sandbox_runtime.types import SandboxStatus, SessionConfig
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
+from .modal_call import (
+    MODAL_SANDBOX_CREATE_TIMEOUT_SECONDS,
+    MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+    await_modal_call,
+    create_modal_sandbox,
+)
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
@@ -198,8 +204,11 @@ class SandboxManager:
         resolved: dict[int, str] = {}
         for attempt in range(retries):
             try:
-                loop = asyncio.get_running_loop()
-                tunnels = await loop.run_in_executor(None, sandbox.tunnels)
+                tunnels = await await_modal_call(
+                    sandbox.tunnels.aio(timeout=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS),
+                    operation="sandbox tunnel lookup",
+                    timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+                )
                 for port in ports:
                     if port in tunnels and port not in resolved:
                         resolved[port] = tunnels[port].url
@@ -346,7 +355,11 @@ class SandboxManager:
         lines += [f"TUNNEL_{port}={url}" for port, url in sorted(tunnel_urls.items())]
         content = "\n".join(lines) + "\n"
         try:
-            await sandbox.filesystem.write_text.aio(content, TUNNEL_ENV_FILE_PATH)
+            await await_modal_call(
+                sandbox.filesystem.write_text.aio(content, TUNNEL_ENV_FILE_PATH),
+                operation="tunnel metadata write",
+                timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+            )
             log.info(
                 "tunnel.urls_written",
                 sandbox_id=sandbox_id,
@@ -466,29 +479,56 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
-        sandbox = await modal.Sandbox.create.aio(
-            "python",
-            "-m",
-            "sandbox_runtime.entrypoint",
-            **create_kwargs,
+        identity_tags = {
+            "openinspect_kind": "interactive",
+            "openinspect_sandbox_id": sandbox_id,
+            "openinspect_create_id": secrets.token_hex(16),
+        }
+        sandbox = await create_modal_sandbox(
+            modal.Sandbox.create.aio(
+                "python",
+                "-m",
+                "sandbox_runtime.entrypoint",
+                tags=identity_tags,
+                **create_kwargs,
+            ),
+            operation="sandbox creation",
+            tags=identity_tags,
+            timeout_seconds=MODAL_SANDBOX_CREATE_TIMEOUT_SECONDS,
         )
         modal_object_id = sandbox.object_id
-        (
-            code_server_url,
-            vnc_url,
-            ttyd_url,
-            extra_tunnel_urls,
-        ) = await self._resolve_and_setup_tunnels(
-            sandbox,
-            sandbox_id,
-            config.code_server_enabled,
-            config.vnc_enabled,
-            terminal_enabled,
-            tunnel_ports,
-            code_server_port,
-            novnc_port,
-            ttyd_proxy_port,
-        )
+        try:
+            (
+                code_server_url,
+                vnc_url,
+                ttyd_url,
+                extra_tunnel_urls,
+            ) = await self._resolve_and_setup_tunnels(
+                sandbox,
+                sandbox_id,
+                config.code_server_enabled,
+                config.vnc_enabled,
+                terminal_enabled,
+                tunnel_ports,
+                code_server_port,
+                novnc_port,
+                ttyd_proxy_port,
+            )
+        except BaseException:
+            try:
+                await await_modal_call(
+                    sandbox.terminate.aio(wait=False),
+                    operation="failed sandbox launch cleanup",
+                    timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+                )
+            except Exception as cleanup_error:
+                log.warn(
+                    "sandbox.launch_cleanup_failed",
+                    sandbox_id=sandbox_id,
+                    modal_object_id=modal_object_id,
+                    exc=cleanup_error,
+                )
+            raise
 
         return SandboxHandle(
             sandbox_id=sandbox_id,
@@ -608,14 +648,18 @@ class SandboxManager:
             SandboxHandle if found, None otherwise
         """
         try:
-            modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+            modal_sandbox = await await_modal_call(
+                modal.Sandbox.from_id.aio(sandbox_id),
+                operation="sandbox lookup",
+                timeout_seconds=MODAL_SANDBOX_RPC_TIMEOUT_SECONDS,
+            )
             return SandboxHandle(
                 sandbox_id=sandbox_id,
                 modal_sandbox=modal_sandbox,
                 status=SandboxStatus.READY,  # Assume ready if we can retrieve it
                 created_at=time.time(),
             )
-        except Exception as e:
+        except modal.exception.NotFoundError as e:
             log.warn("sandbox.lookup_error", sandbox_id=sandbox_id, exc=e)
             return None
 

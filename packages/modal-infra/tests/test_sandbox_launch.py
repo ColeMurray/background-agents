@@ -132,6 +132,9 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     assert kwargs["cpu"] == 1.5
     assert kwargs["memory"] == 3072
     assert kwargs["encrypted_ports"] == [9000, 9001, 9002, 3000]
+    assert kwargs["tags"]["openinspect_kind"] == "interactive"
+    assert kwargs["tags"]["openinspect_sandbox_id"] == "sandbox-1"
+    assert len(kwargs["tags"]["openinspect_create_id"]) == 32
 
     assert env["CONTROL_PLANE_URL"] == "https://control.example"
     assert env["CUSTOM_ENV"] == "preserved"
