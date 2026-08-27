@@ -52,6 +52,7 @@ export type RequestContext = CorrelationContext & {
 export interface RouteDefinition<Context extends RequestContext = RequestContext> {
   method: string;
   pattern: RegExp;
+  cacheControl?: "no-store" | "private, no-store";
   handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
 }
 

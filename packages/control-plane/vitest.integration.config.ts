@@ -12,7 +12,7 @@ const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
 // `require("luxon").DateTime`. Under @cloudflare/vitest-pool-workers that
 // CJS->ESM interop yields `undefined`, so the scheduler tick throws "Cannot read
 // properties of undefined (reading 'DateTime')" and silently skips every overdue
-// automation (see scheduler.test.ts /internal/tick). vite 7 used the CJS build,
+// automation (see Scheduler.tick tests). vite 7 used the CJS build,
 // which interops correctly. Test-only — production bundles via esbuild/wrangler.
 const luxonCjsEntry = createRequire(__filename).resolve("luxon");
 
@@ -49,14 +49,30 @@ export default defineConfig({
           // otherwise defaults its runner to today's compatibility date.
           compatibilityDate: "2024-09-23",
           compatibilityFlags: ["nodejs_compat"],
-          async outboundService(request) {
+          async outboundService(request: Request) {
             const url = new URL(request.url);
             if (url.hostname.endsWith(".modal.run")) {
               return new Response("Modal is unavailable in integration tests", { status: 404 });
             }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
+              return Response.json({
+                device_auth_id: "integration-device",
+                user_code: "TEST-CODE",
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.openai.com/api/accounts/deviceauth/token") {
+              return Response.json({
+                authorization_code: "integration-authorization",
+                code_verifier: "integration-verifier",
+              });
+            }
             if (url.href === "https://auth.openai.com/oauth/token") {
               const body = await request.text();
-              if (!body.includes("integration-openai")) {
+              if (
+                !body.includes("integration-openai") &&
+                !body.includes("integration-authorization")
+              ) {
                 throw new Error("Unexpected OpenAI integration-test credential");
               }
               return Response.json({
@@ -67,16 +83,37 @@ export default defineConfig({
                 expires_in: 3600,
               });
             }
+            if (url.href === "https://auth.x.ai/oauth2/device/code") {
+              return Response.json({
+                device_code: "integration-xai-device",
+                user_code: "XAI-CODE",
+                verification_uri: "https://accounts.x.ai/oauth2/device",
+                verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=XAI-CODE",
+                expires_in: 300,
+                interval: 1,
+              });
+            }
+            if (url.href === "https://auth.x.ai/oauth2/userinfo") {
+              return Response.json({ sub: "xai-integration" });
+            }
             if (url.href === "https://auth.x.ai/oauth2/token") {
               const body = await request.text();
-              if (!body.includes("integration-xai")) {
-                throw new Error("Unexpected xAI integration-test credential");
+              if (body.includes("integration-xai-device")) {
+                return Response.json({
+                  id_token: "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4YWktaW50ZWdyYXRpb24ifQ.",
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-refresh-token",
+                  expires_in: 3600,
+                });
               }
-              return Response.json({
-                access_token: "integration-xai-access-token",
-                refresh_token: "integration-xai-rotated-refresh",
-                expires_in: 3600,
-              });
+              if (body.includes("integration-xai")) {
+                return Response.json({
+                  access_token: "integration-xai-access-token",
+                  refresh_token: "integration-xai-rotated-refresh",
+                  expires_in: 3600,
+                });
+              }
+              throw new Error("Unexpected xAI integration-test credential");
             }
             throw new Error(`Unexpected outbound request: ${request.url}`);
           },

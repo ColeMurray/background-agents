@@ -17,13 +17,16 @@ export type AutomationInvocationSource = "schedule" | "manual" | "event";
  * skipped; `partial_failed` means the runs finished terminal with a mix of
  * completed and failed.
  */
-export type AutomationInvocationStatus =
-  | "starting"
-  | "running"
-  | "completed"
-  | "failed"
-  | "partial_failed"
-  | "skipped";
+export const automationInvocationStatusSchema = z.enum([
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "partial_failed",
+  "skipped",
+]);
+
+export type AutomationInvocationStatus = z.infer<typeof automationInvocationStatusSchema>;
 
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
@@ -88,6 +91,20 @@ const automationSchema = z.object({
 
 export type Automation = z.infer<typeof automationSchema>;
 
+const automationExecutionSummarySchema = z.object({
+  id: z.string(),
+  status: automationInvocationStatusSchema,
+  createdAt: z.number(),
+});
+
+export type AutomationExecutionSummary = z.infer<typeof automationExecutionSummarySchema>;
+
+const automationListItemSchema = automationSchema.extend({
+  recentExecutions: z.array(automationExecutionSummarySchema),
+});
+
+export type AutomationListItem = z.infer<typeof automationListItemSchema>;
+
 export const createAutomationRequestSchema = z.object({
   name: z.string(),
   instructions: z.string(),
@@ -103,6 +120,8 @@ export const createAutomationRequestSchema = z.object({
   repositories: automationRepositoriesInputSchema.optional(),
   /** Environments to fan out over, one workspace session each (design §13.3). */
   environmentIds: z.array(z.string()).optional(),
+  /** Complete pin set. Omission creates the automation without pins. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
 });
 export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
 
@@ -119,6 +138,8 @@ export const updateAutomationRequestSchema = z.object({
   repositories: automationRepositoriesInputSchema.optional(),
   /** Replaces the full environment selection when present (empty clears). */
   environmentIds: z.array(z.string()).optional(),
+  /** Replaces every provider pin when present; an empty map clears all pins. */
+  providerSelections: modelProviderSelectionsSchema.optional(),
 });
 export type UpdateAutomationRequest = z.input<typeof updateAutomationRequestSchema>;
 
@@ -154,12 +175,12 @@ export interface AutomationRun {
 
 export const listAutomationsResponseSchema = z.discriminatedUnion("hasMore", [
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(false),
     nextCursor: z.null(),
   }),
   z.object({
-    automations: z.array(automationSchema),
+    automations: z.array(automationListItemSchema),
     hasMore: z.literal(true),
     nextCursor: z.string().min(1),
   }),

@@ -57,6 +57,21 @@ describe("AutomationModelProviderAuthStore", () => {
     });
   });
 
+  it("rejects malformed persisted provider account selections", () => {
+    expect(() =>
+      toProviderSelections([
+        {
+          automation_id: "auto-1",
+          provider: "openai",
+          auth_mode: "provider_account",
+          provider_account_id: "not-a-provider-account-id",
+          created_at: 1,
+          updated_at: 1,
+        },
+      ])
+    ).toThrow();
+  });
+
   it("builds composable insert and replacement statements", () => {
     const { db, statements } = createFakeDb();
     const store = new AutomationModelProviderAuthStore(db);

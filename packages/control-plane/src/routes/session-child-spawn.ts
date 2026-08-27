@@ -36,9 +36,14 @@ import {
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 const logger = createLogger("router:session-child-spawn");
 const MAX_SPAWN_DEPTH = 2;
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 async function handleSpawnChild(
   request: Request,
@@ -97,8 +102,8 @@ async function handleSpawnChild(
   if (!spawnContextRes.ok) {
     let message = "Failed to get parent session context";
     try {
-      const body = (await spawnContextRes.json()) as { error?: unknown };
-      if (typeof body.error === "string" && body.error.length > 0) {
+      const body = await spawnContextRes.json();
+      if (isJsonRecord(body) && typeof body.error === "string" && body.error.length > 0) {
         message = body.error;
       }
     } catch {
@@ -175,6 +180,20 @@ async function handleSpawnChild(
       ? requestedReasoningEffort
       : null;
 
+  let providerAuth;
+  try {
+    providerAuth = await sessionStore.getCompleteProviderAuth(parentId);
+  } catch (cause) {
+    logger.error("Failed to load parent provider auth", {
+      event: "session.spawn_child_provider_auth_failed",
+      parent_id: parentId,
+      error: cause instanceof Error ? cause.message : String(cause),
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+    });
+    return error("Parent provider auth unavailable", 503);
+  }
+
   const childDepth = parentDepth + 1;
   const childId = generateId();
 
@@ -206,7 +225,9 @@ async function handleSpawnChild(
     repoId: spawnContext.repoId,
     environmentId: parentEnvironmentId,
     branch:
-      spawnContext.repoOwner && spawnContext.repoName ? (spawnContext.baseBranch ?? "main") : null,
+      spawnContext.repoOwner && spawnContext.repoName
+        ? (spawnContext.baseBranch ?? DEFAULT_BASE_BRANCH)
+        : null,
     title: body.title,
     model,
     reasoningEffort,
@@ -228,6 +249,10 @@ async function handleSpawnChild(
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkillsSourceSessionId: parentId,
+    providerAuth: providerAuth.map((auth) => ({
+      ...auth,
+      inheritedFromSessionId: parentId,
+    })),
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(
@@ -294,19 +319,20 @@ async function handleSpawnChild(
   }
 
   ctx.executionCtx.submit(
-    ctx.sessionRuntime
-      .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          childSessionId: childId,
-          status: "created",
-          title: body.title,
+    () =>
+      ctx.sessionRuntime
+        .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            childSessionId: childId,
+            status: "created",
+            title: body.title,
+          }),
+        })
+        .catch((err: unknown) => {
+          logger.error("session.notify_parent_spawn.failed", { error: err });
         }),
-      })
-      .catch((err: unknown) => {
-        logger.error("session.notify_parent_spawn.failed", { error: err });
-      }),
     {
       name: "session.notify_parent_spawn",
       context: { parent_id: parentId, child_id: childId, trace_id: ctx.trace_id },

@@ -51,20 +51,18 @@ function isMediaMimeType(value: string): value is MediaMimeType {
   return MEDIA_MIME_TYPES.has(value as MediaMimeType);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function narrowDimensions(value: unknown): { width: number; height: number } | undefined {
-  if (
-    value &&
-    typeof value === "object" &&
-    typeof (value as { width?: unknown }).width === "number" &&
-    typeof (value as { height?: unknown }).height === "number"
-  ) {
-    return value as { width: number; height: number };
-  }
-  return undefined;
+  if (!isRecord(value)) return undefined;
+  const { width, height } = value;
+  return typeof width === "number" && typeof height === "number" ? { width, height } : undefined;
 }
 
 export function toUiArtifact(artifact: SessionArtifact): Artifact {
-  const meta = artifact.metadata as Record<string, unknown> | null;
+  const meta = artifact.metadata;
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],

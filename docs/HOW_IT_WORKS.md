@@ -575,7 +575,7 @@ was built for internal use where all employees have access to company repositori
 | User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
 | Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
 | WebSocket Token    | Authenticate client connections            | Single session                   |
-| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Provider account + secret scope  |
+| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
 
 Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
 of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
@@ -601,10 +601,35 @@ per-environment scope. A session receives global secrets plus its **session targ
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
-Managed OpenAI and xAI OAuth refresh tokens are a stricter case: they remain control-plane-only and
-are replaced with non-secret provider markers before sandbox creation. The sandbox uses its session
-auth token to request short-lived model access from a provider-specific broker. Refresh-token
-rotation is persisted back to the global, repository, or environment scope that supplied it. See
+OpenAI and xAI subscription credentials are installation-wide provider accounts. Account rows store
+display, status, and optional external identity separately from credentials encrypted with
+`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`. Each provider has an optional default account and an unattended
+mode that chooses the default account or API-key mode for Slack, GitHub, Linear, and unpinned
+automation runs.
+
+The web groups OpenAI and xAI accounts from shared static provider IDs and display metadata; there
+is no provider-catalog endpoint. The control-plane adapter registry remains authoritative when an
+account is connected, selected, defaulted, or consumed.
+
+Session creation resolves every subscription provider once and persists an immutable provider
+account, API-key, or legacy scoped-OAuth auth row in D1, the sole authority for session provider
+auth. The session Durable Object remains authoritative for lifecycle and sandbox-token
+authentication but does not replicate provider-account bindings. An interactive session can follow
+provider policy, select an active account, or choose API-key mode. Automations can pin the same
+choices or resolve current defaults each run. Child sessions copy their parent's D1 auth rows, and
+later default changes do not move existing sessions between accounts.
+
+In account mode, the sandbox receives only a managed marker. Provider API keys and legacy OAuth
+fields for that provider are suppressed. The runtime plugin calls the sandbox-authenticated
+`POST /sessions/:id/provider-auth/:provider/access-token` endpoint; the control plane reads the
+trusted D1 session binding using the sandbox-authenticated session ID, refreshes the encrypted
+account credential, and returns short-lived access with `Cache-Control: no-store`. Sandbox startup
+also reads the complete D1 auth snapshot and fails closed if it is unavailable or incomplete.
+
+Legacy scoped OAuth and provider accounts can coexist. Existing sessions remain pinned to legacy
+scoped OAuth. New sessions use an explicit choice, then a provider-account default, and otherwise
+retain legacy scoped OAuth or API-key behavior. Setting a default affects only future sessions;
+operators may remove legacy keys after legacy-bound sessions are no longer needed. See
 [Using OpenAI Models](./OPENAI_MODELS.md) and
 [Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
 
@@ -613,7 +638,8 @@ rotation is persisted back to the global, repository, or environment scope that 
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
 > models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
-> require managed xAI OAuth credentials and must be enabled under **Settings > Models**.
+> require an xAI provider account or `XAI_API_KEY` mode and must be enabled under **Settings >
+> Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

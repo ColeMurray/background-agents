@@ -41,7 +41,6 @@ const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
     data: z.object({
       sandbox_id: z.string(),
       modal_object_id: z.string().nullable().optional(),
-      status: z.string(),
       created_at: z.number(),
       code_server_url: z.string().nullable().optional(),
       code_server_password: z.string().nullable().optional(),
@@ -184,7 +183,6 @@ export interface CreateSandboxRequest {
 export interface CreateSandboxResponse {
   sandboxId: string;
   modalObjectId?: string; // Modal's internal object ID for snapshot API
-  status: string;
   createdAt: number;
   codeServerUrl?: string;
   codeServerPassword?: string;
@@ -446,7 +444,6 @@ export class ModalClient {
       return {
         sandboxId: result.data.sandbox_id,
         modalObjectId: result.data.modal_object_id ?? undefined,
-        status: result.data.status,
         createdAt: result.data.created_at,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,

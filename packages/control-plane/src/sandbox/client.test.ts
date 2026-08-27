@@ -301,7 +301,6 @@ describe("ModalClient", () => {
     ).resolves.toEqual({
       sandboxId: "sb-1",
       modalObjectId: "mo-1",
-      status: "spawning",
       createdAt: 1,
       codeServerUrl: "https://code.test",
       codeServerPassword: "pw",
@@ -346,7 +345,6 @@ describe("ModalClient", () => {
     expect(result).toEqual({
       sandboxId: "sb-1",
       modalObjectId: undefined,
-      status: "spawning",
       createdAt: 1,
       codeServerUrl: undefined,
       codeServerPassword: undefined,

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
+import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/session/durable-object";
 import { ModelPreferencesStore } from "../../src/db/model-preferences";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -25,6 +26,32 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     reasoningEffort?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: parentName,
+      title: "Parent",
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: opts?.model ?? "anthropic/claude-sonnet-4-6",
+      reasoningEffort: opts?.reasoningEffort ?? null,
+      baseBranch: null,
+      status: "active",
+      parentSessionId: opts?.parentSessionId ?? null,
+      spawnSource: opts?.spawnSource ?? "user",
+      spawnDepth: opts?.spawnDepth ?? 0,
+      automationId: opts?.automationId ?? null,
+      automationRunId: opts?.automationRunId ?? null,
+      environmentId: opts?.environmentId ?? null,
+      userId: opts?.canonicalUserId ?? null,
+      providerAuth: [
+        { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+        { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
     const { stub } = await initNamedSessionDO(parentName, {
       repoOwner: "acme",
       repoName: "web-app",
@@ -53,28 +80,6 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       startedAt: Date.now(),
     });
 
-    const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
-    await store.create({
-      id: parentName,
-      title: "Parent",
-      repoOwner: "acme",
-      repoName: "web-app",
-      model: opts?.model ?? "anthropic/claude-sonnet-4-6",
-      reasoningEffort: opts?.reasoningEffort ?? null,
-      baseBranch: null,
-      status: "active",
-      parentSessionId: opts?.parentSessionId ?? null,
-      spawnSource: opts?.spawnSource ?? "user",
-      spawnDepth: opts?.spawnDepth ?? 0,
-      automationId: opts?.automationId ?? null,
-      automationRunId: opts?.automationRunId ?? null,
-      environmentId: opts?.environmentId ?? null,
-      userId: opts?.canonicalUserId ?? null,
-      createdAt: now,
-      updatedAt: now,
-    });
-
     return { parentName, stub, sandboxToken, store, now };
   }
 
@@ -84,8 +89,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       "SELECT id FROM messages ORDER BY created_at DESC LIMIT 1"
     );
     if (!message) throw new Error("Expected child prompt");
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         "UPDATE messages SET status = 'processing', started_at = ? WHERE id = ?",
         Date.now(),
         message.id
@@ -145,8 +150,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       userId: "slack:U1",
       canonicalUserId: "canonical-user-1",
     });
-    await runInDurableObject(stub, (instance: SessionDO) => {
-      instance.ctx.storage.sql.exec(
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      state.storage.sql.exec(
         `INSERT INTO participants (
            id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email,
            role, scm_access_token_encrypted, joined_at
@@ -161,7 +166,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         "second-access",
         Date.now()
       );
-      instance.ctx.storage.sql.exec(
+      state.storage.sql.exec(
         "UPDATE messages SET author_id = ? WHERE status = 'processing'",
         "participant-second-user"
       );

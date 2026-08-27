@@ -4,6 +4,8 @@ import {
   SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
   SUBSCRIPTION_PROVIDER_IDS,
   connectModelProviderAccountRequestSchema,
+  modelProviderAccountReconnectMethod,
+  modelProviderAccountDefaultResponseSchema,
   modelProviderAccountDefaultRequestSchema,
   modelProviderAccountDefaultsResponseSchema,
   modelProviderAccountResponseSchema,
@@ -12,10 +14,14 @@ import {
   modelProviderSelectionsSchema,
   providerAuthModeSchema,
   reconnectModelProviderAccountRequestSchema,
+  providerDeviceAuthorizationStatusResponseSchema,
+  startProviderDeviceAuthorizationRequestSchema,
+  startProviderDeviceAuthorizationResponseSchema,
   sessionModelProviderAuthResponseSchema,
 } from "./provider-accounts";
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+const TRANSACTION_ID = "01".repeat(32);
 
 describe("subscription provider registry", () => {
   it("exposes stable provider IDs and display metadata", () => {
@@ -144,10 +150,66 @@ describe("provider account write requests", () => {
   });
 });
 
+describe("provider device authorization contracts", () => {
+  it("accepts only strict create and reconnect start inputs", () => {
+    expect(
+      startProviderDeviceAuthorizationRequestSchema.parse({
+        operation: "create",
+        displayName: "Primary OpenAI",
+      })
+    ).toEqual({ operation: "create", displayName: "Primary OpenAI" });
+    expect(
+      startProviderDeviceAuthorizationRequestSchema.parse({
+        operation: "reconnect",
+        providerAccountId: ACCOUNT_ID,
+      })
+    ).toEqual({ operation: "reconnect", providerAccountId: ACCOUNT_ID });
+    for (const value of [
+      { operation: "create", providerAccountId: ACCOUNT_ID },
+      { operation: "reconnect", displayName: "Wrong" },
+      { operation: "create", displayName: "OpenAI", refreshToken: "secret" },
+    ]) {
+      expect(startProviderDeviceAuthorizationRequestSchema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("exposes only browser-safe start and polling fields", () => {
+    expect(
+      startProviderDeviceAuthorizationResponseSchema.safeParse({
+        transactionId: TRANSACTION_ID,
+        provider: "openai",
+        operation: "create",
+        userCode: "ABCD-EFGH",
+        verificationUrl: "https://auth.openai.com/codex/device",
+        expiresAt: 10_000,
+        expiresInMs: 9_000,
+        pollIntervalMs: 5_000,
+      }).success
+    ).toBe(true);
+    expect(
+      providerDeviceAuthorizationStatusResponseSchema.safeParse({
+        status: "pending",
+        expiresAt: 10_000,
+        pollIntervalMs: 5_000,
+        nextPollAt: 6_000,
+        deviceAuthId: "must-not-leak",
+      }).success
+    ).toBe(false);
+    expect(
+      providerDeviceAuthorizationStatusResponseSchema.safeParse({
+        status: "failed",
+        error: "Authorization failed.",
+        retryable: true,
+        providerBody: "must-not-leak",
+      }).success
+    ).toBe(false);
+  });
+});
+
 describe("provider account response schemas", () => {
   const account = {
     id: ACCOUNT_ID,
-    provider: "openai",
+    provider: "openai" as const,
     displayName: "Team ChatGPT",
     externalAccountId: "acct_external",
     status: "active",
@@ -181,6 +243,19 @@ describe("provider account response schemas", () => {
       }).success
     ).toBe(true);
     expect(
+      modelProviderAccountDefaultResponseSchema.safeParse({
+        default: {
+          provider: "openai",
+          providerAccountId: ACCOUNT_ID,
+          unattendedMode: "provider_account",
+          createdBy: "user-1",
+          updatedBy: "user-1",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      }).success
+    ).toBe(true);
+    expect(
       sessionModelProviderAuthResponseSchema.safeParse({
         providerAuth: [
           {
@@ -197,6 +272,22 @@ describe("provider account response schemas", () => {
         ],
       }).success
     ).toBe(true);
+  });
+
+  it("centralizes the legacy reconnect capability", () => {
+    expect(modelProviderAccountReconnectMethod(account)).toBe("device_authorization");
+    expect(
+      modelProviderAccountReconnectMethod({
+        provider: "xai",
+        externalAccountId: null,
+      })
+    ).toBe("refresh_token");
+    expect(
+      modelProviderAccountReconnectMethod({
+        provider: "xai",
+        externalAccountId: "xai-user-1",
+      })
+    ).toBe("device_authorization");
   });
 
   it("rejects credential leakage and inconsistent auth modes", () => {

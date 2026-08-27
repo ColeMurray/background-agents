@@ -16,6 +16,14 @@ export const subscriptionProviderIdSchema = z.enum(SUBSCRIPTION_PROVIDER_IDS);
 export const MODEL_PROVIDER_ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/;
 export const modelProviderAccountIdSchema = z.string().regex(MODEL_PROVIDER_ACCOUNT_ID_PATTERN);
 
+/** Device authorization transaction IDs use 32 random bytes encoded as lowercase hex. */
+export const PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN = /^[0-9a-f]{64}$/;
+export const PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS = 1_000;
+export const PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS = 60_000;
+export const providerDeviceAuthorizationIdSchema = z
+  .string()
+  .regex(PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN);
+
 export const providerAuthSelectionSchema = z.discriminatedUnion("mode", [
   z.strictObject({
     mode: z.literal("provider_account"),
@@ -58,6 +66,23 @@ export const modelProviderAccountSchema = z.strictObject({
 });
 export type ModelProviderAccount = z.infer<typeof modelProviderAccountSchema>;
 
+export type ModelProviderAccountReconnectMethod = "device_authorization" | "refresh_token";
+
+/**
+ * Canonical reconnect capability for provider accounts.
+ *
+ * xAI accounts created before device authorization do not have a bound external identity and
+ * retain the one-time refresh-token reconnect path. Keep that compatibility rule here rather
+ * than making clients infer a workflow from account metadata independently.
+ */
+export function modelProviderAccountReconnectMethod(
+  account: Pick<ModelProviderAccount, "provider" | "externalAccountId">
+): ModelProviderAccountReconnectMethod {
+  return account.provider === "xai" && account.externalAccountId === null
+    ? "refresh_token"
+    : "device_authorization";
+}
+
 export const modelProviderAccountResponseSchema = z.strictObject({
   account: modelProviderAccountSchema,
 });
@@ -86,6 +111,13 @@ export const modelProviderAccountDefaultSchema = z.strictObject({
   updatedAt: z.number().int().nonnegative(),
 });
 export type ModelProviderAccountDefault = z.infer<typeof modelProviderAccountDefaultSchema>;
+
+export const modelProviderAccountDefaultResponseSchema = z.strictObject({
+  default: modelProviderAccountDefaultSchema,
+});
+export type ModelProviderAccountDefaultResponse = z.infer<
+  typeof modelProviderAccountDefaultResponseSchema
+>;
 
 export const modelProviderAccountDefaultRequestSchema = z.strictObject({
   providerAccountId: modelProviderAccountIdSchema,
@@ -149,38 +181,105 @@ export type LegacyProviderCredentialsResponse = z.infer<
   typeof legacyProviderCredentialsResponseSchema
 >;
 
-const displayNameSchema = z.string().trim().min(1).max(100);
+export const modelProviderAccountDisplayNameSchema = z.string().trim().min(1).max(100);
 const credentialStringSchema = z.string().min(1).max(65_536);
 const externalAccountIdSchema = z.string().trim().min(1).max(512);
 
+export const connectOpenAIModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("openai"),
+  displayName: modelProviderAccountDisplayNameSchema,
+  refreshToken: credentialStringSchema,
+  accountId: externalAccountIdSchema,
+});
+export const connectXaiModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("xai"),
+  displayName: modelProviderAccountDisplayNameSchema,
+  refreshToken: credentialStringSchema,
+});
 export const connectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
-  z.strictObject({
-    provider: z.literal("openai"),
-    displayName: displayNameSchema,
-    refreshToken: credentialStringSchema,
-    accountId: externalAccountIdSchema,
-  }),
-  z.strictObject({
-    provider: z.literal("xai"),
-    displayName: displayNameSchema,
-    refreshToken: credentialStringSchema,
-  }),
+  connectOpenAIModelProviderAccountRequestSchema,
+  connectXaiModelProviderAccountRequestSchema,
 ]);
 export type ConnectModelProviderAccountRequest = z.infer<
   typeof connectModelProviderAccountRequestSchema
 >;
 
+export const reconnectOpenAIModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("openai"),
+  refreshToken: credentialStringSchema,
+  accountId: externalAccountIdSchema,
+});
+export const reconnectXaiModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("xai"),
+  refreshToken: credentialStringSchema,
+});
 export const reconnectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
-  z.strictObject({
-    provider: z.literal("openai"),
-    refreshToken: credentialStringSchema,
-    accountId: externalAccountIdSchema,
-  }),
-  z.strictObject({
-    provider: z.literal("xai"),
-    refreshToken: credentialStringSchema,
-  }),
+  reconnectOpenAIModelProviderAccountRequestSchema,
+  reconnectXaiModelProviderAccountRequestSchema,
 ]);
 export type ReconnectModelProviderAccountRequest = z.infer<
   typeof reconnectModelProviderAccountRequestSchema
+>;
+
+export const startProviderDeviceAuthorizationRequestSchema = z.discriminatedUnion("operation", [
+  z.strictObject({
+    operation: z.literal("create"),
+    displayName: modelProviderAccountDisplayNameSchema,
+  }),
+  z.strictObject({
+    operation: z.literal("reconnect"),
+    providerAccountId: modelProviderAccountIdSchema,
+  }),
+]);
+export type StartProviderDeviceAuthorizationRequest = z.infer<
+  typeof startProviderDeviceAuthorizationRequestSchema
+>;
+
+export const startProviderDeviceAuthorizationResponseSchema = z.strictObject({
+  transactionId: providerDeviceAuthorizationIdSchema,
+  provider: subscriptionProviderIdSchema,
+  operation: z.enum(["create", "reconnect"]),
+  userCode: z.string().min(1).max(128),
+  verificationUrl: z.url(),
+  expiresAt: z.number().int().positive(),
+  expiresInMs: z.number().int().positive(),
+  pollIntervalMs: z
+    .number()
+    .int()
+    .min(PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS)
+    .max(PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS),
+});
+export type StartProviderDeviceAuthorizationResponse = z.infer<
+  typeof startProviderDeviceAuthorizationResponseSchema
+>;
+
+const pendingProviderDeviceAuthorizationSchema = z.strictObject({
+  status: z.literal("pending"),
+  expiresAt: z.number().int().positive(),
+  pollIntervalMs: z
+    .number()
+    .int()
+    .min(PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS)
+    .max(PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS),
+  nextPollAt: z.number().int().positive(),
+});
+
+const terminalProviderDeviceAuthorizationErrorSchema = z.strictObject({
+  status: z.enum(["denied", "expired", "failed", "cancelled", "superseded"]),
+  error: z.string().min(1).max(512),
+  retryable: z.boolean(),
+});
+
+export const providerDeviceAuthorizationStatusResponseSchema = z.discriminatedUnion("status", [
+  pendingProviderDeviceAuthorizationSchema,
+  z.strictObject({
+    status: z.literal("connected"),
+    account: modelProviderAccountSchema,
+    reconnectedExisting: z.boolean(),
+    completedAt: z.number().int().positive(),
+  }),
+  terminalProviderDeviceAuthorizationErrorSchema,
+]);
+export type ProviderDeviceAuthorizationStatusResponse = z.infer<
+  typeof providerDeviceAuthorizationStatusResponseSchema
 >;

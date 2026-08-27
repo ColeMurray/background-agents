@@ -32,7 +32,14 @@ export interface Env {
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
-  ANTHROPIC_API_KEY: string;
+  /**
+   * Classifier provider credentials. The deployment binds exactly the one
+   * `CLASSIFICATION_MODEL` selects, so each is optional on its own and the
+   * classifier guards the branch it needs.
+   */
+  ANTHROPIC_API_KEY?: string;
+  CLASSIFICATION_MODEL?: string; // Optional override; defaults to DEFAULT_CLASSIFICATION_MODEL
+  OPENAI_API_KEY?: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }

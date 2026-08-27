@@ -190,6 +190,55 @@ describe("sessionSocketReducer", () => {
     expect(state.promptQueue).toEqual(initial.promptQueue);
   });
 
+  describe("sandboxError", () => {
+    it("hydrates the spawn error from the snapshot and from subscribed", () => {
+      const reason =
+        'Failed to create E2B sandbox: {"code":400,"message":"Timeout cannot be greater than 1 hours"}';
+
+      expect(createSessionSocketState(createSnapshot({ spawnError: reason })).sandboxError).toBe(
+        reason
+      );
+      expect(subscribedState({ spawnError: reason }).sandboxError).toBe(reason);
+      expect(subscribedState().sandboxError).toBeNull();
+    });
+
+    it("records the reason a live sandbox_error carries", () => {
+      const state = reduce(
+        subscribedState(),
+        serverMessage({ type: "sandbox_error", error: "E2B quota exceeded" })
+      );
+
+      expect(state.sessionState?.sandboxStatus).toBe("failed");
+      expect(state.sandboxError).toBe("E2B quota exceeded");
+    });
+
+    it("clears the reason once a fresh attempt starts or succeeds", () => {
+      const failed = reduce(
+        subscribedState(),
+        serverMessage({ type: "sandbox_error", error: "E2B quota exceeded" })
+      );
+
+      // A retry supersedes the previous failure, so the stale reason must not
+      // linger next to a spawning or ready sandbox.
+      expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).sandboxError).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).sandboxError).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_ready" })).sandboxError).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "ready" })).sandboxError
+      ).toBeNull();
+    });
+
+    it("keeps the reason when sandbox_status merely re-asserts failed", () => {
+      const failed = reduce(
+        subscribedState(),
+        serverMessage({ type: "sandbox_error", error: "E2B quota exceeded" }),
+        serverMessage({ type: "sandbox_status", status: "failed" })
+      );
+
+      expect(failed.sandboxError).toBe("E2B quota exceeded");
+    });
+  });
+
   describe("subscribed", () => {
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({

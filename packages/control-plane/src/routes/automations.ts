@@ -14,6 +14,7 @@ import type {
   CreateAutomationRequest,
   UpdateAutomationRequest,
 } from "@open-inspect/shared/types/automations";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { listChannels } from "@open-inspect/shared/slack";
 import {
   getValidModelOrDefault,
@@ -35,10 +36,17 @@ import {
 import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
+import { AutomationModelProviderAuthStore } from "../db/automation-model-provider-auth";
+import {
+  AutomationProviderSelectionError,
+  parseAndValidateAutomationProviderSelections,
+} from "../model-provider-accounts/automation-provider-selection";
 import { generateId } from "../auth/crypto";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
+import { AutomationTriggerBlockedError, Scheduler } from "../scheduler/scheduler";
+import { hydrateAutomation } from "../automation/hydrate";
 import {
   automationRepositoriesInputSchema,
   MAX_AUTOMATION_REPOSITORIES,
@@ -58,6 +66,7 @@ import {
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
+import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 
 const logger = createLogger("router:automations");
 
@@ -69,6 +78,8 @@ const MAX_NAME_LENGTH = 200;
 
 /** Maximum instructions length. Keep in sync with INSTRUCTIONS_MAX_LENGTH in packages/web/src/components/automations/automation-form.tsx. */
 const MAX_INSTRUCTIONS_LENGTH = 15_000;
+
+const RECENT_EXECUTION_COUNT = 10;
 
 type ParseTriggerConfigResult =
   | { ok: true; triggerConfig: TriggerConfig }
@@ -396,21 +407,30 @@ async function handleListAutomations(
   if (!parsed.ok) return error(parsed.error, 400);
 
   const store = new AutomationStore(ctx.db);
+  const providerAuthStore = new AutomationModelProviderAuthStore(ctx.db);
   const result = await store.list(parsed.options);
   const automationIds = result.automations.map((row) => row.id);
-  const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
+  const [
+    repositoriesByAutomation,
+    environmentsByAutomation,
+    providerAuthByAutomation,
+    recentExecutionsByAutomation,
+  ] = await Promise.all([
     store.getRepositoriesForAutomationIds(automationIds),
     store.getEnvironmentsForAutomationIds(automationIds),
+    providerAuthStore.listForAutomationIds(automationIds),
+    store.listRecentExecutionsForAutomationIds(automationIds, RECENT_EXECUTION_COUNT),
   ]);
 
-  const automations = result.automations.map((row) =>
-    toAutomation(
+  const automations = result.automations.map((row) => ({
+    ...toAutomation(
       row,
       repositoriesByAutomation.get(row.id) ?? [],
       environmentsByAutomation.get(row.id) ?? [],
-      []
-    )
-  );
+      providerAuthByAutomation.get(row.id) ?? []
+    ),
+    recentExecutions: recentExecutionsByAutomation.get(row.id) ?? [],
+  }));
   return json({
     automations,
     hasMore: result.hasMore,
@@ -554,6 +574,18 @@ async function handleCreateAutomation(
 
   const newRepositories = await resolveRepositorySelection(env, requestedRepositories, ctx);
 
+  let providerSelections: ModelProviderSelections;
+  try {
+    providerSelections = await parseAndValidateAutomationProviderSelections(
+      ctx.db,
+      body.providerSelections ?? {}
+    );
+  } catch (e) {
+    if (e instanceof AutomationProviderSelectionError) return error(e.message, 400);
+    if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
+    throw e;
+  }
+
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
     ? nextCronOccurrence(body.scheduleCron!, body.scheduleTz!).getTime()
@@ -592,6 +624,7 @@ async function handleCreateAutomation(
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
+  const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const row: AutomationRow = {
     id,
     name: body.name.trim(),
@@ -622,6 +655,7 @@ async function handleCreateAutomation(
     store.bindAutomationInsert(row),
     ...store.bindRepositoryInserts(id, newRepositories, now),
     ...store.bindEnvironmentInserts(id, requestedEnvironmentIds, now),
+    ...providerAuthStore.bindInserts(id, providerSelections, now),
   ];
   if (triggerType === "slack_event") {
     const slackStore = new SlackChannelStore(db);
@@ -631,12 +665,7 @@ async function handleCreateAutomation(
   }
   await db.batch(createStatements);
 
-  const automation = toAutomation(
-    (await store.getById(id))!,
-    await store.getRepositoriesForAutomation(id),
-    await store.getEnvironmentsForAutomation(id),
-    []
-  );
+  const automation = await hydrateAutomation(db, (await store.getById(id))!);
 
   logger.info("automation.created", {
     event: "automation.created",
@@ -686,14 +715,7 @@ async function handleGetAutomation(
   const row = await store.getById(id);
   if (!row) return error("Automation not found", 404);
 
-  return json({
-    automation: toAutomation(
-      row,
-      await store.getRepositoriesForAutomation(id),
-      await store.getEnvironmentsForAutomation(id),
-      []
-    ),
-  });
+  return json({ automation: await hydrateAutomation(ctx.db, row) });
 }
 
 async function handleUpdateAutomation(
@@ -707,6 +729,7 @@ async function handleUpdateAutomation(
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
+  const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
@@ -720,6 +743,20 @@ async function handleUpdateAutomation(
       const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
       if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
       body.triggerConfig = parsedTriggerConfig.triggerConfig;
+    }
+  }
+
+  let replacementProviderSelections: ModelProviderSelections | null = null;
+  if (body.providerSelections !== undefined) {
+    try {
+      replacementProviderSelections = await parseAndValidateAutomationProviderSelections(
+        ctx.db,
+        body.providerSelections
+      );
+    } catch (e) {
+      if (e instanceof AutomationProviderSelectionError) return error(e.message, 400);
+      if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
+      throw e;
     }
   }
 
@@ -924,6 +961,11 @@ async function handleUpdateAutomation(
   if (replacementEnvironmentIds !== null) {
     statements.push(...store.bindReplaceEnvironments(id, replacementEnvironmentIds, Date.now()));
   }
+  if (replacementProviderSelections !== null) {
+    statements.push(
+      ...providerAuthStore.bindReplace(id, replacementProviderSelections, Date.now())
+    );
+  }
   if (resyncSlackChannels) {
     const slackStore = new SlackChannelStore(db);
     statements.push(
@@ -943,14 +985,7 @@ async function handleUpdateAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json({
-    automation: toAutomation(
-      updated,
-      await store.getRepositoriesForAutomation(id),
-      await store.getEnvironmentsForAutomation(id),
-      []
-    ),
-  });
+  return json({ automation: await hydrateAutomation(db, updated) });
 }
 
 async function handleDeleteAutomation(
@@ -998,14 +1033,7 @@ async function handlePauseAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row
-      ? toAutomation(
-          row,
-          await store.getRepositoriesForAutomation(id),
-          await store.getEnvironmentsForAutomation(id),
-          []
-        )
-      : null,
+    automation: row ? await hydrateAutomation(ctx.db, row) : null,
   });
 }
 
@@ -1047,14 +1075,7 @@ async function handleResumeAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row
-      ? toAutomation(
-          row,
-          await store.getRepositoriesForAutomation(id),
-          await store.getEnvironmentsForAutomation(id),
-          []
-        )
-      : null,
+    automation: row ? await hydrateAutomation(ctx.db, row) : null,
   });
 }
 
@@ -1071,38 +1092,23 @@ async function handleTriggerAutomation(
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
 
-  // Forward to SchedulerDO (it performs its own authoritative concurrency check)
-  if (!env.SCHEDULER) {
-    return error("Scheduler not configured", 503);
-  }
-
-  const doId = env.SCHEDULER.idFromName("global-scheduler");
-  const stub = env.SCHEDULER.get(doId);
-
-  const triggerResponse = await stub.fetch("http://internal/internal/trigger", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ automationId: id }),
-  });
-
-  if (!triggerResponse.ok) {
-    const text = await triggerResponse.text().catch(() => "");
+  // The scheduler performs the authoritative D1-backed concurrency check.
+  let triggerResult;
+  try {
+    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
+  } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",
       automation_id: id,
-      status: triggerResponse.status,
-      response: text.slice(0, 500),
+      error: triggerError instanceof Error ? triggerError : new Error(String(triggerError)),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    // Forward 409 (concurrent run) with descriptive message; wrap others as 500
-    if (triggerResponse.status === 409) {
+    if (triggerError instanceof AutomationTriggerBlockedError) {
       return error("A run is already active for this automation", 409);
     }
     return error("Failed to trigger automation", 500);
   }
-
-  const triggerResult = await triggerResponse.json();
 
   logger.info("automation.triggered", {
     event: "automation.triggered",
@@ -1111,7 +1117,7 @@ async function handleTriggerAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json(triggerResult, 201);
+  return json({ invocationId: triggerResult.invocationId, runs: triggerResult.runs }, 201);
 }
 
 function parseRunListParams(request: Request): { limit: number; offset: number } {

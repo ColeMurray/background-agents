@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SkillAssignments } from "./skill-assignments";
 import { SkillFiles } from "./skill-files";
+import { SkillReimport } from "./skill-reimport";
 import { assignmentKey, buildAssignments, errorMessage } from "./utils";
 
 export function SkillEditor({
@@ -72,6 +73,7 @@ export function SkillEditor({
     () => new Set(initialAssignments.map(assignmentKey))
   );
   const [saving, setSaving] = useState(false);
+  const [reimporting, setReimporting] = useState(false);
   const [validation, setValidation] = useState<{
     markdown: string;
     sha256: string;
@@ -182,7 +184,7 @@ export function SkillEditor({
   );
 
   return (
-    <div className="space-y-6">
+    <fieldset disabled={reimporting} className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-foreground">
@@ -286,6 +288,15 @@ export function SkillEditor({
         </div>
       )}
 
+      {skill?.source && (
+        <SkillReimport
+          skill={skill}
+          dirty={dirty}
+          onReimported={() => onSaved(skill.id)}
+          onSavingChange={setReimporting}
+        />
+      )}
+
       <SkillFiles files={files} onChange={setFiles} />
       {assignmentsUnavailable && (
         <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">
@@ -321,6 +332,6 @@ export function SkillEditor({
           </pre>
         </div>
       )}
-    </div>
+    </fieldset>
   );
 }

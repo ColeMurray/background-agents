@@ -9,16 +9,18 @@
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import {
+  automationCallbackContextSchema,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
-import { deliverWithRetry } from "./callback-delivery";
+import { deliverWithRetry, retryDelivery } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
+import type { AutomationRunCompletion } from "../scheduler/scheduler";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
@@ -38,8 +40,9 @@ export interface CallbackServiceEnv {
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
   SLACK_BOT?: FetchClient;
   LINEAR_BOT?: FetchClient;
-  SCHEDULER_CALLBACK?: FetchClient;
 }
+
+export type AutomationRunCompletionHandler = (completion: AutomationRunCompletion) => Promise<void>;
 
 /**
  * Dependencies injected into CallbackNotificationService.
@@ -50,6 +53,7 @@ export interface CallbackServiceDeps {
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
+  completeAutomationRun?: AutomationRunCompletionHandler;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -76,6 +80,7 @@ export class CallbackNotificationService {
   private readonly log: Logger;
   private readonly getSessionId: () => string;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly completeAutomationRun: AutomationRunCompletionHandler | undefined;
   private _lastToolCallCallbackTs = 0;
   private readonly notifiedCallIds = new Set<string>();
 
@@ -85,6 +90,7 @@ export class CallbackNotificationService {
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
+    this.completeAutomationRun = deps.completeAutomationRun;
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
@@ -107,7 +113,7 @@ export class CallbackNotificationService {
    * Where a non-automation callback goes and which key signs it — one
    * decision, so destination and signing key cannot diverge (the CP signs
    * with the DESTINATION bot's secret). Automation callbacks
-   * are routed to the SchedulerDO before this is consulted. Non-linear
+   * are routed to the automation scheduler before this is consulted. Non-linear
    * sources default to the slack bot for backward compatibility (web
    * sources, etc.).
    */
@@ -189,9 +195,19 @@ export class CallbackNotificationService {
       const rawContext = JSON.parse(message.callback_context);
       source = rawContext.source === "automation" ? "automation" : (message.source ?? null);
 
-      // Route automation callbacks to SchedulerDO (different URL + payload).
+      // Route automation callbacks to the scheduler's completion function.
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(rawContext, success, error, messageId);
+        const automationContext = automationCallbackContextSchema.safeParse(rawContext);
+        if (!automationContext.success) {
+          result.rejectReason = "invalid_callback_context";
+          return;
+        }
+        result = await this.notifyAutomationComplete(
+          automationContext.data,
+          success,
+          error,
+          messageId
+        );
         return;
       }
 
@@ -280,8 +296,7 @@ export class CallbackNotificationService {
   }
 
   /**
-   * Notify the SchedulerDO of automation run completion.
-   * Uses a different URL and payload shape than bot callbacks.
+   * Notify the automation scheduler of run completion.
    */
   private async notifyAutomationComplete(
     context: { automationId: string; runId: string; automationName: string },
@@ -289,8 +304,8 @@ export class CallbackNotificationService {
     error: string | undefined,
     messageId: string
   ): Promise<CallbackDeliveryResult> {
-    const binding = this.env.SCHEDULER_CALLBACK;
-    if (!binding) {
+    const completeAutomationRun = this.completeAutomationRun;
+    if (!completeAutomationRun) {
       return { delivered: false, attempts: 0, rejectReason: "no_binding" };
     }
 
@@ -305,16 +320,13 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    return deliverWithRetry(
-      (signal) =>
-        binding.fetch("https://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          signal,
-        }),
+    const delivery = await retryDelivery<void, never>(
+      async () => ({
+        outcome: "delivered",
+        value: await completeAutomationRun(payload),
+      }),
       this.sleep,
-      ({ attempt, response, error: deliveryError }) => {
+      ({ attempt, error: deliveryError }) => {
         this.log.warn("callback.complete_delivery_attempt_failed", {
           message_id: messageId,
           session_id: this.getSessionId(),
@@ -322,13 +334,20 @@ export class CallbackNotificationService {
           automation_id: context.automationId,
           run_id: context.runId,
           attempt,
-          ...(response ? { http_status: response.status } : {}),
           ...(deliveryError !== undefined
             ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
             : {}),
         });
-      }
+      },
+      // D1 operations do not accept AbortSignals. A fake timeout would retry
+      // while the first in-process completion can still be running.
+      { attemptTimeoutMs: null }
     );
+
+    return {
+      delivered: delivery.outcome === "delivered",
+      attempts: delivery.attempts,
+    };
   }
 
   /**
@@ -372,9 +391,8 @@ export class CallbackNotificationService {
     }
     const source = message.source ?? null;
 
-    // Automation runs have no tool-call progress consumer: the SchedulerDO
-    // only implements /internal/run-complete — every /callbacks/tool_call
-    // forward 404s. Skip rather than spam best-effort calls.
+    // Automation runs have no tool-call progress consumer. Skip rather than
+    // spam best-effort bot callbacks.
     if (source === "automation") {
       this.log.debug("callback.tool_call", {
         message_id: messageId,

@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { generateEncryptionKey } from "../../src/auth/crypto";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
@@ -153,6 +154,69 @@ describe("provider account migration and stores", () => {
     await expect(
       new ModelProviderAccountStore(env.DB).getById("atomic-create")
     ).resolves.toBeNull();
+  });
+
+  it("defaults only the first active account created for a provider", async () => {
+    const writer = new D1ModelProviderAccountAtomicWriter(env.DB, generateEncryptionKey());
+    await env.DB.prepare(
+      `INSERT INTO users (id, display_name, email, created_at, updated_at)
+       VALUES ('user-1', 'Test User', 'user@example.com', ?, ?)`
+    )
+      .bind(now, now)
+      .run();
+
+    const first = await writer.createAccountWithCredential({
+      id: "first-account",
+      provider: "xai",
+      displayName: "First",
+      externalAccountId: "first-external",
+      actorId: "user-1",
+      now,
+      credential: { credentialSchemaVersion: 1, payload: { refreshToken: "first" } },
+    });
+    const second = await writer.createAccountWithCredential({
+      id: "second-account",
+      provider: "xai",
+      displayName: "Second",
+      externalAccountId: "second-external",
+      actorId: "user-1",
+      now: now + 1,
+      credential: { credentialSchemaVersion: 1, payload: { refreshToken: "second" } },
+    });
+
+    expect(first.id).toBe("first-account");
+    expect(second.id).toBe("second-account");
+    await expect(new ProviderDefaultStore(env.DB).get("xai")).resolves.toMatchObject({
+      providerAccountId: "first-account",
+      unattendedMode: "provider_account",
+    });
+  });
+
+  it("creates one default when first accounts are connected concurrently", async () => {
+    const writer = new D1ModelProviderAccountAtomicWriter(env.DB, generateEncryptionKey());
+    await env.DB.prepare(
+      `INSERT INTO users (id, display_name, email, created_at, updated_at)
+       VALUES ('user-1', 'Test User', 'user@example.com', ?, ?)`
+    )
+      .bind(now, now)
+      .run();
+
+    const created = await Promise.all(
+      ["concurrent-one", "concurrent-two"].map((id) =>
+        writer.createAccountWithCredential({
+          id,
+          provider: "xai",
+          displayName: id,
+          externalAccountId: `${id}-external`,
+          actorId: "user-1",
+          now,
+          credential: { credentialSchemaVersion: 1, payload: { refreshToken: id } },
+        })
+      )
+    );
+
+    const providerDefault = await new ProviderDefaultStore(env.DB).get("xai");
+    expect(created.map((account) => account.id)).toContain(providerDefault?.providerAccountId);
   });
 
   it("atomically completes verification account state and fenced credentials", async () => {
@@ -446,7 +510,7 @@ describe("provider account migration and stores", () => {
 
     await seedAutomation("automation-auth");
     const automationAuth = new AutomationModelProviderAuthStore(env.DB);
-    await env.DB.batch(
+    await sqlDatabase(env.DB).batch(
       automationAuth.bindReplace(
         "automation-auth",
         { openai: { mode: "provider_account", accountId: "account-auth" } },
@@ -456,7 +520,7 @@ describe("provider account migration and stores", () => {
     expect(await automationAuth.list("automation-auth")).toEqual([
       expect.objectContaining({ provider: "openai", provider_account_id: "account-auth" }),
     ]);
-    await env.DB.batch(automationAuth.bindReplace("automation-auth", {}, now + 1));
+    await sqlDatabase(env.DB).batch(automationAuth.bindReplace("automation-auth", {}, now + 1));
     expect(await automationAuth.list("automation-auth")).toEqual([]);
   });
 });

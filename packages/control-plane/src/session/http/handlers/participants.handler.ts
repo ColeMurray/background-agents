@@ -1,31 +1,24 @@
 import type { ParticipantRepository } from "../../participant-repository";
 
-export interface ParticipantsHandlerDeps {
-  repository: ParticipantRepository;
-}
+/** HTTP boundary for the participant listing endpoint. */
+export class ParticipantsHandler {
+  constructor(private readonly repository: ParticipantRepository) {}
 
-export interface ParticipantsHandler {
-  listParticipants: () => Response;
-}
+  listParticipants(): Response {
+    const participants = this.repository.listParticipants();
 
-export function createParticipantsHandler(deps: ParticipantsHandlerDeps): ParticipantsHandler {
-  return {
-    listParticipants(): Response {
-      const participants = deps.repository.listParticipants();
-
-      return Response.json({
-        participants: participants.map((participant) => ({
-          id: participant.id,
-          userId: participant.user_id,
-          ...(participant.canonical_user_id
-            ? { canonicalUserId: participant.canonical_user_id }
-            : {}),
-          scmLogin: participant.scm_login,
-          scmName: participant.scm_name,
-          role: participant.role,
-          joinedAt: participant.joined_at,
-        })),
-      });
-    },
-  };
+    return Response.json({
+      participants: participants.map((participant) => ({
+        id: participant.id,
+        userId: participant.user_id,
+        ...(participant.canonical_user_id
+          ? { canonicalUserId: participant.canonical_user_id }
+          : {}),
+        scmLogin: participant.scm_login,
+        scmName: participant.scm_name,
+        role: participant.role,
+        joinedAt: participant.joined_at,
+      })),
+    });
+  }
 }
