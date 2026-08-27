@@ -1,5 +1,8 @@
 import type { Environment } from "@open-inspect/shared/types/environments";
-import type { SkillAssignmentInput } from "@open-inspect/shared/types/skills";
+import type {
+  SkillAssignmentInput,
+  SkillImportPreviewResponse,
+} from "@open-inspect/shared/types/skills";
 import type { Repo } from "@/hooks/use-repos";
 
 export function errorMessage(error: unknown): string {
@@ -44,4 +47,21 @@ export function buildAssignments(
     }
   }
   return result;
+}
+
+/**
+ * The confirmation an import sends back with the previewed source. Both the
+ * import and re-import flows go through here so they cannot disagree about
+ * what "store exactly what was reviewed" means.
+ */
+export function previewedSourceConfirmation(preview: SkillImportPreviewResponse): {
+  expectedCommitSha: string;
+  expectedSourceSha256: string;
+  expectedRevisionSha256: string;
+} {
+  return {
+    expectedCommitSha: preview.source.commitSha,
+    expectedSourceSha256: preview.source.sourceSha256,
+    expectedRevisionSha256: preview.revisionSha256,
+  };
 }

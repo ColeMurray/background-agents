@@ -55,7 +55,7 @@ import type { ModelProviderSelections } from "@open-inspect/shared/types/provide
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
-import { setProviderSelection } from "@/lib/provider-selection";
+import { EMPTY_PROVIDER_SELECTIONS, setProviderSelection } from "@/lib/provider-selection";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -166,7 +166,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   );
   const [sentryClientSecret, setSentryClientSecret] = useState("");
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
-    initialValues?.providerSelections ?? {}
+    initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
   );
 
   const isSchedule = triggerType === "schedule";
@@ -784,6 +784,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             value={providerSelections[provider]}
             policyLabel="Use defaults when each run starts"
             unattended
+            disabled={submitting}
             onChange={(selection) =>
               setProviderSelections((current) => setProviderSelection(current, provider, selection))
             }

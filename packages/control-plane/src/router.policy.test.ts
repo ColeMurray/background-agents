@@ -89,8 +89,21 @@ describe("route policy table", () => {
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],
     ["GET", "/sessions/session-1/skills"],
+    ["POST", "/skills"],
+    ["POST", "/skills/import"],
+    ["POST", "/skills/skill-1/reimport"],
+    ["GET", "/skill-profiles"],
   ])("owns the human-user restriction for %s %s", (method, path) => {
     expect(routeFor(method, path)?.authentication.kind).toBe("user");
+  });
+
+  it.each([
+    ["GET", "/skills"],
+    ["POST", "/skills/preview"],
+    ["POST", "/skills/resolve-preview"],
+    ["GET", "/skills/skill-1"],
+  ])("preserves user-or-service access for read-only skill routes %s %s", (method, path) => {
+    expect(routeFor(method, path)?.authentication.kind).toBe("user-or-service");
   });
 
   it("keeps diff authentication method-specific", () => {

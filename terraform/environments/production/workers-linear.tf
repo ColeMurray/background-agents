@@ -47,17 +47,20 @@ module "linear_bot_worker" {
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "APP_NAME", value = var.app_name },
     { name = "DEFAULT_MODEL", value = "claude-sonnet-4-6" },
+    { name = "CLASSIFICATION_MODEL", value = var.classification_model },
     { name = "LINEAR_CLIENT_ID", value = var.linear_client_id },
     { name = "WORKER_URL", value = "https://open-inspect-linear-bot-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev" },
   ]
 
-  secrets = [
-    { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
-    { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
-    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_linear_bot.result },
-    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-    { name = "LINEAR_API_KEY", value = var.linear_api_key },
-  ]
+  secrets = concat(
+    [
+      { name = "LINEAR_WEBHOOK_SECRET", value = var.linear_webhook_secret },
+      { name = "LINEAR_CLIENT_SECRET", value = var.linear_client_secret },
+      { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_linear_bot.result },
+      { name = "LINEAR_API_KEY", value = var.linear_api_key },
+    ],
+    local.classifier_secret_bindings
+  )
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]

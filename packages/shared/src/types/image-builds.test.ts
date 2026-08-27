@@ -1,19 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { imageBuildRecordViewSchema, imageBuildStatusResponseSchema } from "./image-builds";
+import {
+  imageBuildRecordViewSchema,
+  imageBuildStatusResponseSchema,
+  repositoryShaEntrySchema,
+} from "./image-builds";
 
 describe("imageBuildRecordViewSchema", () => {
   const validRecord = {
     id: "build-1",
-    scope_kind: "repo",
-    scope_id: "acme/web",
+    scopeKind: "repo",
+    scopeId: "acme/web",
     provider: "modal",
     status: "ready",
-    repositories_fingerprint: "fp-current",
-    repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
-    runtime_version: "60",
-    build_duration_seconds: 42,
-    error_message: "boom",
-    created_at: 1700000000000,
+    repositoriesFingerprint: "fp-current",
+    repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+    runtimeVersion: "60",
+    buildDurationSeconds: 42,
+    errorMessage: "boom",
+    createdAt: 1700000000000,
   };
 
   it("parses a valid image build record", () => {
@@ -24,8 +28,9 @@ describe("imageBuildRecordViewSchema", () => {
     expect(
       imageBuildRecordViewSchema.safeParse({
         ...validRecord,
-        build_duration_seconds: null,
-        error_message: null,
+        repositoryShas: null,
+        buildDurationSeconds: null,
+        errorMessage: null,
       }).success
     ).toBe(true);
   });
@@ -35,24 +40,46 @@ describe("imageBuildRecordViewSchema", () => {
       false
     );
     expect(
-      imageBuildRecordViewSchema.safeParse({ ...validRecord, scope_id: undefined }).success
+      imageBuildRecordViewSchema.safeParse({ ...validRecord, scopeId: undefined }).success
     ).toBe(false);
+  });
+});
+
+describe("repositoryShaEntrySchema", () => {
+  it("parses structured repository provenance", () => {
+    expect(
+      repositoryShaEntrySchema.safeParse({
+        repoOwner: "acme",
+        repoName: "web",
+        baseSha: "abc123",
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    { repoOwner: "", repoName: "web", baseSha: "abc123" },
+    { repoOwner: "acme", repoName: "", baseSha: "abc123" },
+    { repoOwner: "acme", repoName: "web", baseSha: "" },
+    { repoOwner: "acme", repoName: "web" },
+    { repoOwner: "acme", repoName: "web", baseSha: 123 },
+  ])("rejects invalid entry shape %#", (entry) => {
+    expect(repositoryShaEntrySchema.safeParse(entry).success).toBe(false);
   });
 });
 
 describe("imageBuildStatusResponseSchema", () => {
   const validRecord = {
     id: "build-1",
-    scope_kind: "repo",
-    scope_id: "acme/web",
+    scopeKind: "repo",
+    scopeId: "acme/web",
     provider: "modal",
     status: "ready",
-    repositories_fingerprint: "fp-current",
-    repository_shas: "[]",
-    runtime_version: "60",
-    build_duration_seconds: null,
-    error_message: null,
-    created_at: 1700000000000,
+    repositoriesFingerprint: "fp-current",
+    repositoryShas: [],
+    runtimeVersion: "60",
+    buildDurationSeconds: null,
+    errorMessage: null,
+    createdAt: 1700000000000,
   };
 
   it("parses the status response contract", () => {

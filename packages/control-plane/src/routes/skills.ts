@@ -1,12 +1,19 @@
 import {
   createSkillInputSchema,
   createSkillProfileInputSchema,
+  importSkillInputSchema,
+  reimportSkillInputSchema,
+  reimportSkillPreviewInputSchema,
   replaceSkillContentAndAssignmentsInputSchema,
   setSkillEnabledInputSchema,
   SKILL_LIST_PAGE_SIZE,
+  skillImportPreviewInputSchema,
   skillNameSchema,
   skillResolutionPreviewInputSchema,
   updateSkillProfileInputSchema,
+  type SkillImportProvenance,
+  type SkillImportPreviewResponse,
+  type SkillImportSourceInput,
 } from "@open-inspect/shared/types/skills";
 import {
   SkillProfileConflictError,
@@ -22,12 +29,15 @@ import {
   buildValidatedSkillRevision,
   SkillRevisionValidationError,
 } from "../skills/content-addressing";
+import { fetchSkillImport, SkillImportError, type SkillImportResult } from "../skills/git-import";
 import {
+  createRouteSourceControlProvider,
   error,
   json,
   parsePattern,
   type RequestContext,
   type Route,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   defineRoutes,
 } from "./shared";
@@ -39,6 +49,18 @@ type SkillAuditEvent =
       action: "skill.created" | "skill.edited";
       skill_id: string;
       revision_id: string;
+    }
+  | {
+      action: "skill.imported" | "skill.reimported";
+      skill_id: string;
+      revision_id: string;
+      source_provider: string;
+      source_repository: string;
+      source_ref: string;
+      source_commit_sha: string;
+      source_subdirectory: string | null;
+      source_sha256: string;
+      revision_created: boolean;
     }
   | { action: "skill.enabled_updated" | "skill.deleted"; skill_id: string }
   | {
@@ -157,6 +179,237 @@ async function handlePreviewSkill(
   } catch (e) {
     return skillWriteError(e);
   }
+}
+
+/**
+ * Shape one fetched import as its preview, including whether the canonical
+ * name is still free so the importer can override it before confirming.
+ *
+ * @param heldByName - Name the target skill already holds, on a re-import;
+ *   that name is available to it even though the catalog has it taken.
+ */
+async function importPreviewResponse(
+  ctx: RequestContext,
+  result: SkillImportResult,
+  heldByName?: string
+): Promise<SkillImportPreviewResponse> {
+  return {
+    name: result.name,
+    source: result.source,
+    description: result.content.description,
+    body: result.content.body,
+    license: result.content.license ?? null,
+    compatibility: result.content.compatibility ?? null,
+    metadata: result.content.metadata,
+    revisionSha256: result.revisionSha256,
+    totalBytes: result.totalBytes,
+    files: result.files,
+    warnings: result.warnings,
+    nameAvailable:
+      result.name === heldByName || (await new SkillStore(ctx.db).nameAvailable(result.name)),
+  };
+}
+
+/**
+ * Re-read the source and refuse to store anything the importer has not seen.
+ * The commit pins the bytes; the digest additionally catches a mapping change
+ * between preview and confirmation.
+ */
+function confirmedImport(
+  result: SkillImportResult,
+  expected: {
+    expectedCommitSha: string;
+    expectedSourceSha256: string;
+    expectedRevisionSha256: string;
+  }
+): Response | null {
+  if (result.source.commitSha !== expected.expectedCommitSha) {
+    return error(
+      `The source moved to commit ${result.source.commitSha} since it was previewed. Preview the import again.`,
+      409
+    );
+  }
+  if (result.source.sourceSha256 !== expected.expectedSourceSha256) {
+    return error("The source content changed since it was previewed. Preview again.", 409);
+  }
+  if (result.revisionSha256 !== expected.expectedRevisionSha256) {
+    return error("The imported skill changed since it was previewed. Preview again.", 409);
+  }
+  return null;
+}
+
+async function handlePreviewSkillImport(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const body = await parsedBody(request);
+  if (body instanceof Response) return body;
+  const parsed = skillImportPreviewInputSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid skill import source", 400);
+  try {
+    const result = await fetchSkillImport(
+      createRouteSourceControlProvider(env),
+      parsed.data.source,
+      parsed.data.name
+    );
+    return json(await importPreviewResponse(ctx, result));
+  } catch (e) {
+    return skillImportWriteError(e);
+  }
+}
+
+async function handleImportSkill(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const userId = canonicalUserId(ctx);
+  if (!userId) return error("Canonical user required", 403);
+  const body = await parsedBody(request);
+  if (body instanceof Response) return body;
+  const parsed = importSkillInputSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid skill import", 400);
+  try {
+    const result = await fetchSkillImport(
+      createRouteSourceControlProvider(env),
+      parsed.data.source,
+      parsed.data.name
+    );
+    const stale = confirmedImport(result, parsed.data);
+    if (stale) return stale;
+    const skill = await new SkillStore(ctx.db).create(
+      { name: result.name, content: result.content, assignments: parsed.data.assignments },
+      userId,
+      result.source
+    );
+    audit(ctx, {
+      action: "skill.imported",
+      skill_id: skill.id,
+      revision_id: skill.currentRevisionId,
+      revision_created: true,
+      ...sourceAuditFields(result.source),
+    });
+    return json({ skill }, 201);
+  } catch (e) {
+    return skillImportWriteError(e);
+  }
+}
+
+/**
+ * Resolve the source a re-import reads: the recorded repository and
+ * subdirectory, with only the ref allowed to move.
+ *
+ * An absent ref — omitted or null — means the recorded one, which is what the
+ * editor's empty ref field offers. Returning to the default branch is done by
+ * naming that branch, not by clearing the field, so a re-import never silently
+ * jumps to a different branch than the one it was pinned to.
+ */
+function recordedImportSource(
+  source: SkillImportProvenance | null,
+  ref: string | null | undefined,
+  providerName: string
+): SkillImportSourceInput | Response {
+  if (!source) return error("This skill was not imported from a repository", 409);
+  if (source.provider !== providerName) {
+    return error(
+      `This skill was imported from ${source.provider}, but this deployment uses ${providerName}`,
+      409
+    );
+  }
+  return {
+    repository: { repoOwner: source.repoOwner, repoName: source.repoName },
+    ref: ref ?? source.requestedRef,
+    subdirectory: source.subdirectory,
+  };
+}
+
+async function handlePreviewSkillReimport(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const id = resourceId(match);
+  if (id instanceof Response) return id;
+  const body = await parsedBody(request);
+  if (body instanceof Response) return body;
+  const parsed = reimportSkillPreviewInputSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid skill re-import", 400);
+  const skill = await new SkillStore(ctx.db).get(id);
+  if (!skill) return error("Skill not found", 404);
+  try {
+    const provider = createRouteSourceControlProvider(env);
+    const source = recordedImportSource(skill.source, parsed.data.ref, provider.name);
+    if (source instanceof Response) return source;
+    const result = await fetchSkillImport(provider, source, skill.name);
+    return json(await importPreviewResponse(ctx, result, skill.name));
+  } catch (e) {
+    return skillImportWriteError(e);
+  }
+}
+
+async function handleReimportSkill(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const id = resourceId(match);
+  if (id instanceof Response) return id;
+  const userId = canonicalUserId(ctx);
+  if (!userId) return error("Canonical user required", 403);
+  const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
+  if (!ifMatch) return error("If-Match revision is required", 428);
+  const body = await parsedBody(request);
+  if (body instanceof Response) return body;
+  const parsed = reimportSkillInputSchema.safeParse(body);
+  if (!parsed.success) return error("Invalid skill re-import", 400);
+  const store = new SkillStore(ctx.db);
+  const skill = await store.get(id);
+  if (!skill) return error("Skill not found", 404);
+  if (skill.currentRevisionId !== ifMatch) {
+    return error(`Current revision is ${skill.currentRevisionId}`, 409);
+  }
+  try {
+    const provider = createRouteSourceControlProvider(env);
+    const source = recordedImportSource(skill.source, parsed.data.ref, provider.name);
+    if (source instanceof Response) return source;
+    const result = await fetchSkillImport(provider, source, skill.name);
+    const stale = confirmedImport(result, parsed.data);
+    if (stale) return stale;
+    const applied = await store.applyImportedRevision(
+      id,
+      result.content,
+      result.source,
+      userId,
+      ifMatch
+    );
+    if (!applied) return error("Skill not found", 404);
+    audit(ctx, {
+      action: "skill.reimported",
+      skill_id: id,
+      revision_id: applied.skill.currentRevisionId,
+      revision_created: applied.revisionCreated,
+      ...sourceAuditFields(result.source),
+    });
+    return json({ skill: applied.skill, revisionCreated: applied.revisionCreated });
+  } catch (e) {
+    return skillImportWriteError(e);
+  }
+}
+
+function sourceAuditFields(source: SkillImportResult["source"]) {
+  return {
+    source_provider: source.provider,
+    source_repository: `${source.repoOwner}/${source.repoName}`,
+    source_ref: source.resolvedRef,
+    source_commit_sha: source.commitSha,
+    source_subdirectory: source.subdirectory,
+    source_sha256: source.sourceSha256,
+  };
 }
 
 async function handleSetSkillEnabled(
@@ -352,6 +605,11 @@ async function handleResolvePreview(
   }
 }
 
+function skillImportWriteError(value: unknown): Response {
+  if (value instanceof SkillImportError) return error(value.message, value.status);
+  return skillWriteError(value);
+}
+
 function skillWriteError(value: unknown): Response {
   if (value instanceof SkillConflictError) return error(value.message, 409);
   if (value instanceof SkillValidationError || value instanceof SkillRevisionValidationError) {
@@ -366,9 +624,8 @@ function profileWriteError(value: unknown): Response {
   throw value;
 }
 
-export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
+const skillReadRoutes = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
   { method: "GET", pattern: parsePattern("/skills"), handler: handleListSkills },
-  { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
   {
     method: "POST",
     pattern: parsePattern("/skills/preview"),
@@ -380,6 +637,26 @@ export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_RO
     handler: handleResolvePreview,
   },
   { method: "GET", pattern: parsePattern("/skills/:id"), handler: handleGetSkill },
+]);
+
+const skillAdministrationRoutes = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
+  { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
+  {
+    method: "POST",
+    pattern: parsePattern("/skills/import/preview"),
+    handler: handlePreviewSkillImport,
+  },
+  { method: "POST", pattern: parsePattern("/skills/import"), handler: handleImportSkill },
+  {
+    method: "POST",
+    pattern: parsePattern("/skills/:id/reimport/preview"),
+    handler: handlePreviewSkillReimport,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/skills/:id/reimport"),
+    handler: handleReimportSkill,
+  },
   {
     method: "PATCH",
     pattern: parsePattern("/skills/:id"),
@@ -408,3 +685,5 @@ export const skillRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_RO
     handler: handleDeleteProfile,
   },
 ]);
+
+export const skillRoutes: Route[] = [...skillReadRoutes, ...skillAdministrationRoutes];

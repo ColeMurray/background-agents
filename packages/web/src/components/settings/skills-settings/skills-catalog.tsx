@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { PlusIcon, SparkleIcon } from "@/components/ui/icons";
 import { SkillEditor } from "./skill-editor";
+import { SkillImport } from "./skill-import";
 import { errorMessage } from "./utils";
 
 export function SkillsCatalog() {
@@ -21,6 +22,7 @@ export function SkillsCatalog() {
   const { skills, hasMore, nextCursor, loading, error } = useSkillCatalogPage(cursor);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const {
     skill,
     loading: loadingSkill,
@@ -71,6 +73,19 @@ export function SkillsCatalog() {
       />
     );
   }
+  if (importing) {
+    return (
+      <SkillImport
+        onCancel={() => setImporting(false)}
+        onImported={async (id) => {
+          setImporting(false);
+          setSelectedId(id);
+          setCursorHistory([]);
+          await revalidateSkillCatalogPage(null);
+        }}
+      />
+    );
+  }
   if (selectedId) {
     if (skillError)
       return <p className="text-sm text-destructive">Failed to load this managed skill.</p>;
@@ -98,9 +113,14 @@ export function SkillsCatalog() {
             Manage reusable instructions assigned to repositories and environments.
           </p>
         </div>
-        <Button size="sm" onClick={() => setCreating(true)}>
-          <PlusIcon className="h-4 w-4" /> New skill
-        </Button>
+        <div className="flex shrink-0 gap-2">
+          <Button size="sm" variant="subtle" onClick={() => setImporting(true)}>
+            Import from repository
+          </Button>
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <PlusIcon className="h-4 w-4" /> New skill
+          </Button>
+        </div>
       </div>
       {error ? (
         <p className="text-sm text-destructive">Failed to load managed skills.</p>
@@ -132,12 +152,23 @@ export function SkillsCatalog() {
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                     r{item.revisionNumber}
                   </span>
+                  {item.source && (
+                    <span
+                      className="truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                      title={`Imported from ${item.source.repoOwner}/${item.source.repoName} at ${item.source.commitSha}`}
+                    >
+                      {item.source.repoOwner}/{item.source.repoName}
+                    </span>
+                  )}
                 </div>
                 <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                   {item.description}
                 </p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
+                <p className="mt-2 flex flex-wrap gap-x-2.5 text-xs text-muted-foreground">
+                  <span>
+                    {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
+                  </span>
+                  <span>· Created by {item.creatorDisplayName || item.createdBy}</span>
                 </p>
               </button>
               <Switch

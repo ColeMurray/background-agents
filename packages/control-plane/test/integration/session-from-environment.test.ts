@@ -7,12 +7,11 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import {
   sessionSnapshotSchema,
   type SessionState,
 } from "@open-inspect/shared/types/server-messages";
-import type { SessionDO } from "../../src/session/durable-object";
 import { EnvironmentStore } from "../../src/db/environments";
 import { EnvironmentSecretsStore } from "../../src/db/environment-secrets";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
@@ -20,6 +19,7 @@ import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { resolveEnvironmentTarget } from "../../src/repos/resolve";
 import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO } from "./helpers";
+import { getUserEnvVars } from "./session-do-access";
 
 const KEY = () => env.REPO_SECRETS_ENCRYPTION_KEY as string;
 
@@ -49,17 +49,6 @@ async function seedEnvironment(id: string, name: string, repos: RepoSpec[]): Pro
       repo_id: repo.repoId,
       base_branch: repo.baseBranch,
     }))
-  );
-}
-
-/** Invoke the DO's real (private) getUserEnvVars, exercising the session secret fold. */
-function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string> | undefined> {
-  return runInDurableObject(stub, (instance: SessionDO) =>
-    (
-      instance as unknown as {
-        getUserEnvVars(): Promise<Record<string, string> | undefined>;
-      }
-    ).getUserEnvVars()
   );
 }
 

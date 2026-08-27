@@ -1,8 +1,10 @@
-import type {
-  ModelProviderAccountStatus,
-  ProviderDeviceAuthorizationStatusResponse,
-  StartProviderDeviceAuthorizationRequest,
-  StartProviderDeviceAuthorizationResponse,
+import {
+  PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS,
+  PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS,
+  type ModelProviderAccountStatus,
+  type ProviderDeviceAuthorizationStatusResponse,
+  type StartProviderDeviceAuthorizationRequest,
+  type StartProviderDeviceAuthorizationResponse,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
   decryptProviderAuthorizationPayload,
@@ -26,6 +28,13 @@ import type { ProviderDeviceAuthorizationFinalizer } from "./device-authorizatio
 
 const TRANSACTION_LIFETIME_MS = 10 * 60 * 1000;
 const PROCESSING_CLAIM_TIMEOUT_MS = 30 * 1000;
+
+function boundedPollInterval(intervalMs: number): number {
+  return Math.min(
+    PROVIDER_DEVICE_AUTHORIZATION_MAX_POLL_INTERVAL_MS,
+    Math.max(PROVIDER_DEVICE_AUTHORIZATION_MIN_POLL_INTERVAL_MS, intervalMs)
+  );
+}
 
 export type ProviderDeviceAuthorizationTransactionStore = Pick<
   ProviderAccountAuthorizationStore,
@@ -132,6 +141,7 @@ export class ProviderDeviceAuthorizationService {
     try {
       const started = await capability.start();
       const activatedAt = this.dependencies.now();
+      const pollIntervalMs = boundedPollInterval(started.intervalMs);
       const providerExpiresAt = started.expiresInMs ? activatedAt + started.expiresInMs : expiresAt;
       const effectiveExpiresAt = Math.min(expiresAt, providerExpiresAt);
       const encrypted = await encryptProviderAuthorizationPayload(
@@ -145,7 +155,7 @@ export class ProviderDeviceAuthorizationService {
           userId,
           encrypted,
           capability.stateSchemaVersion,
-          started.intervalMs,
+          pollIntervalMs,
           effectiveExpiresAt,
           activatedAt
         ))
@@ -164,7 +174,7 @@ export class ProviderDeviceAuthorizationService {
         verificationUrl: started.verificationUrl,
         expiresAt: effectiveExpiresAt,
         expiresInMs: effectiveExpiresAt - activatedAt,
-        pollIntervalMs: started.intervalMs,
+        pollIntervalMs,
       };
     } catch (cause) {
       await this.transactions.finish(id, userId, "failed", this.dependencies.now());
@@ -218,7 +228,7 @@ export class ProviderDeviceAuthorizationService {
       );
       now = this.dependencies.now();
       if (result.status === "pending") {
-        const intervalMs = result.intervalMs ?? row.intervalMs;
+        const intervalMs = boundedPollInterval(result.intervalMs ?? row.intervalMs);
         const nextPollAt = now + intervalMs;
         if (!(await this.transactions.returnPending(row, nextPollAt, intervalMs, now))) {
           return this.resolveDurableResponse(userId, provider, id, now);
@@ -331,7 +341,7 @@ export class ProviderDeviceAuthorizationService {
       status: "pending",
       expiresAt: row.expiresAt,
       // Initiating reservations have interval 0 until provider activation completes.
-      pollIntervalMs: Math.max(row.intervalMs, 1_000),
+      pollIntervalMs: boundedPollInterval(row.intervalMs),
       nextPollAt: row.nextPollAt,
     };
   }

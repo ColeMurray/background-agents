@@ -2,10 +2,13 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { toast } from "sonner";
-import type { ModelProviderAccount } from "@open-inspect/shared/types/provider-accounts";
+import type {
+  ModelProviderAccount,
+  ModelProviderAccountDefault,
+} from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAccountsSettings } from "./provider-accounts-settings";
 import { CHATGPT_DEVICE_AUTHORIZATION_SETTINGS_URL } from "./provider-device-authorization-dialog";
 
@@ -39,12 +42,13 @@ const account = {
   archivedAt: null,
 };
 let accountsResult: ModelProviderAccount[];
+let defaultsResult: ModelProviderAccountDefault[];
 
 vi.mock("@/hooks/use-provider-accounts", () => ({
   useProviderAccounts: () => ({
     providers,
     accounts: accountsResult,
-    defaults: [],
+    defaults: defaultsResult,
     loading: false,
     error: undefined,
     refresh,
@@ -83,6 +87,7 @@ describe("ProviderAccountsSettings", () => {
     cancelAuthorization.mockResolvedValue(undefined);
     reconnectAccount.mockResolvedValue(undefined);
     accountsResult = [account];
+    defaultsResult = [];
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -308,7 +313,7 @@ describe("ProviderAccountsSettings", () => {
     expect(liveRegion).not.toHaveTextContent("expires in");
   });
 
-  it("describes authentication for automated sessions", () => {
+  it("shows an actionable empty state when automated sessions have no default", () => {
     render(<ProviderAccountsSettings />);
 
     expect(screen.getByRole("heading", { name: "Automated sessions" })).toBeInTheDocument();
@@ -317,12 +322,30 @@ describe("ProviderAccountsSettings", () => {
         "Choose credentials for sessions started by automations, bots, or other agents."
       )
     ).toBeInTheDocument();
-    const authenticationSelectors = screen.getAllByLabelText("Authentication");
-    expect(authenticationSelectors).toHaveLength(2);
-    for (const selector of authenticationSelectors)
-      expect(selector).toHaveTextContent("No account");
+    expect(screen.queryByLabelText("Automated authentication")).not.toBeInTheDocument();
+    expect(screen.getAllByText("No default account selected")).toHaveLength(2);
+    expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(2);
     expect(screen.getAllByTitle("OpenAI")).not.toHaveLength(0);
     expect(screen.getAllByTitle("Grok")).not.toHaveLength(0);
+  });
+
+  it("names the effective account used by automated sessions", () => {
+    defaultsResult = [
+      {
+        provider: "openai",
+        providerAccountId: account.id,
+        unattendedMode: "provider_account",
+        createdBy: null,
+        updatedBy: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
+      "Use default: Team ChatGPT"
+    );
   });
 
   it("sets the provider default from the account row", async () => {
@@ -338,6 +361,41 @@ describe("ProviderAccountsSettings", () => {
     await waitFor(() => {
       expect(setDefault).toHaveBeenCalledWith("openai", account.id, "provider_account");
     });
+  });
+
+  it("locks every account mutation while an operation is in flight", async () => {
+    let finishAction!: () => void;
+    runAction.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAction = resolve;
+        })
+    );
+    accountsResult = [account, { ...account, id: "c".repeat(32), displayName: "Backup ChatGPT" }];
+    defaultsResult = [
+      {
+        provider: "openai",
+        providerAccountId: account.id,
+        unattendedMode: "provider_account",
+        createdBy: null,
+        updatedBy: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    render(<ProviderAccountsSettings />);
+
+    const verifyButtons = screen.getAllByRole("button", { name: "Verify" });
+    fireEvent.click(verifyButtons[0]);
+
+    expect(screen.getByRole("button", { name: "Add account" })).toBeDisabled();
+    expect(screen.getAllByLabelText("Automated authentication")[0]).toBeDisabled();
+    expect(verifyButtons[1]).toBeDisabled();
+    fireEvent.click(verifyButtons[1]);
+    expect(runAction).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishAction());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add account" })).toBeEnabled());
   });
 
   it("keeps primary account actions on one line and moves secondary actions to overflow", async () => {

@@ -40,6 +40,31 @@ const PROVIDER_ENV = {
   { apiKey: string; marker: string; legacyRefreshToken: string }
 >;
 
+const PROVIDER_AUTH_ERROR = {
+  openai:
+    "No OpenAI authentication is configured for this session. Select a connected ChatGPT account, configure an OpenAI default, or provide OPENAI_API_KEY, then create a new session.",
+  xai: "No xAI authentication is configured for this session. Select a connected SuperGrok account, configure an xAI default, or provide XAI_API_KEY, then create a new session.",
+} as const satisfies Record<SubscriptionProviderId, string>;
+
+export function getProviderAuthenticationError(
+  model: string,
+  sandboxEnv: Record<string, string>,
+  providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>
+): { provider: SubscriptionProviderId; message: string } | null {
+  const provider = model.split("/", 1)[0];
+  if (provider !== "openai" && provider !== "xai") return null;
+
+  const config = PROVIDER_ENV[provider];
+  const mode = providerAuthModes[provider];
+  const available =
+    mode === "provider_account"
+      ? Boolean(sandboxEnv[config.marker])
+      : mode === "api_key"
+        ? Boolean(sandboxEnv[config.apiKey])
+        : Boolean(sandboxEnv[config.apiKey] || sandboxEnv[config.marker]);
+  return available ? null : { provider, message: PROVIDER_AUTH_ERROR[provider] };
+}
+
 export function prepareManagedProviderEnv({
   exposedSecrets,
   brokerSecrets,

@@ -3,7 +3,10 @@ import type { Logger } from "../../../logger";
 import type { SessionRepositoryRow } from "../../types";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "../../repository-target";
 import type { ArtifactRow, ParticipantRow, SessionRow } from "../../types";
-import { createPullRequestHandler } from "./pull-request.handler";
+import { PullRequestHandler } from "./pull-request.handler";
+import type { SessionCoreRepository } from "../../session-core-repository";
+import type { ArtifactRepository } from "../../artifact-repository";
+import type { ParticipantService } from "../../participant-service";
 
 function createRepositoryRow(
   position: number,
@@ -103,25 +106,24 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const pullRequestHandler = createPullRequestHandler({
-    getSession,
-    getSessionRepositories,
-    getPromptingParticipantForPR,
-    resolveAuthForPR,
+  const pullRequestHandler = new PullRequestHandler(
+    { getSession, getSessionRepositories } as unknown as SessionCoreRepository,
+    { getPromptingParticipantForPR, resolveAuthForPR } as unknown as ParticipantService,
+    { getArtifactById, updateArtifact } as unknown as ArtifactRepository,
+    messenger,
     getSessionUrl,
     createPullRequest,
-    getArtifactById,
-    updateArtifact,
-    messenger,
-    now,
     triggerPullRequestRefresh,
-  });
+    now
+  );
 
   // Bind the request-scoped log so call sites exercise the threading without
   // repeating it at every invocation.
   const handler = {
-    ...pullRequestHandler,
     createPr: (request: Request) => pullRequestHandler.createPr(request, log),
+    pullRequestArtifactSnapshot: (request: Request, url: URL) =>
+      pullRequestHandler.pullRequestArtifactSnapshot(request, url),
+    refreshPullRequests: () => pullRequestHandler.refreshPullRequests(),
   };
 
   return {
@@ -144,7 +146,7 @@ function createHandler() {
   };
 }
 
-describe("createPullRequestHandler", () => {
+describe("PullRequestHandler", () => {
   it("returns 404 when session is missing", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(null);

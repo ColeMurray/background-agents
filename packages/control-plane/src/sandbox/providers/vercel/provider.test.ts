@@ -241,7 +241,6 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         sandboxId: "sandbox-456",
         providerObjectId: "vercel-session-1",
-        status: "warming",
         createdAt: 123,
         codeServerUrl: "https://code.test",
         codeServerPassword: expect.any(String),

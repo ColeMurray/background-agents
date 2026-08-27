@@ -6,6 +6,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import {
+  DEFAULT_KEYBOARD_SHORTCUTS,
+  type KeyboardShortcutPreferences,
+} from "@open-inspect/shared/types/keyboard-shortcuts";
 import Home from "./page";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
@@ -76,6 +80,7 @@ const mocks = vi.hoisted(() => ({
     totalBytes: 10,
     ignoredProfileSkillIds: [],
   },
+  keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
 }));
 
 const repo = {
@@ -114,6 +119,14 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }));
 
+vi.mock("@/components/model-reasoning-selector", () => ({
+  ModelReasoningSelector: ({ disabled }: { disabled?: boolean }) => (
+    <button type="button" disabled={disabled} aria-label="Model and effort">
+      Model and effort
+    </button>
+  ),
+}));
+
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: mocks.reposValue, loading: mocks.loadingReposValue }),
 }));
@@ -127,6 +140,19 @@ vi.mock("@/hooks/use-enabled-models", () => ({
     enabledModels: mocks.enabledModelsValue,
     enabledModelOptions: mocks.enabledModelOptionsValue,
     loading: false,
+  }),
+}));
+
+vi.mock("@/hooks/use-keyboard-shortcuts", () => ({
+  useKeyboardShortcuts: () => ({
+    shortcuts: mocks.keyboardShortcuts,
+    labels: {
+      "send-prompt":
+        mocks.keyboardShortcuts["send-prompt"].code === "KeyJ" ? "Alt+J" : "Cmd/Ctrl+Enter",
+      "open-command-menu": "Cmd/Ctrl+K",
+      "new-session": "Cmd/Ctrl+Shift+O",
+      "toggle-sidebar": "Cmd/Ctrl+/",
+    },
   }),
 }));
 
@@ -169,6 +195,7 @@ beforeEach(() => {
   ];
   mocks.providerAccountsValue = [];
   mocks.providerAccountsLoadingValue = false;
+  mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -207,6 +234,23 @@ describe("Home", () => {
       "autocomplete",
       "off"
     );
+  });
+
+  it("submits with the configured prompt shortcut", async () => {
+    mocks.keyboardShortcuts = {
+      ...DEFAULT_KEYBOARD_SHORTCUTS,
+      "send-prompt": { code: "KeyJ", primary: false, alt: true, shift: false },
+    };
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    const promptCalls = () =>
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/prompt")).length;
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(promptCalls()).toBe(0);
+    fireEvent.keyDown(input, { key: "j", code: "KeyJ", altKey: true });
+    await waitFor(() => expect(promptCalls()).toBe(1));
   });
 
   it("completes skills from the current resolution preview", async () => {
@@ -453,8 +497,12 @@ describe("Home", () => {
     const first = render(<Home />);
 
     const authenticationTrigger = await screen.findByRole("button", {
-      name: "OpenAI authentication options",
+      name: /^OpenAI authentication options/,
     });
+    const skillTrigger = screen.getByRole("button", { name: /all skills/i });
+    expect(
+      skillTrigger.compareDocumentPosition(authenticationTrigger) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     fireEvent.pointerDown(authenticationTrigger, { button: 0, ctrlKey: false });
     const authenticationMenu = await screen.findByRole("menuitem", {
       name: "OpenAI authentication",
@@ -470,7 +518,7 @@ describe("Home", () => {
     first.unmount();
     render(<Home />);
     const user = userEvent.setup();
-    await screen.findByRole("button", { name: "OpenAI authentication options" });
+    await screen.findByRole("button", { name: /^OpenAI authentication options/ });
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
@@ -528,10 +576,20 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /background-agents/i });
   });
 
-  it("keeps the composer footer compact", async () => {
+  it("shows the repository and branch above the composer", async () => {
     render(<Home />);
 
+    const repository = await screen.findByRole("button", { name: /background-agents/i });
     const branch = await screen.findByText("main");
+    const composer = screen.getByPlaceholderText("What do you want to build?");
+    expect(
+      repository.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      branch.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(repository.querySelectorAll("svg")).toHaveLength(1);
+    expect(branch.closest("button")?.querySelectorAll("svg")).toHaveLength(1);
     expect(branch).toHaveClass("max-w-[9rem]", "truncate");
     expect(screen.queryByText("build agent")).not.toBeInTheDocument();
   });

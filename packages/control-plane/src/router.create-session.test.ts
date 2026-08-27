@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { generateEncryptionKey } from "./auth/crypto";
 import type { Principal } from "./auth/principal";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
@@ -129,6 +130,9 @@ describe("handleCreateSession D1 ordering", () => {
     return {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
+      // GitHub-identity enrichment reads the token store unconditionally, so
+      // the env must carry valid key material (the db stub answers "no rows").
+      TOKEN_ENCRYPTION_KEY: generateEncryptionKey(),
       DB: {
         prepare: vi.fn(() => statement),
         batch: vi.fn(),

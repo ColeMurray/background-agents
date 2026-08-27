@@ -29,6 +29,7 @@ import {
   type ListSessionInboxResult,
   type ListSessionInboxSnapshotResult,
 } from "./session-inbox-store";
+import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -37,14 +38,6 @@ export type {
   ListSessionInboxResult,
   ListSessionInboxSnapshotResult,
 } from "./session-inbox-store";
-
-const TERMINAL_STATUSES = [
-  "completed",
-  "failed",
-  "archived",
-  "cancelled",
-] satisfies SessionStatus[];
-const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -907,7 +900,7 @@ export class SessionIndexStore {
            WHERE descendants.depth < ${MAX_DESCENDANT_DEPTH}
          )
          SELECT id FROM descendants
-         WHERE status NOT IN (${TERMINAL_STATUS_SQL})
+         WHERE status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
          ORDER BY depth DESC`
       )
       .bind(parentSessionId)
@@ -939,7 +932,7 @@ export class SessionIndexStore {
          WHERE (
            SELECT COUNT(*) FROM (
              SELECT id AS child_session_id FROM sessions
-             WHERE parent_session_id = ? AND status NOT IN (${TERMINAL_STATUS_SQL})
+             WHERE parent_session_id = ? AND status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
              UNION
              SELECT child_session_id FROM child_admission_leases
              WHERE parent_session_id = ? AND expires_at > ?

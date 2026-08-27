@@ -303,6 +303,47 @@ describe("ModelProviderAccountBroker", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("reconciles durable state when stale fencing rejects ambiguously", async () => {
+    const stale = state({
+      exchangeState: "in_flight",
+      exchangeGeneration: 4,
+      exchangeOwner: "slow-owner",
+      exchangeStartedAt: NOW - 20_000,
+    });
+    const completed = state({
+      payload: { refreshToken: "next", accessToken: "late", accessTokenExpiresAt: NOW + 600_000 },
+      credentialVersion: 2,
+      exchangeGeneration: 4,
+      accessTokenExpiresAt: NOW + 600_000,
+    });
+    const { broker, refresh } = setup({
+      credentialStates: [stale, completed],
+      terminalFailure: vi.fn().mockRejectedValue(new Error("D1 response lost")),
+    });
+
+    await expect(broker.getAccess("account-1", "openai")).resolves.toMatchObject({
+      accessToken: "late",
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("preserves a stale-fence storage error when durable state is unchanged", async () => {
+    const stale = state({
+      exchangeState: "in_flight",
+      exchangeGeneration: 4,
+      exchangeOwner: "slow-owner",
+      exchangeStartedAt: NOW - 20_000,
+    });
+    const failure = new Error("D1 response lost");
+    const { broker, refresh } = setup({
+      credentialStates: [stale, stale],
+      terminalFailure: vi.fn().mockRejectedValue(failure),
+    });
+
+    await expect(broker.getAccess("account-1", "openai")).rejects.toBe(failure);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("observes reconnect state when another caller wins stale fencing", async () => {
     const stale = state({
       exchangeState: "in_flight",

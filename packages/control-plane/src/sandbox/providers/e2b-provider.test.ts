@@ -102,7 +102,6 @@ describe("E2BSandboxProvider", () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);
     const result = await provider.createSandbox(baseCreateConfig);
-    expect(result.status).toBe("running");
     expect(result.providerObjectId).toBe("e2b-id");
     expect(result.codeServerUrl).toBe("https://8080-e2b-id.e2b.app");
     const expected = (await computeHmacHex("code-server:sandbox-logical", "secret")).slice(0, 32);

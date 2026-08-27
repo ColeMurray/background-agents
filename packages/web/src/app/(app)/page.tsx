@@ -8,8 +8,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { formatModelNameLower } from "@/lib/format";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { matchesShortcut } from "@/lib/keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
@@ -20,6 +20,8 @@ import {
   getDefaultReasoningEffort,
   getSubscriptionProviderForModel,
   type ModelCategory,
+  type ReasoningEffort,
+  type ValidModel,
 } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -35,9 +37,8 @@ import {
   type SessionTargetSelection,
 } from "@/hooks/use-session-target-picker";
 import { SessionTargetPicker } from "@/components/session-target-picker";
-import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
-import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
-import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { ModelReasoningSelector } from "@/components/model-reasoning-selector";
+import { PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { SessionSkillSelector } from "@/components/session-skill-selector";
 import { PromptSkillTextarea } from "@/components/prompt-skill-autocomplete";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
@@ -55,8 +56,9 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
-import { useWarmDraftSession } from "@/hooks/use-warm-draft-session";
+import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
 import {
+  buildInteractiveProviderRoutingIdentity,
   parseStoredProviderSelections,
   reconcileProviderSelections,
   setProviderSelection,
@@ -160,7 +162,7 @@ export default function Home() {
     loadingEnabledModels ? undefined : enabledModels
   );
 
-  const warmRequest =
+  const warmRequest: WarmDraftSessionRequest | null =
     session &&
     providerSelectionsHydrated &&
     !providerAccounts.loading &&
@@ -174,12 +176,17 @@ export default function Home() {
           providerSelections: availableProviderSelections,
         }
       : null;
+  const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
+    availableProviderSelections,
+    providerAccounts.defaults,
+    providerAccounts.accounts
+  );
   const {
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
-  } = useWarmDraftSession(warmRequest);
+  } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -192,14 +199,14 @@ export default function Home() {
   }, []);
 
   const handleModelChange = useCallback(
-    (model: string) => {
+    (model: ValidModel) => {
       saveModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
     },
     [saveModelPreferenceDraft]
   );
 
   const handleReasoningEffortChange = useCallback(
-    (nextReasoningEffort: string | undefined) => {
+    (nextReasoningEffort: ReasoningEffort | undefined) => {
       saveModelPreferenceDraft({ model: selectedModel, reasoningEffort: nextReasoningEffort });
     },
     [saveModelPreferenceDraft, selectedModel]
@@ -241,6 +248,7 @@ export default function Home() {
     if (
       submitInFlightRef.current ||
       sessionAttachments.isUploading ||
+      !providerSelectionsHydrated ||
       providerAccounts.loading ||
       loadingEnabledModels
     ) {
@@ -330,6 +338,7 @@ export default function Home() {
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}
+      providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
@@ -358,6 +367,7 @@ function HomeContent({
   attachments,
   creating,
   isCreatingSession,
+  providerSelectionsHydrated,
   error,
   handleSubmit,
   modelOptions,
@@ -373,10 +383,10 @@ function HomeContent({
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
-  selectedModel: string;
-  setSelectedModel: (value: string) => void;
-  reasoningEffort: string | undefined;
-  setReasoningEffort: (value: string | undefined) => void;
+  selectedModel: ValidModel;
+  setSelectedModel: (value: ValidModel) => void;
+  reasoningEffort: ReasoningEffort | undefined;
+  setReasoningEffort: (value: ReasoningEffort | undefined) => void;
   prompt: string;
   handlePromptChange: (value: string) => void;
   attachments: {
@@ -388,6 +398,7 @@ function HomeContent({
   };
   creating: boolean;
   isCreatingSession: boolean;
+  providerSelectionsHydrated: boolean;
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
@@ -405,6 +416,7 @@ function HomeContent({
   providerAccounts: ReturnType<typeof useProviderAccounts>;
 }) {
   const { isOpen } = useSidebarContext();
+  const { shortcuts, labels } = useKeyboardShortcuts();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentsLocked = creating || attachments.isUploading;
@@ -422,7 +434,7 @@ function HomeContent({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
 
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    if (matchesShortcut(e.nativeEvent, shortcuts["send-prompt"])) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -457,6 +469,10 @@ function HomeContent({
           {isAuthenticated && (
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
+
+              <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
+                <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
+              </div>
 
               <div
                 className={`border border-border bg-input ${isDraggingOver ? "ring-2 ring-accent" : ""}`}
@@ -516,12 +532,13 @@ function HomeContent({
                       disabled={
                         (!prompt.trim() && attachments.items.length === 0) ||
                         attachmentsLocked ||
+                        !providerSelectionsHydrated ||
                         providerAccounts.loading ||
                         !isLaunchable
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
-                      aria-label={`Send (${SHORTCUT_LABELS.SEND_PROMPT})`}
+                      title={`Send (${labels["send-prompt"]})`}
+                      aria-label={`Send (${labels["send-prompt"]})`}
                     >
                       {creating ? (
                         <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -532,42 +549,24 @@ function HomeContent({
                   </div>
                 </div>
 
-                {/* Footer row with target and model selectors */}
+                {/* Footer row with session controls */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
-                  {/* Left side - Target selector + Model selector */}
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                    <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
-
-                    {/* Model selector */}
-                    <Combobox
-                      value={selectedModel}
-                      onChange={(value) => setSelectedModel(value)}
-                      items={
-                        modelOptions.map((group) => ({
-                          category: group.category,
-                          options: group.models.map((model) => ({
-                            value: model.id,
-                            label: model.name,
-                            description: model.description,
-                          })),
-                        })) as ComboboxGroup[]
-                      }
-                      direction="up"
-                      dropdownWidth="w-56"
-                      disabled={creating}
-                      triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                      <ModelIcon className="w-3.5 h-3.5" />
-                      <span className="truncate max-w-[9rem] sm:max-w-none">
-                        {formatModelNameLower(selectedModel)}
-                      </span>
-                    </Combobox>
-
-                    {/* Reasoning effort pills */}
-                    <ReasoningEffortPills
+                    <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}
-                      onSelect={setReasoningEffort}
+                      items={modelOptions}
+                      onModelChange={setSelectedModel}
+                      onReasoningEffortChange={setReasoningEffort}
+                      disabled={creating}
+                    />
+
+                    <SessionSkillSelector
+                      value={skillSelection}
+                      onChange={setSkillSelection}
+                      target={skillPreviewTarget}
+                      preview={skillPreview}
+                      previewLoading={skillPreviewLoading}
                       disabled={creating}
                     />
 
@@ -580,20 +579,12 @@ function HomeContent({
                           (item) => item.provider === selectedProvider
                         )}
                         value={providerSelections[selectedProvider]}
+                        disabled={creating}
                         onChange={(selection) =>
                           onProviderSelectionChange(selectedProvider, selection)
                         }
                       />
                     )}
-
-                    <SessionSkillSelector
-                      value={skillSelection}
-                      onChange={setSkillSelection}
-                      target={skillPreviewTarget}
-                      preview={skillPreview}
-                      previewLoading={skillPreviewLoading}
-                      disabled={creating}
-                    />
                   </div>
                 </div>
               </div>
