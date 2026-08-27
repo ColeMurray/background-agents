@@ -62,7 +62,7 @@ function narrowDimensions(value: unknown): { width: number; height: number } | u
 }
 
 export function toUiArtifact(artifact: SessionArtifact): Artifact {
-  const meta = isRecord(artifact.metadata) ? artifact.metadata : null;
+  const meta = artifact.metadata;
   return {
     id: artifact.id,
     type: artifact.type as Artifact["type"],

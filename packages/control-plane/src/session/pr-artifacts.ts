@@ -5,10 +5,6 @@ import { parsePullRequestArtifactMetadata } from "./pull-request-snapshot";
 import type { RepoIdentity } from "./repository-target";
 import type { ArtifactRow } from "./types";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /**
  * Repo identity from a PR artifact's metadata. Null when the metadata carries
  * no identity — artifacts written before multi-repo support, which by
@@ -16,17 +12,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * home of that convention: both the duplicate-PR guard and the per-repo
  * artifact find go through here.
  */
-function parsePrArtifactRepo(metadata: string | null): RepoIdentity | null {
-  if (!metadata) return null;
-  try {
-    const parsed: unknown = JSON.parse(metadata);
-    if (!isRecord(parsed)) return null;
-    const { repoOwner, repoName } = parsed;
-    if (typeof repoOwner !== "string" || typeof repoName !== "string") return null;
-    return { repoOwner, repoName };
-  } catch {
-    return null;
-  }
+function prArtifactRepoFromMetadata(metadata: Record<string, unknown>): RepoIdentity | null {
+  const { repoOwner, repoName } = metadata;
+  if (typeof repoOwner !== "string" || typeof repoName !== "string") return null;
+  return { repoOwner, repoName };
 }
 
 /**
@@ -43,7 +32,11 @@ export function findPrArtifactForRepo(
   return artifacts.find(
     (artifact) =>
       artifact.type === "pr" &&
-      prArtifactBelongsToRepo(parsePrArtifactRepo(artifact.metadata), targetRepo, isPrimary)
+      prArtifactBelongsToRepo(
+        prArtifactRepoFromMetadata(parsePullRequestArtifactMetadata(artifact.metadata)),
+        targetRepo,
+        isPrimary
+      )
   );
 }
 
@@ -74,13 +67,12 @@ export function listPrArtifactsForHead(
 ): PrArtifactHeadMatch[] {
   const normalizedHead = normalizeBranchName(branches.headBranch);
   return artifacts
-    .filter(
-      (artifact) =>
-        artifact.type === "pr" &&
-        prArtifactBelongsToRepo(parsePrArtifactRepo(artifact.metadata), targetRepo, isPrimary)
-    )
     .map((artifact) => {
+      if (artifact.type !== "pr") return null;
       const metadata = parsePullRequestArtifactMetadata(artifact.metadata);
+      if (!prArtifactBelongsToRepo(prArtifactRepoFromMetadata(metadata), targetRepo, isPrimary)) {
+        return null;
+      }
       const head = typeof metadata.head === "string" ? metadata.head : branches.generatedHeadBranch;
       if (normalizeBranchName(head) !== normalizedHead) return null;
       return {

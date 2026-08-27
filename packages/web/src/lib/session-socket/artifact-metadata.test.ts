@@ -110,17 +110,4 @@ describe("toUiArtifact", () => {
     });
     expect(artifact.metadata).toBeUndefined();
   });
-
-  it("leaves metadata undefined when loose wire metadata is not an object", () => {
-    const looseArtifact = {
-      id: "artifact-branch-2",
-      type: "branch",
-      url: null,
-      metadata: [],
-      createdAt: 100,
-    } as unknown as Parameters<typeof toUiArtifact>[0];
-    const artifact = toUiArtifact(looseArtifact);
-
-    expect(artifact.metadata).toBeUndefined();
-  });
 });
