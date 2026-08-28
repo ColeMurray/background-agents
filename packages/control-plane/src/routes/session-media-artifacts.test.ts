@@ -10,9 +10,12 @@ import {
   persistMediaArtifact,
 } from "./session-media-artifacts";
 
-function createContext(response: Response): SessionRouteContext {
+function createContext(result: Response | Error): SessionRouteContext {
   const sessionRuntime: SessionRuntimeClient = {
-    fetch: vi.fn(async () => response),
+    fetch: vi.fn(async () => {
+      if (result instanceof Error) throw result;
+      return result;
+    }),
   };
 
   return {
@@ -38,14 +41,19 @@ function createStorage(deleteImpl = vi.fn(async () => undefined)): ObjectStorage
   };
 }
 
-function persistInput(ctx: SessionRouteContext, storage: ObjectStorage) {
+function persistInput(
+  ctx: SessionRouteContext,
+  storage: ObjectStorage
+): Parameters<typeof persistMediaArtifact>[0] {
+  const objectKey = "sessions/session-1/artifact-1.png";
   return {
     sessionId: "session-1",
     artifactId: "artifact-1",
     artifactType: "screenshot" as const,
-    objectKey: "sessions/session-1/artifact-1.png",
+    objectKey,
     metadata: {
-      contentType: "image/png",
+      objectKey,
+      mimeType: "image/png",
       sizeBytes: 123,
     },
     storage,
@@ -74,7 +82,8 @@ describe("persistMediaArtifact", () => {
           artifactType: "screenshot",
           objectKey: "sessions/session-1/artifact-1.png",
           metadata: {
-            contentType: "image/png",
+            objectKey: "sessions/session-1/artifact-1.png",
+            mimeType: "image/png",
             sizeBytes: 123,
           },
         }),
@@ -92,6 +101,16 @@ describe("persistMediaArtifact", () => {
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(400);
     await expect((result as Response).json()).resolves.toEqual({ error: "bad metadata" });
+  });
+
+  it("deletes uploaded storage when the runtime request rejects", async () => {
+    const runtimeError = new Error("runtime unavailable");
+    const ctx = createContext(runtimeError);
+    const storage = createStorage();
+
+    await expect(persistMediaArtifact(persistInput(ctx, storage))).rejects.toBe(runtimeError);
+
+    expect(storage.delete).toHaveBeenCalledWith("sessions/session-1/artifact-1.png");
   });
 
   it("deletes uploaded storage and hides runtime 5xx details", async () => {
