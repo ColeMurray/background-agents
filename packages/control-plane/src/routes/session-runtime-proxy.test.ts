@@ -162,6 +162,28 @@ describe("session runtime proxy routes", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("rejects an empty sandbox error before forwarding it", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const path = "/sessions/session-1/sandbox-error";
+    const { handler, match } = getHandler("POST", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("returns deduplicated canonical participant profiles with safe fields only", async () => {
     const fetch = vi.fn(async () =>
       Response.json({

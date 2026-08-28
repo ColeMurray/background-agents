@@ -144,7 +144,8 @@ async function handleSandboxError(
     return error("Unauthorized", 401);
   }
   const body = await readBodyCapped(request.body, SANDBOX_ERROR_BODY_MAX_BYTES);
-  if (!body) return error("Sandbox error body is too large", 413);
+  if (body === null) return error("Sandbox error body is too large", 413);
+  if (body.byteLength === 0) return error("Sandbox error body is required", 400);
 
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.sandboxError, {
     method: "POST",

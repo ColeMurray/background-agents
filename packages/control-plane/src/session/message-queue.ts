@@ -78,6 +78,7 @@ interface EnqueuedPrompt {
 }
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
 
 type EnqueueAutofixResponse = Extract<
   GitHubAutofixSessionResponse,
@@ -602,9 +603,7 @@ export class SessionMessageQueue {
    * to the sandbox or call processMessageQueue(). This avoids races where a new
    * prompt could be dispatched to a sandbox being shut down.
    */
-  async failStuckProcessingMessage(
-    error = "Execution timed out (stuck processing)"
-  ): Promise<void> {
+  async failStuckProcessingMessage(error = STUCK_PROCESSING_ERROR): Promise<void> {
     const now = Date.now();
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
