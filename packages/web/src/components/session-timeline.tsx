@@ -20,8 +20,11 @@ import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
 import {
   buildSessionTimelineItems,
+  isRenderableTimelineEvent,
   toolCallKey,
+  type DirectTimelineEventType,
   type FlatTimelineItem,
+  type RenderableTimelineEvent,
   type TimelineItem,
   type ToolCallEvent,
 } from "@/lib/timeline-items";
@@ -66,13 +69,16 @@ export function SessionTimeline({
   terminalMessageReadObservationEnabled?: boolean;
   onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
-  const timelineItems = useMemo(() => buildSessionTimelineItems(events), [events]);
   const pendingMessageIds = useMemo(
     () =>
       new Set(
         promptQueue.filter((item) => item.status === "pending").map((item) => item.messageId)
       ),
     [promptQueue]
+  );
+  const timelineItems = useMemo(
+    () => buildSessionTimelineItems(events, pendingMessageIds),
+    [events, pendingMessageIds]
   );
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
@@ -85,26 +91,6 @@ export function SessionTimeline({
     }
     return null;
   }, [events]);
-  const latestTerminalMessageGroupRange = useMemo(() => {
-    if (!latestTerminalMessageId) return null;
-    const completionIndex = timelineItems.findIndex(
-      (item) =>
-        item.type === "single" &&
-        item.event.type === "execution_complete" &&
-        item.event.messageId === latestTerminalMessageId
-    );
-    if (completionIndex < 0) return null;
-    const outputIndex = timelineItems.findIndex(
-      (item) =>
-        item.type === "single" &&
-        item.event.type === "token" &&
-        item.event.messageId === latestTerminalMessageId
-    );
-    return {
-      start: outputIndex >= 0 ? Math.min(outputIndex, completionIndex) : completionIndex,
-      end: Math.max(outputIndex, completionIndex),
-    };
-  }, [timelineItems, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
@@ -113,21 +99,11 @@ export function SessionTimeline({
     () =>
       buildTimelineVirtualRows({
         items: timelineItems,
-        pendingMessageIds,
         terminalMessageId: onMarkMessageRead ? latestTerminalMessageId : null,
-        terminalRange: onMarkMessageRead ? latestTerminalMessageGroupRange : null,
         loadingHistory,
         isProcessing,
       }),
-    [
-      isProcessing,
-      latestTerminalMessageGroupRange,
-      latestTerminalMessageId,
-      loadingHistory,
-      onMarkMessageRead,
-      pendingMessageIds,
-      timelineItems,
-    ]
+    [isProcessing, latestTerminalMessageId, loadingHistory, onMarkMessageRead, timelineItems]
   );
   const getVirtualRowKey = useCallback(
     (index: number) => virtualRows[index]?.id ?? index,
@@ -238,13 +214,6 @@ export function SessionTimeline({
         />
       );
     }
-    if (
-      item.event.type === "user_message" &&
-      item.event.messageId &&
-      pendingMessageIds.has(item.event.messageId)
-    ) {
-      return null;
-    }
     return (
       <EventItem
         key={item.id}
@@ -294,11 +263,12 @@ export function SessionTimeline({
       case "thinking":
         return <ThinkingIndicator />;
       case "terminal":
+        if (!onMarkMessageRead) return row.items.map(renderTimelineItem);
         return (
           <TerminalMessageReadObserver
             messageId={row.messageId}
             enabled={terminalMessageReadObservationEnabled}
-            onMarkMessageRead={onMarkMessageRead!}
+            onMarkMessageRead={onMarkMessageRead}
           >
             {row.items.map(renderTimelineItem)}
           </TerminalMessageReadObserver>
@@ -375,7 +345,7 @@ function TimelineSkeleton() {
 }
 
 type EventRendererProps = {
-  event: SandboxEvent;
+  event: RenderableTimelineEvent;
   sessionId: string;
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
@@ -518,7 +488,6 @@ function UserMessageEvent({
 }: EventRendererProps) {
   if (event.type !== "user_message") return null;
   const attachments = event.attachments ?? [];
-  if (!event.content && attachments.length === 0) return null;
 
   const isCurrentUser =
     event.author?.participantId && currentParticipantId
@@ -582,7 +551,7 @@ function UserMessageEvent({
 }
 
 function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererProps) {
-  if (event.type !== "token" || !event.content) return null;
+  if (event.type !== "token") return null;
 
   return (
     <MessageFrame
@@ -600,7 +569,7 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
 }
 
 function ToolResultEvent({ event }: EventRendererProps) {
-  if (event.type !== "tool_result" || !event.error) return null;
+  if (event.type !== "tool_result") return null;
 
   return (
     <div className="flex min-w-0 items-start gap-2 py-1 text-sm text-destructive">
@@ -621,13 +590,7 @@ function GitSyncEvent({ event }: EventRendererProps) {
 }
 
 function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
-  if (
-    event.type !== "artifact" ||
-    (event.artifactType !== "screenshot" && event.artifactType !== "video") ||
-    !event.artifactId
-  ) {
-    return null;
-  }
+  if (event.type !== "artifact") return null;
 
   return (
     <div className="space-y-2 border border-border-muted bg-card p-3 sm:p-4">
@@ -702,9 +665,7 @@ function formatEventTime(event: SandboxEvent): string {
   return new Date(event.timestamp * 1000).toLocaleTimeString();
 }
 
-const eventRenderers: Partial<
-  Record<SandboxEvent["type"], (props: EventRendererProps) => ReactNode>
-> = {
+const eventRenderers = {
   user_message: UserMessageEvent,
   token: AssistantMessageEvent,
   tool_result: ToolResultEvent,
@@ -714,7 +675,7 @@ const eventRenderers: Partial<
   warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
   context_compacted: ContextCompactedEvent,
-};
+} satisfies Record<DirectTimelineEventType, (props: EventRendererProps) => ReactNode>;
 
 export const EventItem = memo(function EventItem({
   event,
@@ -754,8 +715,8 @@ export const EventItem = memo(function EventItem({
     }, 1500);
   }, []);
 
+  if (!isRenderableTimelineEvent(event) || event.type === "tool_call") return null;
   const render = eventRenderers[event.type];
-  if (!render) return null;
 
   return render({
     event,

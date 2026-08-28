@@ -1,4 +1,3 @@
-import type { SandboxEvent } from "@/types/session";
 import type { SessionTimelineItem } from "./timeline-items";
 
 export type TimelineVirtualRow =
@@ -30,42 +29,63 @@ export const TIMELINE_VIRTUALIZER_DEFAULTS = {
 
 export function buildTimelineVirtualRows({
   items,
-  pendingMessageIds,
   terminalMessageId,
-  terminalRange,
   loadingHistory,
   isProcessing,
 }: {
   items: SessionTimelineItem[];
-  pendingMessageIds: ReadonlySet<string>;
   terminalMessageId: string | null;
-  terminalRange: { start: number; end: number } | null;
   loadingHistory: boolean;
   isProcessing: boolean;
 }): TimelineVirtualRow[] {
   const rows: TimelineVirtualRow[] = [];
   if (loadingHistory) rows.push({ type: "loading", id: "history-loading" });
+  const terminal = terminalMessageId ? findTerminalMessageRange(items, terminalMessageId) : null;
 
   for (let index = 0; index < items.length; index += 1) {
-    if (terminalMessageId && terminalRange && index === terminalRange.start) {
+    if (terminal && index === terminal.start) {
       rows.push({
         type: "terminal",
-        id: `terminal:${terminalMessageId}`,
-        messageId: terminalMessageId,
-        items: items.slice(terminalRange.start, terminalRange.end + 1),
+        id: `terminal:${terminal.messageId}`,
+        messageId: terminal.messageId,
+        items: items.slice(terminal.start, terminal.end + 1),
       });
-      index = terminalRange.end;
+      index = terminal.end;
       continue;
     }
 
     const item = items[index];
-    if (isRenderableTimelineItem(item, pendingMessageIds)) {
-      rows.push({ type: "item", id: `item:${item.id}`, item });
-    }
+    rows.push({ type: "item", id: `item:${item.id}`, item });
   }
 
   if (isProcessing) rows.push({ type: "thinking", id: "thinking" });
   return rows;
+}
+
+function findTerminalMessageRange(
+  items: SessionTimelineItem[],
+  messageId: string
+): { messageId: string; start: number; end: number } | null {
+  const end = items.findIndex(
+    (item) =>
+      item.type === "single" &&
+      item.event.type === "execution_complete" &&
+      item.event.messageId === messageId
+  );
+  if (end < 0) return null;
+
+  let start = end;
+  for (let index = 0; index < end; index += 1) {
+    const item = items[index];
+    if (
+      item.type === "single" &&
+      item.event.type === "token" &&
+      item.event.messageId === messageId
+    ) {
+      start = index;
+    }
+  }
+  return { messageId, start, end };
 }
 
 export function estimateTimelineRowSize(row: TimelineVirtualRow): number {
@@ -84,41 +104,5 @@ export function estimateTimelineRowSize(row: TimelineVirtualRow): number {
       return TIMELINE_ROW_SIZE_ESTIMATES.artifact;
     default:
       return TIMELINE_ROW_SIZE_ESTIMATES.default;
-  }
-}
-
-function isRenderableTimelineItem(
-  item: SessionTimelineItem,
-  pendingMessageIds: ReadonlySet<string>
-): boolean {
-  if (item.type !== "single") return true;
-  const event = item.event;
-  if (event.type === "user_message" && event.messageId && pendingMessageIds.has(event.messageId)) {
-    return false;
-  }
-  return isRenderableEvent(event);
-}
-
-function isRenderableEvent(event: SandboxEvent): boolean {
-  switch (event.type) {
-    case "user_message":
-      return Boolean(event.content || event.attachments?.length);
-    case "token":
-      return Boolean(event.content);
-    case "tool_result":
-      return Boolean(event.error);
-    case "artifact":
-      return (
-        (event.artifactType === "screenshot" || event.artifactType === "video") &&
-        Boolean(event.artifactId)
-      );
-    case "git_sync":
-    case "error":
-    case "warning":
-    case "execution_complete":
-    case "context_compacted":
-      return true;
-    default:
-      return false;
   }
 }

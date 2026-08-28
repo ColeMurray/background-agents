@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
-import { buildTimelineItems, type SessionTimelineItem } from "./timeline-items";
+import {
+  buildSessionTimelineItems,
+  buildTimelineItems,
+  type SessionTimelineItem,
+} from "./timeline-items";
 import {
   buildTimelineVirtualRows,
   estimateTimelineRowSize,
@@ -14,28 +18,29 @@ function single(event: SandboxEvent): SessionTimelineItem {
 describe("buildTimelineVirtualRows", () => {
   it("excludes events that do not render and pending user messages", () => {
     const rows = buildTimelineVirtualRows({
-      items: [
-        single({ type: "heartbeat", sandboxId: "sandbox", timestamp: 1, status: "ready" }),
-        single({
-          type: "tool_result",
-          sandboxId: "sandbox",
-          messageId: "message",
-          timestamp: 2,
-          callId: "call",
-          result: "ok",
-        }),
-        single({ type: "user_message", messageId: "pending", timestamp: 3, content: "queued" }),
-        single({ type: "warning", timestamp: 4, scope: "setup", message: "visible" }),
-      ],
-      pendingMessageIds: new Set(["pending"]),
+      items: buildSessionTimelineItems(
+        [
+          { type: "heartbeat", sandboxId: "sandbox", timestamp: 1, status: "ready" },
+          {
+            type: "tool_result",
+            sandboxId: "sandbox",
+            messageId: "message",
+            timestamp: 2,
+            callId: "call",
+            result: "ok",
+          },
+          { type: "user_message", messageId: "pending", timestamp: 3, content: "queued" },
+          { type: "warning", timestamp: 4, scope: "setup", message: "visible" },
+        ],
+        new Set(["pending"])
+      ),
       terminalMessageId: null,
-      terminalRange: null,
       loadingHistory: false,
       isProcessing: false,
     });
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ type: "item", item: { id: "warning:4" } });
+    expect(rows[0]).toMatchObject({ type: "item", item: { id: "warning:session:4" } });
   });
 
   it("coalesces the terminal output and completion into one row", () => {
@@ -57,9 +62,7 @@ describe("buildTimelineVirtualRows", () => {
     ];
     const rows = buildTimelineVirtualRows({
       items,
-      pendingMessageIds: new Set(),
       terminalMessageId: "message",
-      terminalRange: { start: 0, end: 1 },
       loadingHistory: true,
       isProcessing: true,
     });

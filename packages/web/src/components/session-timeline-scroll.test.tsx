@@ -60,6 +60,73 @@ function toolEvent(
 }
 
 describe("timeline auto-scrolling", () => {
+  it("preserves the visible row position when history is prepended", () => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      if (!this.hasAttribute("data-index")) return 800;
+      return Number(this.dataset.index) % 2 === 0 ? 80 : 160;
+    });
+    const messages = Array.from(
+      { length: 200 },
+      (_, index): SandboxEvent => ({
+        type: "user_message",
+        content: `Message ${index}`,
+        messageId: `message-${index}`,
+        timestamp: index + 10,
+      })
+    );
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={messages} />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 800 },
+      scrollHeight: { configurable: true, value: 500_000 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+      scrollTo: {
+        configurable: true,
+        value: ({ top }: ScrollToOptions) => {
+          if (typeof top === "number") timeline.scrollTop = top;
+        },
+      },
+    });
+    timeline.scrollTop = 20_000;
+    fireEvent.scroll(timeline);
+    const anchorContent = container.querySelector("[data-index] pre")?.textContent;
+    const anchorBefore = [...container.querySelectorAll<HTMLElement>("[data-index]")].find((row) =>
+      row.textContent?.includes(anchorContent ?? "")
+    )!;
+    const viewportOffsetBefore =
+      Number.parseFloat(anchorBefore.style.transform.slice(11)) - timeline.scrollTop;
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          ...Array.from(
+            { length: 3 },
+            (_, index): SandboxEvent => ({
+              type: "user_message",
+              content: `Older ${index}`,
+              messageId: `older-${index}`,
+              timestamp: index + 1,
+            })
+          ),
+          ...messages,
+        ]}
+      />
+    );
+    const anchorAfter = [...container.querySelectorAll<HTMLElement>("[data-index]")].find((row) =>
+      row.textContent?.includes(anchorContent ?? "")
+    )!;
+    const viewportOffsetAfter =
+      Number.parseFloat(anchorAfter.style.transform.slice(11)) - timeline.scrollTop;
+
+    expect(anchorContent).toBeTruthy();
+    expect(viewportOffsetAfter).toBe(viewportOffsetBefore);
+  });
+
   it("keeps observing the history sentinel after the skeleton clears", () => {
     const observedElements: Element[] = [];
     let notifyIntersection = (_isIntersecting: boolean) => {};
@@ -132,7 +199,7 @@ describe("timeline auto-scrolling", () => {
     expect(timeline.scrollTop).toBe(0);
   });
 
-  it("confines sub-task auto-scrolling to the timeline", () => {
+  it("follows appended activity when within the bottom threshold", () => {
     const task = toolEvent("task", "task-call", 1, {
       childSessionId: "child-1",
       status: "running",
@@ -144,7 +211,9 @@ describe("timeline auto-scrolling", () => {
     Object.defineProperties(timeline, {
       clientHeight: { configurable: true, value: 200 },
       scrollHeight: { configurable: true, value: 1_000 },
+      scrollTop: { configurable: true, value: 701, writable: true },
     });
+    fireEvent.scroll(timeline);
 
     rerender(
       <SessionTimeline
