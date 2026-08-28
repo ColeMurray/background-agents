@@ -549,7 +549,7 @@ async def test_snapshot_build_maps_missing_or_mismatched_session_to_not_found(mo
 
 
 @pytest.mark.asyncio
-async def test_image_request_validation_runs_after_authentication(monkeypatch):
+async def test_terminate_request_validation_runs_after_authentication(monkeypatch):
     def reject_auth(_authorization):
         raise web_api.HTTPException(status_code=401, detail="Unauthorized")
 

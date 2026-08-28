@@ -324,9 +324,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   }
 
   /**
-   * Modal has no image-delete API — images are garbage-collected once no
-   * longer referenced — so deletion is a local no-op. Callers (the image
-   * reaper and finalizer) log each attempt and outcome.
+   * Deletion is a local no-op for now: Modal's only deletion surface is the
+   * experimental `image_delete` API, whose adoption is deferred until
+   * validated (#1658). The HTTP endpoint this replaced deleted nothing
+   * either, so reaped images were already retained provider-side. Callers
+   * (the image reaper and finalizer) log each attempt and outcome.
    */
   async deleteProviderImage(): Promise<void> {}
 
