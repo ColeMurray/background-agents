@@ -213,6 +213,7 @@ Two prompt templates in `src/prompts.ts`:
 - Run `gh pr diff` for the full diff
 - Submit a review via `gh api .../reviews`
 - Post inline comments via `gh api .../comments`
+- Emit applyable `suggestion` fences in inline comment bodies (see below)
 
 **`buildCommentActionPrompt`** — Includes the user's request (with @mention stripped) and
 instructions to:
@@ -220,7 +221,37 @@ instructions to:
 - Check prior conversation via `gh pr view --comments`
 - Make code changes and push, or respond with analysis
 - Post a summary comment via `gh api .../issues/{n}/comments`
-- Reply to a specific review thread (when `commentId` is present)
+- Reply to a specific review thread (when `commentId` is present), optionally with an applyable
+  `suggestion` fence — the summary comment cannot carry one, since an issue comment has no line
+  anchor
+
+### Applyable Suggestions
+
+`buildSuggestionGuidelines` serves both prompt paths. A fenced `suggestion` block inside a
+**line-anchored** comment is what GitHub renders with a "Commit suggestion" button; the fence
+content replaces the anchored lines verbatim. Nothing in this package calls a special suggestion
+API—the existing inline-comment and thread-reply routes carry the markdown body.
+
+All review, inline-comment, thread-reply, and summary bodies are passed as `-F body=@<file>` rather
+than an inline `-f body="…"` argument. The prompts require the agent to use its file-write tool or a
+quoted heredoc delimiter; an unquoted heredoc performs command and variable substitution on
+untrusted review text before `gh` reads the file.
+
+For a full review, the agent selects the anchor and must prove every selected line falls inside a
+diff hunk. For a thread reply, GitHub inherits the parent comment's anchor, so the agent instead
+checks that the supplied code-location hunk still matches the current head and emits no fence after
+a commit has moved those lines. Both paths require verbatim replacement, exact indentation, a
+scratch-copy check, and a prose fallback when the replacement cannot be proved safe.
+
+### Repository Identity in API Routes
+
+Every `gh api repos/...` route embedded in these prompts uses
+`encodeRepositoryPathSegments({ repoOwner: owner, repoName: repo })`
+(`@open-inspect/shared/types/repositories`) rather than maintaining another route-construction rule.
+GitHub login owners are currently single segments, so this is behavior-preserving for webhook
+traffic; using the shared helper keeps the prompt aligned with the repository-wide identity
+contract, which also permits nested namespaces on other source-control providers. Human-readable
+`${owner}/${repo}` prose stays unencoded.
 
 The prompts embed only metadata from the webhook payload. The agent gathers everything else.
 
