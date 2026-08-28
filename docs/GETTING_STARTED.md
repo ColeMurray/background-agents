@@ -373,6 +373,10 @@ instead of entering the settings below individually. Replace `SLACK_EVENTS_URL` 
 manifest. The least-privilege template omits the optional `message.channels` and `message.groups`
 automation subscriptions; add them only when using channel-message automations.
 
+Before `terraform apply`, configure the OAuth scopes below, install the app, and collect its bot
+token and signing secret. Apply the URL-dependent manifest after deployment, when Slack can verify
+the worker's `/events` and `/interactions` endpoints.
+
 ### Configure OAuth & Permissions
 
 1. Go to **OAuth & Permissions** in the sidebar
@@ -404,9 +408,10 @@ Queued delivery applies to every Slack completion, including text-only replies. 
 
 1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
    this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
-2. Add the Slack bot scopes `files:write` and `files:read` (needed to forward images attached to
-   Slack messages into sessions), reinstall the app once for the workspace, and update
-   `slack_bot_token` if Slack issued a replacement.
+2. Ensure the Slack app has `assistant:write`, `mpim:history`, `users:read`, `users:read.email`,
+   `files:read`, and `files:write`. Reinstall the app once for the workspace, and update
+   `slack_bot_token` if Slack issued a replacement. These scopes enable Agent view, group direct
+   messages, user identity resolution, inbound images, and generated-media delivery.
 3. Run `terraform apply`, then verify a text completion, an inbound image attached to a prompt, and
    a generated-media attachment. If the token lacks Queue access, the apply fails while provisioning
    the new resources; grant the permission and rerun the apply.
@@ -758,7 +763,7 @@ writable Messages tab lets users start direct-message sessions.
    - `message.channels` (optional - if you want the bot to see all channel messages)
    - `message.groups` (optional - if you want automations in private channels)
    - `message.im` (enables direct message support)
-   - `message.mpim` (enables group direct message support)
+   - `message.mpim` (enables mentioned requests in group direct messages)
 6. Click **Save Changes**
 
 ### Configure Interactivity

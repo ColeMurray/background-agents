@@ -853,6 +853,31 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  it("ignores group direct messages that do not mention the bot", async () => {
+    const slackFetch = mockSlackFetch([]);
+    const env = makeSessionEnv([]);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "message",
+        text: "ask <@U456> about the auth tests",
+        user: "U123",
+        channel: "G123",
+        ts: "444.555",
+        channel_type: "mpim",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+
+    slackFetch.mockRestore();
+  });
+
   it("sets Starting status for follow-up prompts in existing threads", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {

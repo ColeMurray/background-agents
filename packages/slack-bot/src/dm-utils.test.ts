@@ -3,6 +3,7 @@ import {
   stripMentions,
   stripUserMention,
   isDmDispatchable,
+  isGroupDmDispatchable,
   isChannelTriggerCandidate,
 } from "./dm-utils";
 
@@ -58,8 +59,8 @@ describe("isDmDispatchable", () => {
     expect(isDmDispatchable(baseEvent)).toBe(true);
   });
 
-  it("returns true for a valid group DM event", () => {
-    expect(isDmDispatchable({ ...baseEvent, channel_type: "mpim", channel: "G12345" })).toBe(true);
+  it("returns false for a group DM event", () => {
+    expect(isDmDispatchable({ ...baseEvent, channel_type: "mpim", channel: "G12345" })).toBe(false);
   });
 
   it("returns false when subtype is present (e.g. bot_message)", () => {
@@ -102,6 +103,28 @@ describe("isDmDispatchable", () => {
 
   it("still rejects other subtypes even when files are present", () => {
     expect(isDmDispatchable({ ...baseEvent, subtype: "message_changed", files: [{}] })).toBe(false);
+  });
+});
+
+describe("isGroupDmDispatchable", () => {
+  const baseEvent = {
+    type: "message",
+    channel_type: "mpim",
+    text: "<@UBOT> help",
+    channel: "G12345",
+    ts: "1234567890.123456",
+    user: "U12345",
+  };
+
+  it("requires a bot mention", () => {
+    expect(isGroupDmDispatchable(baseEvent, "UBOT")).toBe(true);
+    expect(isGroupDmDispatchable({ ...baseEvent, text: "talking to the group" }, "UBOT")).toBe(
+      false
+    );
+  });
+
+  it("rejects non-MPIM channels", () => {
+    expect(isGroupDmDispatchable({ ...baseEvent, channel_type: "im" }, "UBOT")).toBe(false);
   });
 });
 

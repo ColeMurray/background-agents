@@ -25,7 +25,7 @@ export function stripUserMention(text: string, userId: string): string {
  * so they dispatch on their files instead; a forwarded message with no comment
  * likewise carries its content in `attachments` and no text at all.
  */
-export function isDmDispatchable(event: {
+type DirectMessageEvent = {
   type: string;
   subtype?: string;
   channel_type?: string;
@@ -35,18 +35,32 @@ export function isDmDispatchable(event: {
   user?: string;
   files?: unknown[];
   attachments?: unknown[];
-}): boolean {
+};
+
+function hasDispatchableMessage(event: DirectMessageEvent): boolean {
   const subtypeOk = !event.subtype || event.subtype === "file_share";
   const hasContent =
     !!event.text || (event.files?.length ?? 0) > 0 || (event.attachments?.length ?? 0) > 0;
   return (
     event.type === "message" &&
     subtypeOk &&
-    (event.channel_type === "im" || event.channel_type === "mpim") &&
     hasContent &&
     !!event.channel &&
     !!event.ts &&
     !!event.user
+  );
+}
+
+export function isDmDispatchable(event: DirectMessageEvent): boolean {
+  return event.channel_type === "im" && hasDispatchableMessage(event);
+}
+
+export function isGroupDmDispatchable(event: DirectMessageEvent, botUserId: string): boolean {
+  return (
+    event.channel_type === "mpim" &&
+    !!event.text &&
+    mentionsUser(event.text, botUserId) &&
+    hasDispatchableMessage(event)
   );
 }
 
