@@ -507,13 +507,11 @@ export class IntegrationSettingsStore {
     const maxAttempts = settings.maxAttemptsPerPrPer24Hours;
     if (
       maxAttempts !== undefined &&
-      (typeof maxAttempts !== "number" ||
-        !Number.isInteger(maxAttempts) ||
-        maxAttempts < 1 ||
-        maxAttempts > 50)
+      maxAttempts !== null &&
+      (typeof maxAttempts !== "number" || !Number.isSafeInteger(maxAttempts) || maxAttempts < 1)
     ) {
       throw new IntegrationSettingsValidationError(
-        "autofix.maxAttemptsPerPrPer24Hours must be an integer from 1 to 50"
+        "autofix.maxAttemptsPerPrPer24Hours must be a positive safe integer or null"
       );
     }
 
@@ -526,7 +524,7 @@ export class IntegrationSettingsStore {
         new Set(allowedReviewBots.map((login) => login.trim().toLowerCase()).filter(Boolean))
       );
     }
-    if (typeof maxAttempts === "number") {
+    if (typeof maxAttempts === "number" || maxAttempts === null) {
       normalized.maxAttemptsPerPrPer24Hours = maxAttempts;
     }
     return normalized;

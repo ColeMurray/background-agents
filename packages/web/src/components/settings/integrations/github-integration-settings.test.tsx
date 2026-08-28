@@ -197,17 +197,45 @@ describe("GitHubIntegrationSettings", () => {
     expect(input).toHaveValue("coderabbitai[bot], renovate[bot]");
     expect(screen.getByText(/bot-authored feedback is untrusted input/i)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Attempts per PR per 24 hours" }), {
-      target: { value: "40" },
+    const attemptLimit = screen.getByRole("spinbutton", {
+      name: "Attempts per PR per 24 hours",
     });
-    expect(screen.getByText(/higher attempt caps increase autonomous work/i)).toBeInTheDocument();
+    await user.clear(attemptLimit);
+    expect(attemptLimit).toHaveValue(null);
+    await user.type(attemptLimit, "75");
+    expect(attemptLimit).toHaveValue(75);
+    expect(
+      screen.getByText(/higher or unlimited attempts increase autonomous work/i)
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/integration-settings/github",
       expect.objectContaining({
-        body: expect.stringContaining('"allowedReviewBots":["coderabbitai[bot]","renovate[bot]"]'),
+        body: expect.stringContaining(
+          '"allowedReviewBots":["coderabbitai[bot]","renovate[bot]"],"maxAttemptsPerPrPer24Hours":75'
+        ),
+      })
+    );
+  });
+
+  it("persists an explicit unlimited Autofix attempt policy", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: { defaults: { autoReviewOnOpen: true } } });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    await user.click(screen.getByRole("checkbox", { name: "No Autofix attempt limit" }));
+    expect(screen.getByRole("spinbutton", { name: "Attempts per PR per 24 hours" })).toBeDisabled();
+    expect(screen.getByText(/unlimited attempts increase autonomous work/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        body: expect.stringContaining('"maxAttemptsPerPrPer24Hours":null'),
       })
     );
   });

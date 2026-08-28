@@ -24,7 +24,7 @@ export const githubAutofixSettingsSchema = z.strictObject({
   prCommentsEnabled: z.boolean().optional(),
   openInspectReviewsEnabled: z.boolean().optional(),
   allowedReviewBots: z.array(z.string()).optional(),
-  maxAttemptsPerPrPer24Hours: z.number().optional(),
+  maxAttemptsPerPrPer24Hours: z.number().nullable().optional(),
 });
 
 export type GitHubAutofixSettings = z.infer<typeof githubAutofixSettingsSchema>;
@@ -35,8 +35,11 @@ export interface ResolvedGitHubAutofixSettings {
   prCommentsEnabled: boolean;
   openInspectReviewsEnabled: boolean;
   allowedReviewBots: string[];
-  maxAttemptsPerPrPer24Hours: number;
+  /** A positive attempt cap, or null for no rolling limit. */
+  maxAttemptsPerPrPer24Hours: number | null;
 }
+
+export const GITHUB_AUTOFIX_DEFAULT_ATTEMPT_LIMIT = 30;
 
 export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
   enabled: false,
@@ -44,7 +47,7 @@ export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
   prCommentsEnabled: true,
   openInspectReviewsEnabled: true,
   allowedReviewBots: [],
-  maxAttemptsPerPrPer24Hours: 30,
+  maxAttemptsPerPrPer24Hours: GITHUB_AUTOFIX_DEFAULT_ATTEMPT_LIMIT,
 };
 
 /** Overridable behavior settings for the GitHub bot. Used at both global and repo levels. */

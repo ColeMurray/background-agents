@@ -66,7 +66,7 @@ const enqueueFeedbackCommandSchema = z.object({
     login: z.string().min(1),
   }),
   origin: githubAutofixOriginSchema,
-  attemptLimit: z.number().int().min(1).max(50),
+  attemptLimit: z.number().int().positive().safe().nullable(),
 });
 
 const lookupFeedbackCommandSchema = z.object({
