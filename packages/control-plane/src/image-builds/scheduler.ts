@@ -1,10 +1,13 @@
 import { ImageBuildStore } from "../db/image-builds";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
+import { errorMessage } from "./errors";
+import { imageBuildFinalizationJob } from "./finalization-job";
 import type { ImageBuildProvider } from "./model";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
+import { ImageBuildReaper } from "./reaper";
 import { listEnabledScopes, resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./workflow";
@@ -38,6 +41,7 @@ export interface ImageBuildSchedulerStats {
 
 export class ImageBuildScheduler {
   private readonly sessionCleanup: ImageBuildSessionCleanup;
+  private readonly reaper: ImageBuildReaper;
 
   constructor(
     private readonly env: Env,
@@ -51,6 +55,7 @@ export class ImageBuildScheduler {
     private readonly listScopes: typeof listEnabledScopes = listEnabledScopes
   ) {
     this.sessionCleanup = new ImageBuildSessionCleanup(store, adapterFactory);
+    this.reaper = new ImageBuildReaper(store, adapterFactory);
   }
 
   async run(correlation: CorrelationContext): Promise<ImageBuildSchedulerStats> {
@@ -105,7 +110,7 @@ export class ImageBuildScheduler {
     }
 
     try {
-      const cleanup = await this.workflow.cleanupImages(
+      const cleanup = await this.reaper.cleanupImages(
         DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS,
         correlation
       );
@@ -123,7 +128,6 @@ export class ImageBuildScheduler {
       cron: IMAGE_BUILD_SCHEDULER_CRON,
       duration_ms: Date.now() - startedAt,
       rebuild_enabled: this.provider !== null && this.sourceControl !== null,
-      orphan_sweep: this.provider === "modal" ? "timeout_bounded" : "not_applicable",
       request_id: correlation.request_id,
       trace_id: correlation.trace_id,
     });
@@ -138,11 +142,7 @@ export class ImageBuildScheduler {
     let published = 0;
     for (const row of rows) {
       try {
-        await queue.send({
-          version: 1,
-          buildId: row.id,
-          completionHash: row.completion_hash,
-        });
+        await queue.send(imageBuildFinalizationJob(row.id, row.completion_hash));
         published += 1;
       } catch (error) {
         logger.warn("image_build.scheduler_finalization_republish_row_failed", {
@@ -278,8 +278,4 @@ export async function runImageBuildScheduler(
     createImageBuildAdapterFactory(env),
     sourceControl
   ).run(correlation);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

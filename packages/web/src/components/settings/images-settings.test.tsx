@@ -126,4 +126,23 @@ describe("ImagesSettings", () => {
       screen.getByRole("switch", { name: "Toggle pre-built images for acme/web" })
     ).not.toBeChecked();
   });
+
+  it("shows an error instead of unchecked toggles when the feed fails", async () => {
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fetcher: () => Promise.reject(new Error("boom")),
+          dedupingInterval: 0,
+          shouldRetryOnError: false,
+          revalidateOnFocus: false,
+        }}
+      >
+        <ImagesSettings />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Failed to load image build settings.")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
 });

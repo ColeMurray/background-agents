@@ -35,7 +35,6 @@ import type {
   CompleteImageBuildCallback,
   FailImageBuildCallback,
   ImageBuildWorkflowContext,
-  ImageBuildWorkflowResult,
 } from "../image-builds/types";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -96,19 +95,6 @@ function workflowContext(ctx: RequestContext): ImageBuildWorkflowContext {
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   };
-}
-
-function workflowResultToResponse(result: ImageBuildWorkflowResult): Response {
-  switch (result.type) {
-    case "completion_accepted":
-      return json({ ok: true, snapshotPending: true }, 202);
-    case "failure_accepted":
-      return json({ ok: true, cleanupPending: true }, 202);
-    default: {
-      const exhaustive: never = result;
-      return error(`Unhandled workflow result: ${String(exhaustive)}`, 500);
-    }
-  }
 }
 
 function imageBuildErrorToResponse(errorValue: unknown): Response {
@@ -207,12 +193,12 @@ async function handleBuildComplete(
   };
 
   try {
-    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildComplete({
+    await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildComplete({
       completion,
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
-    return workflowResultToResponse(result);
+    return json({ ok: true, snapshotPending: true }, 202);
   } catch (e) {
     return imageBuildErrorToResponse(e);
   }
@@ -242,12 +228,12 @@ async function handleBuildFailed(
   };
 
   try {
-    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildFailed({
+    await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildFailed({
       failure,
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
-    return workflowResultToResponse(result);
+    return json({ ok: true, cleanupPending: true }, 202);
   } catch (e) {
     return imageBuildErrorToResponse(e);
   }

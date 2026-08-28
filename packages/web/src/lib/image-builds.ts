@@ -18,6 +18,29 @@ import { z } from "zod";
 /** SWR key for the unified image-build feed. */
 export const IMAGE_BUILDS_KEY = "/api/image-builds";
 
+/** Poll cadence for a build-row feed showing a build still in progress. */
+export const IMAGE_BUILD_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * Background cadence for a loaded, all-terminal feed. Builds also start
+ * without any client action — the cron scheduler, and save hooks that run
+ * detached from the CRUD response that scheduled them — so a terminal feed
+ * keeps refreshing slowly to discover new builds.
+ */
+export const IMAGE_BUILD_IDLE_POLL_INTERVAL_MS = 120_000;
+
+/**
+ * SWR `refreshInterval` for build-row feeds: fast while a build is visibly in
+ * progress, slow discovery otherwise. Before the first response (or after an
+ * error) this returns 0 — SWR's own retry and revalidation own that phase.
+ */
+export function imageBuildPollInterval(images: ImageBuildRecordView[] | undefined): number {
+  if (!images) return 0;
+  return images.some((image) => image.status === "building")
+    ? IMAGE_BUILD_POLL_INTERVAL_MS
+    : IMAGE_BUILD_IDLE_POLL_INTERVAL_MS;
+}
+
 /** One prebuild-enabled scope as served by GET /api/image-builds. */
 export const imageBuildUnitViewSchema = z.object({
   scopeKind: imageBuildScopeKindSchema,
