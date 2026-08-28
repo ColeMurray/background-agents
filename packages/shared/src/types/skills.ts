@@ -526,4 +526,5 @@ export type SkillImportWarning = z.infer<typeof skillImportWarningSchema>;
 export type SkillImportPreviewInput = z.infer<typeof skillImportPreviewInputSchema>;
 export type SkillImportPreviewResponse = z.infer<typeof skillImportPreviewResponseSchema>;
 export type ImportSkillInput = z.infer<typeof importSkillInputSchema>;
+export type ReimportSkillPreviewInput = z.infer<typeof reimportSkillPreviewInputSchema>;
 export type ReimportSkillInput = z.infer<typeof reimportSkillInputSchema>;

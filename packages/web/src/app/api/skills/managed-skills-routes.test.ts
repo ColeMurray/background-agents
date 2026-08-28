@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import type { ReimportSkillPreviewInput } from "@open-inspect/shared/types/skills";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { DELETE, PUT } from "./[id]/route";
 import { POST as REIMPORT_PREVIEW } from "./[id]/reimport/preview/route";
@@ -123,7 +124,7 @@ describe("managed skills BFF routes", () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ name: "acme-deploy", nameAvailable: true }, { status: 200 })
     );
-    const body = { ref: "release/2026.08", name: "acme-deploy-next" };
+    const body = { ref: "release/2026.08" } satisfies ReimportSkillPreviewInput;
     const request = new NextRequest("http://localhost/api/skills/skill%2Fone/reimport/preview", {
       method: "POST",
       headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
