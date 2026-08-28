@@ -527,6 +527,7 @@ function HomeContent({
                     maxLength={MAX_WEB_PROMPT_CHARS}
                     disabled={creating}
                     placeholder="What do you want to build?"
+                    autoFocus
                     autoComplete="off"
                     className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
                     rows={3}
