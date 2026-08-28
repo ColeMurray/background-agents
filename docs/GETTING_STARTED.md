@@ -370,7 +370,8 @@ After deploying the Slack worker, you can configure the app from
 [`packages/slack-bot/slack-app-manifest.yaml`](../packages/slack-bot/slack-app-manifest.yaml)
 instead of entering the settings below individually. Replace `SLACK_EVENTS_URL` with the worker's
 `/events` URL and `SLACK_INTERACTIONS_URL` with its `/interactions` URL before applying the
-manifest.
+manifest. The least-privilege template omits the optional `message.channels` and `message.groups`
+automation subscriptions; add them only when using channel-message automations.
 
 ### Configure OAuth & Permissions
 
@@ -379,7 +380,6 @@ manifest.
    - `assistant:write`
    - `app_mentions:read`
    - `chat:write`
-   - `chat:write.public`
    - `channels:history`
    - `channels:read`
    - `groups:history`

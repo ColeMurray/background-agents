@@ -9,6 +9,14 @@ export function stripMentions(text: string): string {
   return applyMentionPolicy(text, "strip").replace(/\s+/g, " ").trim();
 }
 
+/** Strip only one user's mention while preserving mentions of other participants. */
+export function stripUserMention(text: string, userId: string): string {
+  return text
+    .replace(new RegExp(`<@${userId}(?:\\|[^>]*)?>`, "g"), "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Returns true if a Slack message event should be dispatched as a direct or group-direct message.
  * Filters out subtypes (bot_message, message_changed, message_deleted, etc.)

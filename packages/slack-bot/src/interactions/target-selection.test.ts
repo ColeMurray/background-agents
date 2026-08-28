@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageDetails, postMessage } from "@open-inspect/shared/slack";
+import { getMessageDetails, postEphemeral, postMessage } from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import { getPendingRequest, deletePendingRequest } from "../pending-requests/pending-request-store";
@@ -11,6 +11,7 @@ vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
   ...(await importOriginal()),
   escapeMrkdwnText: (text: string) => text,
   getMessageDetails: vi.fn(),
+  postEphemeral: vi.fn(async () => ({ ok: true as const, message_ts: "222.333" })),
   postMessage: vi.fn(async () => ({ ok: true as const, channel: "C123", ts: "222.333" })),
   updateMessage: vi.fn(async () => ({ ok: true as const })),
 }));
@@ -92,7 +93,16 @@ describe("handleTargetSelection", () => {
     });
     const env = makeEnv();
 
-    await handleTargetSelection("acme/app", "C123", "111.222", undefined, env, "trace-1", vi.fn());
+    await handleTargetSelection(
+      "acme/app",
+      "C123",
+      "111.222",
+      undefined,
+      "U123",
+      env,
+      "trace-1",
+      vi.fn()
+    );
 
     expect(getMessageDetails).toHaveBeenCalledWith("xoxb-test", "C123", "111.222", undefined);
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
@@ -131,6 +141,7 @@ describe("handleTargetSelection", () => {
       "C123",
       "111.222",
       undefined,
+      "U123",
       makeEnv(),
       "trace-1",
       vi.fn()
@@ -156,6 +167,7 @@ describe("handleTargetSelection", () => {
       "C123",
       "111.222",
       undefined,
+      "U123",
       makeEnv(),
       "trace-1",
       vi.fn()
@@ -178,7 +190,16 @@ describe("handleTargetSelection", () => {
     vi.mocked(getMessageDetails).mockResolvedValue({ ok: false, error: "message_not_found" });
     const env = makeEnv();
 
-    await handleTargetSelection("acme/app", "C123", "111.222", undefined, env, "trace-1", vi.fn());
+    await handleTargetSelection(
+      "acme/app",
+      "C123",
+      "111.222",
+      undefined,
+      "U123",
+      env,
+      "trace-1",
+      vi.fn()
+    );
 
     expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
     expect(vi.mocked(postMessage)).toHaveBeenCalledWith(
@@ -187,5 +208,34 @@ describe("handleTargetSelection", () => {
       expect.stringContaining("couldn't retrieve the attached image(s)"),
       { thread_ts: "111.222" }
     );
+  });
+
+  it("rejects a selection from someone other than the requester", async () => {
+    vi.mocked(getPendingRequest).mockResolvedValue({
+      message: "Fix the deploy",
+      userId: "U123",
+    });
+    const env = makeEnv();
+
+    await handleTargetSelection(
+      "acme/app",
+      "G123",
+      "111.222",
+      undefined,
+      "U456",
+      env,
+      "trace-1",
+      vi.fn()
+    );
+
+    expect(postEphemeral).toHaveBeenCalledWith(
+      "xoxb-test",
+      "G123",
+      "U456",
+      expect.stringContaining("Only the person who made the request"),
+      { thread_ts: "111.222" }
+    );
+    expect(resolveTargetValue).not.toHaveBeenCalled();
+    expect(startSessionAndSendPrompt).not.toHaveBeenCalled();
   });
 });

@@ -159,12 +159,13 @@ describe("SlackIntegrationSettings", () => {
     expect(allowRadio.checked).toBe(true);
   });
 
-  it("describes public and private channel access in help copy", () => {
+  it("describes channel access via Slack bot membership in help copy", () => {
     setupSWR({ global: null });
     render(<SlackIntegrationSettings />);
 
-    expect(screen.getByText(/agents can post to public slack channels/i)).toBeInTheDocument();
-    expect(screen.getByText(/to make a private channel available/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/invite the .*slack.* bot to a channel/i, { selector: "p" })
+    ).toBeInTheDocument();
   });
 
   it("toggling master switch on and saving sends agentNotificationsEnabled: true", async () => {

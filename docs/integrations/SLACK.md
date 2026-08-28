@@ -259,13 +259,13 @@ To use this workflow:
 
 1. Open the web app and go to **Settings > Integrations > Slack**.
 2. Turn on **Enable agent notifications**.
-3. Invite the Open-Inspect Slack bot to private channels where agents should be allowed to post.
+3. Invite the Open-Inspect Slack bot to any channel where agents should be allowed to post.
 4. Optional: add repository overrides to inherit, force on, or force off agent notifications for
    specific repositories.
 
-The bot can post to public channels without joining them. Private channels remain available only
-while the bot is a member. Slack may still reject missing, archived, inaccessible, or rate-limited
-targets.
+Channel membership controls where these extra posts can go. Invite the bot to a channel to make it
+available; remove it from a channel to remove access. Slack may still reject missing, archived,
+inaccessible, or rate-limited targets.
 
 Changes apply to new sessions. If you turn notifications on and an existing session cannot post to
 Slack, start a new session. Turning notifications off blocks future notification attempts.
@@ -382,7 +382,7 @@ These notes are most useful for workspace admins deciding where the Slack bot sh
   what Slack sessions can touch, limit the GitHub App installation to selected repositories and
   invite the Slack bot only into trusted channels.
 - Bot messages are ignored so the Slack bot does not respond to itself.
-- Agent notifications can target public channels; private channels require bot membership.
+- Agent notifications use Slack channel membership as the access boundary.
 - Accepted notification text is sanitized and shortened to fit Slack block limits; extremely large
   raw inputs are rejected.
 
@@ -441,8 +441,8 @@ changes apply to new Slack sessions.
 ### The agent could not post a Slack notification
 
 Check **Settings > Integrations > Slack** and confirm agent notifications are enabled for the
-repository. For a private channel, also confirm the bot is a member. If Slack rate-limits the post,
-the web session may show retry timing when Slack provides it.
+repository. Also confirm the bot is in the target channel. If Slack rate-limits the post, the web
+session may show retry timing when Slack provides it.
 
 ### The Slack completion looks short
 

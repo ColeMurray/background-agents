@@ -147,9 +147,9 @@ export function SlackIntegrationSettings() {
         description={`${APP_NAME} does not maintain its own channel allowlist.`}
       >
         <p className="text-sm text-muted-foreground">
-          Agents can post to public Slack channels. To make a private channel available, invite the
-          {APP_NAME} Slack bot to it; remove private-channel access by kicking the bot from the
-          channel.
+          To make a channel available to agents, invite the {APP_NAME} Slack bot to a channel in
+          Slack. The bot can post only to channels it&apos;s a member of; remove access by kicking
+          the bot from the channel.
         </p>
       </Section>
 

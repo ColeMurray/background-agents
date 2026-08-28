@@ -189,9 +189,8 @@ Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
 2. OAuth & Permissions → Add scopes: `assistant:write`, `app_mentions:read`, `chat:write`,
-   `chat:write.public`, `channels:history`, `channels:read`, `groups:history`, `groups:read`,
-   `im:history`, `mpim:history`, `files:read`, `files:write`, `reactions:write`, `users:read`,
-   `users:read.email`
+   `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`,
+   `mpim:history`, `files:read`, `files:write`, `reactions:write`, `users:read`, `users:read.email`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL
@@ -267,7 +266,8 @@ After Terraform deployment, guide user:
 
 The user can apply `packages/slack-bot/slack-app-manifest.yaml` instead of configuring the following
 settings individually. Replace `SLACK_EVENTS_URL` with the worker's `/events` URL and
-`SLACK_INTERACTIONS_URL` with its `/interactions` URL first.
+`SLACK_INTERACTIONS_URL` with its `/interactions` URL first. Add the optional `message.channels` and
+`message.groups` subscriptions only when channel-message automations are needed.
 
 ### Enable Agents
 

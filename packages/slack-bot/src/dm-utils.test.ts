@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { stripMentions, isDmDispatchable, isChannelTriggerCandidate } from "./dm-utils";
+import {
+  stripMentions,
+  stripUserMention,
+  isDmDispatchable,
+  isChannelTriggerCandidate,
+} from "./dm-utils";
 
 describe("stripMentions", () => {
   it("removes a single mention", () => {
@@ -26,6 +31,16 @@ describe("stripMentions", () => {
   it("does not strip lowercase or invalid mention-like patterns", () => {
     expect(stripMentions("<@u12345> lowercase")).toBe("<@u12345> lowercase");
     expect(stripMentions("<#C12345> channel ref")).toBe("<#C12345> channel ref");
+  });
+});
+
+describe("stripUserMention", () => {
+  it("strips only the selected user mention", () => {
+    expect(stripUserMention("<@UBOT> ask <@U123> to review", "UBOT")).toBe("ask <@U123> to review");
+  });
+
+  it("strips piped mentions", () => {
+    expect(stripUserMention("hello <@UBOT|open-inspect>", "UBOT")).toBe("hello");
   });
 });
 
