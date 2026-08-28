@@ -107,7 +107,12 @@ type EnforcedIdentity<R extends IdentityRoute> = R extends RequiresUserRoute
 export function deriveIdentity(principal: Principal | undefined): DerivedIdentity | null {
   if (!principal) return null;
   switch (principal.kind) {
+    // An access token is its owner: it carries the same canonical user id a
+    // browser session would. It cannot reach the spawn routes at all — those
+    // are writes, and the credential is read-only — so deriving `user` here
+    // describes the identity without widening what the token can do.
     case "user":
+    case "access-token":
       return {
         participantUserId: principal.userId,
         canonicalUserId: principal.userId,
@@ -119,12 +124,6 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
         // Web's userless service credential asserts no one; user-bearing web
         // calls carry a web session token and resolve as user principals.
         return { participantUserId: null, canonicalUserId: null, actor: null, spawnSource: "user" };
-      }
-      if (principal.service === "mcp") {
-        // Read-only inspection tooling: it asserts no actor and spawns
-        // nothing, so it has no identity to derive and no SpawnSource to
-        // record. Identity routes reject it, which is the intent.
-        return null;
       }
       return {
         participantUserId: principal.actor?.participantUserId ?? null,

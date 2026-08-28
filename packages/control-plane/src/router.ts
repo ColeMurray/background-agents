@@ -28,6 +28,7 @@ import {
   error,
   HttpError,
 } from "./routes/shared";
+import { accessTokenRoutes } from "./routes/access-tokens";
 import { browserAuthRoutes } from "./routes/browser-auth";
 import { signInProviderRoutes } from "./routes/sign-in-providers";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
@@ -250,6 +251,13 @@ function logPrincipal(principal: Principal, ctx: RequestContext, path: string): 
     case "user":
       fields.user_id = principal.userId;
       break;
+    case "access-token":
+      fields.auth_scheme = "access-token";
+      fields.user_id = principal.userId;
+      // The token id, never the token: which credential acted is what makes
+      // a leak traceable to one revocable row.
+      fields.token_id = principal.tokenId;
+      break;
   }
   logger.info("auth.principal", {
     event: "auth.principal",
@@ -318,6 +326,7 @@ export const routes: Route[] = [
 
   ...browserAuthRoutes,
   ...signInProviderRoutes,
+  ...accessTokenRoutes,
 
   // Session management
   ...sessionRoutes,

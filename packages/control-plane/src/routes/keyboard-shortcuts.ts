@@ -1,4 +1,5 @@
 import { updateKeyboardShortcutPreferencesSchema } from "@open-inspect/shared/types/keyboard-shortcuts";
+import { canonicalUserIdOf } from "../auth/principal";
 import { KeyboardShortcutPreferencesStore } from "../db/keyboard-shortcut-preferences";
 import type { Env } from "../types";
 import {
@@ -11,19 +12,13 @@ import {
   type Route,
 } from "./shared";
 
-function canonicalUserId(ctx: RequestContext): string | null {
-  if (ctx.principal?.kind === "user") return ctx.principal.userId;
-  if (ctx.principal?.kind === "service") return ctx.principal.actor?.canonicalUserId ?? null;
-  return null;
-}
-
 async function getPreferences(
   _request: Request,
   _env: Env,
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).get(userId);
   return json({ shortcuts });
@@ -35,7 +30,7 @@ async function updatePreferences(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   let body: unknown;
   try {

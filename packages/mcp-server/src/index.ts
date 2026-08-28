@@ -1,8 +1,10 @@
 /**
  * Read-only MCP server over the Open-Inspect control plane.
  *
- * Runs locally over stdio and signs each request as the `mcp` service, which
- * asserts no actor. Read-only by construction: the client exposes GET only.
+ * Runs locally over stdio and authenticates with a personal access token, so
+ * every request is attributable to the user who issued it. Read-only by
+ * construction: the client exposes GET only, and the control plane refuses an
+ * access-token principal any mutating method regardless.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -58,7 +60,7 @@ export function createServer(client: ControlPlaneClient): McpServer {
 async function main(): Promise<void> {
   const client = new ControlPlaneClient({
     baseUrl: requireEnv("OPEN_INSPECT_CONTROL_PLANE_URL"),
-    secret: requireEnv("OPEN_INSPECT_MCP_SECRET"),
+    token: requireEnv("OPEN_INSPECT_TOKEN"),
   });
   await createServer(client).connect(new StdioServerTransport());
 }

@@ -253,24 +253,34 @@ describe("route principal policy", () => {
     expect(enforceRoutePrincipal(authentication, principal, "GET")?.status).toBe(status);
   });
 
-  const mcpPrincipal = { kind: "service", service: "mcp", actor: null } as const;
+  const tokenPrincipal = {
+    kind: "access-token",
+    userId: "user-1",
+    tokenId: "token-1",
+  } as const;
   const readRoute = { kind: "user-or-service" } as const;
 
-  it.each(["GET", "HEAD", "get"])("lets a read-only service read (%s)", (method) => {
-    expect(enforceRoutePrincipal(readRoute, mcpPrincipal, method)).toBeNull();
+  it.each(["GET", "HEAD", "get"])("lets an access token read (%s)", (method) => {
+    expect(enforceRoutePrincipal(readRoute, tokenPrincipal, method)).toBeNull();
   });
 
   it.each(["POST", "PUT", "PATCH", "DELETE"])(
-    "refuses a read-only service every mutating method (%s), whatever the route policy allows",
+    "refuses an access token every mutating method (%s), whatever the route policy allows",
     (method) => {
       // The trust boundary for the read-only claim: the route itself accepts
-      // any service principal, so only this check stands between a leaked
-      // secret and DELETE /sessions/:id.
-      expect(enforceRoutePrincipal(readRoute, mcpPrincipal, method)?.status).toBe(403);
+      // any user-or-service principal, so only this check stands between a
+      // leaked token and DELETE /sessions/:id.
+      expect(enforceRoutePrincipal(readRoute, tokenPrincipal, method)?.status).toBe(403);
     }
   );
 
-  it("leaves every other service unrestricted by method", () => {
+  it("keeps human-only routes human-only, so a token cannot mint another token", () => {
+    // /access-tokens is a { kind: "user" } route. An access token reaching it
+    // would make revocation meaningless.
+    expect(enforceRoutePrincipal({ kind: "user" }, tokenPrincipal, "GET")?.status).toBe(403);
+  });
+
+  it("leaves services unrestricted by method", () => {
     const bot = { kind: "service", service: "linear-bot", actor: null } as const;
     expect(enforceRoutePrincipal(readRoute, bot, "DELETE")).toBeNull();
   });

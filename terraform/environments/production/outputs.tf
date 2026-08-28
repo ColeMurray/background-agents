@@ -24,12 +24,6 @@ output "control_plane_url" {
   value       = module.control_plane_worker.worker_url
 }
 
-output "mcp_service_secret" {
-  description = "sig1 signing secret for the read-only MCP server (packages/mcp-server). Read with: terraform output -raw mcp_service_secret"
-  value       = random_password.service_auth_secret_mcp.result
-  sensitive   = true
-}
-
 output "control_plane_worker_name" {
   description = "Control plane worker name"
   value       = module.control_plane_worker.worker_name

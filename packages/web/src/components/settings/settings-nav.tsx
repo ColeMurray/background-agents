@@ -83,6 +83,11 @@ const NAV_ITEMS = [
     label: "MCP Servers",
     icon: TerminalIcon,
   },
+  {
+    id: "access-tokens",
+    label: "Access Tokens",
+    icon: KeyIcon,
+  },
 ] as const;
 
 export type SettingsCategory = (typeof NAV_ITEMS)[number]["id"];
