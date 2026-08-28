@@ -245,6 +245,12 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("focuses the prompt when the page loads", () => {
+    render(<Home />);
+
+    expect(screen.getByPlaceholderText("What do you want to build?")).toHaveFocus();
+  });
+
   it("disables autofill suggestions for the prompt", () => {
     render(<Home />);
 

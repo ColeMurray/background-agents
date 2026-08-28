@@ -71,10 +71,19 @@ export class SandboxPushService {
       repo_owner: pushSpec.repoOwner,
       repo_name: pushSpec.repoName,
     });
-    this.wsManager.send(sandboxWs, {
+    const delivered = this.wsManager.send(sandboxWs, {
       type: "push",
       pushSpec,
     });
+    if (!delivered) {
+      const resolver = this.pendingPushResolvers.get(resolverKey);
+      this.pendingPushResolvers.delete(resolverKey);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+      resolver?.reject(new Error("Failed to deliver push command to sandbox"));
+    }
 
     try {
       await pushPromise;
