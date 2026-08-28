@@ -1,30 +1,22 @@
 "use client";
 
-import type { ImageBuildStatus as ImageBuildStatusValue } from "@open-inspect/shared/types/image-builds";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
 import { formatRelativeTime } from "@/lib/time";
-
-/** Presentation-ready view of one prebuilt image's latest build. */
-export interface ImageBuildStatusView {
-  /** Superseded rows are filtered at the fetch boundary and render nothing. */
-  status: ImageBuildStatusValue;
-  createdAt: number;
-  /** Extra line under a ready status, e.g. "abc1234 · 45s". */
-  readyDetails?: string;
-  errorMessage?: string | null;
-}
 
 /**
  * Shared build-status rendering for prebuilt images (repo images and
  * environment images): status dot, relative time, ready details, and the
- * failed-error tooltip. Callers map their row shape to ImageBuildStatusView.
- * Must render inside a TooltipProvider.
+ * failed-error tooltip. Takes the feed row itself; superseded rows are
+ * filtered at the fetch boundary and would render nothing. Must render
+ * inside a TooltipProvider.
  */
 export function ImageBuildStatus({
   image,
   isEnabled,
 }: {
-  image: ImageBuildStatusView | undefined;
+  image: ImageBuildRecordView | undefined;
   isEnabled: boolean;
 }) {
   if (!isEnabled) {
@@ -36,6 +28,10 @@ export function ImageBuildStatus({
   }
 
   if (image.status === "ready") {
+    const readyDetails = formatReadyDetails(
+      parsePrimaryBuildSha(image.repositoryShas),
+      image.buildDurationSeconds
+    );
     return (
       <div className="text-right">
         <div className="flex items-center gap-1.5">
@@ -44,9 +40,7 @@ export function ImageBuildStatus({
             Ready {formatRelativeTime(image.createdAt)}
           </span>
         </div>
-        {image.readyDetails && (
-          <span className="text-xs text-muted-foreground">{image.readyDetails}</span>
-        )}
+        {readyDetails && <span className="text-xs text-muted-foreground">{readyDetails}</span>}
       </div>
     );
   }

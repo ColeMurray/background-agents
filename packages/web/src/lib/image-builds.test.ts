@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import {
+  currentFingerprintBuilds,
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
@@ -12,8 +13,10 @@ import {
   imageBuildsEnabledReposResponseSchema,
   imageBuildsEnabledResponseSchema,
   imageBuildUnitViewSchema,
+  latestCurrentBuild,
   parsePrimaryBuildSha,
   repoImageBuildScopeId,
+  type ImageBuildsFeed,
   type ImageBuildUnitView,
 } from "./image-builds";
 
@@ -223,5 +226,74 @@ describe("imageBuildPollInterval", () => {
 
   it("does not poll before the feed has loaded", () => {
     expect(imageBuildPollInterval(undefined)).toBe(0);
+  });
+});
+
+describe("currentFingerprintBuilds", () => {
+  it("drops stale-fingerprint rows and preserves feed order", () => {
+    const rows = currentFingerprintBuilds(
+      [
+        record({ id: "a", repositoriesFingerprint: "fp-stale" }),
+        record({ id: "b", repositoriesFingerprint: "fp-current" }),
+        record({ id: "c", repositoriesFingerprint: "fp-current" }),
+      ],
+      [unit()]
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["b", "c"]);
+  });
+
+  it("keeps every row of a scope missing from units", () => {
+    const rows = currentFingerprintBuilds(
+      [record({ id: "a", repositoriesFingerprint: "fp-anything" })],
+      []
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["a"]);
+  });
+});
+
+describe("latestCurrentBuild", () => {
+  function feed(images: ImageBuildRecordView[], units: ImageBuildUnitView[]): ImageBuildsFeed {
+    return { units, enabledRepos: [], images };
+  }
+
+  it("skips a newer stale-fingerprint row in favor of the newest current one", () => {
+    // Feed order is createdAt DESC: the stale ready row is newest overall.
+    const build = latestCurrentBuild(
+      feed(
+        [
+          record({ id: "stale-newest", status: "ready", repositoriesFingerprint: "fp-stale" }),
+          record({ id: "current-failed", status: "failed" }),
+          record({ id: "current-older", status: "ready" }),
+        ],
+        [unit()]
+      ),
+      "environment",
+      "env-1"
+    );
+
+    expect(build?.id).toBe("current-failed");
+  });
+
+  it("selects only rows of the requested scope", () => {
+    const build = latestCurrentBuild(
+      feed(
+        [
+          record({ id: "other-scope", scopeKind: "repo", scopeId: "acme/web" }),
+          record({ id: "target" }),
+        ],
+        []
+      ),
+      "environment",
+      "env-1"
+    );
+
+    expect(build?.id).toBe("target");
+  });
+
+  it("returns undefined without a feed or matching row", () => {
+    expect(latestCurrentBuild(undefined, "environment", "env-1")).toBeUndefined();
+    expect(latestCurrentBuild(feed([], []), "environment", "env-1")).toBeUndefined();
   });
 });

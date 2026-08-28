@@ -105,6 +105,47 @@ describe("ImagesSettings", () => {
     expect(screen.getByText("clone exploded")).toBeInTheDocument();
   });
 
+  it("shows the newest current-fingerprint build, not a newer stale-fingerprint row", () => {
+    // The repo set changed after the ready build: spawn will never use the
+    // stale image, so settings must surface the current failed attempt the
+    // rebuild control acts on — matching which rows the picker counts.
+    renderWithFeed({
+      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp-current" }],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
+      images: [
+        {
+          id: "stale-ready",
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          provider: "modal",
+          status: "ready",
+          repositoriesFingerprint: "fp-stale",
+          repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc1234def5678" }],
+          runtimeVersion: "60",
+          buildDurationSeconds: 42,
+          errorMessage: null,
+          createdAt: Date.now(),
+        },
+        {
+          id: "current-failed",
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          provider: "modal",
+          status: "failed",
+          repositoriesFingerprint: "fp-current",
+          repositoryShas: [],
+          runtimeVersion: "60",
+          buildDurationSeconds: null,
+          errorMessage: "install step failed",
+          createdAt: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.queryByText(/^Ready/)).not.toBeInTheDocument();
+  });
+
   it("keeps the toggle enabled when unit resolution transiently dropped the repo", () => {
     // Enabled per the persisted flag but absent from `units` — toggle state
     // must come from the flag, not the resolution-dependent units feed.

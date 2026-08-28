@@ -10,8 +10,9 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
+import { IMAGE_BUILDS_KEY, latestCurrentBuild } from "@/lib/image-builds";
 import { useImageBuilds } from "@/hooks/use-image-builds";
+import { usePendingKeys } from "@/hooks/use-pending-keys";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
@@ -36,8 +37,8 @@ export function EnvironmentsSettings() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
-  const [triggeringIds, setTriggeringIds] = useState<Set<string>>(new Set());
+  const toggling = usePendingKeys();
+  const triggering = usePendingKeys();
 
   const prebuildsSupported = supportsRepoImages();
 
@@ -112,55 +113,46 @@ export function EnvironmentsSettings() {
     }
   };
 
-  const handlePrebuildToggle = async (environment: Environment, enabled: boolean) => {
-    setTogglingIds((prev) => new Set(prev).add(environment.id));
+  const handlePrebuildToggle = (environment: Environment, enabled: boolean) => {
     setError("");
-    try {
-      const response = await browserApiFetch(`/api/environments/${environment.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prebuildEnabled: enabled }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setError(data?.error || "Failed to toggle prebuilds");
-      } else {
-        mutate(ENVIRONMENTS_KEY);
-        mutate(IMAGE_BUILDS_KEY);
+    void toggling.run(environment.id, async () => {
+      try {
+        const response = await browserApiFetch(`/api/environments/${environment.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prebuildEnabled: enabled }),
+        });
+        if (!response.ok) {
+          const data = await response.json();
+          setError(data?.error || "Failed to toggle prebuilds");
+        } else {
+          mutate(ENVIRONMENTS_KEY);
+          mutate(IMAGE_BUILDS_KEY);
+        }
+      } catch {
+        setError("Failed to toggle prebuilds");
       }
-    } catch {
-      setError("Failed to toggle prebuilds");
-    } finally {
-      setTogglingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(environment.id);
-        return next;
-      });
-    }
+    });
   };
 
-  const handleRebuild = async (environment: Environment) => {
-    setTriggeringIds((prev) => new Set(prev).add(environment.id));
+  const handleRebuild = (environment: Environment) => {
     setError("");
-    try {
-      const response = await browserApiFetch(`/api/environments/${environment.id}/images/trigger`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setError(data?.error || "Failed to trigger build");
-      } else {
-        mutate(IMAGE_BUILDS_KEY);
+    void triggering.run(environment.id, async () => {
+      try {
+        const response = await browserApiFetch(
+          `/api/environments/${environment.id}/images/trigger`,
+          { method: "POST" }
+        );
+        if (!response.ok) {
+          const data = await response.json();
+          setError(data?.error || "Failed to trigger build");
+        } else {
+          mutate(IMAGE_BUILDS_KEY);
+        }
+      } catch {
+        setError("Failed to trigger build");
       }
-    } catch {
-      setError("Failed to trigger build");
-    } finally {
-      setTriggeringIds((prev) => {
-        const next = new Set(prev);
-        next.delete(environment.id);
-        return next;
-      });
-    }
+    });
   };
 
   if (view.mode === "create") {
@@ -296,8 +288,8 @@ export function EnvironmentsSettings() {
 
         <div className="space-y-2">
           {environments.map((environment) => {
-            const isToggling = togglingIds.has(environment.id);
-            const isTriggering = triggeringIds.has(environment.id);
+            const isToggling = toggling.pending.has(environment.id);
+            const isTriggering = triggering.pending.has(environment.id);
 
             return (
               <div key={environment.id} className="border border-border px-4 py-3">
@@ -323,10 +315,7 @@ export function EnvironmentsSettings() {
                       <>
                         <EnvironmentImageStatus
                           environment={environment}
-                          image={imageBuildsFeed?.images.find(
-                            (image) =>
-                              image.scopeKind === "environment" && image.scopeId === environment.id
-                          )}
+                          image={latestCurrentBuild(imageBuildsFeed, "environment", environment.id)}
                           feedUnavailable={Boolean(imageBuildsError) && !imageBuildsFeed}
                         />
                         <Tooltip>
@@ -425,22 +414,10 @@ function EnvironmentImageStatus({
     return <span className="text-xs text-muted-foreground">Status unavailable</span>;
   }
 
-  const image = environment.prebuildEnabled ? latestImage : undefined;
-
   return (
     <ImageBuildStatus
       isEnabled={environment.prebuildEnabled}
-      image={
-        image && {
-          status: image.status,
-          createdAt: image.createdAt,
-          readyDetails: formatReadyDetails(
-            parsePrimaryBuildSha(image.repositoryShas),
-            image.buildDurationSeconds
-          ),
-          errorMessage: image.errorMessage,
-        }
-      }
+      image={environment.prebuildEnabled ? latestImage : undefined}
     />
   );
 }

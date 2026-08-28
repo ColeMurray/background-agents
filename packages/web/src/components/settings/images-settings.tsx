@@ -2,15 +2,20 @@
 
 import { useState } from "react";
 import { mutate } from "swr";
-import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { useImageBuilds } from "@/hooks/use-image-builds";
+import { usePendingKeys } from "@/hooks/use-pending-keys";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
+import {
+  IMAGE_BUILDS_KEY,
+  foldEnabledRepoScopeIds,
+  latestCurrentBuild,
+  repoImageBuildScopeId,
+} from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { ImageBuildStatus } from "./image-build-status";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -19,8 +24,8 @@ export function ImagesSettings() {
   const repoImagesSupported = supportsRepoImages();
   const { repos, loading: reposLoading } = useRepos();
   const { data, error: feedError, isLoading: imagesLoading } = useImageBuilds();
-  const [togglingRepos, setTogglingRepos] = useState<Set<string>>(new Set());
-  const [triggeringRepos, setTriggeringRepos] = useState<Set<string>>(new Set());
+  const toggling = usePendingKeys();
+  const triggering = usePendingKeys();
   const [error, setError] = useState("");
 
   if (!repoImagesSupported) {
@@ -39,74 +44,52 @@ export function ImagesSettings() {
 
   // Toggle state reads the persisted flags, not `units` — the units feed
   // resolves scopes through source control and can transiently drop a repo.
-  const enabledRepos = new Set(
-    (data?.enabledRepos ?? []).map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
-  );
+  const enabledRepos = foldEnabledRepoScopeIds(data?.enabledRepos ?? []);
 
-  // Repo scope ids are lowercase `owner/name` pairs.
-  const getLatestImage = (owner: string, name: string): ImageBuildRecordView | undefined => {
-    const key = `${owner}/${name}`.toLowerCase();
-    return data?.images.find((img) => img.scopeKind === "repo" && img.scopeId === key);
-  };
-
-  const handleToggle = async (owner: string, name: string, enabled: boolean) => {
-    const repoKey = `${owner}/${name}`.toLowerCase();
-    setTogglingRepos((prev) => new Set(prev).add(repoKey));
+  const handleToggle = (owner: string, name: string, enabled: boolean) => {
     setError("");
+    void toggling.run(repoImageBuildScopeId(owner, name), async () => {
+      try {
+        const res = await browserApiFetch(
+          `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/toggle`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+          }
+        );
 
-    try {
-      const res = await browserApiFetch(
-        `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/toggle`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled }),
+        if (!res.ok) {
+          const errBody = await res.json();
+          setError(errBody.error || "Failed to toggle image build");
+        } else {
+          mutate(IMAGE_BUILDS_KEY);
         }
-      );
-
-      if (!res.ok) {
-        const errBody = await res.json();
-        setError(errBody.error || "Failed to toggle image build");
-      } else {
-        mutate(IMAGE_BUILDS_KEY);
+      } catch {
+        setError("Failed to toggle image build");
       }
-    } catch {
-      setError("Failed to toggle image build");
-    } finally {
-      setTogglingRepos((prev) => {
-        const next = new Set(prev);
-        next.delete(repoKey);
-        return next;
-      });
-    }
+    });
   };
 
-  const handleTrigger = async (owner: string, name: string) => {
-    const repoKey = `${owner}/${name}`.toLowerCase();
-    setTriggeringRepos((prev) => new Set(prev).add(repoKey));
+  const handleTrigger = (owner: string, name: string) => {
     setError("");
+    void triggering.run(repoImageBuildScopeId(owner, name), async () => {
+      try {
+        const res = await browserApiFetch(
+          `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/trigger`,
+          { method: "POST" }
+        );
 
-    try {
-      const res = await browserApiFetch(
-        `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/trigger`,
-        { method: "POST" }
-      );
-
-      if (!res.ok) {
-        const errBody = await res.json();
-        setError(errBody.error || "Failed to trigger build");
-      } else {
-        mutate(IMAGE_BUILDS_KEY);
+        if (!res.ok) {
+          const errBody = await res.json();
+          setError(errBody.error || "Failed to trigger build");
+        } else {
+          mutate(IMAGE_BUILDS_KEY);
+        }
+      } catch {
+        setError("Failed to trigger build");
       }
-    } catch {
-      setError("Failed to trigger build");
-    } finally {
-      setTriggeringRepos((prev) => {
-        const next = new Set(prev);
-        next.delete(repoKey);
-        return next;
-      });
-    }
+    });
   };
 
   if (loading) {
@@ -142,11 +125,11 @@ export function ImagesSettings() {
 
         <div className="space-y-2">
           {repos.map((repo) => {
-            const repoKey = `${repo.owner}/${repo.name}`.toLowerCase();
+            const repoKey = repoImageBuildScopeId(repo.owner, repo.name);
             const isEnabled = enabledRepos.has(repoKey);
-            const isToggling = togglingRepos.has(repoKey);
-            const isTriggering = triggeringRepos.has(repoKey);
-            const image = getLatestImage(repo.owner, repo.name);
+            const isToggling = toggling.pending.has(repoKey);
+            const isTriggering = triggering.pending.has(repoKey);
+            const image = latestCurrentBuild(data, "repo", repoKey);
 
             return (
               <div
@@ -166,20 +149,7 @@ export function ImagesSettings() {
                 </div>
 
                 <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-                  <ImageBuildStatus
-                    isEnabled={isEnabled}
-                    image={
-                      image && {
-                        status: image.status,
-                        createdAt: image.createdAt,
-                        readyDetails: formatReadyDetails(
-                          parsePrimaryBuildSha(image.repositoryShas),
-                          image.buildDurationSeconds
-                        ),
-                        errorMessage: image.errorMessage,
-                      }
-                    }
-                  />
+                  <ImageBuildStatus isEnabled={isEnabled} image={image} />
                   <Button
                     variant="ghost"
                     size="icon"
