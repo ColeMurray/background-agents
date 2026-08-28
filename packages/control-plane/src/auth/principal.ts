@@ -38,6 +38,7 @@ export interface AuthenticationContext {
 
 export type Principal =
   | { kind: "user"; userId: string }
+  | { kind: "access-token"; userId: string; tokenId: string }
   | { kind: "service"; service: ServiceName; actor: ResolvedIdentity | null }
   | { kind: "sandbox"; sessionId: string };
 
@@ -50,32 +51,45 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   "slack-bot": "slack",
   "github-bot": "github",
   "linear-bot": "linear",
-  // Read-only inspection tooling. Asserts nothing: it must never be able to
-  // act as a person, so every route it reaches sees a bare service principal.
-  mcp: null,
 };
 
 /**
- * Services whose credential may only ever read.
+ * The canonical `users.id` a principal acts as, or null when it acts as no
+ * one. An access token is its owner, so it resolves exactly as that user
+ * would — the point of the credential is that its requests are attributable.
+ */
+export function canonicalUserIdOf(principal: Principal | undefined): string | null {
+  if (!principal) return null;
+  switch (principal.kind) {
+    case "user":
+    case "access-token":
+      return principal.userId;
+    case "service":
+      return principal.actor?.canonicalUserId ?? null;
+    case "sandbox":
+      return null;
+  }
+}
+
+/** Methods a read-only credential may use. */
+const READ_ONLY_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
+
+/**
+ * Whether this principal may issue a request with this method.
  *
- * `mcp` runs on an operator's machine rather than inside the deployment, so
- * its secret is the one most likely to leak — and a leaked secret is only as
- * dangerous as the routes it can reach. Restricting it to safe methods here,
- * at the router, is what makes "read-only" a property of the credential
- * rather than of whichever client happens to hold it: the same signature on a
- * `DELETE /sessions/:id` or `PUT /secrets` is refused whoever built it.
+ * An access token is the one credential that lives outside the deployment —
+ * on a laptop, in an MCP client's config — so it is the one most likely to
+ * leak, and a leaked credential is only as dangerous as the routes it can
+ * reach. Restricting it to safe methods here, at the router, makes read-only a
+ * property of the credential rather than of whichever client holds it: the
+ * same token on a `DELETE /sessions/:id` or `PUT /secrets` is refused whoever
+ * built the request.
  *
  * Safe methods are the boundary rather than a route allowlist because every
  * mutating route is already a non-GET, and an allowlist silently fails open
  * for each read route added later.
  */
-export const READ_ONLY_SERVICES: ReadonlySet<ServiceName> = new Set<ServiceName>(["mcp"]);
-
-/** Methods a read-only service credential may use. */
-const READ_ONLY_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
-
-/** Whether this principal may issue a request with this method. */
 export function principalMayUseMethod(principal: Principal, method: string): boolean {
-  if (principal.kind !== "service" || !READ_ONLY_SERVICES.has(principal.service)) return true;
+  if (principal.kind !== "access-token") return true;
   return READ_ONLY_METHODS.has(method.toUpperCase());
 }

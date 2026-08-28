@@ -1,13 +1,11 @@
 /**
- * Signed, read-only control-plane client.
+ * Read-only control-plane client.
  *
- * Signs every request as the `mcp` service. That principal asserts no actor
- * (`ASSERTION_RIGHTS.mcp` is null), so the control plane resolves it to a bare
- * service principal that cannot act as any person — the whole point of giving
- * this tool its own service name instead of reusing a bot's.
+ * Authenticates with a personal access token the user issued to themselves in
+ * the web UI. The control plane resolves it to that user, so requests are
+ * attributable to a person and revocable by them — and, being an access-token
+ * principal, refused every mutating method.
  */
-
-import { buildOutboundAuthHeaders } from "@open-inspect/shared/service-auth";
 
 /** Longest control-plane response this client will buffer. */
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -26,18 +24,18 @@ export class ControlPlaneError extends Error {
 
 export interface ControlPlaneClientConfig {
   baseUrl: string;
-  secret: string;
+  token: string;
   timeoutMs?: number;
 }
 
 export class ControlPlaneClient {
   private readonly baseUrl: string;
-  private readonly secret: string;
+  private readonly token: string;
   private readonly timeoutMs: number;
 
   constructor(config: ControlPlaneClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
-    this.secret = config.secret;
+    this.token = config.token;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -45,10 +43,10 @@ export class ControlPlaneClient {
    * GET a control-plane path and parse the JSON body.
    *
    * Only GET is exposed, but that is ergonomics rather than the security
-   * boundary: the control plane refuses every mutating method from a
-   * read-only service principal, so a signed `DELETE` is rejected whether or
-   * not it came from this class (`READ_ONLY_SERVICES` in the control plane's
-   * `auth/principal.ts`).
+   * boundary: the control plane refuses every mutating method from an
+   * access-token principal, so a `DELETE` bearing this token is rejected
+   * whether or not it came from this class (`principalMayUseMethod` in the
+   * control plane's `auth/principal.ts`).
    */
   async get(path: string, query?: Record<string, string | number | undefined>): Promise<unknown> {
     const url = new URL(`${this.baseUrl}${path}`);
@@ -57,10 +55,7 @@ export class ControlPlaneClient {
     }
 
     const request = { method: "GET", url: url.toString() };
-    const headers = await buildOutboundAuthHeaders(
-      { service: "mcp", secret: this.secret },
-      request
-    );
+    const headers = { Authorization: `Bearer ${this.token}` };
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -91,8 +86,8 @@ export class ControlPlaneClient {
     }
 
     if (!response.ok) {
-      // 401 here means the signature was rejected: a wrong secret, or a
-      // control plane that predates the `mcp` service name.
+      // 401 here means the token was rejected: mistyped, revoked, or expired.
+      // Issue a new one in the web UI under Settings -> Access tokens.
       throw new ControlPlaneError(
         `${request.method} ${path} returned ${response.status}: ${body.slice(0, 500)}`,
         response.status

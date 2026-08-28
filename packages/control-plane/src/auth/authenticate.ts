@@ -2,15 +2,18 @@
  * Edge authentication: resolve every non-public, non-sandbox request to a
  * typed `Principal` before any handler runs.
  *
- * A `sig1` service signature is verified against that service's own secret.
- * User requests additionally require a Better Auth session. Anything else
- * is not a recognized credential.
+ * A personal access token presented as `Authorization: Bearer` resolves to the
+ * user who issued it. A `sig1` service signature is verified against that
+ * service's own secret; web-service requests additionally require a Better
+ * Auth session. Anything else is not a recognized credential.
  *
  * Sandbox tokens stay router-verified (they need the session id from the
  * path and a DO round-trip), so they are not dispatched here.
  */
 
 import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared/service-auth";
+import { authenticateAccessToken, readAccessTokenHeader } from "./user/access-token";
+import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import { authenticateSession, SessionIntegrityError } from "./user/session-authenticator";
 import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
@@ -37,6 +40,29 @@ export async function authenticate(
   ctx: RequestContext,
   requirement: AuthenticationRequirement = {}
 ): Promise<AuthResult> {
+  const accessToken = readAccessTokenHeader(request.headers);
+  if (accessToken !== null) {
+    const authenticated = await authenticateAccessToken(ctx.db, accessToken);
+    if (!authenticated) {
+      return { reason: "Unauthorized", status: 401, failedScheme: "access-token" };
+    }
+    // Deliberately no `authentication`: that field is browser-session
+    // provenance, and a token is not a browser session. Credential authorities
+    // that require provenance must not see one here.
+    ctx.executionCtx.submit(
+      () => new PersonalAccessTokenStore(ctx.db).touchLastUsed(authenticated.tokenId, Date.now()),
+      { name: "access-token.touch-last-used", context: { token_id: authenticated.tokenId } }
+    );
+    return {
+      principal: {
+        kind: "access-token",
+        userId: authenticated.userId,
+        tokenId: authenticated.tokenId,
+      },
+      request,
+    };
+  }
+
   const signatureHeader = request.headers.get(SERVICE_SIGNATURE_HEADER);
   if (signatureHeader !== null) {
     const channel = await authenticateServiceRequest(request, env, ctx, signatureHeader);

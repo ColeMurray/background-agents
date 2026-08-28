@@ -5,66 +5,66 @@ Claude Code, an IDE — can inspect sessions and automation runs without the web
 
 ## Security model
 
-Requests are signed as the **`mcp` service** using `sig1`, the same per-service scheme the bots use.
-Two properties make this safe to keep on a laptop:
+Requests authenticate with a **personal access token** you issue to yourself in the web UI. Three
+properties make this safe to keep on a laptop:
 
-- **It asserts no actor.** `ASSERTION_RIGHTS.mcp` is `null`, so the control plane resolves it to a
-  bare service principal. Unlike `slack-bot`, `github-bot`, and `linear-bot` — each of which may
-  assert an actor in its own namespace — this credential cannot act as any person.
-- **It reads only, and the control plane enforces that.** `mcp` is in `READ_ONLY_SERVICES`
-  (control-plane `auth/principal.ts`), so the router refuses it every method but `GET`/`HEAD` on
-  every route, whatever that route's own policy allows. A leaked secret cannot sign a
+- **It is yours, and it says so.** The control plane resolves the token to your canonical user id,
+  so every request it makes is attributable to a person rather than to an anonymous service. Routes
+  that scope their answers to a viewer scope them to you.
+- **It reads only, and the control plane enforces that.** An access-token principal is refused every
+  method but `GET`/`HEAD` on every route, whatever that route's own policy allows
+  (`principalMayUseMethod` in control-plane `auth/principal.ts`). A leaked token cannot issue a
   `DELETE /sessions/:id` or a `PUT /secrets`. `ControlPlaneClient` exposing only `get()` is
   convenience on top of that, not the boundary itself.
 
   Safe methods are the boundary rather than a route allowlist because every mutating route is
   already a non-GET, while an allowlist would fail open for each read route added later.
 
-**Never point this at `SERVICE_AUTH_SECRET_WEB`.** The `web` service is the one that escalates to
-_user_ auth by pairing its signature with a Better Auth cookie; its secret on a laptop is a
-categorically larger exposure. That is why `mcp` has its own secret.
+- **You can revoke it yourself, immediately.** Settings → Access Tokens → Revoke. No deploy, no
+  Terraform apply. A token also cannot mint another token: `/access-tokens` is a human-only route,
+  so a leaked credential cannot issue itself a successor to survive its own revocation.
 
-Two limits worth knowing. Nonce-reuse detection in the control plane is log-only and in-isolate, so
-a captured request can be replayed inside the five-minute signature validity window. That changes no
-state — the method restriction sees to it — but it does allow a captured read to be repeated, which
-re-discloses whatever it returned: session messages, diffs, automation data. Treat it as a
-disclosure window, not a harmless one. And the secret sits in plaintext in your MCP client config,
-like any local API key; rotating it means a Terraform apply.
+The control plane stores only a SHA-256 hash of the token, so a database read cannot recover a
+working credential.
+
+Two limits worth knowing. Human-only routes — `GET /sessions/:id` and `sandbox-access`, the latter
+of which mints credentials — are deliberately out of reach; a token that could reach them would be a
+larger credential than the one it replaces. And the token sits in plaintext in your MCP client
+config, like any local API key. That is the reason it is read-only, scoped to you, and revocable in
+one click.
 
 ## Setup
 
-Deploy first, so the control plane knows the `mcp` service name and holds its verification key, then
-read the secret out of Terraform state:
+Issue a token in the web UI: **Settings → Access Tokens → New Token**. Name it after the machine it
+will live on, pick an expiry, and copy the value — it is shown once and never again.
 
-```bash
-cd terraform/environments/production
-terraform apply
-terraform output -raw mcp_service_secret
-terraform output -raw control_plane_url
-```
-
-Build, then register it with your MCP client:
+Build the server:
 
 ```bash
 npm run build -w @open-inspect/shared
 npm run build -w @open-inspect/mcp-server
 ```
 
+Register it with your MCP client, from the repository root:
+
 ```bash
 claude mcp add open-inspect \
-  --env OPEN_INSPECT_CONTROL_PLANE_URL=<control_plane_url> \
-  --env OPEN_INSPECT_MCP_SECRET=<mcp_service_secret> \
+  --env OPEN_INSPECT_CONTROL_PLANE_URL=https://<your-control-plane> \
+  --env OPEN_INSPECT_TOKEN=oi_pat_... \
   -- node /absolute/path/to/packages/mcp-server/dist/index.js
 ```
 
-| Variable                         | Purpose                                     |
-| -------------------------------- | ------------------------------------------- |
-| `OPEN_INSPECT_CONTROL_PLANE_URL` | Control plane worker URL                    |
-| `OPEN_INSPECT_MCP_SECRET`        | `sig1` signing secret for the `mcp` service |
+| Variable                         | Purpose                            |
+| -------------------------------- | ---------------------------------- |
+| `OPEN_INSPECT_CONTROL_PLANE_URL` | Control plane worker URL           |
+| `OPEN_INSPECT_TOKEN`             | Personal access token (`oi_pat_…`) |
 
 Both are required; the process exits with a message on stderr if either is missing. A `401` from any
-tool means the signature was rejected — a stale secret, or a control plane deployed before the `mcp`
-service name existed.
+tool means the token was rejected — mistyped, revoked, or expired. Issue a new one and update the
+client config.
+
+Note that `claude mcp add` does not validate that `--env` values are non-empty. If you populate them
+from a command, check that the command actually printed something first.
 
 ## Tools
 
@@ -81,9 +81,6 @@ Every route above already carried a user-or-service auth policy; adding this pac
 them. `get_session_events` and `get_session_messages` are paged — pass the cursor from a response
 back to continue.
 
-`GET /sessions/:id` (session detail) and `sandbox-access` are human-user-only and deliberately out
-of reach — the latter mints credentials.
-
 ## Development
 
 ```bash
@@ -91,6 +88,6 @@ npm test -w @open-inspect/mcp-server
 npm run typecheck -w @open-inspect/mcp-server
 ```
 
-The client tests verify a real signature round-trip against the control plane's own
-`verifyServiceSignature`, so a change to the `sig1` canonical form fails here rather than at
-runtime.
+Control-plane coverage for the credential itself lives in
+`packages/control-plane/test/integration/access-tokens.test.ts`, which exercises the real D1 path:
+read-only enforcement, expiry, revocation, and the human-only guard on `/access-tokens`.

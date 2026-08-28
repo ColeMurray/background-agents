@@ -21,6 +21,7 @@ import {
   SkillProfileValidationError,
 } from "../db/skill-profiles";
 import { SkillConflictError, SkillStore, SkillValidationError } from "../db/skills";
+import { canonicalUserIdOf } from "../auth/principal";
 import { EnvironmentStore } from "../db/environments";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
@@ -71,17 +72,11 @@ type SkillAuditEvent =
 function audit(ctx: RequestContext, event: SkillAuditEvent): void {
   log.info("managed_skills.audit", {
     event: "managed_skills.audit",
-    actor_user_id: canonicalUserId(ctx),
+    actor_user_id: canonicalUserIdOf(ctx.principal),
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
     ...event,
   });
-}
-
-function canonicalUserId(ctx: RequestContext): string | null {
-  if (ctx.principal?.kind === "user") return ctx.principal.userId;
-  if (ctx.principal?.kind === "service") return ctx.principal.actor?.canonicalUserId ?? null;
-  return null;
 }
 
 async function parsedBody(request: Request): Promise<unknown | Response> {
@@ -140,7 +135,7 @@ async function handleCreateSkill(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
@@ -266,7 +261,7 @@ async function handleImportSkill(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
@@ -359,7 +354,7 @@ async function handleReimportSkill(
 ): Promise<Response> {
   const id = resourceId(match);
   if (id instanceof Response) return id;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
   if (!ifMatch) return error("If-Match revision is required", 428);
@@ -420,7 +415,7 @@ async function handleSetSkillEnabled(
 ): Promise<Response> {
   const id = resourceId(match);
   if (id instanceof Response) return id;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
@@ -443,7 +438,7 @@ async function handleReplaceSkillContentAndAssignments(
 ): Promise<Response> {
   const id = resourceId(match);
   if (id instanceof Response) return id;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
   if (!ifMatch) return error("If-Match revision is required", 428);
@@ -478,7 +473,7 @@ async function handleDeleteSkill(
 ): Promise<Response> {
   const id = resourceId(match);
   if (id instanceof Response) return id;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const deleted = await new SkillStore(ctx.db).delete(id, userId);
   if (deleted) audit(ctx, { action: "skill.deleted", skill_id: id });
@@ -491,7 +486,7 @@ async function handleListProfiles(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   return json({ profiles: await new SkillProfileStore(ctx.db).list(userId) });
 }
@@ -502,7 +497,7 @@ async function handleCreateProfile(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
@@ -530,7 +525,7 @@ async function handleUpdateProfile(
 ): Promise<Response> {
   const id = resourceId(match);
   if (id instanceof Response) return id;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
@@ -553,7 +548,7 @@ async function handleDeleteProfile(
 ): Promise<Response> {
   const id = resourceId(match);
   if (id instanceof Response) return id;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const deleted = await new SkillProfileStore(ctx.db).delete(id, userId);
   if (deleted) audit(ctx, { action: "profile.deleted", profile_id: id });
@@ -592,7 +587,7 @@ async function handleResolvePreview(
       ctx.db,
       { repositories, environmentId: parsed.data.environmentId ?? null },
       parsed.data.selection,
-      canonicalUserId(ctx)
+      canonicalUserIdOf(ctx.principal)
     );
     return json({
       skills: manifest.skills,

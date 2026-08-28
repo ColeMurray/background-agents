@@ -9,6 +9,7 @@ import {
   type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
+import { canonicalUserIdOf } from "../auth/principal";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
@@ -38,12 +39,7 @@ function parseCreatedByFilters(
   const seen = new Set<string>();
 
   for (const value of values) {
-    const userId =
-      value === SESSION_LIST_CURRENT_USER
-        ? principal?.kind === "user"
-          ? principal.userId
-          : null
-        : value;
+    const userId = value === SESSION_LIST_CURRENT_USER ? canonicalUserIdOf(principal) : value;
 
     if (!isCanonicalUserId(userId)) {
       return error("Invalid createdBy", 400);
@@ -78,7 +74,7 @@ async function handleListSessions(
 
   const store = new SessionIndexStore(ctx.db);
   const listStartedAt = Date.now();
-  const viewerUserId = ctx.principal?.kind === "user" ? ctx.principal.userId : undefined;
+  const viewerUserId = canonicalUserIdOf(ctx.principal) ?? undefined;
   const result = await store.list({
     status,
     excludeStatus,

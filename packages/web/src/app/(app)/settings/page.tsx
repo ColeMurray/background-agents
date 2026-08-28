@@ -14,6 +14,7 @@ import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
 import { ScmSettingsPage } from "@/components/settings/scm-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
 import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
+import { AccessTokensSettings } from "@/components/settings/access-tokens-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
 import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
 import { SkillsSettings } from "@/components/settings/skills-settings";
@@ -36,6 +37,7 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   integrations: "Integrations",
   skills: "Skills",
   "mcp-servers": "MCP Servers",
+  "access-tokens": "Access Tokens",
 };
 
 const VALID_CATEGORIES = new Set<string>([
@@ -52,6 +54,7 @@ const VALID_CATEGORIES = new Set<string>([
   "integrations",
   "skills",
   "mcp-servers",
+  "access-tokens",
 ]);
 
 function isValidCategory(tab: string | null): tab is SettingsCategory {
@@ -106,6 +109,7 @@ function SettingsPageContent() {
       {activeCategory === "integrations" && <IntegrationsSettings />}
       {activeCategory === "skills" && <SkillsSettings />}
       {activeCategory === "mcp-servers" && <McpServersSettings />}
+      {activeCategory === "access-tokens" && <AccessTokensSettings />}
     </>
   );
 

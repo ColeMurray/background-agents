@@ -26,14 +26,6 @@ resource "random_password" "service_auth_secret_linear_bot" {
   special = false
 }
 
-# Read-only inspection tooling (packages/mcp-server), run on an operator's
-# machine rather than deployed. Its own secret, never a bot's: `mcp` asserts
-# no actor, while `web` can escalate to acting as a user.
-resource "random_password" "service_auth_secret_mcp" {
-  length  = 64
-  special = false
-}
-
 # Dedicated pepper for image-build callback token hashes.
 resource "random_password" "image_callback_token_pepper" {
   length  = 64
