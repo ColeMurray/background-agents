@@ -61,7 +61,11 @@ jobs:
       - name: Check if secrets are configured
         id: check
         run: |
-          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && [ -n "${{ secrets.R2_ACCESS_KEY_ID }}" ]; then
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] &&
+            [ -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ] &&
+            [ -n "${{ secrets.R2_ACCESS_KEY_ID }}" ] &&
+            [ -n "${{ secrets.R2_SECRET_ACCESS_KEY }}" ] &&
+            [ -n "${{ secrets.R2_BUCKET }}" ]; then
             echo "has-secrets=true" >> $GITHUB_OUTPUT
           else
             echo "has-secrets=false" >> $GITHUB_OUTPUT
@@ -180,6 +184,7 @@ jobs:
           terraform init \
             -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
             -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
+            -backend-config="bucket=${{ secrets.R2_BUCKET }}" \
             -backend-config='endpoints={s3="https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
         working-directory: ${{ env.TF_WORKING_DIR }}
 
@@ -361,6 +366,7 @@ jobs:
           terraform init \
             -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
             -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
+            -backend-config="bucket=${{ secrets.R2_BUCKET }}" \
             -backend-config='endpoints={s3="https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"}'
         working-directory: ${{ env.TF_WORKING_DIR }}
 
