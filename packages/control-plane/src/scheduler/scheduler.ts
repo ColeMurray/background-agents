@@ -897,8 +897,8 @@ export class Scheduler {
     // created only on the first admission. Several automations can watch the
     // same channel; they must not each re-read the thread.
     let slackContextPromise: Promise<string> | undefined;
-    const slackContextBlock = (): Promise<string> => {
-      slackContextPromise ??= this.buildSlackContextWithThread(event as SlackAutomationEvent);
+    const slackContextBlock = (slackEvent: SlackAutomationEvent): Promise<string> => {
+      slackContextPromise ??= this.buildSlackContextWithThread(slackEvent);
       return slackContextPromise;
     };
 
@@ -972,7 +972,7 @@ export class Scheduler {
           ? {
               instructionsOverrideFactory: async () =>
                 appendSlackSessionInstructions(
-                  `${await slackContextBlock()}\n---\n\n${automation.instructions}`,
+                  `${await slackContextBlock(event)}\n---\n\n${automation.instructions}`,
                   slackSessionInstructions
                 ),
             }

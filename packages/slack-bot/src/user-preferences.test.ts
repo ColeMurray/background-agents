@@ -31,6 +31,18 @@ function makeEnv(): Env {
   } as Env;
 }
 
+describe("getUserPreferences", () => {
+  it("returns null for malformed stored preferences", async () => {
+    const env = makeEnv();
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({ userId: "U123", updatedAt: "yesterday" })
+    );
+
+    await expect(getUserPreferences(env, "U123")).resolves.toBeNull();
+  });
+});
+
 describe("updateUserPreferences", () => {
   it("preserves unspecified fields and resets reasoning when the model changes", async () => {
     const env = makeEnv();

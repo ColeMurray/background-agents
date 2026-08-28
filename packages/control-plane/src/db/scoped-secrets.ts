@@ -31,7 +31,7 @@ export interface SecretsWriteResult {
  * Rejects inputs where two raw keys normalize to the same key (e.g. `foo`
  * and `FOO`) rather than letting the last one silently win.
  */
-export function prepareSecretsForWrite(secrets: Record<string, string>): Record<string, string> {
+export function prepareSecretsForWrite(secrets: Record<string, unknown>): Record<string, string> {
   const normalized: Record<string, string> = {};
   let totalValueBytes = 0;
   for (const [rawKey, value] of Object.entries(secrets)) {

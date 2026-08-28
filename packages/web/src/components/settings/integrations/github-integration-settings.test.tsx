@@ -176,7 +176,7 @@ describe("GitHubIntegrationSettings", () => {
                 prCommentsEnabled: true,
                 openInspectReviewsEnabled: true,
                 allowedReviewBots: [],
-                maxAttemptsPerPrPer24Hours: 10,
+                maxAttemptsPerPrPer24Hours: 30,
               },
             },
           },
@@ -198,7 +198,7 @@ describe("GitHubIntegrationSettings", () => {
     expect(screen.getByText(/bot-authored feedback is untrusted input/i)).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("spinbutton", { name: "Attempts per PR per 24 hours" }), {
-      target: { value: "20" },
+      target: { value: "40" },
     });
     expect(screen.getByText(/higher attempt caps increase autonomous work/i)).toBeInTheDocument();
 

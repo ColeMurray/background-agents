@@ -26,7 +26,7 @@ export class RepoSecretsStore {
     repoId: number,
     repoOwner: string,
     repoName: string,
-    secrets: Record<string, string>
+    secrets: Record<string, unknown>
   ): Promise<SecretsWriteResult> {
     const owner = repoOwner.toLowerCase();
     const name = repoName.toLowerCase();

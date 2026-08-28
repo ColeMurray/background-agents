@@ -111,13 +111,17 @@ describe("automation templates catalog", () => {
 
     if (t.prefill.triggerConfig?.conditions?.length) {
       const conditions = t.prefill.triggerConfig.conditions;
+      it("does not create new configs with legacy condition names", () => {
+        expect(conditions.every((condition) => condition.type !== "check_conclusion")).toBe(true);
+      });
       it("has trigger conditions valid for its source", () => {
         const source = TRIGGER_TYPE_TO_SOURCE[triggerType as AutomationTriggerType];
         expect(source).toBeDefined();
         const errors = validateConditions(
           conditions,
           source as NonNullable<typeof source>,
-          conditionRegistry
+          conditionRegistry,
+          t.prefill.eventType
         );
         expect(errors).toEqual([]);
       });

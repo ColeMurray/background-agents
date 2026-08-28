@@ -285,7 +285,8 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
 3. Fill in the basics:
    - **Name**: `Open-Inspect-YourName` (must be globally unique)
    - **Homepage URL**: Your web app URL (see below)
-   - **Webhook**: Uncheck "Active" (not needed)
+   - **Webhook**: Leave "Active" unchecked for now. Step 7c enables it when
+     `enable_github_bot = true` for GitHub automations or bot commands.
 4. If enabling GitHub sign-in, configure **Identifying and authorizing users** (OAuth):
    - **Callback URL**: `{your-web-app-url}/api/auth/callback/github`
 
@@ -307,6 +308,8 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > identity for repository access.
 
 5. Set **Repository permissions**:
+   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
+   - Checks: **Read-only** _(required for GitHub check-suite automations)_
    - Contents: **Read & Write**
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
@@ -783,9 +786,12 @@ Now that the GitHub bot worker is deployed, configure the GitHub App for webhook
    - **Webhook secret**: Enter the `github_webhook_secret` value from your terraform.tfvars
 4. Under **Subscribe to events**, check:
    - **Pull requests**
+   - **Issues**
    - **Issue comments**
    - **Pull request reviews**
    - **Pull request review comments**
+   - **Check suites**
+   - **Workflow runs** _(required for GitHub workflow-run automations)_
 5. Click **Save changes**
 
 ### Find Your Bot Username

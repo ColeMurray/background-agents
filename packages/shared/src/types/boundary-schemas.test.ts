@@ -5,6 +5,7 @@ import {
   clientMessageSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
+  repositoryPairInputSchema,
   RepositoryPairValidationError,
   serverMessageSchema,
   sessionAttachmentUploadResponseSchema,
@@ -23,6 +24,7 @@ import {
   sendPromptRequestSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
+  userPreferencesSchema,
 } from "./session-api";
 import { MAX_WEB_PROMPT_CHARS } from "./websocket";
 import {
@@ -139,6 +141,34 @@ describe("boundary schemas", () => {
         createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
       ).toBe(false);
       expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
+    });
+  });
+
+  describe("userPreferencesSchema", () => {
+    it("parses valid stored preferences", () => {
+      const result = userPreferencesSchema.safeParse({
+        userId: "U123",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "high",
+        branch: "feature/test",
+        updatedAt: 123,
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("parses preferences with optional fields omitted", () => {
+      const result = userPreferencesSchema.safeParse({ userId: "U123", updatedAt: 123 });
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ userId: "U123", updatedAt: 123 });
+    });
+
+    it("rejects malformed stored preferences", () => {
+      expect(userPreferencesSchema.safeParse({ userId: "U123" }).success).toBe(false);
+      expect(
+        userPreferencesSchema.safeParse({ userId: "U123", model: 123, updatedAt: 123 }).success
+      ).toBe(false);
     });
   });
 
@@ -1103,6 +1133,23 @@ describe("boundary schemas", () => {
 });
 
 describe("automation repository schemas", () => {
+  describe("repositoryPairInputSchema", () => {
+    it("normalizes a required repository pair", () => {
+      expect(
+        repositoryPairInputSchema.parse({ repoOwner: "  Acme  ", repoName: "  Web-App " })
+      ).toEqual({ repoOwner: "acme", repoName: "web-app" });
+    });
+
+    it("rejects blank repository identifiers", () => {
+      expect(
+        repositoryPairInputSchema.safeParse({ repoOwner: "   ", repoName: "web" }).success
+      ).toBe(false);
+      expect(
+        repositoryPairInputSchema.safeParse({ repoOwner: "acme", repoName: "\t" }).success
+      ).toBe(false);
+    });
+  });
+
   describe("normalizeOptionalRepositoryPair", () => {
     it("trims and lowercases a complete pair", () => {
       expect(
