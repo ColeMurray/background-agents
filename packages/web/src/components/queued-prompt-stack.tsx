@@ -16,7 +16,7 @@ export function QueuedPromptStack({
   if (pendingPrompts.length === 0) return null;
 
   return (
-    <section aria-label="Queued prompts" className="mx-auto w-full min-w-0 max-w-4xl px-4 pt-3">
+    <section aria-label="Queued prompts" className="mx-auto w-full min-w-0 max-w-3xl px-4 pt-3">
       <div className="max-h-48 overflow-y-auto rounded-t-xl border border-b-0 border-border bg-card/95 px-3 pb-3 pt-2 shadow-[0_-8px_30px_-22px_rgba(0,0,0,0.45)] backdrop-blur-sm">
         <ol className="divide-y divide-border-muted">
           {pendingPrompts.map((prompt) => (

@@ -54,7 +54,7 @@ export function PromptSkillSuggestionPanel({
         role="listbox"
         aria-label="Managed skills"
         aria-busy={source.status === "loading"}
-        className="max-h-[min(22rem,50vh)] overflow-y-auto"
+        className="max-h-[min(12rem,35vh)] overflow-y-auto sm:max-h-[min(22rem,50vh)]"
       >
         {source.status === "loading" ? (
           <div className="flex items-center gap-3 rounded-lg px-3 py-4 text-sm text-muted-foreground">

@@ -12,7 +12,6 @@ import { matchesShortcut } from "@/lib/keyboard-shortcuts";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
-import { APP_NAME } from "@/lib/site-config";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import {
@@ -462,28 +461,25 @@ function HomeContent({
   };
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header with toggle when sidebar is closed */}
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3">
-            <CollapsedSidebarControls />
-          </div>
-        </header>
-      )}
+    <div className="flex h-full flex-col bg-background">
+      <header className="h-14 flex-shrink-0 border-b border-border-muted">
+        <div className="flex h-full items-center gap-3 px-4">
+          {!isOpen && <CollapsedSidebarControls />}
+          <h1 className="text-sm font-medium text-foreground">New session</h1>
+        </div>
+      </header>
 
-      <div className="flex-1 flex flex-col items-center justify-center p-8">
-        <div className="w-full max-w-2xl">
-          {/* Welcome text */}
-          <div className="text-center mb-8">
-            <h1 className="text-3xl font-semibold text-foreground mb-2">Welcome to {APP_NAME}</h1>
-            {isAuthenticated ? (
-              <p className="text-muted-foreground">
-                Ask a question or describe what you want to build
-              </p>
-            ) : (
-              <p className="text-muted-foreground">Sign in to start a new session</p>
-            )}
+      <div className="flex flex-1 overflow-y-auto">
+        <div className="m-auto w-full max-w-3xl px-4 py-10 sm:px-8 sm:py-16">
+          <div className="mb-8 text-center sm:mb-10">
+            <h2 className="mb-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+              Start with an outcome
+            </h2>
+            <p className="text-sm text-muted-foreground sm:text-base">
+              {isAuthenticated
+                ? "What should the agent work on?"
+                : "Sign in to start a new session"}
+            </p>
           </div>
 
           {/* Input box - only show when authenticated */}
@@ -491,17 +487,30 @@ function HomeContent({
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
-              <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
-                <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
-              </div>
-
               <div
-                className={`border border-border bg-input ${isDraggingOver ? "ring-2 ring-accent" : ""}`}
+                className={`rounded-xl border bg-input shadow-sm transition-shadow ${
+                  isDraggingOver
+                    ? "border-accent ring-2 ring-accent/30"
+                    : "border-border-muted focus-within:border-border"
+                }`}
                 onPaste={handlePaste}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
               >
+                <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 rounded-t-xl border-b border-border-muted bg-muted/20 px-4 py-2.5">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-4">
+                    <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
+                  </div>
+                  {isCreatingSession && (
+                    <span
+                      role="status"
+                      className="sr-only whitespace-nowrap text-xs text-accent sm:not-sr-only"
+                    >
+                      Preparing session...
+                    </span>
+                  )}
+                </div>
                 <AttachmentPreviewStrip
                   items={attachments.items}
                   error={attachments.error}
@@ -516,7 +525,6 @@ function HomeContent({
                   className="hidden"
                   onChange={handleFileInputChange}
                 />
-                {/* Text input area */}
                 <div className="relative">
                   <PromptSkillTextarea
                     ref={inputRef}
@@ -528,51 +536,13 @@ function HomeContent({
                     disabled={creating}
                     placeholder="What do you want to build?"
                     autoComplete="off"
-                    className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
-                    rows={3}
+                    className="min-h-36 w-full resize-none bg-transparent px-4 py-4 text-foreground placeholder:text-secondary-foreground focus:outline-none disabled:opacity-50 sm:min-h-44"
+                    rows={5}
                   />
-                  {/* Submit button */}
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                    {isCreatingSession && (
-                      <span className="whitespace-nowrap text-xs text-accent">
-                        Warming sandbox...
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={attachmentsLocked}
-                      className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title="Attach images"
-                      aria-label="Attach images"
-                    >
-                      <PaperclipIcon className="w-5 h-5" />
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={
-                        (!prompt.trim() && attachments.items.length === 0) ||
-                        attachmentsLocked ||
-                        !providerSelectionsHydrated ||
-                        providerAccounts.loading ||
-                        !isLaunchable
-                      }
-                      className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title={`Send (${labels["send-prompt"]})`}
-                      aria-label={`Send (${labels["send-prompt"]})`}
-                    >
-                      {creating ? (
-                        <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <SendIcon className="w-5 h-5" />
-                      )}
-                    </button>
-                  </div>
                 </div>
 
-                {/* Footer row with session controls */}
-                <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
-                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-muted px-3 py-2.5 sm:px-4">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-4">
                     <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}
@@ -606,6 +576,37 @@ function HomeContent({
                         }
                       />
                     )}
+                  </div>
+                  <div className="ml-auto flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={attachmentsLocked}
+                      className="rounded-md p-2 text-secondary-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                      title="Attach images"
+                      aria-label="Attach images"
+                    >
+                      <PaperclipIcon className="h-5 w-5" />
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={
+                        (!prompt.trim() && attachments.items.length === 0) ||
+                        attachmentsLocked ||
+                        !providerSelectionsHydrated ||
+                        providerAccounts.loading ||
+                        !isLaunchable
+                      }
+                      className="rounded-md bg-primary p-2 text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-30"
+                      title={`Send (${labels["send-prompt"]})`}
+                      aria-label={`Send (${labels["send-prompt"]})`}
+                    >
+                      {creating ? (
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      ) : (
+                        <SendIcon className="h-5 w-5" />
+                      )}
+                    </button>
                   </div>
                 </div>
               </div>

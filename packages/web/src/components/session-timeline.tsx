@@ -317,7 +317,7 @@ export function SessionTimeline({
 
 function ThinkingIndicator() {
   return (
-    <div className="bg-card p-4 flex items-center gap-2">
+    <div className="flex items-center gap-2 rounded-xl border border-border-muted bg-card p-4 shadow-sm">
       <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
       <span className="text-sm text-muted-foreground">Thinking...</span>
     </div>
@@ -327,16 +327,16 @@ function ThinkingIndicator() {
 function TimelineSkeleton() {
   return (
     <div className="space-y-3 py-2 animate-pulse">
-      <div className="bg-card p-3 space-y-2 sm:p-4">
+      <div className="space-y-2 rounded-xl border border-border-muted bg-card p-3 sm:p-4">
         <div className="h-3 w-24 bg-muted rounded" />
         <div className="h-3 w-full bg-muted rounded" />
         <div className="h-3 w-5/6 bg-muted rounded" />
       </div>
-      <div className="bg-accent-muted p-3 space-y-2 sm:ml-8 sm:p-4">
+      <div className="space-y-2 rounded-xl border border-primary/10 bg-accent-muted p-3 sm:ml-8 sm:p-4">
         <div className="h-3 w-20 bg-muted rounded" />
         <div className="h-3 w-4/5 bg-muted rounded" />
       </div>
-      <div className="bg-card p-3 space-y-2 sm:p-4">
+      <div className="space-y-2 rounded-xl border border-border-muted bg-card p-3 sm:p-4">
         <div className="h-3 w-32 bg-muted rounded" />
         <div className="h-3 w-3/4 bg-muted rounded" />
       </div>
@@ -517,7 +517,7 @@ function UserMessageEvent({
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-accent-muted p-3 sm:ml-8 sm:p-4"
+      className="group rounded-xl border border-primary/10 bg-accent-muted p-3 shadow-sm sm:ml-8 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
@@ -559,7 +559,7 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-card p-3 sm:p-4"
+      className="group rounded-xl border border-border-muted bg-card p-3 shadow-sm sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
@@ -593,7 +593,7 @@ function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
   if (event.type !== "artifact") return null;
 
   return (
-    <div className="space-y-2 border border-border-muted bg-card p-3 sm:p-4">
+    <div className="space-y-2 rounded-xl border border-border-muted bg-card p-3 shadow-sm sm:p-4">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
           {event.artifactType === "video" ? "Video" : "Screenshot"}

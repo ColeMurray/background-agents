@@ -101,6 +101,12 @@ export function SessionRightSidebarContent({
 
   return (
     <>
+      <div className="border-b border-border-muted px-4 py-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Session context
+        </h2>
+      </div>
+
       {/* Participants */}
       <div className="px-4 py-4 border-b border-border-muted">
         <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />
@@ -126,6 +132,13 @@ export function SessionRightSidebarContent({
           totalCost={sessionState.totalCost}
         />
       </div>
+
+      {/* Tasks */}
+      {tasks.length > 0 && (
+        <CollapsibleSection title="Progress" defaultOpen={true}>
+          <TasksSection tasks={tasks} />
+        </CollapsibleSection>
+      )}
 
       {/* Code Server */}
       {sessionState.codeServerUrl && (
@@ -189,13 +202,6 @@ export function SessionRightSidebarContent({
             sandboxStatus={sessionState.sandboxStatus}
           />
         </div>
-      )}
-
-      {/* Tasks */}
-      {tasks.length > 0 && (
-        <CollapsibleSection title="Tasks" defaultOpen={true}>
-          <TasksSection tasks={tasks} />
-        </CollapsibleSection>
       )}
 
       {/* Child Sessions */}

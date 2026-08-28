@@ -5,7 +5,7 @@ import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/t
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
-import { BoxIcon, RightSidebarIcon } from "@/components/ui/icons";
+import { BoxIcon, BranchIcon, RightSidebarIcon } from "@/components/ui/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
@@ -168,11 +168,11 @@ export function SessionHeader({
   }, [fallbackSessionInfo.title, sessionState?.title, isRenaming]);
 
   return (
-    <header className="border-b border-border-muted flex-shrink-0">
-      <div className="px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+    <header className="h-14 flex-shrink-0 border-b border-border-muted">
+      <div className="flex h-full items-center justify-between gap-3 px-4">
+        <div className="flex min-w-0 items-center gap-3">
           {!isOpen && <CollapsedSidebarControls />}
-          <div>
+          <div className="min-w-0">
             {isRenaming ? (
               <input
                 autoFocus
@@ -190,10 +190,10 @@ export function SessionHeader({
                     setIsRenaming(false);
                   }
                 }}
-                className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
+                className="max-w-64 truncate bg-transparent text-sm font-medium text-foreground outline-none focus:ring-inset focus:ring-ring"
               />
             ) : (
-              <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
+              <h1 className="max-w-64 truncate text-sm font-medium text-foreground">
                 <button
                   type="button"
                   className="max-w-full truncate cursor-text text-left"
@@ -204,10 +204,23 @@ export function SessionHeader({
                 </button>
               </h1>
             )}
-            <p className="text-sm text-muted-foreground">{repoLabel}</p>
+            <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+              <span className="truncate">{repoLabel}</span>
+              {sessionState?.branchName && (
+                <>
+                  <span aria-hidden="true" className="text-border">
+                    /
+                  </span>
+                  <span className="flex min-w-0 items-center gap-1 font-mono">
+                    <BranchIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
+                    <span className="max-w-48 truncate">{sessionState.branchName}</span>
+                  </span>
+                </>
+              )}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             ref={detailsButtonRef}
             type="button"
@@ -225,7 +238,7 @@ export function SessionHeader({
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
           />
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <ConnectionStatusIcon connected={connected} connecting={connecting} />
             <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
@@ -309,9 +322,10 @@ function SandboxStatusIcon({
         <button
           type="button"
           aria-label={`Sandbox status: ${presentation.label}`}
-          className={`relative flex h-8 w-8 items-center justify-center rounded-sm border border-border ${presentation.color} transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+          className={`relative flex h-8 items-center justify-center gap-2 rounded-md border border-border px-2 ${presentation.color} transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
           <BoxIcon className="h-4 w-4" />
+          <span className="hidden text-xs font-medium sm:inline">{presentation.label}</span>
           <span
             aria-hidden="true"
             className={`absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full ${presentation.dot}${presentation.pulse ? " animate-pulse motion-reduce:animate-none" : ""}`}

@@ -209,6 +209,7 @@ describe("SessionHeader", () => {
     expect(connection.parentElement).not.toHaveClass("md:hidden");
     expect(connection).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
+    expect(screen.getByText("feature/status-icons")).toBeInTheDocument();
 
     fireEvent.pointerMove(connection, { pointerType: "mouse" });
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Connected");

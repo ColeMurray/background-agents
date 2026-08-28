@@ -248,6 +248,8 @@ describe("Home", () => {
   it("disables autofill suggestions for the prompt", () => {
     render(<Home />);
 
+    expect(screen.getByRole("heading", { name: "New session" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Start with an outcome" })).toBeInTheDocument();
     expect(screen.getByPlaceholderText("What do you want to build?")).toHaveAttribute(
       "autocomplete",
       "off"
@@ -301,14 +303,15 @@ describe("Home", () => {
 
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "I");
 
-    const warmingStatus = await screen.findByText("Warming sandbox...");
+    const warmingStatus = await screen.findByText("Preparing session...");
+    expect(warmingStatus).toHaveRole("status");
     const attachmentButton = screen.getByRole("button", { name: "Attach images" });
     expect(
       warmingStatus.compareDocumentPosition(attachmentButton) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
 
     resolveCreate?.(Response.json({ sessionId: "session-1", status: "created" }));
-    await waitFor(() => expect(screen.queryByText("Warming sandbox...")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Preparing session...")).not.toBeInTheDocument());
   });
 
   it("does not warm a pending session from a malformed create response", async () => {
@@ -322,7 +325,7 @@ describe("Home", () => {
     render(<Home />);
 
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Investigate logs");
-    await waitFor(() => expect(screen.queryByText("Warming sandbox...")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Preparing session...")).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await screen.findByText("Failed to create session");
@@ -652,8 +655,6 @@ describe("Home", () => {
     expect(
       branch.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-    expect(repository.querySelectorAll("svg")).toHaveLength(1);
-    expect(branch.closest("button")?.querySelectorAll("svg")).toHaveLength(1);
     expect(branch).toHaveClass("max-w-[9rem]", "truncate");
     expect(screen.queryByText("build agent")).not.toBeInTheDocument();
   });

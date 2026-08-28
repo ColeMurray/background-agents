@@ -94,8 +94,11 @@ export function SessionPromptComposer({
   }, [prompt.inputRef, prompt.value]);
 
   return (
-    <footer className="min-w-0 border-t border-border-muted flex-shrink-0">
-      <form onSubmit={prompt.onSubmit} className="w-full min-w-0 max-w-4xl mx-auto p-4 pb-6">
+    <footer className="min-w-0 flex-shrink-0 border-t border-border-muted bg-background/95 backdrop-blur-sm">
+      <form
+        onSubmit={prompt.onSubmit}
+        className="mx-auto w-full min-w-0 max-w-3xl p-3 pb-4 sm:p-4 sm:pb-5"
+      >
         {/* Action bar above input */}
         <div className="hidden mb-3 md:block">
           <ActionBar
@@ -110,7 +113,9 @@ export function SessionPromptComposer({
 
         {/* Input container */}
         <div
-          className={`border bg-input ${isDraggingOver ? "border-accent" : "border-border"}`}
+          className={`rounded-xl border bg-input shadow-sm transition-shadow ${
+            isDraggingOver ? "border-accent ring-2 ring-accent/30" : "border-border-muted"
+          }`}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
@@ -136,7 +141,7 @@ export function SessionPromptComposer({
               onPaste={handlePaste}
               autoComplete="off"
               placeholder={prompt.isProcessing ? "Add a follow-up..." : "Ask or build anything"}
-              className="min-h-12 max-h-40 w-0 min-w-48 flex-1 resize-none overflow-y-auto bg-transparent px-4 py-3 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:block sm:min-h-[7.75rem] sm:w-full sm:px-4 sm:pt-4 sm:pb-12"
+              className="min-h-12 max-h-40 w-0 min-w-48 flex-1 resize-none overflow-y-auto bg-transparent px-4 py-3 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:block sm:min-h-20 sm:w-full sm:px-4 sm:pt-4 sm:pb-12"
               rows={1}
             />
             {/* Floating action buttons */}
@@ -159,7 +164,7 @@ export function SessionPromptComposer({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={attachmentsLocked}
-                className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                className="rounded-md p-2 text-secondary-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
                 title="Attach images"
                 aria-label="Attach images"
               >
@@ -169,7 +174,7 @@ export function SessionPromptComposer({
                 <button
                   type="button"
                   onClick={prompt.onStopExecution}
-                  className="p-2 text-destructive hover:bg-destructive-muted transition"
+                  className="rounded-md p-2 text-destructive transition hover:bg-destructive-muted"
                   title="Stop current prompt; queued prompts will continue"
                   aria-label="Stop current prompt; queued prompts will continue"
                 >
@@ -179,7 +184,7 @@ export function SessionPromptComposer({
               <button
                 type="submit"
                 disabled={sendDisabled}
-                className="flex items-center gap-1 p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                className="flex items-center gap-1 rounded-md bg-primary p-2 text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-30"
                 title={
                   prompt.isProcessing
                     ? "Queue follow-up; runs after the current prompt"
@@ -197,9 +202,7 @@ export function SessionPromptComposer({
             </div>
           </div>
 
-          {/* Footer row with model controls and agent label */}
-          <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
-            {/* Left side - Model controls */}
+          <div className="flex flex-col gap-2 border-t border-border-muted px-4 py-2 sm:flex-row sm:items-center sm:gap-0">
             <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
               <ModelReasoningSelector
                 selectedModel={model.selectedModel}
@@ -210,9 +213,6 @@ export function SessionPromptComposer({
                 disabled={prompt.draftLocked || !sessionPromptable}
               />
             </div>
-
-            {/* Right side - Agent label */}
-            <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
           </div>
           {prompt.submitError && (
             <p

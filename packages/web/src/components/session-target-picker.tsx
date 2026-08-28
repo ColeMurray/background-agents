@@ -2,7 +2,7 @@
 
 import { RepositoryMultiSelect } from "@/components/repository-multi-select";
 import { Combobox } from "@/components/ui/combobox";
-import { ChevronDownIcon } from "@/components/ui/icons";
+import { BranchIcon, ChevronDownIcon, FolderIcon } from "@/components/ui/icons";
 import type { SessionTargetPickerProps } from "@/hooks/use-session-target-picker";
 
 /**
@@ -44,6 +44,7 @@ export function SessionTargetPicker({
         disabled={disabled || loadingRepos}
         triggerClassName="flex max-w-full items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
       >
+        <FolderIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="truncate max-w-[12rem] sm:max-w-none">
           {loadingRepos ? "Loading..." : displayTargetName}
         </span>
@@ -84,6 +85,7 @@ export function SessionTargetPicker({
           disabled={disabled || loadingBranches}
           triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
         >
+          <BranchIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span className="max-w-[9rem] truncate">
             {loadingBranches ? "Loading..." : selectedBranch || "branch"}
           </span>
