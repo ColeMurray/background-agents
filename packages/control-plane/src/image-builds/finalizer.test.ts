@@ -3,11 +3,8 @@ import type { ImageBuildFinalizationRow } from "../db/image-build-finalization";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { FinalizeImageBuildInput } from "./types";
-import {
-  IMAGE_BUILD_PROVIDER_ATTEMPT_MS,
-  ImageBuildFinalizationAttemptError,
-  ImageBuildFinalizer,
-} from "./finalizer";
+import { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { IMAGE_BUILD_PROVIDER_ATTEMPT_MS, ImageBuildFinalizer } from "./finalizer";
 
 const job = { version: 1 as const, buildId: "build-1", completionHash: "a".repeat(64) };
 const correlation = { request_id: "queue-1", trace_id: "queue-1" };

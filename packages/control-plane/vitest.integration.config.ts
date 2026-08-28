@@ -12,7 +12,7 @@ const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
 // `require("luxon").DateTime`. Under @cloudflare/vitest-pool-workers that
 // CJS->ESM interop yields `undefined`, so the scheduler tick throws "Cannot read
 // properties of undefined (reading 'DateTime')" and silently skips every overdue
-// automation (see scheduler.test.ts /internal/tick). vite 7 used the CJS build,
+// automation (see Scheduler.tick tests). vite 7 used the CJS build,
 // which interops correctly. Test-only — production bundles via esbuild/wrangler.
 const luxonCjsEntry = createRequire(__filename).resolve("luxon");
 

@@ -189,7 +189,7 @@ export default tool({
         "Whether to open the pull request as a draft. Set to true only when the user explicitly asks for a draft; otherwise omit this field so the pull request is ready for review. Note: repository policy may still require draft mode."
       ),
   },
-  async execute(args, context) {
+  async execute(args, _context) {
     console.log(`[create-pull-request] execute() called with args:`, JSON.stringify(args));
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";

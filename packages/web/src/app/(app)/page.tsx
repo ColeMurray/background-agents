@@ -66,7 +66,8 @@ import {
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
-const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
+const LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections";
+const LAST_PROVIDER_SELECTIONS_STORAGE_KEY = "open-inspect-last-provider-selections:v1";
 
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
@@ -120,9 +121,29 @@ export default function Home() {
 
     const storedModel = localStorage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = localStorage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
-    const storedProviderSelections = parseStoredProviderSelections(
-      localStorage.getItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY)
+    const storedProviderSelectionsValue = localStorage.getItem(
+      LAST_PROVIDER_SELECTIONS_STORAGE_KEY
     );
+    const legacyProviderSelectionsValue =
+      storedProviderSelectionsValue === null
+        ? localStorage.getItem(LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY)
+        : null;
+    const storedProviderSelections = parseStoredProviderSelections(
+      storedProviderSelectionsValue ?? legacyProviderSelectionsValue
+    );
+    if (legacyProviderSelectionsValue !== null) {
+      try {
+        if (storedProviderSelections) {
+          localStorage.setItem(
+            LAST_PROVIDER_SELECTIONS_STORAGE_KEY,
+            JSON.stringify(storedProviderSelections)
+          );
+        }
+        localStorage.removeItem(LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY);
+      } catch {
+        // Storage migration must not block provider-selection hydration.
+      }
+    }
     setStoredPreference({
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
@@ -506,6 +527,7 @@ function HomeContent({
                     maxLength={MAX_WEB_PROMPT_CHARS}
                     disabled={creating}
                     placeholder="What do you want to build?"
+                    autoFocus
                     autoComplete="off"
                     className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
                     rows={3}

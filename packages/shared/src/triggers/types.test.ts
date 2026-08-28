@@ -66,6 +66,26 @@ describe("automationEventSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts both GitHub conclusion fields during rolling deployments", () => {
+    const baseEvent = {
+      source: "github" as const,
+      eventType: "check_suite.completed",
+      triggerKey: "check_suite:1",
+      concurrencyKey: "check_suite:1",
+      contextBlock: "A check suite completed.",
+      meta: {},
+      repoOwner: "acme",
+      repoName: "web-app",
+    };
+
+    expect(
+      githubAutomationEventSchema.safeParse({ ...baseEvent, conclusion: "failure" }).success
+    ).toBe(true);
+    expect(
+      githubAutomationEventSchema.safeParse({ ...baseEvent, checkConclusion: "failure" }).success
+    ).toBe(true);
+  });
+
   it("rejects optional arrays with non-string values", () => {
     const result = automationEventSchema.safeParse({
       source: "linear",

@@ -68,7 +68,8 @@ linear_webhook_secret = "your-webhook-signing-secret"
 
 The worker also requires these secrets (set via `wrangler secret put` or Terraform):
 
-- **`OPENAI_API_KEY`** — used by the LLM classifier for repo resolution fallback
+- Exactly one classifier credential selected by `CLASSIFICATION_MODEL`: **`ANTHROPIC_API_KEY`** for
+  an Anthropic model (the default), or **`OPENAI_API_KEY`** for an OpenAI model
 - **`SERVICE_AUTH_SECRET`** — per-service sig1 signing secret; also verifies CP callbacks
 
 Then `terraform apply`.
@@ -160,8 +161,8 @@ On any Linear issue:
 - Type `@OpenInspect` in a comment → agent picks up the issue
 - Assign the issue to `OpenInspect` → agent picks it up
 - Agent status is visible directly in Linear (thinking, working, done)
-- Add a `model:<name>` label to override the model (e.g., `model:gpt-5.4`, `model:gpt-5.5`,
-  `model:gpt-5.6-sol`, `model:gpt-5.3-codex`)
+- Add a `model:<name>` label to override the model (e.g., `model:opus`, `model:sonnet`,
+  `model:opus-5`, `model:sonnet-5`, `model:haiku`, `model:gpt-5.4`, `model:gpt-5.3-codex`)
 
 ## Repo Resolution
 
@@ -175,8 +176,9 @@ When an issue is triggered, the agent resolves the session target using a 5-step
    in the trigger comment or clarification reply
 4. **Linear's `issueRepositorySuggestions` API** — Linear's built-in repo suggestion (>= 70%
    confidence)
-5. **LLM classifier** — uses an OpenAI model to classify based on issue content, labels, and
-   available repo descriptions. Asks the user to clarify if confidence is low.
+5. **LLM classifier** — uses the model selected by `CLASSIFICATION_MODEL` (Anthropic by default) to
+   classify based on issue content, labels, and available repo descriptions. Asks the user to
+   clarify if confidence is low.
 
 Environment sessions clone the environment's full repository set; integration settings (model,
 enabled-repos allowlist) resolve from the environment's primary repository until environment-level

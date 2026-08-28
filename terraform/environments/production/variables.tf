@@ -221,12 +221,6 @@ variable "enable_slack_bot" {
   }
 }
 
-variable "slack_triggers_enabled" {
-  description = "Kill switch for Slack channel-message automation triggers. When false (default), the slack-bot ignores channel messages and forwards nothing — the feature ships dark. Flip to true only after completing the rollout verification."
-  type        = bool
-  default     = false
-}
-
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string
@@ -303,23 +297,42 @@ variable "anthropic_api_key" {
   }
 }
 
-variable "openai_api_key" {
-  description = "OpenAI API key backing the Slack and Linear bot message classifiers. Required whenever either bot is enabled."
+variable "classification_model" {
+  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by anthropic_api_key; an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
+  type        = string
+  default     = "claude-haiku-4-5"
+  nullable    = false
+
+  # Each prefix must be followed by an actual model id: a bare "claude-" or
+  # "openai/" satisfies startswith but names no model, and would reach the bots
+  # as a value their resolver accepts and then sends to the provider verbatim.
+  validation {
+    condition = anytrue([
+      for prefix in ["anthropic/", "claude-", "openai/", "gpt-"] :
+      startswith(var.classification_model, prefix) &&
+      trimspace(substr(var.classification_model, length(prefix), -1)) != ""
+    ])
+    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\"), naming a model after the prefix."
+  }
+}
+
+variable "classification_openai_api_key" {
+  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled."
   type        = string
   sensitive   = true
   default     = ""
+  nullable    = false
 
-  # GitHub Actions renders an unset secret as an empty string, so a missing
-  # OPENAI_API_KEY would otherwise plan and apply cleanly and leave the
-  # classifiers 401ing on every message — a silent degradation to the target
-  # picker. Fail closed here instead, while still letting a deployment that
-  # runs neither bot omit the key entirely.
+  # Fail closed once a deployed classifier is pointed at OpenAI: CI renders an
+  # unset secret as an empty string, which would otherwise deploy a
+  # credential-less classifier that rejects every message.
   validation {
     condition = (
       (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
-      length(trimspace(var.openai_api_key)) > 0
+      !(startswith(var.classification_model, "openai/") || startswith(var.classification_model, "gpt-")) ||
+      trimspace(var.classification_openai_api_key) != ""
     )
-    error_message = "When enable_slack_bot or enable_linear_bot is true, openai_api_key must be non-empty: the Slack and Linear message classifiers authenticate to OpenAI with it."
+    error_message = "classification_openai_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an OpenAI model."
   }
 }
 

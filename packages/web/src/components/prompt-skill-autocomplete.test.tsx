@@ -63,7 +63,7 @@ describe("PromptSkillTextarea", () => {
     expect(screen.getAllByRole("option")[0]).toHaveAttribute("tabindex", "-1");
     expect(screen.getByTestId("prompt-skill-suggestions")).not.toHaveAttribute("role");
     expect(input).toHaveAttribute("aria-autocomplete", "list");
-    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(input).not.toHaveAttribute("aria-expanded");
 
     await user.keyboard("{ArrowDown}{Enter}");
     expect(input).toHaveValue("$release-notes ");

@@ -3,7 +3,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { isValidCron } from "@open-inspect/shared/cron";
 import {
+  dedupeConditionsBySemanticKey,
   triggerSources,
+  isGitHubConditionCompatible,
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationTriggerType,
   type AutomationEventSource,
@@ -47,7 +49,7 @@ import {
 } from "@/components/ui/icons";
 import { CronPicker } from "./cron-picker";
 import { TriggerTypeSelector } from "./trigger-type-selector";
-import { ConditionBuilder } from "./condition-builder";
+import { ConditionBuilder, CONDITION_LABELS } from "./condition-builder";
 import { useAutomationTargets } from "./use-automation-targets";
 import { cn } from "@/lib/utils";
 import { NO_REPOSITORY_LABEL, formatRepositoriesLabel } from "@/lib/repo-label";
@@ -79,6 +81,7 @@ const DEFAULT_REASONING_VALUE = "__default__";
 // packages/control-plane/src/routes/automations.ts.
 const INSTRUCTIONS_MAX_LENGTH = 15000;
 const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
+const EMPTY_CONDITIONS: TriggerCondition[] = [];
 
 function requiresRepositoryContext(triggerType: AutomationTriggerType): boolean {
   return triggerType === "github_event" || triggerType === "linear_event";
@@ -162,8 +165,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [eventType, setEventType] = useState(initialValues?.eventType ?? "");
   const [eventTypeError, setEventTypeError] = useState("");
   const [conditions, setConditions] = useState<TriggerCondition[]>(
-    initialValues?.triggerConfig?.conditions ?? []
+    initialValues?.triggerConfig?.conditions ?? EMPTY_CONDITIONS
   );
+  const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>(EMPTY_CONDITIONS);
   const [sentryClientSecret, setSentryClientSecret] = useState("");
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>(
     initialValues?.providerSelections ?? EMPTY_PROVIDER_SELECTIONS
@@ -259,6 +263,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const handleEnvironmentToggle = (environmentId: string) => {
     toggleEnvironment(environmentId);
     if (!multipleSelectionEnabled) setRepoDropdownOpen(false);
+  };
+
+  const handleTriggerTypeChange = (value: AutomationTriggerType) => {
+    setTriggerType(value);
+    setConditions(EMPTY_CONDITIONS);
+    setDroppedConditions(EMPTY_CONDITIONS);
   };
 
   const handleNoRepository = () => {
@@ -397,7 +407,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </FieldDescription>
           <TriggerTypeSelector
             value={triggerType}
-            onChange={setTriggerType}
+            onChange={handleTriggerTypeChange}
             labelledBy="automation-trigger-type-label"
           />
         </div>
@@ -852,6 +862,23 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             onValueChange={(value) => {
               setEventType(value);
               if (eventTypeError) setEventTypeError("");
+              // A GitHub event can only be filtered on the fields its payload
+              // carries, so conditions the new event cannot answer come off
+              // rather than being saved as filters that could never match. Say
+              // which — a filter vanishing without a word reads as a bug.
+              if (TRIGGER_TYPE_TO_SOURCE[triggerType] !== "github") {
+                setDroppedConditions(EMPTY_CONDITIONS);
+                return;
+              }
+              const candidates = dedupeConditionsBySemanticKey([
+                ...conditions,
+                ...droppedConditions,
+              ]);
+              const kept = candidates.filter((condition) =>
+                isGitHubConditionCompatible(value, condition)
+              );
+              setDroppedConditions(candidates.filter((condition) => !kept.includes(condition)));
+              setConditions(kept);
             }}
           >
             <SelectTrigger id="automation-event-type" className="w-full">
@@ -908,11 +935,21 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             conditions={conditions}
             onChange={setConditions}
             triggerSource={TRIGGER_TYPE_TO_SOURCE[triggerType] as AutomationEventSource}
+            eventType={eventType || undefined}
           />
           <FieldDescription>
             Optional filters on incoming events. When you add conditions, every condition must pass
             before a run starts.
           </FieldDescription>
+          {droppedConditions.length > 0 && (
+            <FieldDescription>
+              <span role="status">
+                Removed{" "}
+                {droppedConditions.map(({ type }) => CONDITION_LABELS[type] || type).join(", ")} —
+                not available for this event type.
+              </span>
+            </FieldDescription>
+          )}
           {isSlack && !slackConditionsValid && (
             <p className="mt-1 text-xs text-destructive">
               Slack triggers require at least one Slack Channel condition.

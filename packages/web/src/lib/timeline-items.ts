@@ -21,6 +21,44 @@ export type SessionTimelineItem =
       id: string;
     };
 
+const directTimelineEventEligibility = {
+  user_message: (event: SandboxEvent) =>
+    event.type === "user_message" && Boolean(event.content || event.attachments?.length),
+  token: (event: SandboxEvent) => event.type === "token" && Boolean(event.content),
+  tool_result: (event: SandboxEvent) => event.type === "tool_result" && Boolean(event.error),
+  git_sync: () => true,
+  artifact: (event: SandboxEvent) =>
+    event.type === "artifact" &&
+    (event.artifactType === "screenshot" || event.artifactType === "video") &&
+    Boolean(event.artifactId),
+  error: () => true,
+  warning: () => true,
+  execution_complete: () => true,
+  context_compacted: () => true,
+} satisfies Partial<Record<SandboxEvent["type"], (event: SandboxEvent) => boolean>>;
+
+export type DirectTimelineEventType = keyof typeof directTimelineEventEligibility;
+export type RenderableTimelineEvent =
+  | Extract<SandboxEvent, { type: Exclude<DirectTimelineEventType, "artifact"> }>
+  | (Extract<SandboxEvent, { type: "artifact" }> & {
+      artifactId: string;
+      artifactType: "screenshot" | "video";
+    });
+
+const NO_PENDING_MESSAGES: ReadonlySet<string> = new Set();
+
+export function isRenderableTimelineEvent(
+  event: SandboxEvent,
+  pendingMessageIds: ReadonlySet<string> = NO_PENDING_MESSAGES
+): event is RenderableTimelineEvent | ToolCallEvent {
+  if (event.type === "tool_call") return true;
+  if (event.type === "user_message" && event.messageId && pendingMessageIds.has(event.messageId)) {
+    return false;
+  }
+  const eligibility = directTimelineEventEligibility[event.type as DirectTimelineEventType];
+  return eligibility?.(event) ?? false;
+}
+
 export function toolCallKey(event: ToolCallEvent): string {
   return toolCallIdentityKey(event);
 }
@@ -45,7 +83,7 @@ function groupFlatEvents(events: SandboxEvent[]): FlatTimelineItem[] {
     groups.push({
       type: "tool_group",
       events: tools,
-      id: `tools:${eventKey(tools[0])}`,
+      id: `tools:${eventKey(tools[tools.length - 1])}`,
     });
     tools = [];
   };
@@ -160,8 +198,13 @@ export function buildTimelineItems(events: SandboxEvent[]): TimelineItem[] {
  * Collapses completed turn activity while leaving in-flight and partial-history
  * events in their existing flat presentation.
  */
-export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimelineItem[] {
-  const items = buildTimelineItems(events);
+export function buildSessionTimelineItems(
+  events: SandboxEvent[],
+  pendingMessageIds: ReadonlySet<string> = NO_PENDING_MESSAGES
+): SessionTimelineItem[] {
+  const items = buildTimelineItems(
+    events.filter((event) => isRenderableTimelineEvent(event, pendingMessageIds))
+  );
   const result: SessionTimelineItem[] = [];
 
   for (let index = 0; index < items.length; index += 1) {
@@ -172,12 +215,17 @@ export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimeli
     }
     const userMessage = item.event;
 
-    const completionIndex = items.findIndex(
-      (candidate, candidateIndex) =>
-        candidateIndex > index &&
+    let completionIndex = index + 1;
+    while (completionIndex < items.length) {
+      const candidate = items[completionIndex];
+      if (
         candidate.type === "single" &&
         (candidate.event.type === "user_message" || candidate.event.type === "execution_complete")
-    );
+      ) {
+        break;
+      }
+      completionIndex += 1;
+    }
     const completion = items[completionIndex];
     if (
       completion?.type !== "single" ||

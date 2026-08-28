@@ -10,7 +10,6 @@ import {
   ImageBuildWorkflowUnavailableError,
 } from "./errors";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
-import { IMAGE_BUILD_CLEANUP_ATTEMPT_MS } from "./reaper";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildFinalizationQueue } from "./finalization-job";
@@ -54,12 +53,7 @@ function createStore() {
     },
     tryMarkImageBuildReady: vi.fn(),
     markBuildFailed: vi.fn().mockResolvedValue(true),
-    deleteSupersededImage: vi.fn().mockResolvedValue(true),
     supersedeActiveImages: vi.fn().mockResolvedValue(0),
-    getSupersededImages: vi.fn().mockResolvedValue([]),
-    getFailedImagesWithArtifacts: vi.fn().mockResolvedValue([]),
-    clearFailedImageArtifact: vi.fn().mockResolvedValue(true),
-    deleteOldFailedBuilds: vi.fn().mockResolvedValue(0),
     markStaleBuildsAsFailed: vi.fn().mockResolvedValue(0),
     getStatus: vi.fn().mockResolvedValue([]),
     getStatusForEnabledScopes: vi.fn().mockResolvedValue([]),
@@ -468,14 +462,10 @@ describe("ImageBuildWorkflow", () => {
     function sessionBuildStore() {
       const store = createStore();
       store.authorizeCompletionCallback.mockResolvedValue({
-        authorization: "fresh",
-        build: {
-          id: "imgb-env_1-1-abcd",
-          scope: ENV_SCOPE,
-          provider: "vercel",
-          providerSessionId: "vercel-session-1",
-          status: "building",
-        },
+        id: "imgb-env_1-1-abcd",
+        scope: ENV_SCOPE,
+        provider: "vercel",
+        status: "building",
       });
       return store;
     }
@@ -573,7 +563,7 @@ describe("ImageBuildWorkflow", () => {
       const queue = { send: vi.fn().mockResolvedValue(undefined) };
       const { workflow } = createWorkflow({ store, queue });
 
-      const result = await workflow.acceptBuildComplete({
+      await workflow.acceptBuildComplete({
         completion: validCompletion({
           providerSessionId: "vercel-session-1",
         }),
@@ -581,7 +571,6 @@ describe("ImageBuildWorkflow", () => {
         context: ctx,
       });
 
-      expect(result.type).toBe("completion_accepted");
       expect(queue.send).toHaveBeenCalledWith({
         version: 1,
         buildId: "imgb-env_1-1-abcd",
@@ -662,7 +651,7 @@ describe("ImageBuildWorkflow", () => {
       const queue = { send: vi.fn().mockResolvedValue(undefined) };
       const { workflow } = createWorkflow({ store, queue });
 
-      const result = await workflow.acceptBuildFailed({
+      await workflow.acceptBuildFailed({
         failure: {
           buildId: "imgb-env_1-1-abcd",
           providerSessionId: "vercel-session-1",
@@ -672,7 +661,6 @@ describe("ImageBuildWorkflow", () => {
         context: ctx,
       });
 
-      expect(result.type).toBe("failure_accepted");
       expect(queue.send).toHaveBeenCalledWith({
         version: 1,
         buildId: "imgb-env_1-1-abcd",
@@ -694,14 +682,10 @@ describe("ImageBuildWorkflow", () => {
     it("republishes an exact accepted replay", async () => {
       const store = sessionBuildStore();
       store.authorizeCompletionCallback.mockResolvedValue({
-        authorization: "accepted",
-        build: {
-          id: "imgb-env_1-1-abcd",
-          scope: ENV_SCOPE,
-          provider: "vercel",
-          providerSessionId: "vercel-session-1",
-          status: "building",
-        },
+        id: "imgb-env_1-1-abcd",
+        scope: ENV_SCOPE,
+        provider: "vercel",
+        status: "building",
       });
       store.acceptSuccessfulCompletion.mockResolvedValue("replayed");
       const queue = { send: vi.fn().mockResolvedValue(undefined) };
@@ -715,7 +699,7 @@ describe("ImageBuildWorkflow", () => {
           callbackToken: "callback-token",
           context: ctx,
         })
-      ).resolves.toEqual({ type: "completion_accepted" });
+      ).resolves.toBeUndefined();
 
       expect(queue.send).toHaveBeenCalledWith({
         version: 1,
@@ -727,14 +711,10 @@ describe("ImageBuildWorkflow", () => {
     it("republishes an exact accepted failure replay", async () => {
       const store = sessionBuildStore();
       store.authorizeCompletionCallback.mockResolvedValue({
-        authorization: "accepted",
-        build: {
-          id: "imgb-env_1-1-abcd",
-          scope: ENV_SCOPE,
-          provider: "vercel",
-          providerSessionId: "vercel-session-1",
-          status: "failed",
-        },
+        id: "imgb-env_1-1-abcd",
+        scope: ENV_SCOPE,
+        provider: "vercel",
+        status: "failed",
       });
       store.acceptFailedCompletion.mockResolvedValue("replayed");
       const queue = { send: vi.fn().mockResolvedValue(undefined) };
@@ -750,7 +730,7 @@ describe("ImageBuildWorkflow", () => {
           callbackToken: "callback-token",
           context: ctx,
         })
-      ).resolves.toEqual({ type: "failure_accepted" });
+      ).resolves.toBeUndefined();
 
       expect(queue.send).toHaveBeenCalledWith({
         version: 1,
@@ -793,145 +773,6 @@ describe("ImageBuildWorkflow", () => {
           context: ctx,
         })
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
-    });
-  });
-
-  describe("cleanupImages", () => {
-    function reapableRow(id: string, providerImageId: string | null) {
-      return {
-        id,
-        scope_kind: "environment" as const,
-        scope_id: "env_1",
-        provider: "modal" as const,
-        provider_image_id: providerImageId,
-        provider_session_id: null,
-        created_at: Number(id.replace(/\D/g, "")) || 1,
-      };
-    }
-
-    it("deletes old failed rows and reaps superseded artifacts", async () => {
-      const store = createStore();
-      store.deleteOldFailedBuilds.mockResolvedValue(3);
-      store.getSupersededImages.mockResolvedValue([
-        reapableRow("s-artifact", "im-a"),
-        reapableRow("s-bare", null),
-        reapableRow("s-stuck", "im-stuck"),
-      ]);
-      const adapter = createAdapter();
-      adapter.deleteImage.mockImplementation(async ({ image }) => {
-        if (image.providerImageId === "im-stuck") throw new Error("provider 500");
-      });
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.cleanupImages(86_400_000, ctx);
-
-      // s-artifact: artifact deleted then row reaped. s-bare: no artifact, row
-      // reaped directly. s-stuck: artifact delete failed, row kept for retry.
-      expect(result).toEqual({ deletedFailed: 3, reapedFailed: 0, reapedSuperseded: 2 });
-      expect(store.deleteSupersededImage).toHaveBeenCalledWith("s-artifact", "im-a");
-      expect(store.deleteSupersededImage).toHaveBeenCalledWith("s-bare", null);
-      expect(store.deleteSupersededImage).not.toHaveBeenCalledWith("s-stuck", "im-stuck");
-    });
-
-    it("reaps a restore-failed row's artifact then clears its columns, keeping it failed", async () => {
-      const store = createStore();
-      store.getFailedImagesWithArtifacts.mockResolvedValue([
-        reapableRow("f-restore", "im-restore"),
-      ]);
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.cleanupImages(86_400_000, ctx);
-
-      expect(result.reapedFailed).toBe(1);
-      expect(adapter.deleteImage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          image: { providerImageId: "im-restore", providerSessionId: null },
-        })
-      );
-      // The failed row itself is kept for visibility — only the artifact
-      // columns are nulled; it is never reaped as a superseded row.
-      expect(store.clearFailedImageArtifact).toHaveBeenCalledWith("f-restore", "im-restore");
-      expect(store.deleteSupersededImage).not.toHaveBeenCalledWith("f-restore");
-    });
-
-    it("keeps a failed row's artifact when the provider delete fails", async () => {
-      const store = createStore();
-      store.getFailedImagesWithArtifacts.mockResolvedValue([reapableRow("f-stuck", "im-stuck")]);
-      const adapter = createAdapter();
-      adapter.deleteImage.mockRejectedValue(new Error("provider 500"));
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.cleanupImages(86_400_000, ctx);
-
-      // Artifact not lost: the columns are left intact so the next tick retries.
-      expect(result.reapedFailed).toBe(0);
-      expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
-    });
-
-    it("attempts every failed artifact in one cleanup scan", async () => {
-      const store = createStore();
-      const rows = Array.from({ length: 26 }, (_, index) =>
-        reapableRow(`failed-${index + 1}`, `im-${index + 1}`)
-      );
-      store.getFailedImagesWithArtifacts.mockResolvedValue(rows);
-      const adapter = createAdapter();
-      let inFlight = 0;
-      let peakInFlight = 0;
-      adapter.deleteImage.mockImplementation(async ({ image }) => {
-        inFlight += 1;
-        peakInFlight = Math.max(peakInFlight, inFlight);
-        await Promise.resolve();
-        inFlight -= 1;
-        if (image.providerImageId === "im-1") throw new Error("provider unavailable");
-      });
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.cleanupImages(86_400_000, ctx);
-
-      expect(result.reapedFailed).toBe(25);
-      expect(peakInFlight).toBeLessThanOrEqual(4);
-      expect(store.getFailedImagesWithArtifacts).toHaveBeenCalledWith();
-      expect(store.clearFailedImageArtifact).toHaveBeenCalledWith("failed-26", "im-26");
-    });
-
-    it("does not select already-reaped failed rows (idempotent across ticks)", async () => {
-      const store = createStore();
-      // getFailedImagesWithArtifacts only returns artifact-bearing rows, so a
-      // previously-cleared failed row never reaches the adapter again.
-      store.getFailedImagesWithArtifacts.mockResolvedValue([]);
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.cleanupImages(86_400_000, ctx);
-
-      expect(result.reapedFailed).toBe(0);
-      expect(adapter.deleteImage).not.toHaveBeenCalled();
-      expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
-    });
-
-    it("bounds a hung provider artifact deletion", async () => {
-      vi.useFakeTimers();
-      try {
-        const store = createStore();
-        store.getFailedImagesWithArtifacts.mockResolvedValue([reapableRow("f-hung", "im-hung")]);
-        const adapter = createAdapter();
-        adapter.deleteImage.mockImplementation(
-          async ({ signal }) =>
-            new Promise<void>((_, reject) => {
-              signal?.addEventListener("abort", () => reject(new Error("aborted")));
-            })
-        );
-        const { workflow } = createWorkflow({ store, adapter });
-
-        const cleanup = workflow.cleanupImages(86_400_000, ctx);
-        await vi.advanceTimersByTimeAsync(IMAGE_BUILD_CLEANUP_ATTEMPT_MS);
-
-        await expect(cleanup).resolves.toMatchObject({ reapedFailed: 0 });
-        expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 });

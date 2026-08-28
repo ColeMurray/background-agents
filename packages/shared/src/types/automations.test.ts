@@ -151,3 +151,61 @@ describe("automation provider selection contracts", () => {
     ).toBe(false);
   });
 });
+
+describe("automation request boundary contracts", () => {
+  it.each([createAutomationRequestSchema, updateAutomationRequestSchema])(
+    "accepts canonical, unique environment ids",
+    (schema) => {
+      expect(
+        schema.safeParse({
+          name: "Daily sync",
+          instructions: "Run",
+          environmentIds: ["env_a", "env_B-2"],
+        }).success
+      ).toBe(true);
+    }
+  );
+
+  it.each([createAutomationRequestSchema, updateAutomationRequestSchema])(
+    "rejects malformed or duplicate environment ids",
+    (schema) => {
+      expect(
+        schema.safeParse({
+          name: "Daily sync",
+          instructions: "Run",
+          environmentIds: ["not-an-environment"],
+        }).success
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          name: "Daily sync",
+          instructions: "Run",
+          environmentIds: ["env_a", "env_a"],
+        }).success
+      ).toBe(false);
+    }
+  );
+
+  it("accepts null to clear trigger config on update", () => {
+    expect(updateAutomationRequestSchema.parse({ triggerConfig: null })).toEqual({
+      triggerConfig: null,
+    });
+  });
+
+  it("requires a non-empty Sentry client secret when provided", () => {
+    expect(
+      createAutomationRequestSchema.safeParse({
+        name: "Sentry",
+        instructions: "Investigate",
+        sentryClientSecret: "  ",
+      }).success
+    ).toBe(false);
+    expect(
+      createAutomationRequestSchema.parse({
+        name: "Sentry",
+        instructions: "Investigate",
+        sentryClientSecret: " secret ",
+      }).sentryClientSecret
+    ).toBe(" secret ");
+  });
+});

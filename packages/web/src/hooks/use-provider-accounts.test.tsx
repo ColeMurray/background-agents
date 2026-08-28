@@ -176,6 +176,23 @@ describe("provider account API response boundaries", () => {
       status: 503,
     });
   });
+
+  it("falls back when the error response body is malformed", async () => {
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(
+        Response.json({ error: "Untrusted error", retryable: "no" }, { status: 502 })
+      )
+      .mockResolvedValueOnce(Response.json({ defaults: [] }));
+
+    const { result } = renderHook(() => useProviderAccounts(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toMatchObject({
+      name: "ProviderResourceError",
+      message: "Provider account request failed",
+      status: 502,
+      retryable: undefined,
+    } satisfies Partial<ProviderResourceError>);
+  });
 });
 
 describe("provider device authorization requests", () => {

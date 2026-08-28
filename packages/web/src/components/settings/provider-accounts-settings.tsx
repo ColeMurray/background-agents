@@ -105,6 +105,12 @@ function relativeDateLabel(timestamp: number | null) {
   return relative === "now" ? relative : `${relative} ago`;
 }
 
+function accountStatusLabel(status: ModelProviderAccount["status"]) {
+  if (status === "reconnect_required") return "Reconnect required";
+  if (status === "disabled") return "Disabled";
+  return "Ready";
+}
+
 function legacyKeyLocationLabel(location: LegacyProviderKeyLocation): string {
   if (location.scope === "global") return `Global: ${location.key}`;
   if (location.scope === "repository") {
@@ -288,176 +294,211 @@ export function ProviderAccountsSettings() {
                     (item) => item.provider === account.provider
                   );
                   const isDefault = providerDefault?.providerAccountId === account.id;
+                  const isDefaultForAutomation =
+                    isDefault && providerDefault.unattendedMode === "provider_account";
                   const externalAccountId = account.externalAccountId;
                   return (
-                    <div
-                      key={account.id}
-                      className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between"
-                    >
-                      <div className="flex min-w-0 items-start gap-3">
-                        <div className="flex size-10 shrink-0 items-center justify-center text-foreground">
-                          <SubscriptionProviderIcon
-                            provider={account.provider}
-                            className="size-6 text-primary"
-                          />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                            <span className="font-medium text-foreground">
-                              {account.displayName}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {provider?.subscriptionName ?? account.provider}
-                            </span>
-                            <span className="rounded bg-muted px-1.5 py-0.5 text-xs capitalize text-foreground">
-                              {account.status.replaceAll("_", " ")}
-                            </span>
-                            {isDefault && (
-                              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
-                                Default
-                              </span>
-                            )}
+                    <div key={account.id} className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className="flex size-10 shrink-0 items-center justify-center text-foreground">
+                            <SubscriptionProviderIcon
+                              provider={account.provider}
+                              className="size-6 text-primary"
+                            />
                           </div>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                            <span
-                              className="whitespace-nowrap"
-                              title={
-                                account.lastVerifiedAt
-                                  ? dateLabel(account.lastVerifiedAt)
-                                  : undefined
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="font-medium text-foreground">
+                                {account.displayName}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {provider?.subscriptionName ?? account.provider}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-xs ${
+                                  account.status === "active"
+                                    ? "bg-success-muted text-success"
+                                    : account.status === "reconnect_required"
+                                      ? "bg-warning-muted text-warning"
+                                      : "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                {accountStatusLabel(account.status)}
+                              </span>
+                              {isDefaultForAutomation && (
+                                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
+                                  Default for automation
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                              <span
+                                className="whitespace-nowrap"
+                                title={
+                                  account.lastVerifiedAt
+                                    ? dateLabel(account.lastVerifiedAt)
+                                    : undefined
+                                }
+                              >
+                                Verified {relativeDateLabel(account.lastVerifiedAt)}
+                              </span>
+                              <span
+                                className="whitespace-nowrap"
+                                title={
+                                  account.lastUsedAt ? dateLabel(account.lastUsedAt) : undefined
+                                }
+                              >
+                                Used {relativeDateLabel(account.lastUsedAt)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {account.status === "reconnect_required" && (
+                            <Button
+                              size="xs"
+                              disabled={saving}
+                              onClick={() =>
+                                beginConnection(
+                                  CONNECTION_STRATEGIES[account.provider].reconnect(account)
+                                )
                               }
                             >
-                              Verified {relativeDateLabel(account.lastVerifiedAt)}
-                            </span>
-                            <span
-                              className="whitespace-nowrap"
-                              title={account.lastUsedAt ? dateLabel(account.lastUsedAt) : undefined}
-                            >
-                              Used {relativeDateLabel(account.lastUsedAt)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex max-w-full shrink-0 items-center gap-1.5 overflow-x-auto lg:justify-end">
-                        <Button
-                          size="xs"
-                          variant="subtle"
-                          disabled={saving}
-                          onClick={() =>
-                            beginConnection(
-                              CONNECTION_STRATEGIES[account.provider].reconnect(account)
-                            )
-                          }
-                        >
-                          Reconnect
-                        </Button>
-                        {account.status === "disabled" ? (
-                          <Button
-                            size="xs"
-                            variant="subtle"
-                            disabled={saving}
-                            onClick={() =>
-                              void run(
-                                () => runProviderAccountAction(account.id, "enable"),
-                                "Account enabled"
-                              )
-                            }
-                          >
-                            Enable
-                          </Button>
-                        ) : (
-                          <Button
-                            size="xs"
-                            variant="subtle"
-                            disabled={saving}
-                            onClick={() => beginConfirmation({ account, action: "disable" })}
-                          >
-                            Disable
-                          </Button>
-                        )}
-                        <Button
-                          size="xs"
-                          variant="subtle"
-                          disabled={saving}
-                          onClick={() =>
-                            void run(
-                              () => runProviderAccountAction(account.id, "verify"),
-                              "Account verified"
-                            )
-                          }
-                        >
-                          Verify
-                        </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="subtle"
-                              className="size-7"
-                              aria-label={`More actions for ${account.displayName}`}
-                              disabled={saving}
-                            >
-                              <MoreIcon className="size-4" />
+                              Reconnect
                             </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            {account.status === "active" && !isDefault && (
-                              <DropdownMenuItem
+                          )}
+                          {account.status === "disabled" && (
+                            <Button
+                              size="xs"
+                              disabled={saving}
+                              onClick={() =>
+                                void run(
+                                  () => runProviderAccountAction(account.id, "enable"),
+                                  "Account enabled"
+                                )
+                              }
+                            >
+                              Enable
+                            </Button>
+                          )}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="subtle"
+                                className="size-7"
+                                aria-label={`More actions for ${account.displayName}`}
                                 disabled={saving}
+                              >
+                                <MoreIcon className="size-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              {account.status !== "reconnect_required" && (
+                                <DropdownMenuItem
+                                  disabled={saving}
+                                  onSelect={() =>
+                                    beginConnection(
+                                      CONNECTION_STRATEGIES[account.provider].reconnect(account)
+                                    )
+                                  }
+                                >
+                                  Reconnect
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem
+                                disabled={saving || account.status !== "active"}
                                 onSelect={() =>
                                   void run(
-                                    () =>
-                                      setProviderAccountDefault(
-                                        account.provider,
-                                        account.id,
-                                        providerDefault?.unattendedMode ?? "provider_account"
-                                      ),
-                                    "Default updated"
+                                    () => runProviderAccountAction(account.id, "verify"),
+                                    "Account verified"
                                   )
                                 }
                               >
-                                Make default
+                                Verify
                               </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem
-                              disabled={saving}
-                              onSelect={() => {
-                                if (operationInFlightRef.current) return;
-                                const displayName = window
-                                  .prompt("Account name", account.displayName)
-                                  ?.trim();
-                                if (displayName)
-                                  void run(
-                                    () => renameProviderAccount(account.id, displayName),
-                                    "Account renamed"
-                                  );
-                              }}
-                            >
-                              Rename
-                            </DropdownMenuItem>
-                            {externalAccountId && (
+                              {account.status === "active" && !isDefault && (
+                                <DropdownMenuItem
+                                  disabled={saving}
+                                  onSelect={() =>
+                                    void run(
+                                      () =>
+                                        setProviderAccountDefault(
+                                          account.provider,
+                                          account.id,
+                                          providerDefault?.unattendedMode ?? "provider_account"
+                                        ),
+                                      "Default updated"
+                                    )
+                                  }
+                                >
+                                  Make default
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem
-                                onSelect={() =>
-                                  void navigator.clipboard
-                                    .writeText(externalAccountId)
-                                    .then(() => toast.success("Account ID copied"))
-                                    .catch(() => toast.error("Failed to copy account ID"))
-                                }
+                                disabled={saving}
+                                onSelect={() => {
+                                  if (operationInFlightRef.current) return;
+                                  const displayName = window
+                                    .prompt("Account name", account.displayName)
+                                    ?.trim();
+                                  if (displayName)
+                                    void run(
+                                      () => renameProviderAccount(account.id, displayName),
+                                      "Account renamed"
+                                    );
+                                }}
                               >
-                                Copy account ID
+                                Rename
                               </DropdownMenuItem>
-                            )}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              disabled={saving}
-                              onSelect={() => beginConfirmation({ account, action: "archive" })}
-                            >
-                              Archive
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                              {externalAccountId && (
+                                <DropdownMenuItem
+                                  onSelect={() =>
+                                    void navigator.clipboard
+                                      .writeText(externalAccountId)
+                                      .then(() => toast.success("Account ID copied"))
+                                      .catch(() => toast.error("Failed to copy account ID"))
+                                  }
+                                >
+                                  Copy account ID
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuSeparator />
+                              {account.status === "active" && (
+                                <DropdownMenuItem
+                                  disabled={saving}
+                                  onSelect={() => beginConfirmation({ account, action: "disable" })}
+                                >
+                                  Disable
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                disabled={saving}
+                                onSelect={() => beginConfirmation({ account, action: "archive" })}
+                              >
+                                Archive
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
                       </div>
+                      {account.status !== "active" && (
+                        <p
+                          className={`mt-3 rounded-md px-3 py-2 text-xs ${
+                            account.status === "reconnect_required"
+                              ? "bg-warning-muted text-warning"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {account.status === "reconnect_required"
+                            ? "This account cannot start new sessions until it is reconnected."
+                            : "This account is disabled and is not available for new sessions."}
+                        </p>
+                      )}
                     </div>
                   );
                 })}

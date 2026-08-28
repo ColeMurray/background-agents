@@ -100,7 +100,11 @@ describe("ProviderAccountsSettings", () => {
 
   it("reconnects OpenAI through device authorization with the selected account id", async () => {
     render(<ProviderAccountsSettings />);
-    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reconnect" }));
 
     expect(
       await screen.findByRole("heading", { name: "Reconnect Team ChatGPT" })
@@ -227,7 +231,11 @@ describe("ProviderAccountsSettings", () => {
     );
 
     render(<ProviderAccountsSettings />);
-    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reconnect" }));
 
     expect(await screen.findByText("Provider account is archived")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
@@ -283,7 +291,11 @@ describe("ProviderAccountsSettings", () => {
     accountsResult = [legacyAccount];
     render(<ProviderAccountsSettings />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "More actions for Legacy SuperGrok" }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reconnect" }));
     expect(screen.getByRole("heading", { name: "Reconnect Legacy SuperGrok" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Refresh token"), { target: { value: "legacy-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -346,6 +358,27 @@ describe("ProviderAccountsSettings", () => {
     expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
       "Use default: Team ChatGPT"
     );
+    expect(screen.getByText("Default for automation")).toBeInTheDocument();
+  });
+
+  it("does not label the stored account as the automation default in API key mode", () => {
+    defaultsResult = [
+      {
+        provider: "openai",
+        providerAccountId: account.id,
+        unattendedMode: "api_key",
+        createdBy: null,
+        updatedBy: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
+      "No account (API key)"
+    );
+    expect(screen.queryByText("Default for automation")).not.toBeInTheDocument();
   });
 
   it("sets the provider default from the account row", async () => {
@@ -385,29 +418,30 @@ describe("ProviderAccountsSettings", () => {
     ];
     render(<ProviderAccountsSettings />);
 
-    const verifyButtons = screen.getAllByRole("button", { name: "Verify" });
-    fireEvent.click(verifyButtons[0]);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Verify" }));
 
     expect(screen.getByRole("button", { name: "Add account" })).toBeDisabled();
     expect(screen.getAllByLabelText("Automated authentication")[0]).toBeDisabled();
-    expect(verifyButtons[1]).toBeDisabled();
-    fireEvent.click(verifyButtons[1]);
+    expect(screen.getByRole("button", { name: "More actions for Backup ChatGPT" })).toBeDisabled();
     expect(runAction).toHaveBeenCalledTimes(1);
 
     await act(async () => finishAction());
     await waitFor(() => expect(screen.getByRole("button", { name: "Add account" })).toBeEnabled());
   });
 
-  it("keeps primary account actions on one line and moves secondary actions to overflow", async () => {
+  it("shows primary actions only for accounts needing intervention", async () => {
     render(<ProviderAccountsSettings />);
 
     expect(screen.queryByText(account.externalAccountId)).not.toBeInTheDocument();
     expect(screen.getByText("Verified Never")).toHaveClass("whitespace-nowrap");
     expect(screen.getByText("Used Never")).toHaveClass("whitespace-nowrap");
-    const reconnect = screen.getByRole("button", { name: "Reconnect" });
-    expect(screen.getByRole("button", { name: "Disable" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Verify" })).toBeInTheDocument();
-    expect(reconnect.parentElement).toHaveClass("flex", "shrink-0", "items-center");
+    expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Disable" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Verify" })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Rename" })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
 
@@ -417,6 +451,9 @@ describe("ProviderAccountsSettings", () => {
     });
 
     expect(await screen.findByRole("menuitem", { name: "Make default" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Verify" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Disable" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy account ID" }));
@@ -425,9 +462,44 @@ describe("ProviderAccountsSettings", () => {
     );
   });
 
+  it("surfaces reconnect only as the primary action when an account needs attention", async () => {
+    accountsResult = [{ ...account, status: "reconnect_required" }];
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+    expect(
+      screen.getByText("This account cannot start new sessions until it is reconnected.")
+    ).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Reconnect" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces enable as the primary action when an account is disabled", async () => {
+    accountsResult = [{ ...account, status: "disabled" }];
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByRole("button", { name: "Enable" })).toBeInTheDocument();
+    expect(
+      screen.getByText("This account is disabled and is not available for new sessions.")
+    ).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitem", { name: "Reconnect" })).toBeInTheDocument();
+  });
+
   it("confirms disable and runs the lifecycle action", async () => {
     render(<ProviderAccountsSettings />);
-    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Disable" }));
     fireEvent.click(screen.getByRole("button", { name: "Disable" }));
 
     await waitFor(() => {
