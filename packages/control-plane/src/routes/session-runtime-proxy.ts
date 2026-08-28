@@ -126,6 +126,22 @@ async function handleAddParticipant(
   });
 }
 
+async function handleSandboxError(
+  request: Request,
+  _env: Env,
+  match: RegExpMatchArray,
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const sessionId = getSessionId(match);
+  if (sessionId instanceof Response) return sessionId;
+
+  return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.sandboxError, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await request.text(),
+  });
+}
+
 async function handleParticipantProfiles(
   _request: Request,
   _env: Env,
@@ -294,6 +310,14 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     internalPath: SessionInternalPaths.stop,
     runtimeMethod: "POST",
   }),
+  defineRoute(
+    SCM_AGNOSTIC_SANDBOX_ROUTE,
+    sessionRoute({
+      method: "POST",
+      pattern: parsePattern("/sessions/:id/sandbox-error"),
+      handler: handleSandboxError,
+    })
+  ),
   simpleProxyRoute({
     policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "GET",

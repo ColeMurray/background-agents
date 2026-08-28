@@ -37,6 +37,10 @@ const addParticipantRequestSchema = z.object({
   role: z.enum(["owner", "member"] satisfies [ParticipantRole, ParticipantRole]).optional(),
 });
 
+const sandboxErrorRequestSchema = z.object({
+  error: z.string().trim().min(1),
+});
+
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 /**
@@ -66,6 +70,7 @@ export class SandboxHandler {
       token: string | null,
       sandbox: SandboxRow | null
     ) => Promise<boolean>,
+    private readonly reportSandboxError: (reason: string) => void,
     private readonly generateId: () => string,
     private readonly now: () => number = Date.now
   ) {}
@@ -85,6 +90,28 @@ export class SandboxHandler {
 
     const event: SandboxEvent = result.data;
     await this.sandboxEventProcessor.processSandboxEvent(event);
+    return Response.json({ status: "ok" });
+  }
+
+  async sandboxError(request: Request): Promise<Response> {
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+
+    const result = sandboxErrorRequestSchema.safeParse(raw);
+    if (!result.success) {
+      return Response.json({ error: "Invalid sandbox error" }, { status: 400 });
+    }
+    if (!this.sandboxRepository.getSandbox()) {
+      return Response.json({ error: "No sandbox" }, { status: 404 });
+    }
+
+    this.sandboxRepository.updateSandboxStatus("failed");
+    this.messenger.broadcast({ type: "sandbox_status", status: "failed" });
+    this.reportSandboxError(result.data.error);
     return Response.json({ status: "ok" });
   }
 

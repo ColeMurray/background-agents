@@ -7,6 +7,7 @@ import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
 
 import httpx
 
@@ -69,12 +70,13 @@ class SandboxSupervisor:
 
     async def _report_fatal_error(self, message: str) -> None:
         self.log.error("supervisor.fatal", error_message=message)
-        if not self.config.control_plane_url:
+        if not self.config.control_plane_url or not self.config.session_id:
             return
         try:
+            session_id = quote(self.config.session_id, safe="")
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    f"{self.config.control_plane_url}/sandbox/{self.config.sandbox_id}/error",
+                    f"{self.config.control_plane_url.rstrip('/')}/sessions/{session_id}/sandbox-error",
                     json={"error": message, "fatal": True},
                     headers={"Authorization": f"Bearer {self.config.sandbox_token}"},
                     timeout=5.0,

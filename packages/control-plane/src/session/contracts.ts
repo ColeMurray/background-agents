@@ -21,6 +21,7 @@ export const SessionInternalPaths = {
   autofix: "/internal/autofix",
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
+  sandboxError: "/internal/sandbox-error",
   createMediaArtifact: "/internal/create-media-artifact",
   attachments: "/internal/attachments",
   participants: "/internal/participants",

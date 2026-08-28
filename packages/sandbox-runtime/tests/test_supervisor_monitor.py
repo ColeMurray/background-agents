@@ -19,6 +19,17 @@ def _make_supervisor() -> SandboxSupervisor:
     )
 
 
+def _make_reporting_supervisor() -> SandboxSupervisor:
+    return make_supervisor(
+        {
+            "SANDBOX_ID": "test-sandbox",
+            "CONTROL_PLANE_URL": "https://cp.example.com/",
+            "SANDBOX_AUTH_TOKEN": "tok",
+            "SESSION_CONFIG": '{"session_id":"session/one"}',
+        }
+    )
+
+
 def _fake_process(returncode: int | None) -> MagicMock:
     proc = MagicMock()
     proc.returncode = returncode
@@ -55,6 +66,32 @@ class TestBridgeGracefulShutdown:
         await supervisor.agent_bridge.stop()
 
         process.wait.assert_awaited_once()
+
+
+class TestFatalErrorHttpReporting:
+    async def test_posts_to_session_scoped_sandbox_error_endpoint(self):
+        supervisor = _make_reporting_supervisor()
+        client = AsyncMock()
+        client_context = AsyncMock()
+        client_context.__aenter__.return_value = client
+
+        with patch("sandbox_runtime.supervisor.httpx.AsyncClient", return_value=client_context):
+            await supervisor._report_fatal_error("Bridge repeatedly crashed")
+
+        client.post.assert_awaited_once_with(
+            "https://cp.example.com/sessions/session%2Fone/sandbox-error",
+            json={"error": "Bridge repeatedly crashed", "fatal": True},
+            headers={"Authorization": "Bearer tok"},
+            timeout=5.0,
+        )
+
+    async def test_skips_control_plane_report_without_session_id(self):
+        supervisor = _make_supervisor()
+
+        with patch("sandbox_runtime.supervisor.httpx.AsyncClient") as client:
+            await supervisor._report_fatal_error("Build failed")
+
+        client.assert_not_called()
 
 
 class TestBridgeCrashRestart:

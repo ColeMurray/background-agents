@@ -25,12 +25,14 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
   const artifactRepository = { createArtifact: vi.fn() } as unknown as ArtifactRepository;
   const processSandboxEvent = vi.fn();
   const getSandbox = vi.fn<() => SandboxRow | null>();
+  const updateSandboxStatus = vi.fn();
   const isValidSandboxToken = vi.fn();
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
   const refreshXaiToken = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
+  const reportSandboxError = vi.fn();
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
@@ -49,7 +51,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     repository as unknown as ParticipantRepository,
     artifactRepository,
     { getSession } as unknown as SessionCoreRepository,
-    { getSandbox } as unknown as SandboxRepository,
+    { getSandbox, updateSandboxStatus } as unknown as SandboxRepository,
     { processSandboxEvent } as unknown as SessionSandboxEventProcessor,
     messenger,
     managedSecretsConfigured,
@@ -57,6 +59,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,
+    reportSandboxError,
     generateId,
     now
   );
@@ -65,6 +68,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
   // repeating it at every invocation.
   const handler = {
     sandboxEvent: (request: Request) => sandboxHandler.sandboxEvent(request),
+    sandboxError: (request: Request) => sandboxHandler.sandboxError(request),
     createMediaArtifact: (request: Request) => sandboxHandler.createMediaArtifact(request),
     addParticipant: (request: Request) => sandboxHandler.addParticipant(request),
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
@@ -80,12 +84,14 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     artifactRepository,
     processSandboxEvent,
     getSandbox,
+    updateSandboxStatus,
     isValidSandboxToken,
     getSession,
     refreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     broadcast,
+    reportSandboxError,
     generateId,
     now,
     log,
@@ -113,6 +119,41 @@ describe("SandboxHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
     expect(processSandboxEvent).toHaveBeenCalledWith(event);
+  });
+
+  it("marks a sandbox failed and reports a fatal runtime error", async () => {
+    const { handler, getSandbox, updateSandboxStatus, broadcast, reportSandboxError } =
+      createHandler();
+    getSandbox.mockReturnValue({ id: "sandbox-1" } as SandboxRow);
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: "OpenCode repeatedly crashed", fatal: true }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSandboxStatus).toHaveBeenCalledWith("failed");
+    expect(broadcast).toHaveBeenCalledWith({ type: "sandbox_status", status: "failed" });
+    expect(reportSandboxError).toHaveBeenCalledWith("OpenCode repeatedly crashed");
+  });
+
+  it("rejects an empty sandbox error", async () => {
+    const { handler, updateSandboxStatus, reportSandboxError } = createHandler();
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: "" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(updateSandboxStatus).not.toHaveBeenCalled();
+    expect(reportSandboxError).not.toHaveBeenCalled();
   });
 
   it("rejects malformed sandbox events", async () => {

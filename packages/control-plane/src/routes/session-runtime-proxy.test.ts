@@ -88,6 +88,34 @@ describe("session runtime proxy routes", () => {
     expect(new URL(requests[0].url).search).toBe("?limit=10");
   });
 
+  it("forwards sandbox fatal errors to the session runtime", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "ok" });
+    });
+    const path = "/sessions/session-1/sandbox-error";
+    const { handler, match } = getHandler("POST", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: "Bridge repeatedly crashed", fatal: true }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.sandboxError);
+    await expect(requests[0].json()).resolves.toEqual({
+      error: "Bridge repeatedly crashed",
+      fatal: true,
+    });
+  });
+
   it("returns deduplicated canonical participant profiles with safe fields only", async () => {
     const fetch = vi.fn(async () =>
       Response.json({

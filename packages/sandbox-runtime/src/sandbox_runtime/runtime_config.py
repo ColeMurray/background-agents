@@ -124,6 +124,10 @@ class RuntimeConfig:
     def base_branch(self) -> str:
         return str(self.session_config.get("branch") or "main")
 
+    @property
+    def session_id(self) -> str:
+        return str(self.session_config.get("session_id") or "")
+
     def repository_config(self) -> RepositoryConfig:
         raw_repositories = self.session_config.get("repositories")
         repositories = (
@@ -164,12 +168,12 @@ class RuntimeConfig:
             sandbox_id=self.sandbox_id,
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
-            session_id=str(self.session_config.get("session_id") or ""),
+            session_id=self.session_id,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:
         return ManagedSkillsConfig(
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
-            session_id=str(self.session_config.get("session_id") or ""),
+            session_id=self.session_id,
         )

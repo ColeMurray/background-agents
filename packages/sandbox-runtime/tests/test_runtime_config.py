@@ -37,6 +37,7 @@ def test_runtime_config_parses_frozen_values_without_environment_patching(tmp_pa
     )
 
     assert config.repo_path == tmp_path / "repo"
+    assert config.session_id == "session-1"
     assert config.base_branch == "develop"
     assert config.has_repository is True
 
