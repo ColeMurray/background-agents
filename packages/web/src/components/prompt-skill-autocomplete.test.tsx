@@ -55,7 +55,7 @@ describe("PromptSkillTextarea", () => {
   it("filters and selects a skill with the keyboard", async () => {
     const user = userEvent.setup();
     render(<Harness />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     await user.type(input, "$re");
     expect(screen.getByRole("listbox", { name: "Managed skills" })).toBeInTheDocument();
@@ -63,7 +63,8 @@ describe("PromptSkillTextarea", () => {
     expect(screen.getAllByRole("option")[0]).toHaveAttribute("tabindex", "-1");
     expect(screen.getByTestId("prompt-skill-suggestions")).not.toHaveAttribute("role");
     expect(input).toHaveAttribute("aria-autocomplete", "list");
-    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(input).not.toHaveAttribute("aria-expanded");
+    expect(screen.getByRole("status")).toHaveTextContent("2 managed skill suggestions available.");
 
     await user.keyboard("{ArrowDown}{Enter}");
     expect(input).toHaveValue("$release-notes ");
@@ -74,7 +75,7 @@ describe("PromptSkillTextarea", () => {
   it("dismisses without changing the draft", async () => {
     const user = userEvent.setup();
     render(<Harness />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     await user.type(input, "/rev");
     await user.keyboard("{Escape}");
@@ -90,7 +91,7 @@ describe("PromptSkillTextarea", () => {
     const user = userEvent.setup();
     const onFallbackKeyDown = vi.fn();
     render(<Harness onFallbackKeyDown={onFallbackKeyDown} />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     await user.type(input, "$");
     await user.keyboard("{Control>}{Enter}{/Control}");
@@ -102,7 +103,7 @@ describe("PromptSkillTextarea", () => {
   it("shows explicit loading and no-match states above the composer", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<Harness loadState="loading" availableSkills={[]} />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     await user.type(input, "/");
     expect(screen.getByRole("listbox", { name: "Managed skills" })).toHaveAttribute(
@@ -110,21 +111,24 @@ describe("PromptSkillTextarea", () => {
       "true"
     );
     expect(screen.getByText("Loading managed skills...")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading managed skill suggestions.");
 
     rerender(<Harness availableSkills={[]} />);
     expect(screen.getByText("No managed skills match this session.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("No managed skill suggestions available.");
     expect(screen.getByTestId("prompt-skill-suggestions")).toHaveClass("bottom-full");
 
     rerender(<Harness loadState="error" availableSkills={[]} />);
     expect(
       screen.getByText("Managed skills could not be loaded. Try again shortly.")
     ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Managed skill suggestions unavailable.");
   });
 
   it("does not insert a completion beyond the prompt limit", async () => {
     const user = userEvent.setup();
     render(<Harness maxLength={5} />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     await user.type(input, "$r");
     await user.keyboard("{Enter}");
@@ -136,7 +140,7 @@ describe("PromptSkillTextarea", () => {
   it("selects with a pointer without blurring the textarea", async () => {
     const user = userEvent.setup();
     render(<Harness />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     await user.type(input, "/review");
     await user.pointer({
@@ -151,7 +155,7 @@ describe("PromptSkillTextarea", () => {
   it("selects the active completion with Tab", async () => {
     const user = userEvent.setup();
     render(<Harness />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     await user.type(input, "/rev");
     await user.keyboard("{Tab}");
@@ -163,7 +167,7 @@ describe("PromptSkillTextarea", () => {
   it("suppresses suggestions and selection while composing", async () => {
     const onFallbackKeyDown = vi.fn();
     render(<Harness onFallbackKeyDown={onFallbackKeyDown} />);
-    const input = screen.getByRole("combobox", { name: "Prompt" });
+    const input = screen.getByRole("textbox", { name: "Prompt" });
 
     fireEvent.focus(input);
     fireEvent.compositionStart(input);
