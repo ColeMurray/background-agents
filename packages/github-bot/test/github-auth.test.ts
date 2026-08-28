@@ -5,6 +5,7 @@ import {
   postReaction,
   postCommitStatus,
   checkSenderPermission,
+  getPullRequestApproval,
   GITHUB_API_REQUEST_TIMEOUT_MS,
 } from "../src/github-auth";
 
@@ -449,6 +450,171 @@ describe("checkSenderPermission", () => {
     timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
 
     await expect(resultPromise).resolves.toEqual({ hasPermission: false, error: true });
+    expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe("getPullRequestApproval", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function reviewsResponse(reviews: { login: string | null; state: string }[]): Response {
+    return new Response(
+      JSON.stringify(
+        reviews.map((r) => ({ user: r.login ? { login: r.login } : null, state: r.state }))
+      ),
+      { status: 200 }
+    );
+  }
+
+  it("reports an approval from a reviewer who has not changed their verdict", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      reviewsResponse([{ login: "alice", state: "APPROVED" }])
+    );
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: true,
+    });
+  });
+
+  it("reports no approval for a PR nobody has reviewed", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(reviewsResponse([]));
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: false,
+    });
+  });
+
+  it("lets a reviewer's later CHANGES_REQUESTED override their own earlier approval", async () => {
+    // GitHub keeps every review ever submitted, so an APPROVED row existing is not the same as
+    // the PR being approved.
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      reviewsResponse([
+        { login: "alice", state: "APPROVED" },
+        { login: "alice", state: "CHANGES_REQUESTED" },
+      ])
+    );
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: false,
+    });
+  });
+
+  it("does not let a COMMENTED review clear an earlier approval", async () => {
+    // GitHub itself treats a comment as leaving the approval standing.
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      reviewsResponse([
+        { login: "alice", state: "APPROVED" },
+        { login: "alice", state: "COMMENTED" },
+      ])
+    );
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: true,
+    });
+  });
+
+  it("treats a dismissed approval as withdrawn", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      reviewsResponse([{ login: "alice", state: "DISMISSED" }])
+    );
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: false,
+    });
+  });
+
+  it("still reports an approval when another reviewer requested changes", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      reviewsResponse([
+        { login: "alice", state: "APPROVED" },
+        { login: "bob", state: "CHANGES_REQUESTED" },
+      ])
+    );
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: true,
+    });
+  });
+
+  it("ignores a review whose author no longer exists", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      reviewsResponse([{ login: null, state: "APPROVED" }])
+    );
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: false,
+    });
+  });
+
+  it("walks past the first page so a late verdict is not missed", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({
+      login: `user${i}`,
+      state: "COMMENTED",
+    }));
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(reviewsResponse(firstPage))
+      .mockResolvedValueOnce(reviewsResponse([{ login: "alice", state: "APPROVED" }]));
+
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: true,
+      approved: true,
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(globalThis.fetch).mock.calls[1]?.[0]).toContain("page=2");
+  });
+
+  it("stops after a short page rather than paging forever", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      reviewsResponse([{ login: "alice", state: "APPROVED" }])
+    );
+    await getPullRequestApproval("tok", "acme", "widgets", 42);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports failure rather than a verdict when the API errors", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("Bad Gateway", { status: 502 }));
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: false,
+      error: "GitHub API returned 502",
+    });
+  });
+
+  it("reports failure on a malformed response", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ reviews: [] }), { status: 200 })
+    );
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: false,
+      error: "invalid response",
+    });
+  });
+
+  it("reports failure on a network error", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error("network error"));
+    await expect(getPullRequestApproval("tok", "acme", "widgets", 42)).resolves.toEqual({
+      ok: false,
+      error: "network error",
+    });
+  });
+
+  it("reports failure when a stalled lookup reaches its deadline", async () => {
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    stalledFetch();
+
+    const resultPromise = getPullRequestApproval("tok", "acme", "widgets", 42);
+    timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
+
+    await expect(resultPromise).resolves.toMatchObject({ ok: false });
     expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
   });
 });
