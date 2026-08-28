@@ -126,7 +126,7 @@ describe("SandboxPushService", () => {
 
       // The bridge's "no repository found" path emits push_error with no
       // branchName at all; it must reject the pending push instead of
-      // leaking it to the 360 s timeout.
+      // leaking it until PUSH_TIMEOUT_MS expires.
       h.service.settlePush({
         type: "push_error",
         error: "No repository found for push",
