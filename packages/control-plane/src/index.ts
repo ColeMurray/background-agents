@@ -23,6 +23,8 @@ import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
 import { Scheduler } from "./scheduler/scheduler";
 import { isAutofixQueue } from "./queue-routing";
+import { reapSupersededReviewSessions } from "./routes/github-reviews";
+import { createSessionRuntimeClient } from "./session/runtime-client";
 
 const logger = createLogger("worker");
 
@@ -73,10 +75,52 @@ export default {
       return;
     }
     ctx.waitUntil(checkAutofixQueueHealth(env, logger));
-    // The tick runs both the recovery sweep (orphaned/timed-out runs) and
-    // processes overdue automations.
-    // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: construct the scheduler's database dependency
-    await new Scheduler(env.DB, env, createCloudflareBackgroundTasks(ctx)).tick();
+    // The automation tick and review reaper must both run even when either
+    // fails. Defer propagation until both have had their turn so Cloudflare
+    // still records a failed cron invocation for observability.
+    let schedulerFailure: { error: unknown } | null = null;
+    try {
+      // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: construct the scheduler's database dependency
+      await new Scheduler(env.DB, env, createCloudflareBackgroundTasks(ctx)).tick();
+    } catch (error) {
+      schedulerFailure = { error };
+      logger.error("Scheduler tick failed", {
+        event: "scheduler.tick_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const requestId = crypto.randomUUID();
+    const cronCtx = {
+      request_id: requestId,
+      trace_id: requestId,
+      metrics: createRequestMetrics(),
+    };
+    let reaperFailure: { error: unknown } | null = null;
+    try {
+      // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: cron env.DB read
+      const db = instrumentD1(env.DB, cronCtx.metrics);
+      await reapSupersededReviewSessions(db, createSessionRuntimeClient(env, cronCtx));
+    } catch (error) {
+      reaperFailure = { error };
+      logger.error("Review reaper tick failed", {
+        event: "review_reaper.tick_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    logger.info("review_reaper.tick", {
+      event: "review_reaper.tick",
+      ...cronCtx.metrics.summarize(),
+    });
+
+    if (schedulerFailure && reaperFailure) {
+      throw new AggregateError(
+        [schedulerFailure.error, reaperFailure.error],
+        "Scheduler tick and review reaper failed"
+      );
+    }
+    if (schedulerFailure) throw schedulerFailure.error;
+    if (reaperFailure) throw reaperFailure.error;
   },
 
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {

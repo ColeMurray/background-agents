@@ -323,7 +323,7 @@ function RepoOverrideRow({
       </div>
 
       <div>
-        <p className="text-xs font-medium text-muted-foreground mb-1">Auto-review new PRs</p>
+        <p className="text-xs font-medium text-muted-foreground mb-1">Auto-review PR changes</p>
         <div className="flex items-center gap-2 mb-1">
           <Select value={autoReviewMode} onValueChange={handleAutoReviewModeChange}>
             <SelectTrigger density="compact" className="w-48">

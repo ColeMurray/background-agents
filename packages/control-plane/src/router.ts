@@ -47,6 +47,7 @@ import { skillRoutes } from "./routes/skills";
 import { keyboardShortcutRoutes } from "./routes/keyboard-shortcuts";
 import { sessionRoutes } from "./routes/sessions";
 import { modelProviderAccountRoutes } from "./routes/model-provider-accounts";
+import { githubReviewRoutes } from "./routes/github-reviews";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
 
@@ -368,6 +369,9 @@ export const routes: Route[] = [
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
+
+  // GitHub review-generation supersession (github-bot service auth)
+  ...githubReviewRoutes,
 ];
 
 /**

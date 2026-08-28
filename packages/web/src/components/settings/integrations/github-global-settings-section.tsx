@@ -225,9 +225,9 @@ export function GlobalSettingsSection({
         className="flex items-center justify-between px-4 py-3 border border-border hover:bg-muted/50 transition cursor-pointer mb-4 rounded-sm"
       >
         <div>
-          <span className="text-sm font-medium text-foreground">Auto-review new PRs</span>
+          <span className="text-sm font-medium text-foreground">Auto-review PR changes</span>
           <span className="text-sm text-muted-foreground ml-2">
-            Automatically review non-draft PRs when opened
+            Review non-draft PRs when opened, reopened, updated, or marked ready
           </span>
         </div>
         <Switch
