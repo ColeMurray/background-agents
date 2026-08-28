@@ -43,7 +43,7 @@ describe("useSandboxAccess", () => {
     );
   });
 
-  it.each([404, 409])("authoritatively clears credentials on status %s", async (status) => {
+  it.each([204, 404])("authoritatively clears credentials on status %s", async (status) => {
     mocks.browserApiFetch.mockResolvedValue(new Response(null, { status }));
     const { result } = renderHook(() => useSandboxAccess("session-1"), { wrapper });
     await waitFor(() => expect(result.current.sandboxAccess).toBeNull());

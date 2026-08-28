@@ -16,6 +16,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     `/sessions/${encodeURIComponent(id)}/sandbox-access`,
     { cache: "no-store" }
   );
+  if (response.status === 409) {
+    return new Response(null, {
+      status: 204,
+      headers: { "Cache-Control": "private, no-store", Vary: "Cookie" },
+    });
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

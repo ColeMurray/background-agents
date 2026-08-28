@@ -26,7 +26,7 @@ export function useSandboxAccess(sessionId: string) {
   const key: BrowserApiPath = `/api/sessions/${encodeURIComponent(sessionId)}/sandbox-access`;
   const { data, mutate } = useSWR<SandboxAccess | null>(key, async (url: BrowserApiPath) => {
     const response = await browserApiFetch(url, { cache: "no-store" });
-    if (response.status === 404 || response.status === 409) return null;
+    if (response.status === 204 || response.status === 404) return null;
     if (!response.ok) throw new Error(`Sandbox access failed with status ${response.status}`);
     return sandboxAccessSchema.parse(await response.json());
   });
