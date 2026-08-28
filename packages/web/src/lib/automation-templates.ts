@@ -95,7 +95,7 @@ export const automationTemplates: AutomationTemplate[] = [
     categories: ["popular", "security"],
     primaryOutput: "slack",
     setupNote:
-      "Posts to Slack — requires Slack agent notifications enabled and the bot invited to the channel.",
+      "Posts to Slack — requires Slack agent notifications enabled; private channels require the bot to be invited.",
     prefill: {
       name: "Scan codebase for vulnerabilities",
       triggerType: "schedule",
@@ -210,7 +210,7 @@ export const automationTemplates: AutomationTemplate[] = [
     categories: ["incidents"],
     primaryOutput: "slack",
     setupNote:
-      "Requires GitHub events for this repo and Slack agent notifications enabled with the bot in the channel.",
+      "Requires GitHub events for this repo and Slack agent notifications enabled; private channels require the bot to be invited.",
     prefill: {
       name: "Triage failed CI",
       triggerType: "github_event",
@@ -275,7 +275,7 @@ export const automationTemplates: AutomationTemplate[] = [
     categories: ["data-research"],
     primaryOutput: "slack",
     setupNote:
-      "Posts to Slack — requires Slack agent notifications enabled and the bot invited to the channel.",
+      "Posts to Slack — requires Slack agent notifications enabled; private channels require the bot to be invited.",
     prefill: {
       name: "Weekly dependency digest",
       triggerType: "schedule",

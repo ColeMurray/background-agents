@@ -188,9 +188,10 @@ unless the same verified email is also a linked GitHub identity.
 Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
-2. OAuth & Permissions → Add scopes: `app_mentions:read`, `chat:write`, `channels:history`,
-   `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`,
-   `files:write`, `reactions:write`
+2. OAuth & Permissions → Add scopes: `assistant:write`, `app_mentions:read`, `chat:write`,
+   `chat:write.public`, `channels:history`, `channels:read`, `groups:history`, `groups:read`,
+   `im:history`, `mpim:history`, `files:read`, `files:write`, `reactions:write`, `users:read`,
+   `users:read.email`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL
@@ -264,27 +265,36 @@ terraform apply
 
 After Terraform deployment, guide user:
 
+The user can apply `packages/slack-bot/slack-app-manifest.yaml` instead of configuring the following
+settings individually. Replace `SLACK_EVENTS_URL` with the worker's `/events` URL and
+`SLACK_INTERACTIONS_URL` with its `/interactions` URL first.
+
+### Enable Agents
+
+1. Agents → Enable the agent feature
+2. Set the agent description to `AI coding assistant for your codebase`
+
 ### Enable App Home
 
 1. App Home → Show Tabs → Enable **"Home Tab"**
-2. Save Changes
+2. Enable **"Messages Tab"** and allow users to send messages
+3. Save Changes
 
-The App Home provides a settings interface where users can configure their preferred Claude model.
+The App Home provides settings for users' preferred model, reasoning effort, and branch. The
+writable Messages tab lets users start direct-message sessions.
 
 ### Configure Event Subscriptions
 
-1. Event Subscriptions → Enable → Request URL:
-   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/events`
+1. Event Subscriptions → Enable → Request URL from `terraform output -raw slack_bot_events_url`
 2. Wait for "Verified" checkmark
-3. Subscribe to bot events: `app_home_opened`, `app_mention`, `message.im`
+3. Subscribe to bot events: `app_home_opened`, `app_mention`, `message.channels`, `message.groups`,
+   `message.im`, `message.mpim`
 
 ### Configure Interactivity
 
-4. Interactivity → Enable → Request URL:
-   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions`
-5. Select Menus → Options Load URL:
-   `https://open-inspect-slack-bot-{deployment_name}.{subdomain}.workers.dev/interactions` Required
-   for searchable Slack repository pickers that use external data sources.
+4. Interactivity → Enable → Request URL from `terraform output -raw slack_bot_interactions_url`
+5. Select Menus → Use the same URL for **Options Load URL**. This is required for searchable Slack
+   repository pickers that use external data sources.
 
 ### Invite Bot to Channels
 

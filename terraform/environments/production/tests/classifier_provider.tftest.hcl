@@ -85,6 +85,15 @@ run "anthropic_classifier_by_default" {
     error_message = "Both classifier bots must receive the configured classification model."
   }
 
+  assert {
+    condition = (
+      output.slack_bot_worker_url == "https://open-inspect-slack-bot-classifier-provider-test.test-account.workers.dev" &&
+      output.slack_bot_events_url == "https://open-inspect-slack-bot-classifier-provider-test.test-account.workers.dev/events" &&
+      output.slack_bot_interactions_url == "https://open-inspect-slack-bot-classifier-provider-test.test-account.workers.dev/interactions"
+    )
+    error_message = "Slack setup outputs must expose the worker, events, and interactions URLs."
+  }
+
   # Backwards compatibility: an Anthropic classifier reuses the deployment-wide
   # key, so an existing deployment needs no new variable.
   assert {

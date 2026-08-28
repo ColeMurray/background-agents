@@ -34,6 +34,21 @@ output "slack_bot_worker_name" {
   value       = var.enable_slack_bot ? module.slack_bot_worker[0].worker_name : null
 }
 
+output "slack_bot_worker_url" {
+  description = "Slack bot worker URL"
+  value       = var.enable_slack_bot ? module.slack_bot_worker[0].worker_url : null
+}
+
+output "slack_bot_events_url" {
+  description = "Slack Events API request URL"
+  value       = var.enable_slack_bot ? "${module.slack_bot_worker[0].worker_url}/events" : null
+}
+
+output "slack_bot_interactions_url" {
+  description = "Slack interactivity request and options load URL"
+  value       = var.enable_slack_bot ? "${module.slack_bot_worker[0].worker_url}/interactions" : null
+}
+
 output "linear_kv_id" {
   description = "Linear KV namespace ID"
   value       = var.enable_linear_bot ? module.linear_kv[0].namespace_id : null

@@ -43,6 +43,10 @@ describe("isDmDispatchable", () => {
     expect(isDmDispatchable(baseEvent)).toBe(true);
   });
 
+  it("returns true for a valid group DM event", () => {
+    expect(isDmDispatchable({ ...baseEvent, channel_type: "mpim", channel: "G12345" })).toBe(true);
+  });
+
   it("returns false when subtype is present (e.g. bot_message)", () => {
     expect(isDmDispatchable({ ...baseEvent, subtype: "bot_message" })).toBe(false);
   });
@@ -51,7 +55,7 @@ describe("isDmDispatchable", () => {
     expect(isDmDispatchable({ ...baseEvent, subtype: "message_changed" })).toBe(false);
   });
 
-  it("returns false for non-im channel type", () => {
+  it("returns false for non-DM channel type", () => {
     expect(isDmDispatchable({ ...baseEvent, channel_type: "channel" })).toBe(false);
   });
 

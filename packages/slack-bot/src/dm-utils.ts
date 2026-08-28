@@ -10,7 +10,7 @@ export function stripMentions(text: string): string {
 }
 
 /**
- * Returns true if a Slack message event should be dispatched as a DM.
+ * Returns true if a Slack message event should be dispatched as a direct or group-direct message.
  * Filters out subtypes (bot_message, message_changed, message_deleted, etc.)
  * to prevent processing bot replies and edit/delete notifications. Messages
  * with file uploads arrive as the `file_share` subtype and may carry no text,
@@ -34,7 +34,7 @@ export function isDmDispatchable(event: {
   return (
     event.type === "message" &&
     subtypeOk &&
-    event.channel_type === "im" &&
+    (event.channel_type === "im" || event.channel_type === "mpim") &&
     hasContent &&
     !!event.channel &&
     !!event.ts &&
@@ -63,7 +63,7 @@ function mentionsUser(text: string, userId: string): boolean {
  *   opens a thread invisible whenever it came with a file. Only its text
  *   triggers — the attachment is not forwarded to the session (matching
  *   automation thread replies).
- * - DM (`im`) and group-DM (`mpim`) channels — handled by the DM path
+ * - DM (`im`) and group-DM (`mpim`) channels — handled by the direct-message path
  * - messages from the bot itself
  * - messages that @mention the bot — those are explicit requests dispatched by
  *   the `app_mention` path; processing them here too would double-handle.

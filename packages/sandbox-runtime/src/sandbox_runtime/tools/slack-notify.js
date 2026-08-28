@@ -65,7 +65,7 @@ async function readErrorBody(response) {
 export default tool({
   name: "slack-notify",
   description:
-    "Post a message to a Slack channel that the user has authorized. Use this only when the user has explicitly asked you to notify Slack — this is an externally-visible action that other humans will see. The user must tell you which channel; do not guess. The bot must already be invited to the channel; if you get channel_not_found_or_forbidden, ask the user to invite the bot. Plain text + Slack mrkdwn formatting only (bold *...*, italic _..._, inline code `...`, fenced blocks, lists, blockquotes). The server attaches the attribution footer and View Session button — do not fabricate them.",
+    "Post a message to a Slack channel that the user has authorized. Use this only when the user has explicitly asked you to notify Slack — this is an externally-visible action that other humans will see. The user must tell you which channel; do not guess. The bot can post to public channels, but must be invited to private channels. If you get channel_not_found_or_forbidden, ask the user to verify the channel and invite the bot when it is private. Plain text + Slack mrkdwn formatting only (bold *...*, italic _..._, inline code `...`, fenced blocks, lists, blockquotes). The server attaches the attribution footer and View Session button — do not fabricate them.",
   args: {
     channel: z
       .string()
@@ -81,7 +81,7 @@ export default tool({
       .string()
       .optional()
       .describe(
-        "Optional Slack thread timestamp to reply within an existing thread. Same channel-membership rules apply."
+        "Optional Slack thread timestamp to reply within an existing thread. Private channels require bot membership."
       ),
     reason: z
       .string()
