@@ -7,6 +7,27 @@ export type TimelineVirtualRow =
   | { type: "loading"; id: string }
   | { type: "thinking"; id: string };
 
+export const TIMELINE_ROW_SIZE_ESTIMATES = {
+  status: 40,
+  terminal: 220,
+  group: 44,
+  assistantMessage: 180,
+  userMessage: 100,
+  artifact: 420,
+  default: 36,
+} as const;
+
+export const TIMELINE_VIRTUALIZER_DEFAULTS = {
+  overscan: 8,
+  gap: 8,
+  paddingStart: 12,
+  paddingEnd: 8,
+  anchorTo: "end",
+  followOnAppend: "auto",
+  scrollEndThreshold: 100,
+  useAnimationFrameWithResizeObserver: true,
+} as const;
+
 export function buildTimelineVirtualRows({
   items,
   pendingMessageIds,
@@ -48,19 +69,21 @@ export function buildTimelineVirtualRows({
 }
 
 export function estimateTimelineRowSize(row: TimelineVirtualRow): number {
-  if (row.type === "loading" || row.type === "thinking") return 40;
-  if (row.type === "terminal") return 220;
-  if (row.item.type !== "single") return 44;
+  if (row.type === "loading" || row.type === "thinking") {
+    return TIMELINE_ROW_SIZE_ESTIMATES.status;
+  }
+  if (row.type === "terminal") return TIMELINE_ROW_SIZE_ESTIMATES.terminal;
+  if (row.item.type !== "single") return TIMELINE_ROW_SIZE_ESTIMATES.group;
 
   switch (row.item.event.type) {
     case "token":
-      return 180;
+      return TIMELINE_ROW_SIZE_ESTIMATES.assistantMessage;
     case "user_message":
-      return 100;
+      return TIMELINE_ROW_SIZE_ESTIMATES.userMessage;
     case "artifact":
-      return 420;
+      return TIMELINE_ROW_SIZE_ESTIMATES.artifact;
     default:
-      return 36;
+      return TIMELINE_ROW_SIZE_ESTIMATES.default;
   }
 }
 

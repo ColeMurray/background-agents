@@ -28,6 +28,7 @@ import {
 import {
   buildTimelineVirtualRows,
   estimateTimelineRowSize,
+  TIMELINE_VIRTUALIZER_DEFAULTS,
   type TimelineVirtualRow,
 } from "@/lib/timeline-virtual-rows";
 import type { Artifact, SandboxEvent } from "@/types/session";
@@ -137,25 +138,20 @@ export function SessionTimeline({
     [virtualRows]
   );
   const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    ...TIMELINE_VIRTUALIZER_DEFAULTS,
     count: showSkeleton ? 0 : virtualRows.length,
     getScrollElement: () => scrollContainerRef.current,
     getItemKey: getVirtualRowKey,
     estimateSize: estimateVirtualRowSize,
-    overscan: 8,
-    gap: 8,
-    paddingStart: 12,
-    paddingEnd: 8,
-    anchorTo: "end",
-    followOnAppend: "auto",
-    scrollEndThreshold: 100,
-    useAnimationFrameWithResizeObserver: true,
   });
 
   const handleScroll = useCallback(() => {
     hasScrolledRef.current = true;
     const el = scrollContainerRef.current;
     if (el) {
-      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+      isNearBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight <
+        TIMELINE_VIRTUALIZER_DEFAULTS.scrollEndThreshold;
     }
   }, []);
 

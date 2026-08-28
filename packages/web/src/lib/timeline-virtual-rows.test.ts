@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
 import { buildTimelineItems, type SessionTimelineItem } from "./timeline-items";
-import { buildTimelineVirtualRows, estimateTimelineRowSize } from "./timeline-virtual-rows";
+import {
+  buildTimelineVirtualRows,
+  estimateTimelineRowSize,
+  TIMELINE_ROW_SIZE_ESTIMATES,
+} from "./timeline-virtual-rows";
 
 function single(event: SandboxEvent): SessionTimelineItem {
   return { type: "single", event, id: `${event.type}:${event.timestamp}` };
@@ -62,7 +66,7 @@ describe("buildTimelineVirtualRows", () => {
 
     expect(rows.map((row) => row.type)).toEqual(["loading", "terminal", "thinking"]);
     expect(rows[1]).toMatchObject({ type: "terminal", items });
-    expect(estimateTimelineRowSize(rows[1])).toBe(220);
+    expect(estimateTimelineRowSize(rows[1])).toBe(TIMELINE_ROW_SIZE_ESTIMATES.terminal);
   });
 });
 
