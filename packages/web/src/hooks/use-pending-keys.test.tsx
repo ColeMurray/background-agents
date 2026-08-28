@@ -37,6 +37,35 @@ describe("usePendingKeys", () => {
     expect(result.current.pending.has("k1")).toBe(false);
   });
 
+  it("keeps the key pending until the last overlapping action settles", async () => {
+    const { result } = renderHook(() => usePendingKeys());
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const secondGate = new Promise<void>((resolve) => (releaseSecond = resolve));
+
+    let firstRun!: Promise<void>;
+    let secondRun!: Promise<void>;
+    act(() => {
+      firstRun = result.current.run("k1", () => firstGate);
+      secondRun = result.current.run("k1", () => secondGate);
+    });
+
+    await act(async () => {
+      releaseFirst();
+      await firstRun;
+    });
+
+    expect(result.current.pending.has("k1")).toBe(true);
+
+    await act(async () => {
+      releaseSecond();
+      await secondRun;
+    });
+
+    expect(result.current.pending.has("k1")).toBe(false);
+  });
+
   it("tracks concurrent keys independently", async () => {
     const { result } = renderHook(() => usePendingKeys());
     let release!: () => void;
