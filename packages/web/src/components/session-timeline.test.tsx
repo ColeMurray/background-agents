@@ -26,6 +26,8 @@ function mockScrollIntoView() {
   });
 }
 beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
   vi.stubGlobal(
     "IntersectionObserver",
     class {
@@ -1178,5 +1180,21 @@ describe("task activity grouping", () => {
       false
     );
     consoleError.mockRestore();
+  });
+});
+
+describe("timeline virtualization", () => {
+  it("mounts only a bounded window for large histories", () => {
+    const events: SandboxEvent[] = Array.from({ length: 500 }, (_, index) => ({
+      type: "user_message",
+      content: `Message ${index}`,
+      messageId: `message-${index}`,
+      timestamp: index + 1,
+    }));
+
+    const { container } = render(<SessionTimeline {...baseTimelineProps} events={events} />);
+
+    expect(container.querySelectorAll("[data-index]").length).toBeLessThanOrEqual(20);
+    expect(container).not.toHaveTextContent("Message 250");
   });
 });

@@ -45,7 +45,7 @@ function groupFlatEvents(events: SandboxEvent[]): FlatTimelineItem[] {
     groups.push({
       type: "tool_group",
       events: tools,
-      id: `tools:${eventKey(tools[0])}`,
+      id: `tools:${eventKey(tools[tools.length - 1])}`,
     });
     tools = [];
   };

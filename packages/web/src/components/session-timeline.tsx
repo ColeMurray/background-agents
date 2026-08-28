@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { SessionWorkGroup } from "@/components/session-work-group";
@@ -24,6 +25,11 @@ import {
   type TimelineItem,
   type ToolCallEvent,
 } from "@/lib/timeline-items";
+import {
+  buildTimelineVirtualRows,
+  estimateTimelineRowSize,
+  type TimelineVirtualRow,
+} from "@/lib/timeline-virtual-rows";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
@@ -70,6 +76,7 @@ export function SessionTimeline({
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
+  const [expandedTaskSections, setExpandedTaskSections] = useState<Set<string>>(new Set());
   const latestTerminalMessageId = useMemo(() => {
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const event = events[index];
@@ -100,10 +107,49 @@ export function SessionTimeline({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
-  const isPrependingRef = useRef(false);
-  const didPrependRef = useRef(false);
-  const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
+  const virtualRows = useMemo(
+    () =>
+      buildTimelineVirtualRows({
+        items: timelineItems,
+        pendingMessageIds,
+        terminalMessageId: onMarkMessageRead ? latestTerminalMessageId : null,
+        terminalRange: onMarkMessageRead ? latestTerminalMessageGroupRange : null,
+        loadingHistory,
+        isProcessing,
+      }),
+    [
+      isProcessing,
+      latestTerminalMessageGroupRange,
+      latestTerminalMessageId,
+      loadingHistory,
+      onMarkMessageRead,
+      pendingMessageIds,
+      timelineItems,
+    ]
+  );
+  const getVirtualRowKey = useCallback(
+    (index: number) => virtualRows[index]?.id ?? index,
+    [virtualRows]
+  );
+  const estimateVirtualRowSize = useCallback(
+    (index: number) => estimateTimelineRowSize(virtualRows[index]),
+    [virtualRows]
+  );
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: showSkeleton ? 0 : virtualRows.length,
+    getScrollElement: () => scrollContainerRef.current,
+    getItemKey: getVirtualRowKey,
+    estimateSize: estimateVirtualRowSize,
+    overscan: 8,
+    gap: 8,
+    paddingStart: 12,
+    paddingEnd: 8,
+    anchorTo: "end",
+    followOnAppend: "auto",
+    scrollEndThreshold: 100,
+    useAnimationFrameWithResizeObserver: true,
+  });
 
   const handleScroll = useCallback(() => {
     hasScrolledRef.current = true;
@@ -125,8 +171,6 @@ export function SessionTimeline({
           hasScrolledRef.current &&
           container.scrollHeight > container.clientHeight
         ) {
-          prevScrollHeightRef.current = container.scrollHeight;
-          isPrependingRef.current = true;
           onLoadOlder();
         }
       },
@@ -138,19 +182,6 @@ export function SessionTimeline({
   }, [onLoadOlder]);
 
   useLayoutEffect(() => {
-    if (isPrependingRef.current && scrollContainerRef.current) {
-      const el = scrollContainerRef.current;
-      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
-      isPrependingRef.current = false;
-      didPrependRef.current = true;
-    }
-  }, [events]);
-
-  useLayoutEffect(() => {
-    if (didPrependRef.current) {
-      didPrependRef.current = false;
-      return;
-    }
     if (isNearBottomRef.current) {
       const container = scrollContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
@@ -189,6 +220,15 @@ export function SessionTimeline({
     });
   }, []);
 
+  const toggleTaskSection = useCallback((key: string) => {
+    setExpandedTaskSections((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   const renderFlatItem = (item: FlatTimelineItem): ReactNode => {
     if (item.type === "tool_group") {
       return (
@@ -223,7 +263,14 @@ export function SessionTimeline({
 
   const renderBaseTimelineItem = (item: TimelineItem): ReactNode =>
     item.type === "task_group" ? (
-      <TaskActivityItem key={item.id} event={item.event} hasActivity={item.activity.length > 0}>
+      <TaskActivityItem
+        key={item.id}
+        event={item.event}
+        hasActivity={item.activity.length > 0}
+        expansionKey={item.id}
+        expandedSections={expandedTaskSections}
+        onToggleSection={toggleTaskSection}
+      >
         {item.activity.map(renderFlatItem)}
       </TaskActivityItem>
     ) : (
@@ -244,6 +291,27 @@ export function SessionTimeline({
       renderBaseTimelineItem(item)
     );
 
+  const renderVirtualRow = (row: TimelineVirtualRow): ReactNode => {
+    switch (row.type) {
+      case "loading":
+        return <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>;
+      case "thinking":
+        return <ThinkingIndicator />;
+      case "terminal":
+        return (
+          <TerminalMessageReadObserver
+            messageId={row.messageId}
+            enabled={terminalMessageReadObservationEnabled}
+            onMarkMessageRead={onMarkMessageRead!}
+          >
+            {row.items.map(renderTimelineItem)}
+          </TerminalMessageReadObserver>
+        );
+      case "item":
+        return renderTimelineItem(row.item);
+    }
+  };
+
   return (
     <div
       ref={scrollContainerRef}
@@ -254,49 +322,31 @@ export function SessionTimeline({
       // ancestor overflow clip, and grow the page itself.
       className="relative h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
     >
-      <div className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
-        <div ref={topSentinelRef} className="h-1" />
-        {loadingHistory && (
-          <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
-        )}
+      <div className="w-full min-w-0 max-w-3xl mx-auto">
         {showSkeleton ? (
-          <TimelineSkeleton />
+          <>
+            <div ref={topSentinelRef} className="h-1" />
+            <TimelineSkeleton />
+          </>
         ) : (
-          timelineItems.map((item, index) => {
-            if (
-              latestTerminalMessageGroupRange &&
-              onMarkMessageRead &&
-              index === latestTerminalMessageGroupRange.start
-            ) {
+          <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+            <div ref={topSentinelRef} className="absolute left-0 top-0 h-1 w-full" />
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = virtualRows[virtualRow.index];
               return (
-                <TerminalMessageReadObserver
-                  key={`terminal-message-${latestTerminalMessageId}`}
-                  messageId={latestTerminalMessageId!}
-                  enabled={terminalMessageReadObservationEnabled}
-                  onMarkMessageRead={onMarkMessageRead}
+                <div
+                  key={virtualRow.key}
+                  ref={rowVirtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  className="absolute left-0 top-0 w-full"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
-                  {timelineItems
-                    .slice(
-                      latestTerminalMessageGroupRange.start,
-                      latestTerminalMessageGroupRange.end + 1
-                    )
-                    .map(renderTimelineItem)}
-                </TerminalMessageReadObserver>
+                  {renderVirtualRow(row)}
+                </div>
               );
-            }
-            if (
-              latestTerminalMessageGroupRange &&
-              onMarkMessageRead &&
-              index > latestTerminalMessageGroupRange.start &&
-              index <= latestTerminalMessageGroupRange.end
-            ) {
-              return null;
-            }
-            return renderTimelineItem(item);
-          })
+            })}
+          </div>
         )}
-        {isProcessing && <ThinkingIndicator />}
-        <div />
       </div>
     </div>
   );
