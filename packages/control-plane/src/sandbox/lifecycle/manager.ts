@@ -154,7 +154,7 @@ export interface SandboxStorage {
   /** Update last activity timestamp */
   updateSandboxLastActivity(timestamp: number): void;
   /** Record authenticated startup liveness for the current logical sandbox. */
-  recordBootProgress(sandboxId: string, timestamp: number): boolean;
+  recordStartupHeartbeat(sandboxId: string, timestamp: number): boolean;
   /** Fail startup only if identity, attempt, status, and liveness are unchanged. */
   failStartupIfUnchanged(sandboxId: string, createdAt: number, livenessAt: number): boolean;
   /** Increment circuit breaker failure count */
@@ -218,6 +218,7 @@ export interface SandboxLifecycleConfig {
   heartbeat: HeartbeatConfig;
   connectingTimeout: ConnectingTimeoutConfig;
   controlPlaneUrl: string;
+  earlySandboxConnection?: boolean;
   /** Default model ID used when the session has no model override. */
   model: string;
   /**
@@ -245,6 +246,17 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
   connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
 };
+
+function runtimeUserEnvVars(
+  userEnvVars: Record<string, string> | undefined,
+  earlySandboxConnection: boolean | undefined
+): Record<string, string> | undefined {
+  if (!userEnvVars && !earlySandboxConnection) return undefined;
+  const resolved = { ...userEnvVars };
+  delete resolved.EARLY_SANDBOX_CONNECTION;
+  if (earlySandboxConnection) resolved.EARLY_SANDBOX_CONNECTION = "1";
+  return resolved;
+}
 
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
@@ -303,6 +315,7 @@ export interface SlackAgentNotifyLookup {
  */
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
+  isSnapshotting(): boolean;
   updateLastActivity(timestamp: number): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
   reportSandboxError(reason: string): void;
@@ -583,7 +596,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         sandboxAuthToken,
         provider,
         model: modelId,
-        userEnvVars,
+        userEnvVars: runtimeUserEnvVars(userEnvVars, this.config.earlySandboxConnection),
         prebuiltImageId,
         prebuiltImageSha,
         timeoutSeconds,
@@ -906,7 +919,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repoName: session.repo_name,
         provider,
         model: modelId,
-        userEnvVars,
+        userEnvVars: runtimeUserEnvVars(userEnvVars, this.config.earlySandboxConnection),
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
@@ -1079,7 +1092,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Trigger a filesystem snapshot of the sandbox.
    */
-  async triggerSnapshot(reason: string): Promise<void> {
+  async triggerSnapshot(reason: string, processMessageQueue?: () => Promise<void>): Promise<void> {
     if (!this.provider.takeSnapshot) {
       this.log.debug("Provider does not support snapshots");
       return;
@@ -1157,6 +1170,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
       if (previousStatus === "ready") {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+        if (processMessageQueue && this.wsManager.getSandboxWebSocket()) {
+          await processMessageQueue();
+        }
       }
     }
   }
@@ -1389,6 +1405,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       return "sandbox_terminated";
     }
 
+    if (sandbox.last_heartbeat !== null) {
+      await this.alarmScheduler.schedule(sandbox.last_heartbeat + this.config.heartbeat.timeoutMs);
+    }
+
     // Evaluate inactivity timeout
     const connectedClients = this.getConnectedClientCount();
     const inactivityState = {
@@ -1532,8 +1552,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.storage.updateSandboxLastActivity(timestamp);
   }
 
-  async recordBootProgress(sandboxId: string, timestamp: number): Promise<boolean> {
-    if (!this.storage.recordBootProgress(sandboxId, timestamp)) return false;
+  async recordStartupHeartbeat(sandboxId: string, timestamp: number): Promise<boolean> {
+    if (!this.storage.recordStartupHeartbeat(sandboxId, timestamp)) return false;
     await this.alarmScheduler.schedule(timestamp + this.config.connectingTimeout.timeoutMs);
     return true;
   }
@@ -1679,6 +1699,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.broadcaster.broadcast({ type: "sandbox_status", status });
     // The bridge replaces this with its inactivity alarm when it connects.
     await this.alarmScheduler.schedule(createdAt + this.config.connectingTimeout.timeoutMs);
+  }
+
+  /**
+   * Check whether queue work must wait for the current snapshot to finish.
+   */
+  isSnapshotting(): boolean {
+    return this.storage.getSandbox()?.status === "snapshotting";
   }
 
   /**

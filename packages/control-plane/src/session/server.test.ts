@@ -274,7 +274,7 @@ describe("SessionServer", () => {
     });
   });
 
-  it("parses and routes sandbox events without exposing a socket type", async () => {
+  it("routes sandbox events with the actual sending socket", async () => {
     const { server, messageDeps, setConnectionKind } = createHarness();
     setConnectionKind("sandbox");
 
@@ -288,12 +288,15 @@ describe("SessionServer", () => {
       })
     );
 
-    expect(messageDeps.processSandboxEvent).toHaveBeenCalledWith({
-      type: "heartbeat",
-      sandboxId: "sandbox-1",
-      timestamp: 1000,
-      status: "ready",
-    });
+    expect(messageDeps.processSandboxEvent).toHaveBeenCalledWith(
+      {
+        type: "heartbeat",
+        sandboxId: "sandbox-1",
+        timestamp: 1000,
+        status: "ready",
+      },
+      "sandbox"
+    );
   });
 
   it("schedules sandbox reconnect checks and always reciprocates close", async () => {

@@ -35,7 +35,7 @@ export interface SessionWebSocketManager {
    * Accept a sandbox WebSocket, close any existing sandbox socket, and set
    * as the active sandbox connection.
    */
-  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean };
+  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId: string): { replaced: boolean };
 
   /** Parse a WebSocket's tags to determine its kind and identity. */
   classify(ws: WebSocket): ConnectionClassification;
@@ -45,6 +45,9 @@ export interface SessionWebSocketManager {
    * Validates sandbox ID against the repository during hibernation recovery.
    */
   getSandboxSocket(): WebSocket | null;
+
+  getExecutionSocket(): WebSocket | null;
+  isCurrentSandboxSocket(ws: WebSocket, sandboxId: string): boolean;
 
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
@@ -116,22 +119,19 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     this.ctx.acceptWebSocket(ws, [`wsid:${wsId}`]);
   }
 
-  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean } {
-    const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : [])];
-    this.ctx.acceptWebSocket(ws, tags);
-
+  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId: string): { replaced: boolean } {
     let replaced = false;
-    if (this.sandboxWs && this.sandboxWs !== ws) {
-      try {
-        if (this.sandboxWs.readyState === WebSocket.OPEN) {
-          this.sandboxWs.close(1000, "New sandbox connecting");
-          replaced = true;
-        }
-      } catch {
-        // Ignore errors closing old WebSocket
+    const existing = new Set(this.ctx.getWebSockets());
+    if (this.sandboxWs) existing.add(this.sandboxWs);
+    for (const candidate of existing) {
+      if (candidate === ws || this.classify(candidate).kind !== "sandbox") continue;
+      if (candidate.readyState === WebSocket.OPEN) {
+        this.close(candidate, 1000, "New sandbox connecting");
+        replaced = true;
       }
     }
 
+    this.ctx.acceptWebSocket(ws, ["sandbox", `sid:${sandboxId}`]);
     this.sandboxWs = ws;
     return { replaced };
   }
@@ -162,7 +162,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     // After inactivity timeout or heartbeat stale, the DO closes the WS and sets
     // status to stopped/stale, but the close handshake may not complete before
     // hibernation. On wake, the zombie WS still appears OPEN — skip it.
-    const terminalStatuses = ["stopped", "failed", "stale"];
+    const terminalStatuses = ["stopped", "stale"];
     if (sandbox && terminalStatuses.includes(sandbox.status)) {
       this.sandboxWs = null;
       // Close any lingering sandbox WebSockets so they don't persist
@@ -176,7 +176,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
 
     if (this.sandboxWs?.readyState === WebSocket.OPEN) {
-      return this.sandboxWs;
+      const parsed = this.classify(this.sandboxWs);
+      if (parsed.kind === "sandbox" && parsed.sandboxId === expectedSandboxId) {
+        return this.sandboxWs;
+      }
+      this.close(this.sandboxWs, 1000, "Sandbox identity changed");
+      this.sandboxWs = null;
     }
 
     // Hibernation recovery: scan all WebSockets, validate sandbox identity
@@ -200,6 +205,21 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
 
     return null;
+  }
+
+  getExecutionSocket(): WebSocket | null {
+    return this.sandboxRepository.getSandbox()?.status === "ready" ? this.getSandboxSocket() : null;
+  }
+
+  isCurrentSandboxSocket(ws: WebSocket, sandboxId: string): boolean {
+    const sandbox = this.sandboxRepository.getSandbox();
+    const parsed = this.classify(ws);
+    return (
+      this.getSandboxSocket() === ws &&
+      parsed.kind === "sandbox" &&
+      parsed.sandboxId === sandboxId &&
+      sandbox?.modal_sandbox_id === sandboxId
+    );
   }
 
   clearSandboxSocket(): void {

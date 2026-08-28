@@ -234,10 +234,10 @@ export class SandboxRepository {
     );
   }
 
-  recordBootProgress(sandboxId: string, timestamp: number): boolean {
+  recordStartupHeartbeat(sandboxId: string, timestamp: number): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET last_heartbeat = ?
-       WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting')`,
+      `UPDATE sandbox SET status = 'connecting', last_heartbeat = ?
+       WHERE modal_sandbox_id = ? AND status NOT IN ('snapshotting', 'stopped', 'stale')`,
       timestamp,
       sandboxId
     );

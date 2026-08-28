@@ -173,6 +173,8 @@ class AgentBridge:
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+    EXECUTION_HEALTH_POLL_INTERVAL_SECONDS = 0.5
+    EXECUTION_UNAVAILABLE_MESSAGE = "Sandbox execution is unavailable while booting"
 
     def __init__(
         self,
@@ -231,6 +233,9 @@ class AgentBridge:
         self.ws: ClientConnection | None = None
         self.shutdown_event = asyncio.Event()
         self.git_sync_complete = asyncio.Event()
+        self._ready_event_payload: dict[str, Any] | None = None
+        self._connection_ready_event = asyncio.Event()
+        self._send_lock = asyncio.Lock()
 
         # Session state
         self.opencode_session_id: str | None = None
@@ -285,8 +290,9 @@ class AgentBridge:
         url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
-    def _build_ready_event(self) -> dict[str, Any]:
-        repositories = load_repo_manifest(self.repo_manifest_path)
+    def _build_ready_event(self, repositories: list[Any] | None = None) -> dict[str, Any]:
+        if repositories is None:
+            repositories = load_repo_manifest(self.repo_manifest_path)
         # The image bakes SANDBOX_VERSION; reporting it lets the control plane
         # stamp snapshots with the runtime that produced them and retire the
         # ones a later compatibility floor rules out.
@@ -325,19 +331,25 @@ class AgentBridge:
         """
         self.log.info("bridge.run_start")
 
-        await self._load_session_id()
         reconnect_attempts = 0
         run_outcome = "shutdown"
-        signing_initialized = False
+        early_connection = os.environ.get("EARLY_SANDBOX_CONNECTION") == "1"
+        execution_task: asyncio.Task[None] | None = None
 
         try:
+            if early_connection:
+                execution_task = asyncio.create_task(self._initialize_execution())
+            else:
+                try:
+                    await self._initialize_execution()
+                except Exception:
+                    run_outcome = "fatal_error"
+                    raise
+
             while not self.shutdown_event.is_set():
                 run_outcome = "shutdown"
                 try:
-                    if not signing_initialized:
-                        await self.git_signing.initialize(None)
-                        signing_initialized = True
-                    await self._connect_and_run()
+                    await self._connect_and_run(execution_task)
                     if not self.shutdown_event.is_set():
                         run_outcome = "connection_closed"
                     reconnect_attempts = 0
@@ -348,6 +360,11 @@ class AgentBridge:
                 except websockets.ConnectionClosed:
                     run_outcome = "connection_closed"
                 except Exception as e:
+                    if execution_task is not None and execution_task.done():
+                        initialization_error = execution_task.exception()
+                        if initialization_error is not None:
+                            run_outcome = "fatal_error"
+                            raise initialization_error
                     error_str = str(e)
                     # Check for fatal HTTP errors that shouldn't trigger retry
                     if (
@@ -380,6 +397,13 @@ class AgentBridge:
                 await asyncio.sleep(delay)
 
         finally:
+            if execution_task is not None:
+                if not execution_task.done():
+                    execution_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await execution_task
+                elif not execution_task.cancelled():
+                    execution_task.exception()
             # Cancel any in-flight prompt task before closing resources
             if self._current_prompt_task and not self._current_prompt_task.done():
                 self._current_prompt_task.cancel()
@@ -455,7 +479,7 @@ class AgentBridge:
         ]
         return any(pattern in error_str for pattern in fatal_patterns)
 
-    async def _connect_and_run(self) -> None:
+    async def _connect_and_run(self, execution_task: asyncio.Task[None] | None = None) -> None:
         """Connect to control plane and handle messages.
 
         Raises:
@@ -475,8 +499,11 @@ class AgentBridge:
                 ping_timeout=10,
             ) as ws:
                 self.ws = ws
+                self._connection_ready_event.clear()
                 self._mark_connected()
                 heartbeat_task: asyncio.Task[None] | None = None
+                readiness_task: asyncio.Task[None] | None = None
+                receiver_task: asyncio.Task[None] | None = None
                 background_tasks: set[asyncio.Task[None]] = set()
 
                 try:
@@ -488,24 +515,31 @@ class AgentBridge:
                         reconnect_attempt_count=self._reconnect_attempt_count,
                     )
                     await self.event_forwarder.bind(ws)
-                    await self._send_event(self._build_ready_event())
-                    await self._drain_boot_warnings()
 
+                    if execution_task is None:
+                        await self._announce_ready(ws, None)
+                    else:
+                        readiness_task = asyncio.create_task(
+                            self._announce_ready(ws, execution_task)
+                        )
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-                    async for message in ws:
-                        if self.shutdown_event.is_set():
-                            break
+                    receiver_task = asyncio.create_task(
+                        self._receive_commands(ws, background_tasks)
+                    )
 
-                        try:
-                            cmd = json.loads(message)
-                            task = await self._handle_command(cmd)
-                            if task:
-                                background_tasks.add(task)
-                                task.add_done_callback(background_tasks.discard)
-                        except json.JSONDecodeError as e:
-                            self.log.warn("bridge.invalid_message", exc=e)
-                        except Exception as e:
-                            self.log.error("bridge.command_error", exc=e)
+                    if readiness_task is None:
+                        await receiver_task
+                    else:
+                        done, _pending = await asyncio.wait(
+                            {readiness_task, receiver_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if readiness_task in done:
+                            readiness_task.result()
+                            readiness_task = None
+                            await receiver_task
+                        else:
+                            receiver_task.result()
 
                 except websockets.ConnectionClosed as e:
                     self._log_disconnect(
@@ -518,8 +552,22 @@ class AgentBridge:
                 finally:
                     if heartbeat_task is not None:
                         heartbeat_task.cancel()
+                    if readiness_task is not None:
+                        readiness_task.cancel()
+                    if receiver_task is not None:
+                        receiver_task.cancel()
                     for task in background_tasks:
                         task.cancel()
+                    await asyncio.gather(
+                        *(
+                            task
+                            for task in (heartbeat_task, readiness_task, receiver_task)
+                            if task is not None
+                        ),
+                        *background_tasks,
+                        return_exceptions=True,
+                    )
+                    self._connection_ready_event.clear()
                     self.ws = None
                     self.event_forwarder.unbind()
                     if self._connected_at_monotonic is not None:
@@ -543,20 +591,81 @@ class AgentBridge:
                 ) from e
             raise
 
+    async def _receive_commands(
+        self,
+        ws: ClientConnection,
+        background_tasks: set[asyncio.Task[None]],
+    ) -> None:
+        async for message in ws:
+            if self.shutdown_event.is_set():
+                break
+
+            try:
+                cmd = json.loads(message)
+                task = await self._handle_command(cmd)
+                if task:
+                    background_tasks.add(task)
+                    task.add_done_callback(background_tasks.discard)
+            except json.JSONDecodeError as e:
+                self.log.warn("bridge.invalid_message", exc=e)
+            except Exception as e:
+                self.log.error("bridge.command_error", exc=e)
+
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
         while not self.shutdown_event.is_set():
-            await asyncio.sleep(self.HEARTBEAT_INTERVAL)
-
             if self.ws and self.ws.state == State.OPEN:
                 await self._send_event(
                     {
                         "type": "heartbeat",
                         "sandboxId": self.sandbox_id,
-                        "status": "ready",
+                        "status": "ready" if self._connection_ready_event.is_set() else "booting",
                         "timestamp": time.time(),
                     }
                 )
+            await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+
+    async def _initialize_execution(self) -> None:
+        while not self.shutdown_event.is_set():
+            if await self.opencode_client.is_healthy():
+                break
+            await asyncio.sleep(self.EXECUTION_HEALTH_POLL_INTERVAL_SECONDS)
+        if self.shutdown_event.is_set():
+            return
+
+        await self._load_session_id()
+        repositories = load_repo_manifest(self.repo_manifest_path)
+        while True:
+            try:
+                await self.git_signing.initialize(None)
+                break
+            except GitSigningError as error:
+                if not error.retryable:
+                    raise
+                await asyncio.sleep(self.RECONNECT_BACKOFF_BASE)
+
+        self._ready_event_payload = self._build_ready_event(repositories)
+
+    async def _announce_ready(
+        self,
+        ws: ClientConnection,
+        execution_task: asyncio.Task[None] | None,
+    ) -> None:
+        if execution_task is not None:
+            await asyncio.shield(execution_task)
+        if self.shutdown_event.is_set() or self._ready_event_payload is None:
+            raise RuntimeError("Execution initialization completed without a ready payload")
+        ready_event = {
+            **self._ready_event_payload,
+            "sandboxId": self.sandbox_id,
+            "timestamp": time.time(),
+        }
+        async with self._send_lock:
+            if self.ws is not ws or ws.state != State.OPEN:
+                raise RuntimeError("Connection closed before ready could be sent")
+            await ws.send(json.dumps(ready_event))
+        self._connection_ready_event.set()
+        await self._drain_boot_warnings()
 
     async def _drain_boot_warnings(self) -> None:
         """Forward supervisor boot warnings queued before the bridge existed.
@@ -570,7 +679,6 @@ class AgentBridge:
             return
         try:
             lines = path.read_text().splitlines()
-            path.unlink(missing_ok=True)
         except Exception as e:
             self.log.warn("bridge.boot_warnings_read_failed", exc=e)
             return
@@ -586,6 +694,7 @@ class AgentBridge:
             if not isinstance(entry, dict) or not entry.get("message"):
                 continue
             await self._send_event({"type": "warning", **entry})
+        path.unlink(missing_ok=True)
 
     async def _send_media_warning(self, message: str) -> None:
         """Surface non-fatal media handling failures to the user timeline."""
@@ -593,7 +702,8 @@ class AgentBridge:
 
     async def _send_event(self, event: dict[str, Any]) -> None:
         """Send event to control plane, buffering if WS is unavailable."""
-        await self.event_forwarder.send(event)
+        async with self._send_lock:
+            await self.event_forwarder.send(event)
 
     async def _handle_command(self, cmd: dict[str, Any]) -> asyncio.Task[None] | None:
         """Handle command from control plane.
@@ -605,6 +715,22 @@ class AgentBridge:
         """
         cmd_type = cmd.get("type")
         self.log.debug("bridge.command_received", cmd_type=cmd_type)
+
+        if not self._connection_ready_event.is_set() and cmd_type in {
+            "prompt",
+            "push",
+            "refresh_diff",
+            "snapshot",
+        }:
+            await self._send_event(
+                {
+                    "type": "error",
+                    "error": self.EXECUTION_UNAVAILABLE_MESSAGE,
+                    "commandType": cmd_type,
+                    **({"messageId": cmd["messageId"]} if cmd.get("messageId") else {}),
+                }
+            )
+            return None
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
@@ -840,6 +966,8 @@ class AgentBridge:
         if self._current_prompt_task and not self._current_prompt_task.done():
             self._current_prompt_task.cancel()
         self.shutdown_event.set()
+        if self.ws is not None:
+            await self.ws.close()
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
         """Handle push command using provider-generated push spec.

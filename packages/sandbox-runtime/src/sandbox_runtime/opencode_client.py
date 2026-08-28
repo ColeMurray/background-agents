@@ -94,6 +94,17 @@ class OpenCodeClient:
         )
         return response.status_code == 200
 
+    async def is_healthy(self) -> bool:
+        """Whether the local OpenCode server is accepting requests."""
+        try:
+            response = await self._client().get(
+                f"{self._base_url}/global/health",
+                timeout=2.0,
+            )
+            return response.status_code == 200
+        except httpx.HTTPError:
+            return False
+
     @asynccontextmanager
     async def events(
         self, *, inactivity_timeout_seconds: float

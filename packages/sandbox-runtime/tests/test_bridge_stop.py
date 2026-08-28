@@ -80,6 +80,7 @@ def bridge() -> AgentBridge:
         auth_token="test-token",
     )
     bridge.opencode_session_id = "oc-session-123"
+    bridge._connection_ready_event.set()
     wire_opencode_transport(bridge, MockHttpClient())
     return bridge
 

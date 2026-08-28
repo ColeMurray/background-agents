@@ -6,6 +6,7 @@ import {
   openSandboxWs,
   queryDO,
   seedSandboxAuth,
+  waitForSandboxStatus,
 } from "./helpers";
 
 const SANDBOX_TOKEN = "prompt-order-sandbox-token";
@@ -132,6 +133,14 @@ describe("POST /internal/prompt", () => {
     });
     expect(sandboxWs).not.toBeNull();
     sandboxWs!.accept();
+    sandboxWs!.send(
+      JSON.stringify({
+        type: "ready",
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1000,
+      })
+    );
+    await waitForSandboxStatus(stub, "ready");
 
     const enqueue = async (content: string) => {
       const response = await stub.fetch("http://internal/internal/prompt", {
@@ -195,6 +204,14 @@ describe("POST /internal/prompt", () => {
     });
     expect(sandboxWs).not.toBeNull();
     sandboxWs!.accept();
+    sandboxWs!.send(
+      JSON.stringify({
+        type: "ready",
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1000,
+      })
+    );
+    await waitForSandboxStatus(stub, "ready");
 
     const sandboxMessages = collectMessages(sandboxWs!, { timeoutMs: 500 });
     const enqueue = (content: string) =>

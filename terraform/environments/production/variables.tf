@@ -591,6 +591,12 @@ variable "sandbox_inactivity_timeout_ms" {
   default     = 600000
 }
 
+variable "early_sandbox_connection" {
+  description = "Temporarily connect sandbox runtimes before execution initialization completes."
+  type        = bool
+  default     = false
+}
+
 variable "web_platform" {
   description = "Platform for the web app deployment: 'vercel' or 'cloudflare' (OpenNext)"
   type        = string

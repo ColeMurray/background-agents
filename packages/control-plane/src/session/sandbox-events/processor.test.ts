@@ -35,6 +35,8 @@ function createProcessor() {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
+    updateSandboxStatus: vi.fn(),
+    getSandbox: vi.fn(() => ({ status: "connecting" })),
     recordReportedSandboxRuntimeVersion: vi.fn(),
     getProcessingMessage,
     addSessionCost: vi.fn(),
@@ -65,8 +67,12 @@ function createProcessor() {
     notifyComplete: vi.fn(async () => {}),
   };
 
+  const defaultSender = { readyState: WebSocket.OPEN } as WebSocket;
+  const getSandboxSocket = vi.fn(() => null as WebSocket | null);
   const wsManager = {
-    getSandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxSocket,
+    getExecutionSocket: vi.fn(() => getSandboxSocket()),
+    isCurrentSandboxSocket: vi.fn(() => true),
     send: vi.fn(() => true),
   };
 
@@ -77,6 +83,7 @@ function createProcessor() {
   const projectTerminalMessage = vi.fn(async () => {});
   const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
   const scheduleInactivityCheck = vi.fn(async () => {});
+  const scheduleDisconnectCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
@@ -131,14 +138,25 @@ function createProcessor() {
       eventRepository,
       messenger,
       diffService as unknown as SessionDiffService,
+      wsManager as unknown as SessionWebSocketManager,
       applySessionTitleUpdate,
-      updateLastActivity
+      updateLastActivity,
+      scheduleInactivityCheck,
+      processMessageQueue,
+      () => false,
+      scheduleDisconnectCheck
     ),
     pushService
   );
 
   return {
-    processor,
+    processor: {
+      processSandboxEvent: (event: SandboxEvent & { ackId?: string }, sender?: WebSocket | null) =>
+        processor.processSandboxEvent(
+          event,
+          sender === undefined ? (getSandboxSocket() ?? defaultSender) : sender
+        ),
+    },
     pushService,
     artifactRepository,
     repository,
@@ -151,6 +169,7 @@ function createProcessor() {
     projectTerminalMessage,
     statusService,
     scheduleInactivityCheck,
+    scheduleDisconnectCheck,
     processMessageQueue,
     broadcastPromptQueue,
     updateLastActivity,
@@ -210,6 +229,17 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
+  it("accepts a senderless heartbeat from authenticated HTTP ingestion", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent(
+      { type: "heartbeat", sandboxId: "sb-1", status: "booting", timestamp: 1000 },
+      null
+    );
+
+    expect(h.repository.updateSandboxHeartbeat).toHaveBeenCalledWith(expect.any(Number));
+  });
+
   it("applies session_title without storing a timeline event", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {
@@ -240,6 +270,82 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
 
     expect(h.diffService.pinBaselines).toHaveBeenCalledWith(event);
+  });
+
+  it("grants readiness, starts inactivity, and drains the queue for the captured sender", async () => {
+    const h = createProcessor();
+    const sender = { readyState: WebSocket.OPEN } as WebSocket;
+
+    await h.processor.processSandboxEvent(
+      { type: "ready", sandboxId: "sb-1", timestamp: 1000 },
+      sender
+    );
+
+    expect(h.wsManager.isCurrentSandboxSocket).toHaveBeenCalledWith(sender, "sb-1");
+    expect(h.repository.updateSandboxStatus).toHaveBeenCalledWith("ready");
+    expect(h.repository.updateSandboxHeartbeat).toHaveBeenCalledWith(expect.any(Number));
+    expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+    expect(h.scheduleDisconnectCheck).toHaveBeenCalledOnce();
+    expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+  });
+
+  it("ignores ready from a stale sender", async () => {
+    const h = createProcessor();
+    h.wsManager.isCurrentSandboxSocket.mockReturnValue(false);
+
+    await h.processor.processSandboxEvent(
+      { type: "ready", sandboxId: "sb-1", timestamp: 1000 },
+      {} as WebSocket
+    );
+
+    expect(h.repository.recordReportedSandboxRuntimeVersion).not.toHaveBeenCalled();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+  });
+
+  it("retries post-status ready work after a scheduling failure", async () => {
+    const h = createProcessor();
+    h.scheduleInactivityCheck.mockRejectedValueOnce(new Error("alarm unavailable"));
+    const sender = {} as WebSocket;
+    const event = { type: "ready", sandboxId: "sb-1", timestamp: 1000 } as const;
+
+    await expect(h.processor.processSandboxEvent(event, sender)).rejects.toThrow(
+      "alarm unavailable"
+    );
+    h.repository.getSandbox.mockReturnValue({ status: "ready" });
+    await h.processor.processSandboxEvent(event, sender);
+
+    expect(h.repository.updateSandboxStatus).toHaveBeenCalledWith("ready");
+    expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(2);
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+  });
+
+  it("preserves snapshotting and defers queue drain when a reconnect announces ready", async () => {
+    const h = createProcessor();
+    h.repository.getSandbox.mockReturnValue({ status: "snapshotting" });
+
+    await h.processor.processSandboxEvent(
+      { type: "ready", sandboxId: "sb-1", timestamp: 1000 },
+      {} as WebSocket
+    );
+
+    expect(h.repository.updateSandboxStatus).not.toHaveBeenCalled();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+    expect(h.scheduleInactivityCheck).not.toHaveBeenCalled();
+    expect(h.scheduleDisconnectCheck).toHaveBeenCalledOnce();
+  });
+
+  it("treats senderless ready as metadata-only", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent(
+      { type: "ready", sandboxId: "sb-1", timestamp: 1000 },
+      null
+    );
+
+    expect(h.diffService.pinBaselines).toHaveBeenCalledOnce();
+    expect(h.repository.updateSandboxStatus).not.toHaveBeenCalled();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
   });
 
   it("records the reported runtime version on ready", async () => {
@@ -851,6 +957,29 @@ describe("SessionSandboxEventProcessor", () => {
   });
 
   describe("ACK mechanism", () => {
+    it("returns a critical ACK to the captured sender after replacement", async () => {
+      const h = createProcessor();
+      const sender = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue({} as WebSocket);
+
+      await h.processor.processSandboxEvent(
+        {
+          type: "error",
+          messageId: "msg-stale",
+          error: "failed",
+          sandboxId: "sb-1",
+          timestamp: 1000,
+          ackId: "error:stale",
+        },
+        sender
+      );
+
+      expect(h.wsManager.send).toHaveBeenCalledWith(sender, {
+        type: "ack",
+        ackId: "error:stale",
+      });
+    });
+
     it("sends ACK after execution_complete when ackId is present", async () => {
       const h = createProcessor();
       const sandboxWs = {} as WebSocket;

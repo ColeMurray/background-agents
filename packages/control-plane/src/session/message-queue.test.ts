@@ -184,8 +184,10 @@ function buildQueue() {
     getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };
 
+  const getSandboxSocket = vi.fn(() => null as WebSocket | null);
   const wsManager = {
-    getSandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxSocket,
+    getExecutionSocket: vi.fn(() => getSandboxSocket()),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
   };
 
@@ -208,6 +210,7 @@ function buildQueue() {
   };
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
+    isSnapshotting: vi.fn(() => false),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
     reportSandboxError: vi.fn((_reason: string) => {}),
@@ -475,6 +478,75 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
     expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
+  });
+
+  it("keeps a prompt pending while a socketless sandbox is snapshotting", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.sandboxLifecycle.isSnapshotting.mockReturnValue(true);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+  });
+
+  it("leaves a prompt pending without spawning when only a control socket is attached", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.wsManager.getSandboxSocket.mockReturnValue({
+      readyState: WebSocket.OPEN,
+    } as WebSocket);
+    h.wsManager.getExecutionSocket.mockReturnValue(null);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.setAlarm).not.toHaveBeenCalled();
+    expect(h.getProviderAuthenticationError).not.toHaveBeenCalled();
+  });
+
+  it("recovers an expired stop confirmation before gating a control-only socket", async () => {
+    const h = buildQueue();
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: WebSocket.OPEN } as WebSocket);
+    h.wsManager.getExecutionSocket.mockReturnValue(null);
+    h.repository.getMessageAwaitingStopConfirmation
+      .mockReturnValueOnce({ id: "msg-stopped", deadline: Date.now() - 1 })
+      .mockReturnValueOnce({ id: "msg-stopped", deadline: Date.now() - 1 })
+      .mockReturnValue(null);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "stop_confirmation_timeout"
+    );
+  });
+
+  it("re-reads sandbox sockets after provider auth validation", async () => {
+    const h = buildQueue();
+    const staleSocket = { readyState: WebSocket.OPEN } as WebSocket;
+    let resolveAuth!: () => void;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.wsManager.getSandboxSocket.mockReturnValue(staleSocket);
+    h.wsManager.getExecutionSocket.mockReturnValue(staleSocket);
+    h.getProviderAuthenticationError.mockImplementation(
+      () =>
+        new Promise<null>((resolve) => {
+          resolveAuth = () => resolve(null);
+        })
+    );
+
+    const processing = h.queue.processMessageQueue();
+    await vi.waitFor(() => expect(h.getProviderAuthenticationError).toHaveBeenCalledOnce());
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: WebSocket.OPEN } as WebSocket);
+    h.wsManager.getExecutionSocket.mockReturnValue(null);
+    resolveAuth();
+    await processing;
+
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
   });
 
   it.each(["cancelled", "archived"] as const)(
@@ -809,6 +881,7 @@ describe("SessionMessageQueue", () => {
     const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.wsManager.getExecutionSocket.mockReturnValue(sandboxWs);
 
     await h.queue.processMessageQueue();
 
@@ -840,7 +913,9 @@ describe("SessionMessageQueue", () => {
     h.repository.getNextPendingMessage.mockReturnValue(
       createMessage({ source: "github", origin_context: JSON.stringify(origin) })
     );
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.wsManager.getExecutionSocket.mockReturnValue(sandboxWs);
 
     await h.queue.processMessageQueue();
 
@@ -895,6 +970,7 @@ describe("SessionMessageQueue", () => {
       model === "xai/grok-4.5" ? "No xAI authentication is configured" : null
     );
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.wsManager.getExecutionSocket.mockReturnValue(sandboxWs);
 
     await h.queue.processMessageQueue();
 

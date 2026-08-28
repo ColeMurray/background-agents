@@ -67,7 +67,6 @@ export class SandboxHandler {
       sandbox: SandboxRow | null
     ) => Promise<boolean>,
     private readonly generateId: () => string,
-    private readonly recordBootProgress: (sandboxId: string, timestamp: number) => Promise<boolean>,
     private readonly now: () => number = Date.now
   ) {}
 
@@ -232,24 +231,6 @@ export class SandboxHandler {
 
     log.info("Sandbox token verified successfully");
     return Response.json({ valid: true }, { status: 200 });
-  }
-
-  async bootProgress(request: Request): Promise<Response> {
-    let raw: unknown;
-    try {
-      raw = await request.json();
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-    const sandboxId =
-      raw && typeof raw === "object" && "sandboxId" in raw ? raw.sandboxId : undefined;
-    if (typeof sandboxId !== "string" || !sandboxId) {
-      return Response.json({ error: "sandboxId is required" }, { status: 400 });
-    }
-
-    return (await this.recordBootProgress(sandboxId, this.now()))
-      ? Response.json({ status: "ok" })
-      : Response.json({ error: "Sandbox is not booting" }, { status: 409 });
   }
 
   async openaiTokenRefresh(log: Logger): Promise<Response> {

@@ -371,6 +371,12 @@ export class SessionMessageQueue {
       return;
     }
 
+    const initialControlSocket = this.wsManager.getSandboxSocket();
+    if (initialControlSocket && !this.wsManager.getExecutionSocket()) {
+      this.log.debug("processMessageQueue: sandbox execution not ready");
+      return;
+    }
+
     const message = this.messageRepository.getNextPendingMessage();
     if (!message) {
       return;
@@ -392,8 +398,12 @@ export class SessionMessageQueue {
       return;
     }
 
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (!sandboxWs) {
+    const controlSocket = this.wsManager.getSandboxSocket();
+    if (!controlSocket) {
+      if (this.sandboxLifecycle.isSnapshotting()) {
+        this.log.debug("processMessageQueue: sandbox snapshot in progress");
+        return;
+      }
       this.log.info("prompt.dispatch", {
         event: "prompt.dispatch",
         message_id: message.id,
@@ -422,6 +432,11 @@ export class SessionMessageQueue {
           context: { message_id: message.id },
         }
       );
+      return;
+    }
+    const sandboxWs = this.wsManager.getExecutionSocket();
+    if (!sandboxWs) {
+      this.log.debug("processMessageQueue: sandbox execution not ready");
       return;
     }
 

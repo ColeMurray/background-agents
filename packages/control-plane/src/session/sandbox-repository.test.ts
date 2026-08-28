@@ -230,11 +230,12 @@ describe("SandboxRepository", () => {
     });
   });
 
-  describe("recordBootProgress", () => {
-    it("records liveness only for the current booting sandbox identity", () => {
-      repository.recordBootProgress("sandbox-current", 5000);
+  describe("recordStartupHeartbeat", () => {
+    it("atomically records connecting liveness for an admissible sandbox identity", () => {
+      repository.recordStartupHeartbeat("sandbox-current", 5000);
 
-      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
+      expect(mock.calls[0].query).toContain("SET status = 'connecting', last_heartbeat = ?");
+      expect(mock.calls[0].query).toContain("status NOT IN ('snapshotting', 'stopped', 'stale')");
       expect(mock.calls[0].query).toContain("modal_sandbox_id = ?");
       expect(mock.calls[0].params).toEqual([5000, "sandbox-current"]);
     });

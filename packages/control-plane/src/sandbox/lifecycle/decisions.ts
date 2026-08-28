@@ -583,7 +583,7 @@ export interface ConnectingTimeoutResult {
  *
  * @param status - Current sandbox status
  * @param createdAt - Timestamp (ms) when the sandbox was spawned
- * @param lastHeartbeat - Latest authenticated boot-progress receipt time
+ * @param lastHeartbeat - Latest authenticated startup heartbeat receipt time
  * @param config - Connecting timeout configuration
  * @param now - Current timestamp (ms)
  * @returns Current timeout state and deadline

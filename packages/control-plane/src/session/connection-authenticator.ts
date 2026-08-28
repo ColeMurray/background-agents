@@ -11,8 +11,6 @@ import { isValidSandboxToken } from "./sandbox-access";
 import { resolveParticipantName } from "./participant-name";
 import { getAvatarUrl, type ParticipantService } from "./participant-service";
 import type { PresenceService } from "./presence-service";
-import type { SessionMessageQueue } from "./message-queue";
-import type { SessionMessenger } from "./messenger";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
@@ -30,9 +28,7 @@ export interface SessionConnectionAuthenticatorDeps {
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
   lifecycleManager: SandboxLifecycleManager;
-  messenger: SessionMessenger;
   backgroundTasks: BackgroundTasks;
-  messageQueue: Pick<SessionMessageQueue, "processMessageQueue">;
   participantService: ParticipantService;
   presenceService: PresenceService;
   snapshotReader: SessionSnapshotReader;
@@ -60,9 +56,7 @@ export class SessionConnectionAuthenticator {
       sessionCoreRepository,
       sandboxRepository,
       lifecycleManager,
-      messenger,
       backgroundTasks,
-      messageQueue,
     } = this.deps;
     log.debug("WebSocket upgrade requested");
     const isSandbox = url.searchParams.get("type") === "sandbox";
@@ -81,7 +75,7 @@ export class SessionConnectionAuthenticator {
       const expectedSandboxId = sandbox?.modal_sandbox_id;
 
       // Validate sandbox ID first (catches stale sandboxes reconnecting after restore)
-      if (expectedSandboxId && sandboxId !== expectedSandboxId) {
+      if (!expectedSandboxId || sandboxId !== expectedSandboxId) {
         log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
@@ -142,6 +136,19 @@ export class SessionConnectionAuthenticator {
         });
         return new Response("Sandbox is stopped", { status: 410 });
       }
+      if (currentSandbox?.status === "snapshotting") {
+        log.info("ws.connect", {
+          event: "ws.connect",
+          ws_type: "sandbox",
+          outcome: "rejected",
+          reject_reason: "sandbox_snapshotting",
+          duration_ms: Date.now() - wsStartTime,
+        });
+        return new Response("Sandbox snapshot is in progress", {
+          status: 503,
+          headers: { "Retry-After": "1" },
+        });
+      }
       if (
         currentSandbox?.modal_sandbox_id !== expectedSandboxId ||
         currentSandbox?.auth_token_hash !== sandbox?.auth_token_hash ||
@@ -160,25 +167,13 @@ export class SessionConnectionAuthenticator {
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
       if (isSandbox) {
-        // The lifecycle manager publishes access after any pending provider
-        // startup has persisted its URLs and credentials.
-        const accessIsPersisted = !lifecycleManager.isProviderStartupPending();
-        const { replaced } = wsManager.acceptAndSetSandboxSocket(server, sandboxId ?? undefined);
+        const now = Date.now();
+        if (!(await lifecycleManager.recordStartupHeartbeat(sandboxId!, now))) {
+          return new Response("Forbidden: Sandbox credentials changed", { status: 403 });
+        }
+        const { replaced } = wsManager.acceptAndSetSandboxSocket(server, sandboxId!);
         // Notify manager that sandbox connected so it can reset the spawning flag
         lifecycleManager.onSandboxConnected();
-        sandboxRepository.updateSandboxStatus("ready");
-        messenger.broadcast({ type: "sandbox_status", status: "ready" });
-        if (accessIsPersisted) {
-          messenger.broadcast({ type: "sandbox_access_changed" });
-        }
-
-        // Set initial activity timestamp and schedule inactivity check
-        // IMPORTANT: Must await to ensure alarm is scheduled before returning
-        const now = Date.now();
-        lifecycleManager.updateLastActivity(now);
-        sandboxRepository.updateSandboxHeartbeat(now);
-        await lifecycleManager.scheduleInactivityCheck();
-
         log.info("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
@@ -186,11 +181,6 @@ export class SessionConnectionAuthenticator {
           sandbox_id: sandboxId,
           replaced_existing: replaced,
           duration_ms: Date.now() - now,
-        });
-
-        // Process any pending messages now that sandbox is connected
-        backgroundTasks.submit(() => messageQueue.processMessageQueue(), {
-          name: "message_queue.process",
         });
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
