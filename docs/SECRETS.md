@@ -196,16 +196,18 @@ from it, even after you rotate the secret. Two guidelines:
 
 ## Common Examples
 
-| Key                 | Scope  | Purpose                                                      |
-| ------------------- | ------ | ------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY` | Global | Claude API access (required for Daytona or Vercel sandboxes) |
-| `OPENAI_API_KEY`    | Global | OpenAI API access when a session selects API-key mode        |
-| `XAI_API_KEY`       | Global | xAI API access when a session selects API-key mode           |
-| `DEEPSEEK_API_KEY`  | Global | DeepSeek API access                                          |
-| `ZHIPU_API_KEY`     | Global | Z.AI Coding Plan GLM access                                  |
-| `DATABASE_URL`      | Repo   | Database connection string                                   |
-| `AWS_ACCESS_KEY_ID` | Repo   | AWS credentials for a specific project                       |
-| `STRIPE_SECRET_KEY` | Repo   | Stripe API key for a specific project                        |
+| Key                               | Scope  | Purpose                                                                                                                                |
+| --------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`               | Global | Claude API access (required for Daytona or Vercel sandboxes)                                                                           |
+| `OPENAI_API_KEY`                  | Global | OpenAI API access when a session selects API-key mode                                                                                  |
+| `XAI_API_KEY`                     | Global | xAI API access when a session selects API-key mode                                                                                     |
+| `DEEPSEEK_API_KEY`                | Global | DeepSeek API access                                                                                                                    |
+| `ZHIPU_API_KEY`                   | Global | Z.AI Coding Plan GLM access                                                                                                            |
+| `OPENAI_API_KEY_FALLBACK`         | Any    | Spillover once the ChatGPT subscription reaches its ceiling ([guide](OPENAI_MODELS.md#spilling-over-before-the-subscription-runs-out)) |
+| `OPENAI_SUBSCRIPTION_MAX_PERCENT` | Any    | Share of a Codex rate-limit window sandboxes may consume (default 100)                                                                 |
+| `DATABASE_URL`                    | Repo   | Database connection string                                                                                                             |
+| `AWS_ACCESS_KEY_ID`               | Repo   | AWS credentials for a specific project                                                                                                 |
+| `STRIPE_SECRET_KEY`               | Repo   | Stripe API key for a specific project                                                                                                  |
 
 ---
 
