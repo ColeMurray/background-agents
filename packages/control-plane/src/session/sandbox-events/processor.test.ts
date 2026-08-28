@@ -592,6 +592,44 @@ describe("SessionSandboxEventProcessor", () => {
     );
   });
 
+  it("fails a push immediately when the command cannot be delivered", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createProcessor();
+      const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+      h.wsManager.send.mockReturnValue(false);
+
+      let result: Awaited<ReturnType<typeof h.pushService.pushBranchToRemote>> | undefined;
+      void h.pushService
+        .pushBranchToRemote(createPushSpec("acme", "web", "feature/test"))
+        .then((pushResult) => {
+          result = pushResult;
+        });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining("Failed to deliver push command to sandbox"),
+      });
+      expect(vi.getTimerCount()).toBe(0);
+
+      h.pushService.settlePush({
+        type: "push_complete",
+        branchName: "feature/test",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1000,
+      });
+      expect(h.log.warn).toHaveBeenCalledWith(
+        "Push event matched no pending resolver",
+        expect.objectContaining({ pending_resolvers: [] })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   describe("push resolver keying", () => {
     function connectSandbox(h: ReturnType<typeof createProcessor>) {
       const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
