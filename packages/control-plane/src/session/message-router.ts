@@ -44,7 +44,7 @@ export interface SessionMessageRouterDeps<Connection, Client extends ConnectedCl
   log: Logger;
   sockets: SocketRegistry<Connection, Client>;
   clientCommands: SessionClientCommands<Connection, Client>;
-  processSandboxEvent: (event: SandboxEvent) => Promise<void>;
+  processSandboxEvent: (event: SandboxEvent, sender: Connection) => Promise<void>;
   clock: Clock;
 }
 
@@ -72,15 +72,15 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
       this.deps.sockets.close(connection, 1000, "Sandbox socket replaced");
       return;
     }
-    await this.handleSandboxMessage(message);
+    await this.handleSandboxMessage(connection, message);
   }
 
-  private async handleSandboxMessage(message: string): Promise<void> {
+  private async handleSandboxMessage(connection: Connection, message: string): Promise<void> {
     const parsed = this.parseMessage(message, "sandbox", sandboxEventSchema);
     if (!parsed.valid) return;
 
     try {
-      await this.deps.processSandboxEvent(parsed.data);
+      await this.deps.processSandboxEvent(parsed.data, connection);
     } catch (error) {
       this.deps.log.error("Error processing sandbox message", {
         error: error instanceof Error ? error : String(error),

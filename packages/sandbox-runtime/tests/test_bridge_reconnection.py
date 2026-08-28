@@ -97,7 +97,7 @@ class TestIsFatalConnectionError:
             lambda *_args, **_kwargs: ConnectionContext(ws),
         )
         bridge.log = MagicMock()
-        bridge._send_event = AsyncMock(side_effect=asyncio.CancelledError)
+        bridge.event_forwarder.bind = AsyncMock(side_effect=asyncio.CancelledError)
 
         with pytest.raises(asyncio.CancelledError):
             await bridge._connect_and_run()
@@ -118,7 +118,7 @@ class TestIsFatalConnectionError:
     async def test_run_complete_does_not_retain_transient_outcome(self, bridge, monkeypatch):
         attempts = 0
 
-        async def connect_and_run():
+        async def connect_and_run(*_args):
             nonlocal attempts
             attempts += 1
             if attempts == 1:
@@ -126,8 +126,7 @@ class TestIsFatalConnectionError:
             bridge.shutdown_event.set()
 
         bridge.log = MagicMock()
-        bridge.git_signing.initialize = AsyncMock()
-        bridge._load_session_id = AsyncMock()
+        bridge._initialize_execution = AsyncMock()
         bridge._connect_and_run = connect_and_run
         monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", AsyncMock())
 
@@ -143,11 +142,11 @@ class TestIsFatalConnectionError:
         )
 
     @pytest.mark.asyncio
-    async def test_run_retries_signing_initialization_before_connecting(self, bridge, monkeypatch):
-        async def connect_and_run():
-            bridge.shutdown_event.set()
-
+    async def test_execution_initialization_retries_retryable_signing_failure(
+        self, bridge, monkeypatch
+    ):
         bridge.log = MagicMock()
+        bridge.opencode_client.is_healthy = AsyncMock(return_value=True)
         bridge.git_signing.initialize = AsyncMock(
             side_effect=[
                 GitSigningError("Commit signing configuration unavailable", retryable=True),
@@ -155,60 +154,54 @@ class TestIsFatalConnectionError:
             ]
         )
         bridge._load_session_id = AsyncMock()
-        bridge._connect_and_run = AsyncMock(side_effect=connect_and_run)
+        bridge._build_ready_event = MagicMock(return_value={"type": "ready"})
         sleep = AsyncMock()
         monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
 
-        await bridge.run()
+        await bridge._initialize_execution()
 
         assert bridge.git_signing.initialize.await_count == 2
-        bridge._connect_and_run.assert_awaited_once()
         sleep.assert_awaited_once_with(bridge.RECONNECT_BACKOFF_BASE)
+        assert bridge._ready_event_payload is not None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", [401, 403, 404, 410])
-    async def test_run_exits_on_terminal_signing_configuration_status(
+    async def test_execution_initialization_exits_on_terminal_signing_configuration_status(
         self, bridge, monkeypatch, status
     ):
         bridge.log = MagicMock()
+        bridge.opencode_client.is_healthy = AsyncMock(return_value=True)
         bridge.git_signing.initialize = AsyncMock(
             side_effect=GitSigningError(
                 "Commit signing configuration unavailable", status_code=status
             )
         )
         bridge._load_session_id = AsyncMock()
-        bridge._connect_and_run = AsyncMock()
         sleep = AsyncMock()
         monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
 
-        await bridge.run()
+        with pytest.raises(GitSigningError):
+            await bridge._initialize_execution()
 
-        bridge._connect_and_run.assert_not_awaited()
         sleep.assert_not_awaited()
-        assert bridge.shutdown_event.is_set()
-        bridge.log.info.assert_any_call(
-            "bridge.run_complete",
-            outcome="fatal_error",
-            connection_count=0,
-            reconnect_count=0,
-            reconnect_attempt_count=0,
-            total_connected_duration_seconds=0.0,
-        )
+        assert bridge._ready_event_payload is None
 
     @pytest.mark.asyncio
-    async def test_run_exits_on_nonretryable_payload_failure(self, bridge, monkeypatch):
+    async def test_execution_initialization_exits_on_nonretryable_payload_failure(
+        self, bridge, monkeypatch
+    ):
         bridge.log = MagicMock()
+        bridge.opencode_client.is_healthy = AsyncMock(return_value=True)
         bridge.git_signing.initialize = AsyncMock(
             side_effect=GitSigningError("Invalid commit signing configuration")
         )
         bridge._load_session_id = AsyncMock()
-        bridge._connect_and_run = AsyncMock()
         sleep = AsyncMock()
         monkeypatch.setattr("sandbox_runtime.bridge.asyncio.sleep", sleep)
 
-        await bridge.run()
+        with pytest.raises(GitSigningError):
+            await bridge._initialize_execution()
 
-        bridge._connect_and_run.assert_not_awaited()
         sleep.assert_not_awaited()
 
 

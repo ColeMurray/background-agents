@@ -311,21 +311,6 @@ const LIFECYCLE = admit({
 
 export const sessionRuntimeProxyRoutes = new Hono<ControlPlaneHonoEnv>();
 
-sessionRuntimeProxyRoutes.post(
-  "/sessions/:id/boot-progress",
-  admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
-  (c) =>
-    dispatchSession(c, async (request, _env, params, ctx) => {
-      const body = await parseJsonBody(request);
-      if (body instanceof Response) return body;
-      return ctx.sessionRuntime.fetch(params.id, SessionInternalPaths.bootProgress, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    })
-);
-
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/sandbox-access",
   admit({

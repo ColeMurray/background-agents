@@ -15,7 +15,7 @@ function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boo
         fn(clientB);
       }
     ),
-    getSandboxSocket: vi.fn(() => sandbox),
+    getExecutionSocket: vi.fn(() => sandbox),
     send: vi.fn(() => overrides.sendResult ?? true),
   };
   return { messenger: new SessionMessengerImpl(wsManager), wsManager, clientA, clientB, sandbox };

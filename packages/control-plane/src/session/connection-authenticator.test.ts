@@ -70,10 +70,8 @@ interface Harness {
     enforceAuthTimeout: ReturnType<typeof vi.fn>;
   };
   lifecycleManager: {
-    isProviderStartupPending: ReturnType<typeof vi.fn>;
+    recordStartupHeartbeat: ReturnType<typeof vi.fn>;
     onSandboxConnected: ReturnType<typeof vi.fn>;
-    updateLastActivity: ReturnType<typeof vi.fn>;
-    scheduleInactivityCheck: ReturnType<typeof vi.fn>;
   };
   broadcast: ReturnType<typeof vi.fn>;
   submitted: string[];
@@ -103,10 +101,8 @@ function createHarness(opts: {
     enforceAuthTimeout: vi.fn(async () => undefined),
   };
   const lifecycleManager = {
-    isProviderStartupPending: vi.fn(() => false),
+    recordStartupHeartbeat: vi.fn(async () => true),
     onSandboxConnected: vi.fn(),
-    updateLastActivity: vi.fn(),
-    scheduleInactivityCheck: vi.fn(async () => undefined),
   };
   const broadcast = vi.fn();
   const submitted: string[] = [];
@@ -258,14 +254,14 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     expect((await rejection(decision)).status).toBe(403);
   });
 
-  it("accepts a bridge for a sandbox row that has no id yet", async () => {
+  it("rejects a bridge for a sandbox row that has no id yet", async () => {
     const h = createHarness({ sandbox: await sandboxRow({ modal_sandbox_id: null }) });
 
     const decision = await h.authenticator.authorize(
       upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: "anything" })
     );
 
-    expect(decision).toMatchObject({ kind: "accept", role: "sandbox" });
+    expect((await rejection(decision)).status).toBe(403);
   });
 });
 
@@ -293,32 +289,12 @@ describe("UpgradeDecision.attach", () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
-  it("marks the sandbox ready, publishes access, arms the inactivity check, and drains the queue", async () => {
-    const h = createHarness({ sandbox: await sandboxRow() });
-
-    await (await accepted(h, sandboxUpgrade())).attach(socket);
-
-    expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledWith(socket, SANDBOX_ID);
-    expect(h.lifecycleManager.onSandboxConnected).toHaveBeenCalledOnce();
-    expect(h.sandboxRepository.updateSandboxStatus).toHaveBeenCalledWith("ready");
-    expect(h.broadcast.mock.calls.map(([message]) => message.type)).toEqual([
-      "sandbox_status",
-      "sandbox_access_changed",
-    ]);
-    expect(h.lifecycleManager.scheduleInactivityCheck).toHaveBeenCalledOnce();
-    expect(h.submitted).toEqual(["message_queue.process"]);
-    expect(h.processMessageQueue).toHaveBeenCalledOnce();
-    expect(h.log.info).toHaveBeenCalledWith(
-      "ws.connect",
-      expect.objectContaining({ outcome: "success", sandbox_id: SANDBOX_ID })
-    );
-  });
-
-  it("arms the inactivity check before adopting the socket", async () => {
+  it("persists startup liveness before adopting the sandbox control socket", async () => {
     const h = createHarness({ sandbox: await sandboxRow() });
     const order: string[] = [];
-    h.lifecycleManager.scheduleInactivityCheck.mockImplementation(async () => {
-      order.push("schedule");
+    h.lifecycleManager.recordStartupHeartbeat.mockImplementation(async () => {
+      order.push("persist");
+      return true;
     });
     h.wsManager.acceptAndSetSandboxSocket.mockImplementation(() => {
       order.push("accept");
@@ -327,41 +303,27 @@ describe("UpgradeDecision.attach", () => {
 
     await (await accepted(h, sandboxUpgrade())).attach(socket);
 
-    expect(order).toEqual(["schedule", "accept"]);
-  });
-
-  it("commits nothing when the inactivity check cannot be armed", async () => {
-    const h = createHarness({ sandbox: await sandboxRow() });
-    h.lifecycleManager.scheduleInactivityCheck.mockRejectedValue(new Error("alarm unavailable"));
-
-    await expect((await accepted(h, sandboxUpgrade())).attach(socket)).rejects.toThrow(
-      "alarm unavailable"
-    );
-
-    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
-    expect(h.lifecycleManager.onSandboxConnected).not.toHaveBeenCalled();
+    expect(order).toEqual(["persist", "accept"]);
+    expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledWith(socket, SANDBOX_ID);
+    expect(h.lifecycleManager.onSandboxConnected).toHaveBeenCalledOnce();
     expect(h.sandboxRepository.updateSandboxStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
-    expect(h.submitted).toEqual([]);
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+    expect(h.log.info).toHaveBeenCalledWith(
+      "ws.connect",
+      expect.objectContaining({ outcome: "success", sandbox_id: SANDBOX_ID })
+    );
   });
 
-  it("withholds the access broadcast while provider startup is still persisting", async () => {
+  it("rejects when startup liveness cannot be persisted", async () => {
     const h = createHarness({ sandbox: await sandboxRow() });
-    h.lifecycleManager.isProviderStartupPending.mockReturnValue(true);
+    h.lifecycleManager.recordStartupHeartbeat.mockResolvedValue(false);
 
-    await (await accepted(h, sandboxUpgrade())).attach(socket);
+    const decision = await h.authenticator.authorize(sandboxUpgrade());
 
-    expect(h.broadcast.mock.calls.map(([message]) => message.type)).toEqual(["sandbox_status"]);
-  });
-
-  it("passes the presented sandbox id through, or undefined when the bridge sent none", async () => {
-    const h = createHarness({ sandbox: await sandboxRow({ modal_sandbox_id: null }) });
-
-    await (
-      await accepted(h, upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: null }))
-    ).attach(socket);
-
-    expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledWith(socket, undefined);
+    expect((await rejection(decision)).status).toBe(403);
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.lifecycleManager.onSandboxConnected).not.toHaveBeenCalled();
   });
 
   it("attaches exactly once", async () => {

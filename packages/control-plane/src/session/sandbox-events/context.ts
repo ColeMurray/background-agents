@@ -15,6 +15,7 @@ export interface SandboxEventContext {
   messageId: string | null;
   /** The processing message as of event arrival (single DO turn — stable). */
   processingMessage: { id: string } | null;
+  sender: WebSocket | null;
 }
 
 /**

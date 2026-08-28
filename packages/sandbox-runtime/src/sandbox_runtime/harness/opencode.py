@@ -63,7 +63,8 @@ class OpencodeHarness:
         return self._prompt_stream
 
     async def open(self) -> None:
-        return None
+        while not await self.client.is_healthy():
+            await asyncio.sleep(1)
 
     async def close(self) -> None:
         await self.client.aclose()

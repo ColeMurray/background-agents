@@ -1,5 +1,4 @@
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -69,6 +68,7 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
     monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
     monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+    monkeypatch.delenv("EARLY_SANDBOX_CONNECTION", raising=False)
 
     assert await supervisor.run() is True
     supervisor.repository_boot.prepare_tunnel_environment.assert_called_once_with(BootMode.FRESH)
@@ -83,64 +83,195 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
     ]
 
 
-async def test_boot_progress_runs_until_bridge_starts(tmp_path, monkeypatch):
+async def test_early_connection_starts_bridge_before_repository_boot(tmp_path, monkeypatch):
     events = []
-    supervisor, repository, opencode_server, agent_bridge, *_ = _supervisor(tmp_path, events)
-    original_repository_boot = repository.boot.side_effect
-    original_opencode_start = opencode_server.start.side_effect
-
-    async def boot(mode, ports):
-        await asyncio.sleep(0)
-        assert supervisor._boot_progress_task is not None
-        return original_repository_boot(mode, ports)
-
-    async def start_opencode(repositories, workdir):
-        assert supervisor._boot_progress_task is not None
-        return original_opencode_start(repositories, workdir)
-
-    async def start_bridge():
-        assert supervisor._boot_progress_task is not None
-        events.append("bridge")
-
-    repository.boot.side_effect = boot
-    opencode_server.start.side_effect = start_opencode
-    agent_bridge.start.side_effect = start_bridge
+    supervisor, *_ = _supervisor(tmp_path, events)
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
     monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
     monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
 
     assert await supervisor.run() is True
-    assert supervisor._boot_progress_task is None
+    assert events == [
+        "bridge",
+        "desktop",
+        "repository:fresh",
+        "skills",
+        "code_server",
+        "terminal",
+        "opencode",
+    ]
 
 
-async def test_report_boot_progress_uses_session_route_and_sandbox_token(tmp_path, monkeypatch):
-    supervisor, *_ = _supervisor(tmp_path, [])
-    supervisor.config = replace(
-        supervisor.config,
-        control_plane_url="https://control.example/",
-        sandbox_token="secret-token",
-        session_config={"session_id": "session/one"},
-    )
-    post = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock()))
-    client = MagicMock()
-    client.__aenter__ = AsyncMock(return_value=MagicMock(post=post))
-    client.__aexit__ = AsyncMock(return_value=None)
-    monkeypatch.setattr(
-        "sandbox_runtime.supervisor.httpx.AsyncClient", MagicMock(return_value=client)
-    )
+async def test_early_connection_repository_failure_stops_bridge(tmp_path, monkeypatch):
+    supervisor, repository, _opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
+    repository.boot.side_effect = RuntimeError("clone failed")
+    supervisor._report_fatal_error = AsyncMock()
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
 
-    sleep = AsyncMock(side_effect=asyncio.CancelledError)
-    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", sleep)
+    assert await supervisor.run() is False
 
-    with pytest.raises(asyncio.CancelledError):
-        await supervisor._boot_progress_loop()
+    agent_bridge.start.assert_awaited_once()
+    agent_bridge.stop.assert_awaited_once()
+    supervisor._report_fatal_error.assert_awaited_once_with("clone failed")
 
-    post.assert_awaited_once_with(
-        "https://control.example/sessions/session%2Fone/boot-progress",
-        json={"sandboxId": "sandbox-1"},
-        headers={"Authorization": "Bearer secret-token"},
-        timeout=supervisor.BOOT_PROGRESS_TIMEOUT_SECONDS,
-    )
+
+async def test_early_connection_restarts_bridge_while_repository_boot_is_blocked(
+    tmp_path, monkeypatch
+):
+    supervisor, repository, _opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
+    release_boot = asyncio.Event()
+    boot_started = asyncio.Event()
+
+    async def blocked_boot(_mode, _ports):
+        boot_started.set()
+        await release_boot.wait()
+        return RepositoryBootResult(True, [], True, True, (), tmp_path)
+
+    repository.boot.side_effect = blocked_boot
+    agent_bridge.exit_code.side_effect = [1, None]
+
+    async def restart_bridge():
+        if agent_bridge.start.await_count == 2:
+            release_boot.set()
+
+    agent_bridge.start.side_effect = restart_bridge
+    monkeypatch.setattr(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False))
+    monkeypatch.setattr(supervisor, "EARLY_BRIDGE_MONITOR_INTERVAL_SECONDS", 0.01, raising=False)
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+
+    run_task = asyncio.create_task(supervisor.run())
+    await boot_started.wait()
+
+    assert await asyncio.wait_for(run_task, timeout=1) is True
+    assert agent_bridge.start.await_count == 2
+
+
+@pytest.mark.parametrize("blocked_stage", ["repository", "skills", "opencode"])
+async def test_clean_early_bridge_exit_cancels_pre_ready_startup(
+    tmp_path, monkeypatch, blocked_stage
+):
+    supervisor, repository, opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
+    stage_started = asyncio.Event()
+    stage_cancelled = asyncio.Event()
+
+    async def block_stage(*_args):
+        stage_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stage_cancelled.set()
+
+    if blocked_stage == "repository":
+        repository.boot.side_effect = block_stage
+    elif blocked_stage == "skills":
+        supervisor.managed_skills.materialize.side_effect = block_stage
+    else:
+        opencode_server.start.side_effect = block_stage
+
+    agent_bridge.exit_code.return_value = 0
+    supervisor._report_fatal_error = AsyncMock()
+    monkeypatch.setattr(supervisor, "EARLY_BRIDGE_MONITOR_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+
+    run_task = asyncio.create_task(supervisor.run())
+    await stage_started.wait()
+
+    assert await asyncio.wait_for(run_task, timeout=1) is True
+    assert stage_cancelled.is_set()
+    supervisor._report_fatal_error.assert_not_awaited()
+    opencode_server.stop.assert_awaited_once()
+
+
+async def test_early_bridge_crash_restarts_during_post_repository_startup(tmp_path, monkeypatch):
+    supervisor, _repository, _opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
+    release_skills = asyncio.Event()
+    skills_started = asyncio.Event()
+
+    async def blocked_skills(*_args):
+        skills_started.set()
+        await release_skills.wait()
+
+    async def start_bridge():
+        if agent_bridge.start.await_count == 2:
+            release_skills.set()
+
+    supervisor.managed_skills.materialize.side_effect = blocked_skills
+    agent_bridge.start.side_effect = start_bridge
+    agent_bridge.exit_code.side_effect = [1, None]
+    monkeypatch.setattr(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False))
+    monkeypatch.setattr(supervisor, "EARLY_BRIDGE_MONITOR_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+
+    run_task = asyncio.create_task(supervisor.run())
+    await skills_started.wait()
+
+    assert await asyncio.wait_for(run_task, timeout=1) is True
+    assert agent_bridge.start.await_count == 2
+
+
+async def test_early_bridge_restart_budget_carries_into_steady_monitoring(tmp_path, monkeypatch):
+    supervisor, _repository, _opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
+    release_terminal = asyncio.Event()
+    terminal_started = asyncio.Event()
+
+    async def blocked_terminal(*_args):
+        terminal_started.set()
+        await release_terminal.wait()
+
+    async def start_bridge():
+        if agent_bridge.start.await_count == 2:
+            release_terminal.set()
+
+    supervisor.web_terminal.start.side_effect = blocked_terminal
+    agent_bridge.start.side_effect = start_bridge
+    agent_bridge.exit_code.side_effect = [1, None]
+    monkeypatch.setattr(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False))
+    monkeypatch.setattr(supervisor, "EARLY_BRIDGE_MONITOR_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+
+    run_task = asyncio.create_task(supervisor.run())
+    await terminal_started.wait()
+
+    assert await asyncio.wait_for(run_task, timeout=1) is True
+    supervisor.monitor_processes.assert_awaited_once_with(bridge_restarts=1)
+
+
+async def test_early_bridge_restart_exhaustion_cancels_startup_and_reports_fatal(
+    tmp_path, monkeypatch
+):
+    supervisor, _repository, opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
+    opencode_started = asyncio.Event()
+    opencode_cancelled = asyncio.Event()
+
+    async def blocked_opencode(*_args):
+        opencode_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            opencode_cancelled.set()
+
+    opencode_server.start.side_effect = blocked_opencode
+    agent_bridge.exit_code.return_value = 1
+    supervisor.MAX_RESTARTS = 1
+    supervisor._report_fatal_error = AsyncMock()
+    monkeypatch.setattr(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False))
+    monkeypatch.setattr(supervisor, "EARLY_BRIDGE_MONITOR_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+
+    run_task = asyncio.create_task(supervisor.run())
+    await opencode_started.wait()
+
+    assert await asyncio.wait_for(run_task, timeout=1) is False
+    assert opencode_cancelled.is_set()
+    assert agent_bridge.start.await_count == 2
+    supervisor._report_fatal_error.assert_awaited_once_with("Bridge crashed 2 times, giving up")
 
 
 async def test_regular_boot_passes_repository_workspace_to_services(tmp_path, monkeypatch):
@@ -168,6 +299,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
         _supervisor(tmp_path, [])
     )
     monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    monkeypatch.setenv("EARLY_SANDBOX_CONNECTION", "1")
     callback = MagicMock()
 
     async def report_success(**_kwargs):

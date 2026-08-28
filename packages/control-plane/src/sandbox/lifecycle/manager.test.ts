@@ -245,15 +245,18 @@ function createMockStorage(
       calls.push("updateSandboxLastActivity");
       if (sandbox) sandbox.last_activity = timestamp;
     }),
-    recordBootProgress: vi.fn((sandboxId: string, timestamp: number) => {
-      calls.push(`recordBootProgress:${sandboxId}`);
+    recordStartupHeartbeat: vi.fn((sandboxId: string, timestamp: number) => {
+      calls.push(`recordStartupHeartbeat:${sandboxId}`);
       if (
         !sandbox ||
         sandbox.modal_sandbox_id !== sandboxId ||
-        (sandbox.status !== "spawning" && sandbox.status !== "connecting")
+        sandbox.status === "snapshotting" ||
+        sandbox.status === "stopped" ||
+        sandbox.status === "stale"
       ) {
         return false;
       }
+      sandbox.status = "connecting";
       sandbox.last_heartbeat = timestamp;
       return true;
     }),
@@ -984,6 +987,36 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ userEnvVars }));
     });
+
+    it.each([
+      [false, {}],
+      [true, { EARLY_SANDBOX_CONNECTION: "1" }],
+    ])(
+      "sets the early connection runtime variable only when activated",
+      async (enabled, expected) => {
+        const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+        const storage = createMockStorage(createMockSession(), sandbox, {
+          EARLY_SANDBOX_CONNECTION: "user-value",
+        });
+        const provider = createMockProvider();
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          { ...createTestConfig(), earlySandboxConnection: enabled }
+        );
+
+        await manager.spawnSandbox();
+
+        expect(provider.createSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ userEnvVars: expected })
+        );
+      }
+    );
 
     it("spawns no-repository sessions without repo-only sandbox features", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -1835,7 +1868,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider();
-
+      const processMessageQueue = vi.fn(async () => {});
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -1847,7 +1880,7 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await manager.triggerSnapshot("test_reason");
+      await manager.triggerSnapshot("test_reason", processMessageQueue);
 
       expect(provider.takeSnapshot).toHaveBeenCalled();
       expect(storage.calls).toContain(
@@ -1860,6 +1893,27 @@ describe("SandboxLifecycleManager", () => {
         { type: "sandbox_status", status: "ready" },
         { type: "sandbox_access_changed" },
       ]);
+      expect(processMessageQueue).not.toHaveBeenCalled();
+    });
+
+    it("drains the queue after a ready sandbox snapshots with its control socket connected", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const processMessageQueue = vi.fn(async () => {});
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(true),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("test_reason", processMessageQueue);
+
+      expect(processMessageQueue).toHaveBeenCalledOnce();
     });
 
     it("skips when provider does not support snapshots", async () => {
@@ -2070,6 +2124,32 @@ describe("SandboxLifecycleManager", () => {
       }
     );
 
+    it("re-arms a healthy sandbox at its renewable heartbeat deadline", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      const config = createTestConfig();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        alarmScheduler,
+        createMockIdGenerator(),
+        config
+      );
+
+      await manager.handleAlarm();
+
+      expect(alarmScheduler.alarms[0]).toBe(sandbox.last_heartbeat! + config.heartbeat.timeoutMs);
+    });
+
     it("detects heartbeat timeout and sets stale", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -2161,7 +2241,7 @@ describe("SandboxLifecycleManager", () => {
 
       // Should extend, not timeout
       expect(storage.calls).not.toContain("updateSandboxStatus:stopped");
-      expect(alarmScheduler.alarms.length).toBe(1);
+      expect(alarmScheduler.alarms.length).toBe(2);
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_warning")
       ).toBe(true);
@@ -2194,7 +2274,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.handleAlarm();
 
       expect(storage.calls).not.toContain("updateSandboxStatus:stopped");
-      expect(alarmScheduler.alarms.length).toBe(1);
+      expect(alarmScheduler.alarms.length).toBe(2);
     });
 
     it("triggers snapshot before stopping", async () => {
@@ -2508,7 +2588,7 @@ describe("SandboxLifecycleManager", () => {
     });
   });
 
-  describe("recordBootProgress", () => {
+  describe("recordStartupHeartbeat", () => {
     it("records current startup liveness and rearms the watchdog", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({ status: "connecting", last_heartbeat: null });
@@ -2526,7 +2606,9 @@ describe("SandboxLifecycleManager", () => {
         config
       );
 
-      await expect(manager.recordBootProgress(sandbox.modal_sandbox_id!, now)).resolves.toBe(true);
+      await expect(manager.recordStartupHeartbeat(sandbox.modal_sandbox_id!, now)).resolves.toBe(
+        true
+      );
       expect(sandbox.last_heartbeat).toBe(now);
       expect(alarmScheduler.alarms).toEqual([now + config.connectingTimeout.timeoutMs]);
     });
@@ -2546,7 +2628,9 @@ describe("SandboxLifecycleManager", () => {
         createTestConfig()
       );
 
-      await expect(manager.recordBootProgress("sandbox-replaced", Date.now())).resolves.toBe(false);
+      await expect(manager.recordStartupHeartbeat("sandbox-replaced", Date.now())).resolves.toBe(
+        false
+      );
       expect(alarmScheduler.alarms).toEqual([]);
     });
   });
