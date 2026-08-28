@@ -3,6 +3,8 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from sandbox_runtime.supervisor import SandboxSupervisor
 from tests.runtime_helpers import make_supervisor
 
@@ -72,6 +74,8 @@ class TestFatalErrorHttpReporting:
     async def test_posts_to_session_scoped_sandbox_error_endpoint(self):
         supervisor = _make_reporting_supervisor()
         client = AsyncMock()
+        response = MagicMock(spec=httpx.Response)
+        client.post.return_value = response
         client_context = AsyncMock()
         client_context.__aenter__.return_value = client
 
@@ -83,6 +87,27 @@ class TestFatalErrorHttpReporting:
             json={"error": "Bridge repeatedly crashed", "fatal": True},
             headers={"Authorization": "Bearer tok"},
             timeout=5.0,
+        )
+        response.raise_for_status.assert_called_once_with()
+
+    async def test_logs_non_successful_report_response(self, caplog):
+        supervisor = _make_reporting_supervisor()
+        client = AsyncMock()
+        client.post.return_value = httpx.Response(
+            503,
+            request=httpx.Request(
+                "POST", "https://cp.example.com/sessions/session-1/sandbox-error"
+            ),
+        )
+        client_context = AsyncMock()
+        client_context.__aenter__.return_value = client
+
+        caplog.set_level("ERROR", logger="supervisor")
+        with patch("sandbox_runtime.supervisor.httpx.AsyncClient", return_value=client_context):
+            await supervisor._report_fatal_error("Bridge repeatedly crashed")
+
+        assert any(
+            record.getMessage() == "supervisor.report_error_failed" for record in caplog.records
         )
 
     async def test_skips_control_plane_report_without_session_id(self):

@@ -75,12 +75,13 @@ class SandboxSupervisor:
         try:
             session_id = quote(self.config.session_id, safe="")
             async with httpx.AsyncClient() as client:
-                await client.post(
+                response = await client.post(
                     f"{self.config.control_plane_url.rstrip('/')}/sessions/{session_id}/sandbox-error",
                     json={"error": message, "fatal": True},
                     headers={"Authorization": f"Bearer {self.config.sandbox_token}"},
                     timeout=5.0,
                 )
+                response.raise_for_status()
         except Exception as error:
             self.log.error("supervisor.report_error_failed", exc=error)
 
