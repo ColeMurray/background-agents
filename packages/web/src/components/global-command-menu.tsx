@@ -7,7 +7,7 @@ import { formatRepoLabel } from "@/lib/repo-label";
 import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
 import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
-import { getSettingsGroups } from "@/components/settings/settings-registry";
+import { DEFAULT_SETTINGS_QUERY, getSettingsGroups } from "@/components/settings/settings-registry";
 import {
   Command,
   CommandDialog,
@@ -52,7 +52,7 @@ export function GlobalCommandMenu({
   sessions,
 }: GlobalCommandMenuProps) {
   const { labels } = useKeyboardShortcuts();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(DEFAULT_SETTINGS_QUERY);
   const searchableSessions = useMemo(
     () => sessions.filter((session) => session.status !== "archived"),
     [sessions]
@@ -60,7 +60,7 @@ export function GlobalCommandMenu({
   const settingsGroups = getSettingsGroups({ query, includeGlobalAliases: true });
 
   useEffect(() => {
-    if (!open) setQuery("");
+    if (!open) setQuery(DEFAULT_SETTINGS_QUERY);
   }, [open]);
 
   const handleSelect = (callback: () => void) => {

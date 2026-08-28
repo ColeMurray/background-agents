@@ -131,15 +131,17 @@ export const SETTINGS_GROUPS = [
 type SettingsItem = (typeof SETTINGS_GROUPS)[number]["items"][number];
 export type SettingsCategory = SettingsItem["id"];
 export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = "secrets";
+export const DEFAULT_SETTINGS_QUERY = "";
+export const DEFAULT_INCLUDE_GLOBAL_SETTINGS_ALIASES = false;
 
 function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean): boolean {
   return !("requiresRepoImages" in item) || repoImagesEnabled;
 }
 
 export function getSettingsGroups({
-  query = "",
+  query = DEFAULT_SETTINGS_QUERY,
   repoImagesEnabled = supportsRepoImages(),
-  includeGlobalAliases = false,
+  includeGlobalAliases = DEFAULT_INCLUDE_GLOBAL_SETTINGS_ALIASES,
 }: {
   query?: string;
   repoImagesEnabled?: boolean;
