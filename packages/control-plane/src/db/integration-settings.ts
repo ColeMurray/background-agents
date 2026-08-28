@@ -505,15 +505,6 @@ export class IntegrationSettingsStore {
     }
 
     const maxAttempts = settings.maxAttemptsPerPrPer24Hours;
-    if (
-      maxAttempts !== undefined &&
-      maxAttempts !== null &&
-      (typeof maxAttempts !== "number" || !Number.isSafeInteger(maxAttempts) || maxAttempts < 1)
-    ) {
-      throw new IntegrationSettingsValidationError(
-        "autofix.maxAttemptsPerPrPer24Hours must be a positive safe integer or null"
-      );
-    }
 
     const normalized: GitHubAutofixSettings = {};
     for (const key of booleanKeys) {

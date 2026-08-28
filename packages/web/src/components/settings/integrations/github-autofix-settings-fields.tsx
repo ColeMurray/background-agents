@@ -32,7 +32,10 @@ export function GitHubAutofixSettingsFields({
   compact = false,
 }: {
   value: ResolvedGitHubAutofixSettings;
-  onChange: (value: ResolvedGitHubAutofixSettings) => void;
+  onChange: (
+    value: ResolvedGitHubAutofixSettings,
+    changedKey: keyof ResolvedGitHubAutofixSettings
+  ) => void;
   onDirty: () => void;
   compact?: boolean;
 }) {
@@ -57,7 +60,7 @@ export function GitHubAutofixSettingsFields({
   const update = <K extends keyof ResolvedGitHubAutofixSettings>(
     key: K,
     next: ResolvedGitHubAutofixSettings[K]
-  ) => onChange({ ...value, [key]: next });
+  ) => onChange({ ...value, [key]: next }, key);
   const rowClass = compact
     ? "flex items-center justify-between gap-3 py-1"
     : "flex items-center justify-between gap-3 px-3 py-2 border border-border rounded-sm";

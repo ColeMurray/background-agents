@@ -18,13 +18,15 @@ export interface IntegrationEntry<
 }
 
 /** Overridable behavior settings for GitHub Autofix. */
+export const githubAutofixAttemptLimitSchema = z.number().int().positive().safe().nullable();
+
 export const githubAutofixSettingsSchema = z.strictObject({
   enabled: z.boolean().optional(),
   reviewsEnabled: z.boolean().optional(),
   prCommentsEnabled: z.boolean().optional(),
   openInspectReviewsEnabled: z.boolean().optional(),
   allowedReviewBots: z.array(z.string()).optional(),
-  maxAttemptsPerPrPer24Hours: z.number().nullable().optional(),
+  maxAttemptsPerPrPer24Hours: githubAutofixAttemptLimitSchema.optional(),
 });
 
 export type GitHubAutofixSettings = z.infer<typeof githubAutofixSettingsSchema>;

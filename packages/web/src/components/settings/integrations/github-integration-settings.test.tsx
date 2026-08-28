@@ -346,10 +346,15 @@ describe("GitHubIntegrationSettings", () => {
     );
   });
 
-  it("repo auto-review override without an explicit value seeds from global default when saved", async () => {
+  it("preserves sparse Autofix overrides when saving an unrelated repo setting", async () => {
     const user = userEvent.setup();
     setupSWR({
-      global: { defaults: { autoReviewOnOpen: false } },
+      global: {
+        defaults: {
+          autoReviewOnOpen: false,
+          autofix: { maxAttemptsPerPrPer24Hours: null },
+        },
+      },
       repos: [{ repo: "acme/web", settings: { autofix: { enabled: true } } }],
       availableRepos: [repo("acme/web")],
     });
@@ -374,7 +379,7 @@ describe("GitHubIntegrationSettings", () => {
         body: JSON.stringify({
           settings: {
             autoReviewOnOpen: false,
-            autofix: { ...GITHUB_AUTOFIX_DEFAULTS, enabled: true },
+            autofix: { enabled: true },
           },
         }),
       })
