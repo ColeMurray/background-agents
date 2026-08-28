@@ -247,6 +247,32 @@ export async function resolveAutomationProviderAuth(
   );
 }
 
+/**
+ * Compose an event-triggered automation's prompt.
+ *
+ * An automation's instructions are identical on every run; the event context
+ * block differs each time. Provider prompt caches key on byte-identical leading
+ * spans, so leading with the event context keeps the instructions off the cache
+ * boundary and every run pays full price for them. Instruction-first ordering
+ * holds the static portion at the head of each request for a given automation.
+ *
+ * This is the single composition point for both the plain event path and the
+ * Slack path that enriches the context block with thread history. New call
+ * sites belong here rather than in an inline template.
+ *
+ * Set AUTOMATION_INSTRUCTIONS_FIRST="false" to restore context-first ordering.
+ */
+export function composeAutomationPrompt(
+  env: Env,
+  contextBlock: string,
+  instructions: string
+): string {
+  if (env.AUTOMATION_INSTRUCTIONS_FIRST === "false") {
+    return `${contextBlock}\n---\n\n${instructions}`;
+  }
+  return `${instructions}\n---\n\n${contextBlock}`;
+}
+
 export class Scheduler {
   private readonly log: Logger;
 
@@ -958,7 +984,7 @@ export class Scheduler {
       // a reply racing the initial trigger gets the "already active" notice
       // instead of a second session.
       const instructionsOverride = appendSlackSessionInstructions(
-        `${event.contextBlock}\n---\n\n${automation.instructions}`,
+        composeAutomationPrompt(this.env, event.contextBlock, automation.instructions),
         slackSessionInstructions
       );
       const result = await this.startInvocation(store, {
@@ -972,7 +998,11 @@ export class Scheduler {
           ? {
               instructionsOverrideFactory: async () =>
                 appendSlackSessionInstructions(
-                  `${await slackContextBlock(event)}\n---\n\n${automation.instructions}`,
+                  composeAutomationPrompt(
+                    this.env,
+                    await slackContextBlock(event),
+                    automation.instructions
+                  ),
                   slackSessionInstructions
                 ),
             }
