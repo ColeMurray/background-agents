@@ -548,6 +548,83 @@ async def test_snapshot_build_maps_missing_or_mismatched_session_to_not_found(mo
     assert exc.value.detail == "build session not found"
 
 
+def _patch_image_delete(monkeypatch, **mock_kwargs) -> SimpleNamespace:
+    image_delete = SimpleNamespace(aio=AsyncMock(**mock_kwargs))
+    monkeypatch.setattr(web_api.experimental, "image_delete", image_delete)
+    return image_delete
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_image_deletes_via_sdk(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    image_delete = _patch_image_delete(monkeypatch)
+
+    result = await _call(
+        web_api.api_delete_provider_image,
+        {"provider_image_id": "im-1"},
+    )
+
+    image_delete.aio.assert_awaited_once_with("im-1")
+    assert result == {
+        "success": True,
+        "data": {"provider_image_id": "im-1", "deleted": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_image_treats_missing_image_as_deleted(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    _patch_image_delete(monkeypatch, side_effect=web_api.NotFoundError("image im-1 not found"))
+
+    result = await _call(
+        web_api.api_delete_provider_image,
+        {"provider_image_id": "im-1"},
+    )
+
+    assert result == {
+        "success": True,
+        "data": {"provider_image_id": "im-1", "deleted": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_image_propagates_provider_failures(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    _patch_image_delete(monkeypatch, side_effect=RuntimeError("image service unavailable"))
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_delete_provider_image,
+            {"provider_image_id": "im-1"},
+        )
+
+    assert exc.value.status_code == 500
+
+
+def test_image_delete_supports_async_invocation():
+    # The endpoint awaits experimental.image_delete.aio; fail fast here if a
+    # Modal upgrade drops the synchronizer's .aio form.
+    assert hasattr(web_api.experimental.image_delete, "aio")
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_image_rejects_non_string_id(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    info = MagicMock()
+    monkeypatch.setattr(web_api.log, "info", info)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_delete_provider_image,
+            {"provider_image_id": 123},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "provider_image_id must be a string"
+    assert info.call_args.kwargs["http_status"] == 400
+    assert info.call_args.kwargs["outcome"] == "error"
+
+
 @pytest.mark.asyncio
 async def test_image_request_validation_runs_after_authentication(monkeypatch):
     def reject_auth(_authorization):
@@ -557,8 +634,8 @@ async def test_image_request_validation_runs_after_authentication(monkeypatch):
 
     with pytest.raises(web_api.HTTPException) as exc:
         await _call(
-            web_api.api_terminate_build_sandbox,
-            {"build_id": 123},
+            web_api.api_delete_provider_image,
+            {"provider_image_id": 123},
         )
 
     assert exc.value.status_code == 401

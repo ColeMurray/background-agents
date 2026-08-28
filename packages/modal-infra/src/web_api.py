@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Annotated, Any, Self
 
 from fastapi import Header, HTTPException
-from modal import fastapi_endpoint
+from modal import experimental, fastapi_endpoint
+from modal.exception import NotFoundError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
@@ -87,6 +88,10 @@ class TerminateBuildSandboxRequest(_ModalRequestModel):
     build_id: NonEmptyString
     provider_session_id: NonEmptyString
     reason: NonEmptyString
+
+
+class DeleteProviderImageRequest(_ModalRequestModel):
+    provider_image_id: NonEmptyString
 
 
 class InteractiveRepositoryRequest(_ModalRequestModel):
@@ -843,3 +848,53 @@ def _validated_build_repositories(
         }
         for repository in repositories
     ]
+
+
+@app.function(
+    image=function_image,
+    secrets=[internal_api_secret],
+)
+@fastapi_endpoint(method="POST")
+async def api_delete_provider_image(
+    request: dict[str, object],
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+) -> dict:
+    """
+    Delete a single provider image.
+
+    Used to clean up pre-built images once a newer build replaces them or a
+    failed build leaves an artifact behind. An image that is already gone
+    counts as deleted so retried cleanups stay idempotent; any other provider
+    failure propagates as an error so the caller keeps its artifact record
+    and retries later.
+
+    POST body:
+    {
+        "provider_image_id": "..."
+    }
+    """
+    async with _execute_endpoint(
+        endpoint_name="api_delete_provider_image",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+    ):
+        parsed_request = _parse_request(DeleteProviderImageRequest, request)
+        provider_image_id = parsed_request.provider_image_id
+
+        try:
+            await experimental.image_delete.aio(provider_image_id)
+        except NotFoundError:
+            log.info("image.delete_missing", provider_image_id=provider_image_id)
+        else:
+            log.info("image.deleted", provider_image_id=provider_image_id)
+
+        return {
+            "success": True,
+            "data": {
+                "provider_image_id": provider_image_id,
+                "deleted": True,
+            },
+        }

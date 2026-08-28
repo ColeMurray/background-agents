@@ -22,6 +22,8 @@ import type {
   CreateImageBuildSandboxResponse,
   StartImageBuildSandboxRequest,
   TerminateImageBuildSandboxRequest,
+  DeleteProviderImageRequest,
+  DeleteProviderImageResponse,
 } from "../client";
 
 // ==================== Mock Factories ====================
@@ -37,6 +39,7 @@ function createMockModalClient(
     ) => Promise<CreateImageBuildSandboxResponse>;
     startImageBuildSandbox: (req: StartImageBuildSandboxRequest) => Promise<void>;
     terminateImageBuildSandbox: (req: TerminateImageBuildSandboxRequest) => Promise<void>;
+    deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
 ): ModalClient {
   return {
@@ -73,6 +76,12 @@ function createMockModalClient(
     ),
     startImageBuildSandbox: vi.fn(async () => undefined),
     terminateImageBuildSandbox: vi.fn(async () => undefined),
+    deleteProviderImage: vi.fn(
+      async (req: DeleteProviderImageRequest): Promise<DeleteProviderImageResponse> => ({
+        providerImageId: req.providerImageId,
+        deleted: true,
+      })
+    ),
     ...overrides,
   } as unknown as ModalClient;
 }
@@ -550,6 +559,36 @@ describe("ModalSandboxProvider", () => {
       expect(onProviderSessionCreated.mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(client.startImageBuildSandbox).mock.invocationCallOrder[0]
       );
+    });
+
+    it("deletes provider images through the Modal client", async () => {
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client);
+      const correlation = { request_id: "request-1", trace_id: "trace-1" };
+
+      await provider.deleteProviderImage("modal-image-1", correlation);
+
+      expect(client.deleteProviderImage).toHaveBeenCalledWith(
+        { providerImageId: "modal-image-1" },
+        correlation
+      );
+    });
+
+    it("propagates provider-image deletion failures as classified errors", async () => {
+      const client = createMockModalClient({
+        deleteProviderImage: vi.fn(async () => {
+          throw new ModalApiError("Modal API error: 503 Service Unavailable", 503);
+        }),
+      });
+      const provider = new ModalSandboxProvider(client);
+
+      try {
+        await provider.deleteProviderImage("modal-image-1");
+        expect.fail("Should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(SandboxProviderError);
+        expect((e as SandboxProviderError).errorType).toBe("transient");
+      }
     });
   });
 

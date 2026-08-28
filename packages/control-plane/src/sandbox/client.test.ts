@@ -703,4 +703,39 @@ describe("ModalClient", () => {
       })
     ).rejects.toThrow("Modal API error: Invalid response");
   });
+
+  it("parses valid provider image delete responses", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { provider_image_id: "img-1", deleted: true },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).resolves.toEqual({
+      providerImageId: "img-1",
+      deleted: true,
+    });
+  });
+
+  it("rejects malformed provider image delete responses instead of trusting the payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { provider_image_id: "img-1", deleted: "yes" },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).rejects.toThrow(
+      "Modal API error: Invalid response"
+    );
+  });
 });
