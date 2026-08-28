@@ -10,9 +10,24 @@ export const imageBuildFinalizationJobSchema = z.object({
 
 export type ImageBuildFinalizationJob = z.infer<typeof imageBuildFinalizationJobSchema>;
 
-/** Minimal producer boundary used by callback workflows. */
+/**
+ * Minimal producer boundary used by callback workflows, satisfied directly by
+ * the Queue binding. The send response is never consumed — callers only await
+ * delivery.
+ */
 export interface ImageBuildFinalizationQueue {
-  send(job: ImageBuildFinalizationJob): Promise<void>;
+  send(job: ImageBuildFinalizationJob): Promise<unknown>;
+}
+
+/**
+ * Rebuilds the Queue command for a completion that was already accepted and
+ * persisted on the row (the cron republish path).
+ */
+export function republishedImageBuildFinalizationJob(row: {
+  id: string;
+  completion_hash: string;
+}): ImageBuildFinalizationJob {
+  return { version: 1, buildId: row.id, completionHash: row.completion_hash };
 }
 
 type FinalizationOutcome =

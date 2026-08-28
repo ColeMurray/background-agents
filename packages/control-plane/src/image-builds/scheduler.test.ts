@@ -5,6 +5,7 @@ import type { SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
+import type { ImageBuildReaper } from "./reaper";
 import { ImageBuildScheduler } from "./scheduler";
 import type { ResolvedImageBuildTarget } from "./scope";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
@@ -73,6 +74,8 @@ function harness(
       type: "triggered" as const,
       buildId: "build-new",
     })),
+  };
+  const reaper = {
     cleanupImages: vi.fn(async () => ({
       deletedFailed: 2,
       reapedFailed: 1,
@@ -98,6 +101,7 @@ function harness(
     store as unknown as ImageBuildStore,
     workflow as unknown as ImageBuildWorkflow,
     { create: vi.fn(() => adapter) } as unknown as ImageBuildAdapterFactory,
+    reaper as unknown as ImageBuildReaper,
     options.sourceControl === undefined ? ({} as SourceControlProvider) : options.sourceControl,
     resolveTarget,
     listScopes
@@ -107,6 +111,7 @@ function harness(
     store,
     adapter,
     workflow,
+    reaper,
     resolveTarget,
     listScopes,
     listSessionCleanup,
@@ -179,14 +184,14 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("continues reconciliation and artifact cleanup when a cleanup phase query fails", async () => {
-    const { scheduler, store, workflow } = harness();
+    const { scheduler, store, reaper } = harness();
     store.listSessionCleanup.mockRejectedValueOnce(new Error("D1 cleanup unavailable"));
 
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
     expect(stats.scopesScanned).toBe(1);
     expect(stats.triggered).toBe(1);
-    expect(workflow.cleanupImages).toHaveBeenCalledOnce();
+    expect(reaper.cleanupImages).toHaveBeenCalledOnce();
   });
 
   it("checks every enabled scope in one full scan", async () => {
@@ -262,7 +267,7 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("runs provider-neutral maintenance when rebuild reconciliation is unavailable", async () => {
-    const { scheduler, listScopes, workflow } = harness({
+    const { scheduler, listScopes, reaper } = harness({
       provider: null,
       sourceControl: null,
     });
@@ -273,7 +278,7 @@ describe("ImageBuildScheduler", () => {
     expect(stats.cleanupAttempted).toBe(2);
     expect(stats.scopesScanned).toBe(0);
     expect(listScopes).not.toHaveBeenCalled();
-    expect(workflow.cleanupImages).toHaveBeenCalledOnce();
+    expect(reaper.cleanupImages).toHaveBeenCalledOnce();
   });
 
   it("republishes persisted artifacts left behind by exhausted Queue delivery", async () => {
