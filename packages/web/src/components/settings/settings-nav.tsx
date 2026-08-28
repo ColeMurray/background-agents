@@ -139,6 +139,10 @@ export const SETTINGS_GROUPS = [
 type SettingsItem = (typeof SETTINGS_GROUPS)[number]["items"][number];
 export type SettingsCategory = SettingsItem["id"];
 
+function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean): boolean {
+  return !("requiresRepoImages" in item) || repoImagesEnabled;
+}
+
 export function getSettingsCategoryLabel(category: SettingsCategory): string {
   for (const group of SETTINGS_GROUPS) {
     for (const item of group.items) {
@@ -155,7 +159,7 @@ export function isSettingsCategory(
   if (!value) return false;
   return SETTINGS_GROUPS.some((group) =>
     group.items.some(
-      (item) => item.id === value && (!("requiresRepoImages" in item) || repoImagesEnabled)
+      (item) => item.id === value && isSettingsItemAvailable(item, repoImagesEnabled)
     )
   );
 }
@@ -193,7 +197,7 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
   const groups = SETTINGS_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
-      if ("requiresRepoImages" in item && !repoImagesEnabled) return false;
+      if (!isSettingsItemAvailable(item, repoImagesEnabled)) return false;
       if (!normalizedQuery) return true;
       const searchText = `${item.label} ${item.description} ${item.keywords}`.toLowerCase();
       return normalizedQuery.split(/\s+/).every((term) => searchText.includes(term));

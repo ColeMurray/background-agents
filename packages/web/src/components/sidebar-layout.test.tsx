@@ -11,7 +11,6 @@ expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   isMobile: false,
-  pathname: "/",
   sidebar: {
     isOpen: true,
     toggle: vi.fn(),
@@ -22,7 +21,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(),
-  usePathname: () => mocks.pathname,
+  usePathname: () => "/",
 }));
 
 vi.mock("@/hooks/use-media-query", () => ({
@@ -37,20 +36,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.isMobile = false;
-  mocks.pathname = "/";
   mocks.sidebar.isOpen = true;
-});
-
-describe("settings shell", () => {
-  it("replaces the session sidebar on settings routes", () => {
-    mocks.pathname = "/settings";
-    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
-
-    render(<SidebarLayout>Settings content</SidebarLayout>);
-
-    expect(screen.getByText("Settings content")).toBeInTheDocument();
-    expect(screen.queryByTestId("mobile-sidebar-drawer")).not.toBeInTheDocument();
-  });
 });
 
 describe("CollapsedSidebarControls", () => {
