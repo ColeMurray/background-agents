@@ -5,6 +5,7 @@ locals {
   use_vercel_backend       = var.sandbox_provider == "vercel"
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
   use_e2b_backend          = var.sandbox_provider == "e2b"
+  sandbox_runtime_manifest = jsondecode(file("${var.project_root}/packages/sandbox-runtime/src/sandbox_runtime/runtime_manifest.json"))
 
   # A complete OAuth credential pair is the deployment's provider enablement
   # declaration. Runtime validation mirrors these plan-time invariants.

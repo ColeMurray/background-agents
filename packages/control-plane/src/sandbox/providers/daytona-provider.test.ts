@@ -143,6 +143,23 @@ describe("DaytonaSandboxProvider", () => {
       expect(createCall.public).toBe(false);
     });
 
+    it("returns a partial result when tunnel enrichment fails after launch", async () => {
+      const client = createMockClient({
+        getSignedPreviewUrl: vi.fn(async () => {
+          throw new Error("preview service unavailable");
+        }),
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await expect(
+        provider.createSandbox({ ...baseCreateConfig, codeServerEnabled: true })
+      ).resolves.toMatchObject({
+        sandboxId: "sandbox-456",
+        providerObjectId: "daytona-sandbox-id",
+        codeServerUrl: undefined,
+      });
+    });
+
     it("assembles env vars correctly for GitHub, without embedding any token", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);

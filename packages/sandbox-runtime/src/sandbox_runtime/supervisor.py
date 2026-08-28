@@ -11,9 +11,21 @@ from urllib.parse import quote
 
 import httpx
 
-from .constants import BOOT_WARNINGS_FILE_PATH, IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from .agent_bridge_process import (
+    BridgeStartupError,
+    ExecutionInitializationError,
+    LocalControlDeliveryError,
+)
+from .constants import (
+    BOOT_WARNINGS_FILE_PATH,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+    MANAGED_SKILLS_MATERIALIZATION_TIMEOUT_SECONDS,
+)
+from .opencode_server import OpenCodeHealthTimeoutError
 from .repo_image_callback import RepoImageBuildCallback
-from .runtime_config import BootMode, RuntimeConfig
+from .repository_boot import PrimaryStartError
+from .runtime_config import BootMode, RuntimeConfig, SandboxControlProtocol
+from .types import BootFailureCode, BootPhase
 
 if TYPE_CHECKING:
     import signal
@@ -70,6 +82,64 @@ class SandboxSupervisor:
         self._desktop_restart_task: asyncio.Task[bool] | None = None
         self._repository_boot_result: RepositoryBootResult | None = None
         self._boot_progress_task: asyncio.Task[None] | None = None
+        self._boot_phase: BootPhase | None = None
+        self._bridge_restart_count = 0
+        self._bridge_restart_lock = asyncio.Lock()
+
+    @property
+    def _uses_v2_control(self) -> bool:
+        return self.config.sandbox_control_protocol is SandboxControlProtocol.V2
+
+    async def _set_boot_phase(self, phase: BootPhase) -> None:
+        self._boot_phase = phase
+        if self._uses_v2_control:
+            await self._deliver_bridge_control(lambda: self.agent_bridge.set_boot_phase(phase))
+
+    async def _signal_execution_dependencies_ready(self) -> None:
+        await self._deliver_bridge_control(self.agent_bridge.execution_dependencies_ready)
+
+    async def _signal_execution_dependencies_unavailable(self, phase: BootPhase) -> None:
+        await self._deliver_bridge_control(
+            lambda: self.agent_bridge.execution_dependencies_unavailable(phase)
+        )
+
+    async def _deliver_bridge_control(self, send: Callable[[], Awaitable[Any]]) -> None:
+        try:
+            await send()
+        except LocalControlDeliveryError as error:
+            self.log.error(
+                "bridge.local_control_delivery_failed",
+                message_type=error.message_type,
+                reason=error.reason,
+            )
+            await self._restart_bridge(
+                stop_current=True,
+                expected_process=self.agent_bridge.process_identity(),
+            )
+
+    def _boot_failure_code(self, error: Exception | None = None) -> BootFailureCode:
+        if isinstance(error, BridgeStartupError):
+            return BootFailureCode.BRIDGE_INITIALIZATION_FAILED
+        if isinstance(error, OpenCodeHealthTimeoutError):
+            return BootFailureCode.OPENCODE_HEALTH_TIMEOUT
+        if isinstance(error, PrimaryStartError):
+            return BootFailureCode.PRIMARY_START_FAILED
+        if self._boot_phase is None:
+            return BootFailureCode.INTERNAL_BOOT_ERROR
+        return {
+            BootPhase.REPOSITORY_SYNC: BootFailureCode.REPOSITORY_BOOT_FAILED,
+            BootPhase.MANAGED_SKILLS: BootFailureCode.MANAGED_SKILLS_FAILED,
+            BootPhase.OPENCODE_START: BootFailureCode.OPENCODE_START_FAILED,
+        }.get(self._boot_phase, BootFailureCode.INTERNAL_BOOT_ERROR)
+
+    async def _report_v2_boot_failure(self, error: Exception) -> None:
+        if isinstance(error, ExecutionInitializationError):
+            return
+        if isinstance(error, BridgeStartupError):
+            await self._set_boot_phase(BootPhase.BRIDGE_INITIALIZATION)
+        elif isinstance(error, OpenCodeHealthTimeoutError):
+            await self._set_boot_phase(BootPhase.OPENCODE_HEALTH)
+        await self.agent_bridge.boot_failed(self._boot_failure_code(error))
 
     async def _report_boot_progress(self) -> None:
         session_id = str(self.config.session_config.get("session_id") or "")
@@ -155,6 +225,9 @@ class SandboxSupervisor:
         if exit_code is None:
             return restart_count
 
+        if self._uses_v2_control:
+            await self._signal_execution_dependencies_unavailable(BootPhase.OPENCODE_RESTART)
+
         restart_count += 1
         self.log.error(
             "opencode.crash",
@@ -163,7 +236,10 @@ class SandboxSupervisor:
         )
         if restart_count > self.MAX_RESTARTS:
             self.log.error("opencode.max_restarts", restart_count=restart_count)
-            await self._report_fatal_error(f"OpenCode crashed {restart_count} times, giving up")
+            if self._uses_v2_control:
+                await self.agent_bridge.boot_failed(BootFailureCode.OPENCODE_START_FAILED)
+            else:
+                await self._report_fatal_error(f"OpenCode crashed {restart_count} times, giving up")
             self.shutdown_event.set()
             return restart_count
 
@@ -181,39 +257,63 @@ class SandboxSupervisor:
             self._repository_boot_result.repositories,
             self._repository_boot_result.workdir,
         )
+        if self._uses_v2_control:
+            await self._signal_execution_dependencies_ready()
         return restart_count
 
-    async def _handle_bridge_exit(self, restart_count: int) -> int:
+    async def _restart_bridge(self, *, stop_current: bool, expected_process: object | None) -> bool:
+        async with self._bridge_restart_lock:
+            if self.agent_bridge.process_identity() is not expected_process:
+                return True
+            if stop_current:
+                await self.agent_bridge.stop()
+            while self._bridge_restart_count < self.MAX_RESTARTS:
+                self._bridge_restart_count += 1
+                delay = min(self.BACKOFF_BASE**self._bridge_restart_count, self.BACKOFF_MAX)
+                self.log.info(
+                    "bridge.restart",
+                    delay_s=round(delay, 1),
+                    restart_count=self._bridge_restart_count,
+                )
+                if await self._wait_for_shutdown(delay):
+                    return False
+                try:
+                    await self.agent_bridge.start()
+                    return True
+                except (BridgeStartupError, LocalControlDeliveryError) as error:
+                    self.log.error(
+                        "bridge.restart_failed",
+                        restart_count=self._bridge_restart_count,
+                        error_type=type(error).__name__,
+                    )
+                    if isinstance(error, LocalControlDeliveryError):
+                        await self.agent_bridge.stop()
+
+            self.log.error("bridge.max_restarts", restart_count=self._bridge_restart_count + 1)
+            await self._report_fatal_error(
+                f"Bridge crashed {self._bridge_restart_count + 1} times, giving up"
+            )
+            self.shutdown_event.set()
+            return False
+
+    async def _handle_bridge_exit(self) -> None:
         exit_code = self.agent_bridge.exit_code()
         if exit_code is None:
-            return restart_count
+            return
         if exit_code == 0:
             self.log.info("bridge.graceful_exit", exit_code=exit_code)
             self.shutdown_event.set()
-            return restart_count
+            return
 
-        restart_count += 1
         self.log.error(
             "bridge.crash",
             exit_code=exit_code,
-            restart_count=restart_count,
+            restart_count=self._bridge_restart_count + 1,
         )
-        if restart_count > self.MAX_RESTARTS:
-            self.log.error("bridge.max_restarts", restart_count=restart_count)
-            await self._report_fatal_error(f"Bridge crashed {restart_count} times, giving up")
-            self.shutdown_event.set()
-            return restart_count
-
-        delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
-        self.log.info(
-            "bridge.restart",
-            delay_s=round(delay, 1),
-            restart_count=restart_count,
+        await self._restart_bridge(
+            stop_current=False,
+            expected_process=self.agent_bridge.process_identity(),
         )
-        if await self._wait_for_shutdown(delay):
-            return restart_count
-        await self.agent_bridge.start()
-        return restart_count
 
     async def _handle_code_server_exit(self, restart_count: int) -> int:
         exit_code = self.code_server.exit_code()
@@ -296,7 +396,6 @@ class SandboxSupervisor:
     async def monitor_processes(self) -> None:
         """Monitor each concrete process owner with its explicit restart policy."""
         opencode_restarts = 0
-        bridge_restarts = 0
         code_server_restarts = 0
         terminal_restarts = 0
         desktop_restarts = 0
@@ -305,7 +404,7 @@ class SandboxSupervisor:
             opencode_restarts = await self._handle_opencode_exit(opencode_restarts)
             if self.shutdown_event.is_set():
                 break
-            bridge_restarts = await self._handle_bridge_exit(bridge_restarts)
+            await self._handle_bridge_exit()
             if self.shutdown_event.is_set():
                 break
             code_server_restarts = await self._handle_code_server_exit(code_server_restarts)
@@ -396,6 +495,7 @@ class SandboxSupervisor:
         Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
 
         opencode_ready = False
+        process_monitor_task: asyncio.Task[None] | None = None
         try:
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
@@ -420,37 +520,61 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return True
 
-            self._start_boot_progress()
+            if self._uses_v2_control:
+                await self.agent_bridge.start()
+                process_monitor_task = asyncio.create_task(self.monitor_processes())
+            else:
+                self._start_boot_progress()
 
+            await self._set_boot_phase(BootPhase.DESKTOP)
             try:
                 await self.browser_desktop.start()
             except Exception as error:
                 self.log.warn("vnc.start_failed", exc=error)
                 await self.browser_desktop.stop()
 
-            boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+            self._boot_phase = BootPhase.REPOSITORY_SYNC
+            if self._uses_v2_control:
+                boot_result = await self.repository_boot.boot(
+                    self.boot_mode, expected_tunnel_ports, self._set_boot_phase
+                )
+            else:
+                boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
             self._repository_boot_result = boot_result
 
             # Materialization is sandbox-boot work; OpenCode process restarts
             # reuse this tree and must not depend on control-plane availability.
             if self.managed_skills is not None:
-                await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
+                await self._set_boot_phase(BootPhase.MANAGED_SKILLS)
+                try:
+                    async with asyncio.timeout(MANAGED_SKILLS_MATERIALIZATION_TIMEOUT_SECONDS):
+                        await self.managed_skills.materialize(
+                            boot_result.repositories, boot_result.workdir
+                        )
+                except TimeoutError as error:
+                    raise RuntimeError("managed skills materialization timed out") from error
 
+            await self._set_boot_phase(BootPhase.CODE_SERVER)
             try:
                 await self.code_server.start(boot_result.workdir)
             except Exception as error:
                 self.log.warn("code_server.start_failed", exc=error)
                 await self.code_server.stop()
+            await self._set_boot_phase(BootPhase.TERMINAL)
             try:
                 await self.web_terminal.start(boot_result.workdir)
             except Exception as error:
                 self.log.warn("web_terminal.start_failed", exc=error)
                 await self.web_terminal.stop()
 
+            await self._set_boot_phase(BootPhase.OPENCODE_START)
             await self.opencode_server.start(boot_result.repositories, boot_result.workdir)
             opencode_ready = True
-            await self._stop_boot_progress()
-            await self.agent_bridge.start()
+            if self._uses_v2_control:
+                await self._signal_execution_dependencies_ready()
+            else:
+                await self._stop_boot_progress()
+                await self.agent_bridge.start()
             self.log.info(
                 "sandbox.startup",
                 repo_owner=self.config.repo_owner,
@@ -465,7 +589,10 @@ class SandboxSupervisor:
                 duration_ms=int((time.time() - startup_start) * 1000),
                 outcome="success",
             )
-            await self.monitor_processes()
+            if process_monitor_task is None:
+                await self.monitor_processes()
+            else:
+                await process_monitor_task
         except ImageBuildExecutionCancelled:
             self.log.info("image_build.cancelled", reason="shutdown_requested")
             return True
@@ -483,9 +610,15 @@ class SandboxSupervisor:
                 except ImageBuildExecutionCancelled:
                     self.log.info("image_build.cancelled", reason="shutdown_requested")
                     return True
-            await self._report_fatal_error(str(error))
+            if self._uses_v2_control and self.agent_bridge.started():
+                await self._report_v2_boot_failure(error)
+            else:
+                await self._report_fatal_error(str(error))
             return False
         finally:
+            if process_monitor_task is not None and not process_monitor_task.done():
+                process_monitor_task.cancel()
+                await asyncio.gather(process_monitor_task, return_exceptions=True)
             await self._stop_boot_progress()
             await self.shutdown()
         return True

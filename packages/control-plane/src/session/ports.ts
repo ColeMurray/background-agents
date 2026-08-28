@@ -21,6 +21,13 @@ export type ConnectionClassification =
   | { kind: "sandbox"; sandboxId?: string }
   | { kind: "client"; wsId?: string };
 
+export interface AuthenticatedSandboxSender<Connection> {
+  connection: Connection;
+  sandboxId: string;
+  protocolVersion: 1 | 2;
+  executionReady: boolean;
+}
+
 /** Wall and monotonic time sources used by session application code. */
 export interface Clock {
   nowMs(): number;
@@ -36,6 +43,7 @@ export interface SocketRegistry<Connection, Client extends ConnectedClient> {
   clearSandboxIfMatch(connection: Connection): boolean;
   removeClient(connection: Connection): Client | null;
   hasParticipant(participantId: string): boolean;
+  getSandboxSender(connection: Connection): AuthenticatedSandboxSender<Connection> | null;
 }
 
 /** Participant-facing notifications emitted by disconnect policy. */

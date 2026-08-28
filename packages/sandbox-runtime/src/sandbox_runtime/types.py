@@ -13,6 +13,7 @@ class SandboxStatus(StrEnum):
     SPAWNING = "spawning"
     CONNECTING = "connecting"
     WARMING = "warming"
+    BOOTING = "booting"
     READY = "ready"
     STALE = "stale"  # Heartbeat missed - sandbox may be unresponsive
     SNAPSHOTTING = "snapshotting"  # Taking filesystem snapshot
@@ -27,6 +28,42 @@ class GitSyncStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class RuntimeState(StrEnum):
+    BOOTING = "booting"
+    READY = "ready"
+
+
+class BootPhase(StrEnum):
+    DESKTOP = "desktop"
+    REPOSITORY_SYNC = "repository_sync"
+    SETUP = "setup"
+    TUNNEL = "tunnel"
+    START = "start"
+    MANAGED_SKILLS = "managed_skills"
+    CODE_SERVER = "code_server"
+    TERMINAL = "terminal"
+    MCP_PACKAGES = "mcp_packages"
+    OPENCODE_START = "opencode_start"
+    OPENCODE_HEALTH = "opencode_health"
+    RESTORED_SESSION_VALIDATION = "restored_session_validation"
+    GIT_SIGNING = "git_signing"
+    BRIDGE_INITIALIZATION = "bridge_initialization"
+    OPENCODE_RESTART = "opencode_restart"
+
+
+class BootFailureCode(StrEnum):
+    REPOSITORY_BOOT_FAILED = "repository_boot_failed"
+    PRIMARY_START_FAILED = "primary_start_failed"
+    MANAGED_SKILLS_FAILED = "managed_skills_failed"
+    OPENCODE_START_FAILED = "opencode_start_failed"
+    OPENCODE_HEALTH_TIMEOUT = "opencode_health_timeout"
+    RESTORED_SESSION_VALIDATION_FAILED = "restored_session_validation_failed"
+    GIT_SIGNING_FAILED = "git_signing_failed"
+    BRIDGE_INITIALIZATION_FAILED = "bridge_initialization_failed"
+    FATAL_PHASE_TIMEOUT = "fatal_phase_timeout"
+    INTERNAL_BOOT_ERROR = "internal_boot_error"
 
 
 class SandboxEvent(BaseModel):

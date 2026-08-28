@@ -392,8 +392,8 @@ export class SessionMessageQueue {
       return;
     }
 
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (!sandboxWs) {
+    const controlWs = this.wsManager.getSandboxControlSocket();
+    if (!controlWs) {
       this.log.info("prompt.dispatch", {
         event: "prompt.dispatch",
         message_id: message.id,
@@ -422,6 +422,16 @@ export class SessionMessageQueue {
           context: { message_id: message.id },
         }
       );
+      return;
+    }
+    const sandboxWs = this.wsManager.getExecutionSocket();
+    if (!sandboxWs) {
+      this.log.info("prompt.dispatch", {
+        event: "prompt.dispatch",
+        message_id: message.id,
+        outcome: "deferred",
+        reason: "sandbox_not_ready",
+      });
       return;
     }
 

@@ -597,6 +597,23 @@ variable "sandbox_inactivity_timeout_ms" {
   default     = 600000
 }
 
+variable "enable_early_sandbox_control_channel" {
+  description = "Opt new interactive sandbox launches into sandbox control protocol v2. Keep false until all selected provider artifacts support it."
+  type        = bool
+  default     = false
+}
+
+variable "verified_sandbox_runtime_generation" {
+  description = "Highest sandbox runtime generation verified across every selected provider artifact. Set to the manifest generation only after those artifacts are deployed."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.verified_sandbox_runtime_generation >= 0 && floor(var.verified_sandbox_runtime_generation) == var.verified_sandbox_runtime_generation
+    error_message = "verified_sandbox_runtime_generation must be a non-negative integer."
+  }
+}
+
 variable "web_platform" {
   description = "Platform for the web app deployment: 'vercel' or 'cloudflare' (OpenNext)"
   type        = string

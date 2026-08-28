@@ -342,7 +342,7 @@ Key fields to check:
 - `prompt.run` → `outcome` and `duration_ms` (did it succeed? how long?)
 - `prompt.complete` → `total_duration_ms` (end-to-end time)
 
-### "Why is the sandbox not connecting?"
+### "Why is the sandbox not ready?"
 
 ```
 # 1. Did the sandbox spawn?
@@ -352,15 +352,26 @@ service="control-plane" msg="sandbox.spawned" session_id="<SESSION_ID>"
 # 2. Did the provider create it? Modal example:
 service="modal-infra" msg="sandbox.create" sandbox_id="<SANDBOX_ID>"
 
-# 3. Did startup succeed?
-service="modal-infra" msg="sandbox.startup" sandbox_id="<SANDBOX_ID>"
-
-# 4. Did the bridge connect?
+# 3. Did the early bridge connect?
 service="modal-infra" msg="bridge.connect" sandbox_id="<SANDBOX_ID>"
 
-# 5. Did the control-plane accept the WebSocket?
+# 4. Did the control plane accept the control socket?
 service="control-plane" msg="ws.connect" ws_type="sandbox" session_id="<SESSION_ID>"
+
+# 5. Which boot phase was last observed?
+service="control-plane" event="sandbox.boot_phase" session_id="<SESSION_ID>"
+
+# 6. Did execution become ready?
+service="control-plane" event="sandbox.execution_ready" session_id="<SESSION_ID>"
+
+# 7. Was prompt dispatch still deferred?
+service="control-plane" event="prompt.dispatch" outcome="deferred" session_id="<SESSION_ID>"
 ```
+
+Interpret the stages separately: provider startup without `bridge.connect` indicates launch or
+network failure; a connected socket with fresh heartbeats but no readiness indicates boot or
+execution initialization; `reason="sandbox_not_ready"` is expected while that work is in progress.
+For legacy runtimes, look for authenticated `boot-progress` requests instead of early heartbeats.
 
 Check `outcome` and `reject_reason` on `ws.connect`. Common reasons:
 

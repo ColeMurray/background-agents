@@ -64,3 +64,11 @@ BOOT_WARNINGS_FILE_PATH = "/tmp/oi-boot-warnings.jsonl"
 # layout has a single authority. JSON: {"repositories": [{owner, name, branch,
 # path}]}. Mirrored as a string literal in plugins/inspect-plugin.js.
 REPO_MANIFEST_FILE_PATH = "/tmp/oi-repo-manifest.json"
+
+# V2 fatal boot events retry through one reconnect before supervisor shutdown.
+BOOT_FAILURE_ACK_TIMEOUT_SECONDS = 5.0
+BOOT_FAILURE_SHUTDOWN_GRACE_SECONDS = 15.0
+LOCAL_CONTROL_SEND_TIMEOUT_SECONDS = 5.0
+EXECUTION_READY_RESULT_TIMEOUT_SECONDS = 30.0
+MANAGED_SKILLS_MATERIALIZATION_TIMEOUT_SECONDS = 120.0
+MANAGED_SKILLS_PROCESS_TERMINATE_GRACE_SECONDS = 2.0

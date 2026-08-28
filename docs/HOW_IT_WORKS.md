@@ -160,8 +160,9 @@ Open-Inspect uses a three-tier architecture spanning multiple cloud providers:
 │  ┌────────────────────────────────────────────────────────────────────┐ │
 │  │                        Session Sandbox                              │ │
 │  │  ┌────────────┐    ┌────────────┐    ┌────────────┐               │ │
-│  │  │ Supervisor │───▶│  OpenCode  │───▶│   Bridge   │───────────────┼─┼──▶ Control Plane
-│  │  └────────────┘    └────────────┘    └────────────┘               │ │
+│  │  │ Supervisor │───▶│   Bridge   │────────────────────────────────┼─┼──▶ Control Plane
+│  │  └─────┬──────┘    └─────┬──────┘                                │ │
+│  │        └──────────────▶ OpenCode ◀────────────────────────────────┘ │
 │  │                           │                                        │ │
 │  │                    Full Dev Environment                            │ │
 │  │              (Node.js, Python, git, Playwright)                    │ │
@@ -190,6 +191,12 @@ Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the
 does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
 in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
 heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+
+For control protocol v2, the bridge connects before repository boot and OpenCode startup. A control
+socket means the runtime is connected, heartbeats prove it is alive, and only the connection-scoped
+`ready` event makes that socket eligible for prompt dispatch. Reconnected sockets start unconfirmed
+and must announce readiness again. Legacy runtime images retain their late-connect progress watchdog
+during the rollout window.
 
 ### Data Plane (Sandbox Backends)
 
@@ -257,12 +264,13 @@ When you create a session for a repo without an existing snapshot:
 ```
 
 1. **Sandbox created**: The selected backend creates a fresh sandbox from its base runtime
-2. **Git sync**: Clones your repository using brokered SCM credentials from the git credential
+2. **Control attach**: A v2 runtime connects and starts boot heartbeats; prompts remain queued
+3. **Git sync**: Clones your repository using brokered SCM credentials from the git credential
    helper
-3. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
-4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
-5. **Agent start**: OpenCode server starts and connects back to the control plane
-6. **Ready**: Sandbox accepts prompts
+4. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
+5. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
+6. **Agent start**: OpenCode starts and passes its health check
+7. **Ready**: The bridge validates execution dependencies and the control plane releases prompts
 
 For multi-repository sessions, steps 2–4 run per repository in position order: every repository is
 cloned into its own `/workspace` directory and each repository's setup and start scripts run in

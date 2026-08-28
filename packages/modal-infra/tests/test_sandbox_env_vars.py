@@ -113,6 +113,41 @@ async def test_user_env_vars_override_order(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_control_protocol_env_is_typed_and_control_plane_owned(monkeypatch):
+    captured = []
+
+    async def fake_create_aio(*args, **kwargs):
+        captured.append(kwargs["env"])
+
+        class FakeSandbox:
+            object_id = "obj-123"
+            stdout = None
+
+        return FakeSandbox()
+
+    fake_create_aio.aio = fake_create_aio
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+
+    await SandboxManager().create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            sandbox_control_protocol_version=2,
+        )
+    )
+    await SandboxManager().create_sandbox(
+        SandboxConfig(
+            repo_owner="acme",
+            repo_name="repo",
+            user_env_vars={"SANDBOX_CONTROL_PROTOCOL_VERSION": "2"},
+        )
+    )
+
+    assert captured[0]["SANDBOX_CONTROL_PROTOCOL_VERSION"] == "2"
+    assert "SANDBOX_CONTROL_PROTOCOL_VERSION" not in captured[1]
+
+
+@pytest.mark.asyncio
 async def test_restore_user_env_vars_override_order(monkeypatch):
     captured = {}
 

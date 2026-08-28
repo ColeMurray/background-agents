@@ -235,10 +235,11 @@ export class E2BSandboxProvider implements SandboxProvider {
       });
 
       try {
-        await this.startEntrypoint(sandbox);
+        await this.startEntrypoint(sandbox, undefined, "return_unknown");
       } catch (error) {
         // The sandbox exists but can never boot — kill it rather than leak it
-        // until its TTL, then let the create fail loudly.
+        // until its TTL. startEntrypoint only throws before issuing the launch
+        // request; ambiguous request failures are logged and preserved instead.
         await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
         throw error;
       }
@@ -344,12 +345,15 @@ export class E2BSandboxProvider implements SandboxProvider {
    * classified permanent so it trips the circuit breaker instead of looping
    * create→kill.
    *
-   * Callers own cleanup: any failure here leaves a sandbox that can never
-   * boot, and the caller must kill it rather than leak it until its TTL.
+   * Missing secure-launch credentials fail before the request and remain safe
+   * to clean up. Interactive callers preserve an ambiguous request failure
+   * because the detached process may already be running; image builds keep the
+   * strict throw-and-cleanup behavior because they have no control channel.
    */
   private async startEntrypoint(
     sandbox: E2BSandboxCreated,
-    providerSessionId?: string
+    providerSessionId?: string,
+    ambiguousFailure: "throw" | "return_unknown" = "throw"
   ): Promise<void> {
     const envdAccessToken = sandbox.envdAccessToken;
     if (!envdAccessToken) {
@@ -358,10 +362,19 @@ export class E2BSandboxProvider implements SandboxProvider {
         "permanent"
       );
     }
-    await this.client.startProcess(sandbox.sandboxID, entrypointCommand(providerSessionId), {
-      domain: sandbox.domain,
-      envdAccessToken,
-    });
+    try {
+      await this.client.startProcess(sandbox.sandboxID, entrypointCommand(providerSessionId), {
+        domain: sandbox.domain,
+        envdAccessToken,
+      });
+    } catch (error) {
+      if (ambiguousFailure === "throw") throw error;
+      log.warn("e2b.entrypoint_launch_unknown", {
+        sandbox_id: sandbox.sandboxID,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     log.info("e2b.entrypoint_started", { sandbox_id: sandbox.sandboxID });
   }
 

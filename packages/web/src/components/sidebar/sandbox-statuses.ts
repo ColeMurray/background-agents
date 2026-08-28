@@ -7,5 +7,6 @@ export const STARTING_SANDBOX_STATUSES: Set<SandboxStatus> = new Set([
   "pending",
   "spawning",
   "connecting",
+  "booting",
   "warming",
 ]);

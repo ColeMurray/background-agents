@@ -11,6 +11,7 @@ class RuntimeManifest(TypedDict):
     generation: int
     minimumCompatibleGeneration: int
     minimumRebuildGeneration: int
+    sandboxControlProtocolV2MinimumGeneration: int
 
 
 _MANIFEST_PATH = Path(__file__).with_name("runtime_manifest.json")

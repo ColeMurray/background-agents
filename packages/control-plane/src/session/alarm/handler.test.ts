@@ -13,6 +13,7 @@ function createHandler() {
     failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
     recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
     resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
+    processMessageQueue: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const lifecycleManager = {
     handleAlarm: vi.fn<() => Promise<SandboxAlarmResult>>().mockResolvedValue("no_action"),
@@ -120,6 +121,7 @@ describe("createAlarmHandler", () => {
       failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
       recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
       resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
+      processMessageQueue: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
 
     const handler = createAlarmHandler({
@@ -160,7 +162,7 @@ describe("createAlarmHandler", () => {
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 
-  it("fails stuck work without resuming after a connecting timeout", async () => {
+  it("fails stuck work and redrives the pending queue once after a startup timeout", async () => {
     const { handler, repository, messageQueue, lifecycleManager } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
     lifecycleManager.handleAlarm.mockResolvedValue("sandbox_failed");
@@ -168,6 +170,7 @@ describe("createAlarmHandler", () => {
     await handler.handle();
 
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
+    expect(messageQueue.processMessageQueue).toHaveBeenCalledOnce();
     expect(messageQueue.resumeAfterSandboxTermination).not.toHaveBeenCalled();
   });
 
@@ -179,6 +182,7 @@ describe("createAlarmHandler", () => {
     await handler.handle();
 
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
+    expect(messageQueue.processMessageQueue).not.toHaveBeenCalled();
     expect(messageQueue.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
   });
 });

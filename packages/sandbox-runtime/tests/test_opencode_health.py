@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime.opencode_server import OpenCodeHealthTimeoutError
 from tests.runtime_helpers import make_opencode_server
 
 
@@ -30,3 +31,15 @@ async def test_stop_tolerates_process_exiting_before_terminate():
     await server.stop()
 
     process.wait.assert_awaited_once()
+
+
+async def test_health_timeout_has_distinct_failure_type(monkeypatch):
+    server = make_opencode_server({})
+    server._opencode_process = SimpleNamespace(returncode=None)
+    server.HEALTH_CHECK_TIMEOUT = 0
+
+    with (
+        patch("sandbox_runtime.opencode_server.httpx.AsyncClient"),
+        pytest.raises(OpenCodeHealthTimeoutError),
+    ):
+        await server._wait_for_health()

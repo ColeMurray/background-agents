@@ -146,8 +146,10 @@ export interface SandboxState {
   status: SandboxStatus;
   /** When the sandbox was created/spawned */
   createdAt: number;
-  /** Last authenticated boot liveness report */
+  /** Last authenticated legacy boot-progress report, before runtime attachment. */
   bootProgressAt?: number | null;
+  /** Server timestamp when provider startup completed and runtime attach waiting began. */
+  runtimeAttachStartedAt?: number | null;
   /** Provider object ID if the sandbox exists remotely */
   providerObjectId?: string | null;
   /** Snapshot image ID if available for restore */
@@ -177,15 +179,20 @@ export interface SpawnConfig {
    * Guards against spawns interrupted before the sandbox connects (provider
    * crash, redeploy, cancelled provider call). Such a spawn can leave the
    * persisted status pinned at "spawning"/"connecting" indefinitely — the
-   * connecting-timeout alarm may never have been scheduled — which otherwise
+   * provider-startup lease alarm may never have been scheduled — which otherwise
    * makes every later spawn attempt skip with "already spawning" forever.
    */
-  spawningTimeoutMs: number;
-  /** Absolute maximum wall-clock duration for one boot attempt */
-  maxBootDurationMs: number;
+  /** Maximum duration of a provider create/restore/resume operation. */
+  providerOperationLeaseMs: number;
+  /** Maximum liveness gap while waiting for legacy runtime attachment. */
+  runtimeAttachTimeoutMs: number;
+  /** Absolute cap for a legacy pre-attach startup attempt. */
+  legacyStartupCapMs: number;
 }
 
-export const DEFAULT_MAX_BOOT_DURATION_MS = 15 * 60 * 1000;
+export const DEFAULT_LEGACY_STARTUP_CAP_MS = 15 * 60 * 1000;
+export const DEFAULT_PROVIDER_OPERATION_LEASE_MS = 15 * 60 * 1000;
+export const RUNTIME_ATTACH_TIMEOUT_MS = 120_000;
 
 /**
  * Default spawn configuration.
@@ -193,8 +200,9 @@ export const DEFAULT_MAX_BOOT_DURATION_MS = 15 * 60 * 1000;
 export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
   cooldownMs: 30000, // 30 seconds
   readyWaitMs: 60000, // 60 seconds
-  spawningTimeoutMs: 120000, // 2 minutes — matches the connecting-timeout watchdog
-  maxBootDurationMs: DEFAULT_MAX_BOOT_DURATION_MS,
+  providerOperationLeaseMs: DEFAULT_PROVIDER_OPERATION_LEASE_MS,
+  runtimeAttachTimeoutMs: RUNTIME_ATTACH_TIMEOUT_MS,
+  legacyStartupCapMs: DEFAULT_LEGACY_STARTUP_CAP_MS,
 };
 
 /**
@@ -274,8 +282,7 @@ export function evaluateSpawnDecision(
   isSpawningInMemory: boolean,
   supportsPersistentResume = false
 ): SpawnAction {
-  const timeSinceLivenessMs = now - Math.max(state.createdAt, state.bootProgressAt ?? 0);
-  const bootDurationMs = now - state.createdAt;
+  const runtimeAttachStartedAt = state.runtimeAttachStartedAt ?? null;
 
   // In-memory flag first: it is set synchronously when a spawn/restore starts
   // and stays up until the provider call resolves. A second evaluation in
@@ -314,24 +321,28 @@ export function evaluateSpawnDecision(
     };
   }
 
-  // Don't spawn if a spawn/connect is genuinely in progress (persisted status).
-  // But a spawn interrupted before the sandbox connects (provider crash,
-  // redeploy, cancelled provider call) can pin the status at "spawning"/
-  // "connecting" forever — the connecting-timeout alarm may never have been
-  // scheduled. Treat a stale spawn/connect as dead so a fresh spawn can recover
-  // the session, instead of skipping indefinitely.
-  if (
-    (state.status === "spawning" || state.status === "connecting") &&
-    bootDurationMs >= config.maxBootDurationMs
-  ) {
-    return { action: "spawn", reason: "previous boot exceeded maximum duration" };
+  // An attached runtime owns its boot lifecycle. Heartbeat and phase-specific
+  // failure handling move it out of booting; elapsed total duration does not.
+  if (state.status === "booting") {
+    return { action: "skip", reason: "already booting" };
   }
 
-  if (
-    (state.status === "spawning" || state.status === "connecting") &&
-    timeSinceLivenessMs < config.spawningTimeoutMs
-  ) {
-    return { action: "skip", reason: `already ${state.status}` };
+  if (state.status === "spawning" || state.status === "connecting") {
+    if (state.status === "connecting" && runtimeAttachStartedAt !== null) {
+      const livenessAt = Math.max(runtimeAttachStartedAt, state.bootProgressAt ?? 0);
+      if (now - runtimeAttachStartedAt >= config.legacyStartupCapMs) {
+        return { action: "spawn", reason: "previous legacy attach exceeded its absolute cap" };
+      }
+      if (now - livenessAt < config.runtimeAttachTimeoutMs) {
+        return { action: "skip", reason: "already connecting" };
+      }
+      return { action: "spawn", reason: "previous runtime attach timed out" };
+    }
+
+    if (now - state.createdAt < config.providerOperationLeaseMs) {
+      return { action: "skip", reason: `already ${state.status}` };
+    }
+    return { action: "spawn", reason: "previous provider operation lease expired" };
   }
 
   // Don't spawn if status is "ready" and we have an active WebSocket
@@ -340,10 +351,11 @@ export function evaluateSpawnDecision(
       return { action: "skip", reason: "sandbox ready with active WebSocket" };
     }
     // If no WebSocket but was recently spawned, wait for reconnect
-    if (timeSinceLivenessMs < config.readyWaitMs) {
+    const readyAgeMs = now - state.createdAt;
+    if (readyAgeMs < config.readyWaitMs) {
       return {
         action: "wait",
-        reason: `status ready but no WebSocket, last liveness was ${Math.round(timeSinceLivenessMs / 1000)}s ago`,
+        reason: `status ready but no WebSocket, created ${Math.round(readyAgeMs / 1000)}s ago`,
       };
     }
   }
@@ -351,13 +363,13 @@ export function evaluateSpawnDecision(
   // Cooldown: don't spawn if last spawn was within cooldown period
   // Exception: failed or stopped status bypasses cooldown
   if (
-    timeSinceLivenessMs < config.cooldownMs &&
+    now - state.createdAt < config.cooldownMs &&
     state.status !== "failed" &&
     state.status !== "stopped"
   ) {
     return {
       action: "wait",
-      reason: `last liveness was ${Math.round(timeSinceLivenessMs / 1000)}s ago, waiting`,
+      reason: `last spawn was ${Math.round((now - state.createdAt) / 1000)}s ago, waiting`,
     };
   }
 
@@ -551,33 +563,36 @@ export function evaluateHeartbeatHealth(
   return { isStale: false };
 }
 
-// ==================== Connecting Timeout ====================
+// ==================== Startup Timing ====================
 
 /**
- * Configuration for the initial-connect watchdog.
+ * Configuration for the pre-attach provider-startup lease.
  */
-export interface ConnectingTimeoutConfig {
-  /** Maximum time without boot liveness before the sandbox is failed */
+export interface ProviderOperationLeaseConfig {
+  /** Maximum duration of a provider create/restore/resume operation. */
   timeoutMs: number;
-  /** Absolute maximum wall-clock duration for one boot attempt */
-  maxBootDurationMs: number;
 }
 
-/**
- * Default connecting timeout: 2 minutes.
- * Boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically
- * takes 30–90 seconds. Two minutes provides margin without leaving users waiting too long.
- */
-export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
-  timeoutMs: 120_000,
-  maxBootDurationMs: DEFAULT_MAX_BOOT_DURATION_MS,
+export interface RuntimeAttachTimeoutConfig {
+  /** Maximum time without legacy progress while waiting for runtime attach. */
+  timeoutMs: number;
+  /** Absolute cap for legacy runtime attachment, regardless of progress reports. */
+  legacyStartupCapMs: number;
+}
+
+/** Provider calls can include allocation and image restore, so use a provider-safe lease. */
+export const DEFAULT_PROVIDER_OPERATION_LEASE_CONFIG: ProviderOperationLeaseConfig = {
+  timeoutMs: DEFAULT_PROVIDER_OPERATION_LEASE_MS,
 };
 
-/**
- * Result of connecting timeout evaluation.
- */
-export interface ConnectingTimeoutResult {
-  /** Whether the sandbox has exceeded the connecting timeout */
+export const DEFAULT_RUNTIME_ATTACH_TIMEOUT_CONFIG: RuntimeAttachTimeoutConfig = {
+  timeoutMs: RUNTIME_ATTACH_TIMEOUT_MS,
+  legacyStartupCapMs: DEFAULT_LEGACY_STARTUP_CAP_MS,
+};
+
+/** Result shared by provider-operation and runtime-attach timing decisions. */
+export interface StartupTimingResult {
+  /** Whether the relevant startup deadline has elapsed. */
   isTimedOut: boolean;
   /** Time elapsed against the timeout that fired (ms) */
   elapsedMs: number;
@@ -588,12 +603,11 @@ export interface ConnectingTimeoutResult {
 }
 
 /**
- * Evaluate whether a sandbox has been stuck in "connecting" too long.
+ * Evaluate the provider create/restore/resume operation lease.
  *
- * After a sandbox is spawned, it must establish a WebSocket connection to the
- * control plane within the configured timeout. If the bridge never connects
- * (crash, network failure, etc.), this function detects the timeout so the
- * alarm handler can fail the sandbox.
+ * This lease begins at the persisted reservation and ends when provider
+ * startup commits `runtime_attach_started_at`. Legacy progress does not renew
+ * provider API work.
  *
  * Covers both "connecting" and "spawning": a spawn that is interrupted before
  * the provider call returns leaves the status at "spawning" (the transition to
@@ -604,30 +618,56 @@ export interface ConnectingTimeoutResult {
  *
  * @param status - Current sandbox status
  * @param createdAt - Timestamp (ms) when the sandbox was spawned
- * @param config - Connecting timeout configuration
+ * @param config - Provider-operation lease configuration
  * @param now - Current timestamp (ms)
- * @returns Whether the sandbox has timed out and how long it's been spawning/connecting
+ * @returns Provider-operation timing state
  */
-export function evaluateConnectingTimeout(
+export function evaluateProviderOperationLease(
   status: SandboxStatus,
   createdAt: number,
-  config: ConnectingTimeoutConfig,
-  now: number,
-  bootProgressAt: number | null = null
-): ConnectingTimeoutResult {
-  if (status !== "connecting" && status !== "spawning") {
+  runtimeAttachStartedAt: number | null,
+  config: ProviderOperationLeaseConfig,
+  now: number
+): StartupTimingResult {
+  if ((status !== "connecting" && status !== "spawning") || runtimeAttachStartedAt !== null) {
     return { isTimedOut: false, elapsedMs: 0, livenessAt: createdAt, deadlineAt: createdAt };
   }
 
-  const livenessAt = Math.max(createdAt, bootProgressAt ?? 0);
-  const livenessDeadlineAt = livenessAt + config.timeoutMs;
-  const absoluteDeadlineAt = createdAt + config.maxBootDurationMs;
-  const deadlineAt = Math.min(livenessDeadlineAt, absoluteDeadlineAt);
-  const absoluteTimedOut = now >= absoluteDeadlineAt;
-  const elapsedMs = now - (absoluteTimedOut ? createdAt : livenessAt);
+  const deadlineAt = createdAt + config.timeoutMs;
   return {
     isTimedOut: now >= deadlineAt,
-    elapsedMs,
+    elapsedMs: now - createdAt,
+    livenessAt: createdAt,
+    deadlineAt,
+  };
+}
+
+/**
+ * Evaluate runtime attachment from the server timestamp persisted after the
+ * provider call returns. Providers do not expose entrypoint launch time, so
+ * this is intentionally an attach-wait origin rather than a launch claim.
+ * Legacy progress renews liveness but cannot exceed the absolute attach cap.
+ */
+export function evaluateRuntimeAttachTimeout(
+  status: SandboxStatus,
+  runtimeAttachStartedAt: number | null,
+  config: RuntimeAttachTimeoutConfig,
+  now: number,
+  bootProgressAt: number | null = null
+): StartupTimingResult {
+  if (status !== "connecting" || runtimeAttachStartedAt === null) {
+    const origin = runtimeAttachStartedAt ?? now;
+    return { isTimedOut: false, elapsedMs: 0, livenessAt: origin, deadlineAt: origin };
+  }
+
+  const livenessAt = Math.max(runtimeAttachStartedAt, bootProgressAt ?? 0);
+  const livenessDeadlineAt = livenessAt + config.timeoutMs;
+  const absoluteDeadlineAt = runtimeAttachStartedAt + config.legacyStartupCapMs;
+  const deadlineAt = Math.min(livenessDeadlineAt, absoluteDeadlineAt);
+  const absoluteTimedOut = now >= absoluteDeadlineAt;
+  return {
+    isTimedOut: now >= deadlineAt,
+    elapsedMs: now - (absoluteTimedOut ? runtimeAttachStartedAt : livenessAt),
     livenessAt,
     deadlineAt,
   };
@@ -670,7 +710,7 @@ export function evaluateWarmDecision(state: WarmState): WarmAction {
     return { action: "skip", reason: "already spawning" };
   }
 
-  if (state.status === "spawning" || state.status === "connecting") {
+  if (state.status === "spawning" || state.status === "connecting" || state.status === "booting") {
     return { action: "skip", reason: `sandbox status is ${state.status}` };
   }
 

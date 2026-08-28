@@ -27,6 +27,7 @@ import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
+import { resolveSandboxControlProtocolVersion } from "../sandbox/runtime-manifest";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildProvider } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
@@ -455,7 +456,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     recordTerminalMessage,
     statusService,
-    (reason) => lifecycleManager.triggerSnapshot(reason),
+    async (reason) => {
+      await lifecycleManager.triggerSnapshot(reason);
+      await messageQueue.processMessageQueue();
+    },
     updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
@@ -468,7 +472,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     diffService,
     (title, options) => titleService.applySessionTitleUpdate(title, options),
-    updateLastActivity
+    updateLastActivity,
+    wsManager,
+    backgroundTasks,
+    (sandboxId) => lifecycleManager.cleanupFailedBoot(sandboxId),
+    () => lifecycleManager.scheduleInactivityCheck(),
+    () => messageQueue.processMessageQueue()
   );
   const pushService = new SandboxPushService(log, wsManager);
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
@@ -745,6 +754,17 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       Array.from(wsManager.getAuthenticatedClients()).some(
         (client) => client.participantId === participantId
       ),
+    getSandboxSender: (ws) => {
+      const sender = wsManager.getSandboxSenderContext(ws);
+      return sender
+        ? {
+            connection: ws,
+            sandboxId: sender.sandboxId,
+            protocolVersion: sender.protocolVersion,
+            executionReady: sender.executionReady,
+          }
+        : null;
+    },
   };
   const clientCommands = new SessionClientCommandFacade(
     connectionAuthenticator,
@@ -773,7 +793,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       log,
       sockets,
       clientCommands,
-      processSandboxEvent: (event) => sandboxEventProcessor.processSandboxEvent(event),
+      processSandboxEvent: (event, sender) =>
+        sandboxEventProcessor.processSandboxEvent(event, {
+          socket: sender.connection,
+          connection: sender.connection,
+          sandboxId: sender.sandboxId,
+          protocolVersion: sender.protocolVersion,
+          executionReady: sender.executionReady,
+        }),
       clock,
     }),
     disconnects: new SessionDisconnectHandler({
@@ -920,6 +947,9 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     mcpServerLookup,
     slackAgentNotifyLookup,
     sandboxDashboardUrlBuilder,
+    sandboxControlProtocolVersion: resolveSandboxControlProtocolVersion(
+      env.ENABLE_EARLY_SANDBOX_CONTROL_CHANNEL
+    ),
   };
 
   // Create the image lookup if D1 is available and the provider supports

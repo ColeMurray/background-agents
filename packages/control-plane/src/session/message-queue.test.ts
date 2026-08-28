@@ -184,8 +184,11 @@ function buildQueue() {
     getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };
 
+  const getSandboxSocket = vi.fn(() => null as WebSocket | null);
   const wsManager = {
-    getSandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxSocket,
+    getSandboxControlSocket: vi.fn(() => getSandboxSocket()),
+    getExecutionSocket: vi.fn(() => getSandboxSocket()),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
   };
 
@@ -475,6 +478,20 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
     expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
+  });
+
+  it("keeps work pending without spawning when control is attached but execution is unconfirmed", async () => {
+    const h = buildQueue();
+    const controlSocket = { readyState: WebSocket.OPEN } as WebSocket;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.wsManager.getSandboxControlSocket.mockReturnValue(controlSocket);
+    h.wsManager.getExecutionSocket.mockReturnValue(null);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
   });
 
   it.each(["cancelled", "archived"] as const)(

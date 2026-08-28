@@ -100,6 +100,27 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
+  it("forwards the sandbox control protocol on create and restore", async () => {
+    const client = createMockModalClient();
+    const provider = new ModalSandboxProvider(client);
+
+    await provider.createSandbox({ ...testConfig, sandboxControlProtocolVersion: 2 });
+    await provider.restoreFromSnapshot({
+      ...testConfig,
+      snapshotImageId: "snapshot-1",
+      sandboxControlProtocolVersion: 2,
+    });
+
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxControlProtocolVersion: 2 }),
+      undefined
+    );
+    expect(client.restoreSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxControlProtocolVersion: 2 }),
+      undefined
+    );
+  });
+
   describe("capabilities", () => {
     it("reports correct capabilities", () => {
       const client = createMockModalClient();

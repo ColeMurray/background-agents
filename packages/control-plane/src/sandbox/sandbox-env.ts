@@ -103,6 +103,7 @@ const SESSION_CONFIG_ENV_VAR = "SESSION_CONFIG";
 /** Build-mode marker checked as `=== "true"` by the runtime entrypoint. */
 export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
 export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
+export const SANDBOX_CONTROL_PROTOCOL_VERSION_ENV_KEY = "SANDBOX_CONTROL_PROTOCOL_VERSION";
 
 /**
  * Every env var `BootMode.from_env` (sandbox_runtime/runtime_config.py) reads to
@@ -289,6 +290,7 @@ export function buildSandboxEnvVars(
   // would otherwise survive into BootMode.from_env — letting a session claim it
   // booted from a repo image, a snapshot, or an image build when it did not.
   for (const marker of BOOT_MODE_ENV_KEYS) delete envVars[marker];
+  delete envVars[SANDBOX_CONTROL_PROTOCOL_VERSION_ENV_KEY];
 
   const sessionConfig = buildSessionConfig(config);
 
@@ -302,6 +304,12 @@ export function buildSandboxEnvVars(
     REPO_NAME: config.repoName ?? "",
     [SESSION_CONFIG_ENV_VAR]: JSON.stringify(sessionConfig),
   });
+
+  if (config.sandboxControlProtocolVersion !== undefined) {
+    envVars[SANDBOX_CONTROL_PROTOCOL_VERSION_ENV_KEY] = String(
+      config.sandboxControlProtocolVersion
+    );
+  }
 
   if (config.codeServerEnabled) {
     envVars.CODE_SERVER_PORT = String(resolveServicePorts(config.sandboxSettings).codeServerPort);

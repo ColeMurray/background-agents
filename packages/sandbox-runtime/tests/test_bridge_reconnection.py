@@ -97,7 +97,7 @@ class TestIsFatalConnectionError:
             lambda *_args, **_kwargs: ConnectionContext(ws),
         )
         bridge.log = MagicMock()
-        bridge._send_event = AsyncMock(side_effect=asyncio.CancelledError)
+        bridge._send_connection_event = AsyncMock(side_effect=asyncio.CancelledError)
 
         with pytest.raises(asyncio.CancelledError):
             await bridge._connect_and_run()

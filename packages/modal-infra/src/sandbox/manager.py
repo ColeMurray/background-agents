@@ -53,6 +53,7 @@ _RESERVED_LAUNCH_ENV_VARS = {
     "TERMINAL_ENABLED",
     "AGENT_SLACK_NOTIFY_ENABLED",
     "SESSION_CONFIG",
+    "SANDBOX_CONTROL_PROTOCOL_VERSION",
     VNC_PASSWORD_ENV_VAR,
     NOVNC_PORT_ENV_VAR,
 }
@@ -99,6 +100,7 @@ class SandboxConfig:
     session_config: SessionConfig | dict[str, Any] | None = None
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
+    sandbox_control_protocol_version: int | None = None
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
@@ -388,6 +390,10 @@ class SandboxManager:
                 "REPO_NAME": config.repo_name or "",
             }
         )
+        if config.sandbox_control_protocol_version is not None:
+            env_vars["SANDBOX_CONTROL_PROTOCOL_VERSION"] = str(
+                config.sandbox_control_protocol_version
+            )
 
         clone_token: str | None = None
         include_github_cli_aliases = False
@@ -473,22 +479,31 @@ class SandboxManager:
             **create_kwargs,
         )
         modal_object_id = sandbox.object_id
-        (
-            code_server_url,
-            vnc_url,
-            ttyd_url,
-            extra_tunnel_urls,
-        ) = await self._resolve_and_setup_tunnels(
-            sandbox,
-            sandbox_id,
-            config.code_server_enabled,
-            config.vnc_enabled,
-            terminal_enabled,
-            tunnel_ports,
-            code_server_port,
-            novnc_port,
-            ttyd_proxy_port,
-        )
+        try:
+            (
+                code_server_url,
+                vnc_url,
+                ttyd_url,
+                extra_tunnel_urls,
+            ) = await self._resolve_and_setup_tunnels(
+                sandbox,
+                sandbox_id,
+                config.code_server_enabled,
+                config.vnc_enabled,
+                terminal_enabled,
+                tunnel_ports,
+                code_server_port,
+                novnc_port,
+                ttyd_proxy_port,
+            )
+        except Exception as e:
+            log.warn(
+                "sandbox.launch_tunnel_enrichment_failed",
+                sandbox_id=sandbox_id,
+                modal_object_id=modal_object_id,
+                exc=e,
+            )
+            code_server_url = vnc_url = ttyd_url = extra_tunnel_urls = None
 
         return SandboxHandle(
             sandbox_id=sandbox_id,
@@ -626,6 +641,7 @@ class SandboxManager:
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
+        sandbox_control_protocol_version: int | None = None,
         clone_token: str | None = None,
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
@@ -678,6 +694,7 @@ class SandboxManager:
                     session_config=session_config,
                     control_plane_url=control_plane_url,
                     sandbox_auth_token=sandbox_auth_token,
+                    sandbox_control_protocol_version=sandbox_control_protocol_version,
                     timeout_seconds=timeout_seconds,
                     user_env_vars=user_env_vars,
                     code_server_enabled=code_server_enabled,

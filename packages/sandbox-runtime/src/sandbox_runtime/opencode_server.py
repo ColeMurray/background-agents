@@ -32,6 +32,10 @@ AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
 
+class OpenCodeHealthTimeoutError(RuntimeError):
+    """OpenCode launched but did not become healthy within its startup bound."""
+
+
 def resolve_opencode_global_config_dir() -> Path:
     """Resolve OpenCode's global config directory using its xdg-basedir rules."""
     override = os.environ.get("OPENCODE_CONFIG_DIR")
@@ -597,7 +601,7 @@ class OpenCodeServer:
 
                 await asyncio.sleep(0.5)
 
-        raise RuntimeError("OpenCode server failed to become healthy")
+        raise OpenCodeHealthTimeoutError("OpenCode server failed to become healthy")
 
     async def stop(self) -> None:
         if self._opencode_process and self._opencode_process.returncode is None:

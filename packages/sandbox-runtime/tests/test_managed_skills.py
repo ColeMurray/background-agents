@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
 import json
+import multiprocessing
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -157,6 +159,42 @@ async def test_materializer_replaces_destination(tmp_path):
     assert not (destination / "stale.txt").exists()
     assert "name: managed" in (destination / "managed" / "SKILL.md").read_text()
     assert (destination / "managed" / "SKILL.md").stat().st_mode & 0o777 == 0o400
+
+
+async def test_materializer_timeout_terminates_filesystem_process_without_late_mutation(tmp_path):
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(return_value=json.dumps(_installation()).encode())
+    destination = tmp_path / "global" / "skills"
+    destination.mkdir(parents=True)
+    (destination / "existing").write_text("keep")
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "missing-bundled",
+    )
+    started = tmp_path / "transaction-started"
+    late_mutation = tmp_path / "late-mutation"
+
+    def blocked_transaction(*_args):
+        started.write_text("started")
+        time.sleep(0.5)
+        late_mutation.write_text("too late")
+
+    materializer._run_filesystem_transaction = blocked_transaction
+
+    existing_children = {process.pid for process in multiprocessing.active_children()}
+    started_at = time.monotonic()
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.05):
+            await materializer.materialize((), tmp_path / "workspace")
+
+    assert time.monotonic() - started_at < 0.3
+    assert started.exists()
+    assert {process.pid for process in multiprocessing.active_children()} <= existing_children
+    assert (destination / "existing").read_text() == "keep"
+    await asyncio.sleep(0.55)
+    assert not late_mutation.exists()
 
 
 async def test_materializer_drops_only_managed_skills_that_collide_with_discovered_skills(tmp_path):

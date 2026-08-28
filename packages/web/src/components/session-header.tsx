@@ -45,6 +45,13 @@ const SANDBOX_STATUS_PRESENTATION: Record<
     dot: "bg-warning",
     pulse: true,
   },
+  booting: {
+    label: "Booting...",
+    detail: "Preparing repositories and the agent runtime.",
+    color: "text-warning",
+    dot: "bg-warning",
+    pulse: true,
+  },
   ready: {
     label: "Ready",
     detail: "The sandbox is available.",

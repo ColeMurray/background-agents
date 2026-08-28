@@ -2,7 +2,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
 import type { MessageRepository } from "../message-repository";
 import type { SandboxPushService } from "../sandbox-push-service";
-import type { SessionWebSocketManager } from "../websocket-manager";
+import type { SandboxSenderContext, SessionWebSocketManager } from "../websocket-manager";
 import type { SandboxArtifactEventHandler } from "./artifact.handler";
 import type { SandboxEventContext } from "./context";
 import type { SandboxExecutionEventHandler } from "./execution.handler";
@@ -39,7 +39,10 @@ export class SessionSandboxEventProcessor {
     private readonly pushService: SandboxPushService
   ) {}
 
-  async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
+  async processSandboxEvent(
+    event: SandboxEventWithAck,
+    sender: SandboxSenderContext | null = null
+  ): Promise<void> {
     if (event.type === "heartbeat" || event.type === "token") {
       this.log.debug("Sandbox event", { event_type: event.type });
     } else if (event.type !== "execution_complete") {
@@ -53,48 +56,54 @@ export class SessionSandboxEventProcessor {
       now,
       messageId: eventMessageId ?? processingMessage?.id ?? null,
       processingMessage,
+      sender,
     };
 
-    await this.dispatch(event, context);
+    const shouldAck = await this.dispatch(event, context);
 
-    if (CRITICAL_EVENT_TYPES.has(event.type)) {
-      this.sendAck(event.ackId);
+    if (shouldAck && CRITICAL_EVENT_TYPES.has(event.type)) {
+      this.sendAck(event.ackId, sender?.socket ?? null);
     }
   }
 
-  private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<void> {
+  private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<boolean> {
     switch (event.type) {
       case "heartbeat":
-        this.runtime.handleHeartbeat(context);
-        return;
+        this.runtime.handleHeartbeat(event, context);
+        return true;
+      case "boot_phase":
+        this.runtime.handleBootPhase(event, context);
+        return true;
+      case "boot_failed":
+        return this.runtime.handleBootFailed(event, context);
       case "session_title":
         this.runtime.handleSessionTitle(event);
-        return;
+        return true;
       case "ready":
-        this.runtime.handleReady(event, context);
-        return;
+        await this.runtime.handleReady(event, context);
+        return true;
       case "git_sync":
         this.runtime.handleGitSync(event, context);
-        return;
+        return true;
       case "artifact":
         this.artifacts.handleArtifact(event, context);
-        return;
+        return true;
       case "token":
         this.streaming.handleToken(event, context);
-        return;
+        return true;
       case "context_compacted":
         this.streaming.handleContextCompacted(event, context);
-        return;
+        return true;
       case "step_start":
       case "step_finish":
         this.streaming.handleStep(event, context);
-        return;
+        return true;
       case "tool_call":
         this.streaming.handleToolCall(event, context);
-        return;
+        return true;
       case "execution_complete":
         await this.execution.handleExecutionComplete(event, context);
-        return;
+        return true;
       case "push_complete":
       case "push_error":
         // Observed like any other timeline event; additionally answers the
@@ -102,24 +111,24 @@ export class SessionSandboxEventProcessor {
         // on a microtask, so it cannot observe this dispatch mid-flight.
         this.streaming.recordTimelineEvent(event, context);
         this.pushService.settlePush(event);
-        return;
+        return true;
       case "tool_result":
       case "error":
       case "warning":
       case "user_message":
         // Timeline-observer events: persist and broadcast, nothing else.
         this.streaming.recordTimelineEvent(event, context);
-        return;
+        return true;
       default:
         // Exhaustive: a new SandboxEvent variant must pick a family here.
         event satisfies never;
-        return;
+        return true;
     }
   }
 
-  private sendAck(ackId: string | undefined): void {
+  private sendAck(ackId: string | undefined, capturedSender: WebSocket | null): void {
     if (!ackId) return;
-    const sandboxWs = this.wsManager.getSandboxSocket();
+    const sandboxWs = capturedSender ?? this.wsManager.getSandboxSocket();
     if (sandboxWs) {
       this.wsManager.send(sandboxWs, { type: "ack", ackId });
     } else {

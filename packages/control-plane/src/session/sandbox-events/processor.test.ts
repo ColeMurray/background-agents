@@ -34,7 +34,11 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
 function createProcessor() {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
+    getSandbox: vi.fn(() => ({ status: "booting", ready_at: null as number | null })),
     updateSandboxHeartbeat: vi.fn(),
+    markExecutionReady: vi.fn(() => true),
+    recordBootPhase: vi.fn(() => true),
+    failBoot: vi.fn(() => true),
     recordReportedSandboxRuntimeVersion: vi.fn(),
     getProcessingMessage,
     addSessionCost: vi.fn(),
@@ -67,7 +71,12 @@ function createProcessor() {
 
   const wsManager = {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxControlSocket: vi.fn(() => null as WebSocket | null),
+    getExecutionSocket: vi.fn(() => null as WebSocket | null),
     send: vi.fn(() => true),
+    updateSandboxAttachment: vi.fn(() => true),
+    isCurrentSandboxSender: vi.fn(() => true),
+    close: vi.fn(),
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
@@ -80,6 +89,7 @@ function createProcessor() {
   const processMessageQueue = vi.fn(async () => {});
   const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
+  const cleanupFailedBoot = vi.fn(async () => {});
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const log = {
     debug: vi.fn(),
@@ -132,7 +142,12 @@ function createProcessor() {
       messenger,
       diffService as unknown as SessionDiffService,
       applySessionTitleUpdate,
-      updateLastActivity
+      updateLastActivity,
+      wsManager as unknown as SessionWebSocketManager,
+      backgroundTasks,
+      cleanupFailedBoot,
+      scheduleInactivityCheck,
+      processMessageQueue
     ),
     pushService
   );
@@ -210,6 +225,34 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
+  it("recovers v2 boot diagnostics from heartbeat phase replay", async () => {
+    const h = createProcessor();
+    const socket = { readyState: WebSocket.OPEN } as WebSocket;
+
+    await h.processor.processSandboxEvent(
+      {
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        status: "booting",
+        phase: "opencode_restart",
+        timestamp: 1000,
+      },
+      {
+        socket,
+        connection: socket,
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: false,
+      }
+    );
+
+    expect(h.repository.recordBootPhase).toHaveBeenCalledWith(
+      "sb-1",
+      "opencode_restart",
+      expect.any(Number)
+    );
+  });
+
   it("applies session_title without storing a timeline event", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {
@@ -271,6 +314,49 @@ describe("SessionSandboxEventProcessor", () => {
     });
 
     expect(h.repository.recordReportedSandboxRuntimeVersion).toHaveBeenCalledWith(null);
+  });
+
+  it("confirms a replacement socket during snapshotting without ending the snapshot", async () => {
+    const h = createProcessor();
+    const socket = { readyState: WebSocket.OPEN } as WebSocket;
+    h.repository.getSandbox.mockReturnValue({ status: "snapshotting", ready_at: 100 });
+
+    await h.processor.processSandboxEvent(
+      { type: "ready", sandboxId: "sb-1", timestamp: 1000 },
+      {
+        socket,
+        connection: socket,
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: false,
+      }
+    );
+
+    expect(h.wsManager.updateSandboxAttachment).toHaveBeenCalledWith(socket, true);
+    expect(h.repository.markExecutionReady).toHaveBeenCalledWith("sb-1", expect.any(Number));
+    expect(h.broadcast).not.toHaveBeenCalledWith({ type: "sandbox_status", status: "ready" });
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+  });
+
+  it("does not count a v2 ready reannouncement as user activity", async () => {
+    const h = createProcessor();
+    const socket = { readyState: WebSocket.OPEN } as WebSocket;
+    h.repository.getSandbox.mockReturnValue({ status: "booting", ready_at: 100 });
+
+    await h.processor.processSandboxEvent(
+      { type: "ready", sandboxId: "sb-1", timestamp: 1000 },
+      {
+        socket,
+        connection: socket,
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: false,
+      }
+    );
+
+    expect(h.updateLastActivity).not.toHaveBeenCalled();
+    expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
   });
 
   it("persists token event and broadcasts it", async () => {
@@ -571,7 +657,7 @@ describe("SessionSandboxEventProcessor", () => {
   it("resolves pending push when push_complete event arrives", async () => {
     const h = createProcessor();
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.wsManager.getExecutionSocket.mockReturnValue(sandboxWs);
 
     const pushPromise = h.pushService.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")
@@ -592,10 +678,25 @@ describe("SessionSandboxEventProcessor", () => {
     );
   });
 
+  it("rejects a push while the v2 sandbox is connected but not execution-ready", async () => {
+    const h = createProcessor();
+    h.wsManager.getSandboxControlSocket.mockReturnValue({
+      readyState: WebSocket.OPEN,
+    } as WebSocket);
+
+    await expect(
+      h.pushService.pushBranchToRemote(createPushSpec("acme", "web", "feature/test"))
+    ).resolves.toEqual({
+      success: false,
+      error: "Sandbox is not ready to push branches",
+    });
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
   describe("push resolver keying", () => {
     function connectSandbox(h: ReturnType<typeof createProcessor>) {
       const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+      h.wsManager.getExecutionSocket.mockReturnValue(sandboxWs);
       return sandboxWs;
     }
 
@@ -851,6 +952,37 @@ describe("SessionSandboxEventProcessor", () => {
   });
 
   describe("ACK mechanism", () => {
+    it("sends a critical ACK to the captured sender after a replacement race", async () => {
+      const h = createProcessor();
+      const originalSender = { readyState: WebSocket.OPEN, url: "original" } as WebSocket;
+      const replacement = { readyState: WebSocket.OPEN, url: "replacement" } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(replacement);
+
+      await h.processor.processSandboxEvent(
+        {
+          type: "error",
+          messageId: "msg-1",
+          error: "failed",
+          sandboxId: "sb-1",
+          timestamp: 1,
+          ackId: "ack-original",
+        },
+        {
+          socket: originalSender,
+          connection: originalSender,
+          sandboxId: "sb-1",
+          protocolVersion: 2,
+          executionReady: true,
+        }
+      );
+
+      expect(h.wsManager.send).toHaveBeenCalledWith(originalSender, {
+        type: "ack",
+        ackId: "ack-original",
+      });
+      expect(h.wsManager.send).not.toHaveBeenCalledWith(replacement, expect.anything());
+    });
+
     it("sends ACK after execution_complete when ackId is present", async () => {
       const h = createProcessor();
       const sandboxWs = {} as WebSocket;

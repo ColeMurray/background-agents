@@ -28,6 +28,20 @@ class BootMode(StrEnum):
         return cls.FRESH
 
 
+class SandboxControlProtocol(StrEnum):
+    LEGACY = "legacy"
+    V2 = "2"
+
+    @classmethod
+    def from_env(cls, environment: Mapping[str, str]) -> SandboxControlProtocol:
+        if "SANDBOX_CONTROL_PROTOCOL_VERSION" not in environment:
+            return cls.LEGACY
+        value = environment["SANDBOX_CONTROL_PROTOCOL_VERSION"]
+        if value == cls.V2.value:
+            return cls.V2
+        raise ValueError(f"Unknown SANDBOX_CONTROL_PROTOCOL_VERSION: {value!r}")
+
+
 def _freeze_json(value: Any) -> Any:
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
@@ -76,6 +90,7 @@ class BridgeProcessConfig:
     control_plane_url: str
     sandbox_token: str
     session_id: str
+    sandbox_control_protocol: SandboxControlProtocol = SandboxControlProtocol.LEGACY
 
 
 @dataclass(frozen=True)
@@ -89,6 +104,7 @@ class RuntimeConfig:
     session_config: Mapping[str, Any]
     workspace_path: Path
     repo_path: Path
+    sandbox_control_protocol: SandboxControlProtocol
 
     @classmethod
     def from_env(
@@ -114,6 +130,7 @@ class RuntimeConfig:
             session_config=session_config,
             workspace_path=workspace_path,
             repo_path=repo_path,
+            sandbox_control_protocol=SandboxControlProtocol.from_env(environment),
         )
 
     @property
@@ -165,6 +182,7 @@ class RuntimeConfig:
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
             session_id=str(self.session_config.get("session_id") or ""),
+            sandbox_control_protocol=self.sandbox_control_protocol,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:

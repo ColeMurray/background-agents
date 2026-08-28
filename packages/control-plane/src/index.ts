@@ -99,15 +99,20 @@ async function handleWebSocket(
   db: SqlDatabase,
   metrics: RequestMetrics
 ): Promise<Response> {
-  // Extract session ID from path: /sessions/:id/ws
-  const match = url.pathname.match(/^\/sessions\/([^/]+)\/ws$/);
+  // The dedicated v2 path fails closed on workers that do not recognize it.
+  const match = url.pathname.match(/^\/sessions\/([^/]+)\/(?:ws|runtime-control)$/);
 
   if (!match) {
     logger.warn("Invalid WebSocket path", { event: "ws.invalid_path", http_path: url.pathname });
     return new Response("Invalid WebSocket path", { status: 400 });
   }
 
-  const sessionId = match[1];
+  let sessionId: string;
+  try {
+    sessionId = decodeURIComponent(match[1]);
+  } catch {
+    return new Response("Invalid session ID", { status: 400 });
+  }
   if (!(await new SessionIndexStore(db).exists(sessionId))) {
     logger.warn("WebSocket session not found", {
       event: "ws.session_not_found",

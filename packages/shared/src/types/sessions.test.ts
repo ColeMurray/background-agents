@@ -81,6 +81,7 @@ describe("sandbox status vocabulary", () => {
       "spawning",
       "connecting",
       "warming",
+      "booting",
       "ready",
       "stale",
       "snapshotting",

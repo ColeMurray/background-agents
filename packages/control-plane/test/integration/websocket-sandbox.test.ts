@@ -7,8 +7,10 @@ import {
   collectMessages,
   initNamedSession,
   openClientWs,
+  openRuntimeControlWs,
   openSandboxWs,
   seedSandboxAuth,
+  seedMessage,
   queryDO,
   waitForSandboxStatus,
 } from "./helpers";
@@ -17,6 +19,293 @@ const SANDBOX_TOKEN = "test-sandbox-auth-token-abc123";
 const SANDBOX_ID = "sb-integration-test";
 
 describe("Sandbox WebSocket (via SELF.fetch)", () => {
+  it("decodes an encoded session ID on the dedicated runtime path", async () => {
+    const name = `ws/runtime-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+
+    const { ws, response } = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+
+    expect(response.status).toBe(101);
+    ws!.accept();
+    ws!.close();
+  });
+
+  it("admits the dedicated runtime-control path without making it execution-ready", async () => {
+    const name = `ws-runtime-control-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+
+    const { ws, response } = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+
+    expect(response.status).toBe(101);
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await waitForSandboxStatus(stub, "booting");
+    expect(
+      await queryDO<{
+        status: string;
+        runtime_protocol_version: number;
+        last_heartbeat: number;
+        last_activity: number | null;
+      }>(
+        stub,
+        "SELECT status, runtime_protocol_version, last_heartbeat, last_activity FROM sandbox"
+      )
+    ).toEqual([
+      {
+        status: "booting",
+        runtime_protocol_version: 2,
+        last_heartbeat: expect.any(Number),
+        last_activity: null,
+      },
+    ]);
+    ws!.close();
+  });
+
+  it("keeps a pending prompt blocked through attach and dispatches after connection-scoped ready", async () => {
+    const name = `ws-runtime-ready-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    await seedMessage(stub, {
+      id: "pending-through-boot",
+      authorId: participants[0].id,
+      content: "wait for runtime readiness",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now(),
+    });
+
+    const { ws } = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await waitForSandboxStatus(stub, "booting");
+    expect(
+      await queryDO<{ status: string }>(
+        stub,
+        "SELECT status FROM messages WHERE id = ?",
+        "pending-through-boot"
+      )
+    ).toEqual([{ status: "pending" }]);
+
+    const prompt = collectMessages(ws!, { until: (message) => message.type === "prompt" });
+    ws!.send(
+      JSON.stringify({
+        type: "ready",
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1000,
+        runtimeVersion: "test-runtime",
+      })
+    );
+
+    expect((await prompt).at(-1)).toMatchObject({
+      type: "prompt",
+      messageId: "pending-through-boot",
+    });
+    await waitForSandboxStatus(stub, "ready");
+    ws!.close();
+  });
+
+  it("persists boot diagnostics and ACKs a fenced boot failure", async () => {
+    const name = `ws-runtime-boot-failed-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const { ws } = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await waitForSandboxStatus(stub, "booting");
+    ws!.send(
+      JSON.stringify({
+        type: "boot_phase",
+        sandboxId: SANDBOX_ID,
+        timestamp: 1,
+        phase: "opencode_health",
+      })
+    );
+    const ack = collectMessages(ws!, { until: (message) => message.type === "ack" });
+    ws!.send(
+      JSON.stringify({
+        type: "boot_failed",
+        sandboxId: SANDBOX_ID,
+        timestamp: 2,
+        ackId: "boot-failed-1",
+        phase: "opencode_health",
+        code: "opencode_health_timeout",
+      })
+    );
+
+    expect((await ack).at(-1)).toEqual({ type: "ack", ackId: "boot-failed-1" });
+    await waitForSandboxStatus(stub, "failed");
+    expect(
+      await queryDO<{ status: string; boot_phase: string; last_spawn_error: string }>(
+        stub,
+        "SELECT status, boot_phase, last_spawn_error FROM sandbox"
+      )
+    ).toEqual([
+      {
+        status: "failed",
+        boot_phase: "opencode_health",
+        last_spawn_error: "opencode_health_timeout",
+      },
+    ]);
+
+    const duplicateAck = collectMessages(ws!, { until: (message) => message.type === "ack" });
+    ws!.send(
+      JSON.stringify({
+        type: "boot_failed",
+        sandboxId: SANDBOX_ID,
+        timestamp: 3,
+        ackId: "boot-failed-duplicate",
+        phase: "opencode_health",
+        code: "opencode_health_timeout",
+      })
+    );
+    expect((await duplicateAck).at(-1)).toEqual({
+      type: "ack",
+      ackId: "boot-failed-duplicate",
+    });
+    ws!.close();
+  });
+
+  it("starts a replacement v2 socket unconfirmed until it re-announces ready", async () => {
+    const name = `ws-runtime-reconnect-unconfirmed-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const first = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    first.ws!.accept();
+    first.ws!.send(JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: 1 }));
+    await waitForSandboxStatus(stub, "ready");
+
+    const replacement = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    replacement.ws!.accept();
+    await waitForSandboxStatus(stub, "booting");
+
+    replacement.ws!.send(JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: 2 }));
+    await waitForSandboxStatus(stub, "ready");
+    replacement.ws!.close();
+  });
+
+  it("ACKs boot failure from a superseded identity without failing the replacement", async () => {
+    const name = `ws-runtime-boot-fence-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const { ws } = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    ws!.accept();
+    await waitForSandboxStatus(stub, "booting");
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET modal_sandbox_id = ?", "replacement-sandbox");
+    });
+    const ack = collectMessages(ws!, { until: (message) => message.type === "ack" });
+
+    ws!.send(
+      JSON.stringify({
+        type: "boot_failed",
+        sandboxId: SANDBOX_ID,
+        timestamp: 1,
+        ackId: "superseded-boot-failure",
+        phase: "repository_sync",
+        code: "repository_boot_failed",
+      })
+    );
+
+    expect((await ack).at(-1)).toEqual({
+      type: "ack",
+      ackId: "superseded-boot-failure",
+    });
+    expect(
+      await queryDO<{ modal_sandbox_id: string; status: string }>(
+        stub,
+        "SELECT modal_sandbox_id, status FROM sandbox"
+      )
+    ).toEqual([{ modal_sandbox_id: "replacement-sandbox", status: "booting" }]);
+    ws!.close();
+  });
+
+  it("keeps a long-elapsed boot alive while control heartbeats remain fresh", async () => {
+    const name = `ws-runtime-long-boot-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const { ws } = await openRuntimeControlWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    ws!.accept();
+    await waitForSandboxStatus(stub, "booting");
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET created_at = ?", Date.now() - 24 * 60 * 60 * 1000);
+      state.storage.setAlarm(Date.now());
+    });
+    ws!.send(
+      JSON.stringify({
+        type: "heartbeat",
+        sandboxId: SANDBOX_ID,
+        timestamp: 1,
+        status: "booting",
+        phase: "repository_sync",
+      })
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runInSessionDO(stub, (instance: SessionDO) => instance.alarm());
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
+      { status: "booting" },
+    ]);
+    ws!.close();
+  });
+
   it("upgrade with valid auth returns 101", async () => {
     const name = `ws-sandbox-ok-${Date.now()}`;
     const { stub } = await initNamedSession(name);

@@ -162,13 +162,19 @@ CREATE TABLE IF NOT EXISTS sandbox (
   snapshot_image_id TEXT,                           -- Modal Image ID for filesystem snapshot restoration
   snapshot_runtime_version TEXT,                    -- SANDBOX_VERSION that produced snapshot_image_id (restore compatibility floor)
   runtime_version TEXT,                             -- SANDBOX_VERSION reported by the running sandbox
+  runtime_protocol_version INTEGER,                 -- Latest attached runtime control protocol
+  boot_phase TEXT,                                  -- Latest validated boot phase
+  boot_phase_started_at INTEGER,                    -- Server receipt time for current phase
+  boot_failure_code TEXT,                           -- Stable allowlisted fatal boot outcome
+  ready_at INTEGER,                                 -- Server time execution readiness was declared
+  runtime_attach_started_at INTEGER,                -- Server time provider startup completed and attach waiting began
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
   auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
   -- Default must match DEFAULT_SANDBOX_STATUS (sandbox/sandbox-status.ts).
-  status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'ready', 'stale', 'snapshotting', 'stopped', 'failed'
+  status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'booting', 'ready', 'stale', 'snapshotting', 'stopped', 'failed'
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
-  boot_progress_at INTEGER,                         -- Last authenticated boot liveness report
+  boot_progress_at INTEGER,                         -- Deprecated; retained for migration compatibility
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot
   last_spawn_error TEXT,                            -- Last sandbox spawn error (if any)
   last_spawn_error_at INTEGER,                      -- Timestamp of last spawn error
@@ -611,6 +617,26 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 46,
     description: "Record sandbox boot progress",
     run: `ALTER TABLE sandbox ADD COLUMN boot_progress_at INTEGER`,
+  },
+  {
+    id: 47,
+    description: "Add sandbox runtime control diagnostics",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN runtime_protocol_version INTEGER`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN boot_phase TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN boot_phase_started_at INTEGER`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN ready_at INTEGER`);
+    },
+  },
+  {
+    id: 48,
+    description: "Persist stable sandbox boot failure codes",
+    run: `ALTER TABLE sandbox ADD COLUMN boot_failure_code TEXT`,
+  },
+  {
+    id: 49,
+    description: "Persist runtime attach start time",
+    run: `ALTER TABLE sandbox ADD COLUMN runtime_attach_started_at INTEGER`,
   },
 ];
 

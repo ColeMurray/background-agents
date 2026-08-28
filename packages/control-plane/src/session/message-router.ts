@@ -3,7 +3,7 @@ import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
 import type { SessionHistoryPage } from "./event-stream";
-import type { Clock, ConnectedClient, SocketRegistry } from "./ports";
+import type { AuthenticatedSandboxSender, Clock, ConnectedClient, SocketRegistry } from "./ports";
 
 const FETCH_HISTORY_MIN_INTERVAL_MS = 200;
 
@@ -39,7 +39,10 @@ export interface SessionMessageRouterDeps<Connection, Client extends ConnectedCl
   log: Logger;
   sockets: SocketRegistry<Connection, Client>;
   clientCommands: SessionClientCommands<Connection, Client>;
-  processSandboxEvent: (event: SandboxEvent) => Promise<void>;
+  processSandboxEvent: (
+    event: SandboxEvent,
+    sender: AuthenticatedSandboxSender<Connection>
+  ) => Promise<void>;
   clock: Clock;
 }
 
@@ -52,22 +55,31 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     if (typeof message !== "string") return;
 
     if (this.deps.sockets.classify(connection).kind === "sandbox") {
-      await this.handleSandboxMessage(message);
+      await this.handleSandboxMessage(connection, message);
     } else {
       await this.handleClientMessage(connection, message);
     }
   }
 
-  private async handleSandboxMessage(message: string): Promise<void> {
+  private async handleSandboxMessage(connection: Connection, message: string): Promise<void> {
     const parsed = this.parseMessage(message, "sandbox", sandboxEventSchema);
     if (!parsed.valid) return;
 
+    const sender = this.deps.sockets.getSandboxSender(connection);
+    if (!sender) {
+      this.deps.sockets.close(connection, 1008, "Unauthenticated sandbox connection");
+      return;
+    }
+
     try {
-      await this.deps.processSandboxEvent(parsed.data);
+      await this.deps.processSandboxEvent(parsed.data, sender);
     } catch (error) {
       this.deps.log.error("Error processing sandbox message", {
         error: error instanceof Error ? error : String(error),
       });
+      if (parsed.data.type === "ready") {
+        this.deps.sockets.close(connection, 1011, "Ready processing failed");
+      }
     }
   }
 

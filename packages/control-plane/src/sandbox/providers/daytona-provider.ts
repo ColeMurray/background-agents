@@ -93,15 +93,25 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
       const sandbox = await this.client.createSandbox(params);
 
-      const { codeServerUrl, codeServerPassword, vncAccess, tunnelUrls } =
-        await this.buildTunnelUrls(
+      let codeServerUrl: string | undefined;
+      let codeServerPassword: string | undefined;
+      let vncAccess: VncAccess | undefined;
+      let tunnelUrls: Record<string, string> | undefined;
+      try {
+        ({ codeServerUrl, codeServerPassword, vncAccess, tunnelUrls } = await this.buildTunnelUrls(
           sandbox.id,
           config.sandboxId,
           config.timeoutSeconds,
           config.codeServerEnabled,
           config.vncEnabled,
           config.sandboxSettings
-        );
+        ));
+      } catch (tunnelError) {
+        log.warn("daytona.create_tunnel_urls_failed", {
+          sandbox_id: config.sandboxId,
+          error: tunnelError instanceof Error ? tunnelError.message : String(tunnelError),
+        });
+      }
 
       return {
         sandboxId: config.sandboxId,

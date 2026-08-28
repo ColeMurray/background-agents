@@ -39,11 +39,6 @@ function createMockSql() {
 const TEST_ENCRYPTION_KEY = generateEncryptionKey();
 const RECORD_BOOT_PROGRESS_QUERY = `UPDATE sandbox SET boot_progress_at = ?
        WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting')`;
-const FAIL_BOOT_QUERY = `UPDATE sandbox SET status = 'failed'
-       WHERE modal_sandbox_id = ?
-         AND status IN ('spawning', 'connecting')
-         AND MAX(created_at, COALESCE(boot_progress_at, 0)) = ?`;
-
 function providerStartupQuery(preserveMissing: boolean): string {
   const value = (column: string) => (preserveMissing ? `COALESCE(?, ${column})` : "?");
   return `UPDATE sandbox SET
@@ -54,10 +49,15 @@ function providerStartupQuery(preserveMissing: boolean): string {
          vnc_password = ${value("vnc_password")},
          tunnel_urls = ${value("tunnel_urls")},
          ttyd_url = ${value("ttyd_url")},
-         ttyd_token = ${value("ttyd_token")}
+         ttyd_token = ${value("ttyd_token")},
+         status = CASE WHEN status IN ('spawning', 'connecting') THEN 'connecting' ELSE status END,
+         runtime_attach_started_at = CASE
+           WHEN status IN ('spawning', 'connecting') THEN ?
+           ELSE runtime_attach_started_at
+         END
        WHERE modal_sandbox_id = ?
          AND created_at = ?
-         AND status IN ('spawning', 'connecting', 'ready')`;
+         AND status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting')`;
 }
 
 describe("SandboxRepository", () => {
@@ -132,6 +132,40 @@ describe("SandboxRepository", () => {
     });
   });
 
+  describe("markExecutionReady", () => {
+    it("confirms socket readiness without ending an in-flight snapshot", () => {
+      repository.markExecutionReady("sandbox-1", 1234);
+
+      expect(mock.calls[0].query).toContain(
+        "CASE WHEN status = 'snapshotting' THEN status ELSE 'ready' END"
+      );
+      expect(mock.calls[0].query).toContain("'snapshotting'");
+      expect(mock.calls[0].params).toEqual([1234, "sandbox-1"]);
+    });
+  });
+
+  describe("failBoot", () => {
+    it("persists the stable failure code separately from its display message", () => {
+      repository.failBoot(
+        "sandbox-1",
+        "opencode_health",
+        "opencode_health_timeout",
+        "OpenCode did not become healthy",
+        1234
+      );
+
+      expect(mock.calls[0].query).toContain("boot_failure_code = ?");
+      expect(mock.calls[0].params).toEqual([
+        "opencode_health",
+        1234,
+        "opencode_health_timeout",
+        "OpenCode did not become healthy",
+        1234,
+        "sandbox-1",
+      ]);
+    });
+  });
+
   describe("updateSandboxForSpawn", () => {
     it("sets all spawn fields atomically and invalidates credentials", () => {
       repository.updateSandboxForSpawn({
@@ -154,6 +188,7 @@ describe("SandboxRepository", () => {
       // A replacement sandbox must not inherit the predecessor's runtime.
       expect(mock.calls[0].query).toContain("runtime_version = NULL");
       expect(mock.calls[0].query).toContain("boot_progress_at = NULL");
+      expect(mock.calls[0].query).toContain("runtime_attach_started_at = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "modal-sb-1"]);
     });
 
@@ -173,6 +208,7 @@ describe("SandboxRepository", () => {
     repository.updateSandboxForResume({ status: "connecting", createdAt: 2000 });
 
     expect(mock.calls[0].query).toContain("boot_progress_at = NULL");
+    expect(mock.calls[0].query).toContain("runtime_attach_started_at = NULL");
     expect(mock.calls[0].params).toEqual(["connecting", 2000]);
   });
 
@@ -259,41 +295,37 @@ describe("SandboxRepository", () => {
     });
   });
 
+  describe("startup timeout fences", () => {
+    it("fences provider-operation failure by identity and attempt before attach starts", () => {
+      repository.failProviderOperationIfUnchanged("sandbox-current", 5000);
+
+      expect(mock.calls[0].query).toContain("created_at = ?");
+      expect(mock.calls[0].query).toContain("runtime_attach_started_at IS NULL");
+      expect(mock.calls[0].params).toEqual(["sandbox-current", 5000]);
+    });
+
+    it("fences runtime-attach failure by identity, attempt, attach start, and liveness", () => {
+      repository.failRuntimeAttachIfUnchanged("sandbox-current", 1000, 5000, 6000);
+
+      expect(mock.calls[0].query).toContain("runtime_attach_started_at = ?");
+      expect(mock.calls[0].query).toContain(
+        "MAX(runtime_attach_started_at, COALESCE(boot_progress_at, 0)) = ?"
+      );
+      expect(mock.calls[0].params).toEqual(["sandbox-current", 1000, 5000, 6000]);
+    });
+  });
+
   describe("recordBootProgress", () => {
-    it("fences progress by logical sandbox identity and boot status", () => {
+    it("fences compatibility progress to legacy pre-attach states", () => {
       mock.setRowsWritten(RECORD_BOOT_PROGRESS_QUERY, 1);
 
       expect(repository.recordBootProgress("sandbox-current", 5000)).toBe(true);
-
-      expect(mock.calls[0].query).toContain("modal_sandbox_id = ?");
       expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
       expect(mock.calls[0].params).toEqual([5000, "sandbox-current"]);
     });
 
-    it("returns false when the fenced update matches no sandbox", () => {
-      const rejected = createMockSql();
-      const rejectedRepository = new SandboxRepository(rejected.sql, log, TEST_ENCRYPTION_KEY);
-
-      expect(rejectedRepository.recordBootProgress("sandbox-stale", 5000)).toBe(false);
-    });
-  });
-
-  describe("failBootIfUnchanged", () => {
-    it("fences timeout failure by identity, status, and observed liveness", () => {
-      mock.setRowsWritten(FAIL_BOOT_QUERY, 1);
-
-      expect(repository.failBootIfUnchanged("sandbox-current", 5000)).toBe(true);
-
-      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
-      expect(mock.calls[0].query).toContain("MAX(created_at, COALESCE(boot_progress_at, 0)) = ?");
-      expect(mock.calls[0].params).toEqual(["sandbox-current", 5000]);
-    });
-
-    it("returns false when the fenced update matches no sandbox", () => {
-      const rejected = createMockSql();
-      const rejectedRepository = new SandboxRepository(rejected.sql, log, TEST_ENCRYPTION_KEY);
-
-      expect(rejectedRepository.failBootIfUnchanged("sandbox-stale", 5000)).toBe(false);
+    it("rejects progress after v2 attachment or identity replacement", () => {
+      expect(repository.recordBootProgress("sandbox-stale", 5000)).toBe(false);
     });
   });
 
@@ -311,10 +343,14 @@ describe("SandboxRepository", () => {
           tunnelUrls: { "3000": "https://tunnel.example" },
           ttyd: { url: "https://terminal.example", token: "terminal-secret" },
           preserveMissing: false,
+          runtimeAttachStartedAt: 2000,
         })
       ).resolves.toBe(true);
 
-      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting', 'ready')");
+      expect(mock.calls[0].query).toContain(
+        "status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting')"
+      );
+      expect(mock.calls[0].query).toContain("runtime_attach_started_at = CASE");
       expect(mock.calls[0].query).toContain("modal_object_id = COALESCE(?, modal_object_id)");
       expect(mock.calls[0].query).toContain("created_at = ?");
       expect(mock.calls[0].params.slice(-2)).toEqual(["sandbox-current", 1000]);
@@ -342,6 +378,7 @@ describe("SandboxRepository", () => {
           tunnelUrls: null,
           ttyd: null,
           preserveMissing: false,
+          runtimeAttachStartedAt: 2000,
         })
       ).resolves.toBe(false);
     });
@@ -358,6 +395,7 @@ describe("SandboxRepository", () => {
         tunnelUrls: null,
         ttyd: null,
         preserveMissing: true,
+        runtimeAttachStartedAt: 2000,
       });
 
       expect(mock.calls[0].query).toContain("code_server_url = COALESCE(?, code_server_url)");

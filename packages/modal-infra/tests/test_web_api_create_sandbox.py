@@ -114,6 +114,28 @@ RESTORE_REQUEST = {
 
 
 @pytest.mark.asyncio
+async def test_create_sandbox_forwards_control_protocol(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    await _call_create_sandbox({**CREATE_REQUEST, "sandbox_control_protocol_version": 2})
+
+    assert captured["config"].sandbox_control_protocol_version == 2
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_forwards_control_protocol(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, captured)
+
+    await _call_restore_sandbox({**RESTORE_REQUEST, "sandbox_control_protocol_version": 2})
+
+    assert captured["restore"]["sandbox_control_protocol_version"] == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("call", "payload", "field"),
     [

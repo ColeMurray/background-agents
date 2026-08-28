@@ -13,6 +13,7 @@ import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
+export type SandboxControlProtocolVersion = 2;
 
 /**
  * Provider-neutral configuration for triggering an image build inside a
@@ -94,6 +95,8 @@ export interface CreateSandboxConfig {
   controlPlaneUrl: string;
   /** Authentication token for sandbox */
   sandboxAuthToken: string;
+  /** Optional runtime control protocol selected once by the control plane. */
+  sandboxControlProtocolVersion?: SandboxControlProtocolVersion;
   /** LLM provider (e.g., "anthropic") */
   provider: string;
   /** LLM model (e.g., "claude-sonnet-4-5") */
@@ -189,6 +192,8 @@ export interface RestoreConfig {
   sandboxId: string;
   /** Authentication token for sandbox */
   sandboxAuthToken: string;
+  /** Optional runtime control protocol selected once by the control plane. */
+  sandboxControlProtocolVersion?: SandboxControlProtocolVersion;
   /** Control plane URL for sandbox callbacks */
   controlPlaneUrl: string;
   /** Repository owner */

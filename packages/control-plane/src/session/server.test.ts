@@ -47,6 +47,16 @@ function createHarness() {
     clearSandboxIfMatch: vi.fn(() => true),
     removeClient: vi.fn(() => client),
     hasParticipant: vi.fn(() => false),
+    getSandboxSender: vi.fn((connection) =>
+      connectionKind === "sandbox"
+        ? {
+            connection,
+            sandboxId: "sandbox-1",
+            protocolVersion: 2 as const,
+            executionReady: false,
+          }
+        : null
+    ),
   };
   const clientCommands: SessionClientCommands<string, TestClient> = {
     subscribe: vi.fn(async () => undefined),
@@ -216,6 +226,31 @@ describe("SessionServer", () => {
     expect(sockets.getClient).not.toHaveBeenCalled();
   });
 
+  it("passes the authenticated sending sandbox context to event processing", async () => {
+    const { server, messageDeps, setConnectionKind } = createHarness();
+    setConnectionKind("sandbox");
+
+    await server.onMessage(
+      "sandbox-socket",
+      JSON.stringify({
+        type: "heartbeat",
+        sandboxId: "sandbox-1",
+        status: "booting",
+        timestamp: 1,
+      })
+    );
+
+    expect(messageDeps.processSandboxEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "heartbeat" }),
+      {
+        connection: "sandbox-socket",
+        sandboxId: "sandbox-1",
+        protocolVersion: 2,
+        executionReady: false,
+      }
+    );
+  });
+
   it.each([
     {
       type: "prompt",
@@ -288,12 +323,20 @@ describe("SessionServer", () => {
       })
     );
 
-    expect(messageDeps.processSandboxEvent).toHaveBeenCalledWith({
-      type: "heartbeat",
-      sandboxId: "sandbox-1",
-      timestamp: 1000,
-      status: "ready",
-    });
+    expect(messageDeps.processSandboxEvent).toHaveBeenCalledWith(
+      {
+        type: "heartbeat",
+        sandboxId: "sandbox-1",
+        timestamp: 1000,
+        status: "ready",
+      },
+      {
+        connection: "sandbox",
+        sandboxId: "sandbox-1",
+        protocolVersion: 2,
+        executionReady: false,
+      }
+    );
   });
 
   it("schedules sandbox reconnect checks and always reciprocates close", async () => {

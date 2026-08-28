@@ -121,6 +121,7 @@ class CreateSandboxRequest(_RepositoryContextModel):
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    sandbox_control_protocol_version: Annotated[int, Field(ge=2, le=2)] | None = None
     opencode_session_id: str | None = None
     provider: str | None = None
     model: str | None = None
@@ -161,6 +162,7 @@ class RestoreSandboxRequest(_ModalRequestModel):
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
     sandbox_auth_token: NonEmptyString
+    sandbox_control_protocol_version: Annotated[int, Field(ge=2, le=2)] | None = None
     user_env_vars: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
     code_server_enabled: bool = False
@@ -409,6 +411,7 @@ async def api_create_sandbox(
             session_config=session_config,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
+            sandbox_control_protocol_version=parsed_request.sandbox_control_protocol_version,
             user_env_vars=parsed_request.user_env_vars or None,
             repo_image_id=parsed_request.repo_image_id or None,
             repo_image_sha=parsed_request.repo_image_sha or None,
@@ -644,6 +647,7 @@ async def api_restore_sandbox(
             sandbox_id=parsed_request.sandbox_id,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
+            sandbox_control_protocol_version=parsed_request.sandbox_control_protocol_version,
             clone_token=clone_token,
             user_env_vars=parsed_request.user_env_vars or None,
             timeout_seconds=(

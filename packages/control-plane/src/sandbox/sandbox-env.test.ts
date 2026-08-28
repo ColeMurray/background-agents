@@ -203,6 +203,31 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars.SANDBOX_TIMEOUT_SECONDS).toBe("14400");
   });
 
+  it("adds the selected sandbox control protocol and omits it by default", () => {
+    const enabled = buildSandboxEnvVars(
+      { ...baseConfig, sandboxControlProtocolVersion: 2 },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+    const disabled = buildSandboxEnvVars(baseConfig, {
+      scmIdentity: scmCloneIdentity("github"),
+    });
+
+    expect(enabled.SANDBOX_CONTROL_PROTOCOL_VERSION).toBe("2");
+    expect(disabled).not.toHaveProperty("SANDBOX_CONTROL_PROTOCOL_VERSION");
+  });
+
+  it("does not let user env opt into the sandbox control protocol", () => {
+    const envVars = buildSandboxEnvVars(
+      {
+        ...baseConfig,
+        userEnvVars: { SANDBOX_CONTROL_PROTOCOL_VERSION: "2" },
+      },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+
+    expect(envVars).not.toHaveProperty("SANDBOX_CONTROL_PROTOCOL_VERSION");
+  });
+
   it("system vars take precedence over user-defined repo secrets", () => {
     const envVars = buildSandboxEnvVars(
       {

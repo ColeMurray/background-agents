@@ -212,14 +212,15 @@ describe("ModalClient", () => {
   it("sends multi-repo members as flat snake_case create fields", async () => {
     // Modal's create handler builds its SessionConfig from the request by
     // field name, so the wire keys must match SessionConfig exactly.
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          success: true,
-          data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
     );
 
     const client = createModalClient("secret", "acme", "prod-web");
@@ -244,14 +245,15 @@ describe("ModalClient", () => {
   });
 
   it("sends a null repositories create field for single-repo sessions", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          success: true,
-          data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
     );
 
     const client = createModalClient("secret", "acme", "prod-web");
@@ -265,6 +267,39 @@ describe("ModalClient", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body.repositories).toBeNull();
+  });
+
+  it("forwards the sandbox control protocol for create and restore", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    const client = createModalClient("secret", "acme", "prod-web");
+    const common = {
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      repoOwner: "testowner",
+      repoName: "testrepo",
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      sandboxControlProtocolVersion: 2 as const,
+    };
+
+    await client.createSandbox(common);
+    await client.restoreSandbox({ ...common, snapshotImageId: "snapshot-1" });
+
+    const createBody = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    const restoreBody = JSON.parse((fetchMock.mock.calls[1]?.[1] as RequestInit).body as string);
+    expect(createBody.sandbox_control_protocol_version).toBe(2);
+    expect(restoreBody.sandbox_control_protocol_version).toBe(2);
   });
 
   it("parses optional create response fields without rejecting valid Modal data", async () => {

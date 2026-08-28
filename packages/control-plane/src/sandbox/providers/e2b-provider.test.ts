@@ -367,7 +367,7 @@ describe("E2BSandboxProvider", () => {
     expect(createEnv(client).SANDBOX_TIMEOUT_SECONDS).toBe("1800");
   });
 
-  it("kills the created sandbox when the entrypoint cannot start (no leak)", async () => {
+  it("returns the created sandbox without cleanup when entrypoint launch is ambiguous", async () => {
     const client = mockClient({
       startProcess: vi.fn(async () => {
         throw new E2BApiError("envd unreachable", 502);
@@ -375,26 +375,11 @@ describe("E2BSandboxProvider", () => {
     });
     const provider = new E2BSandboxProvider(client, providerConfig);
 
-    // Without the kill the sandbox idles unbootable until its TTL.
-    await expect(provider.createSandbox(baseCreateConfig)).rejects.toBeInstanceOf(
-      SandboxProviderError
-    );
-    expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
-  });
-
-  it("still surfaces the original error when the cleanup kill also fails", async () => {
-    const client = mockClient({
-      startProcess: vi.fn(async () => {
-        throw new E2BApiError("envd unreachable", 502);
-      }),
-      killSandbox: vi.fn(async () => {
-        throw new E2BApiError("kill failed too", 500);
-      }),
+    await expect(provider.createSandbox(baseCreateConfig)).resolves.toMatchObject({
+      sandboxId: baseCreateConfig.sandboxId,
+      providerObjectId: "e2b-id",
     });
-    const provider = new E2BSandboxProvider(client, providerConfig);
-    await expect(provider.createSandbox(baseCreateConfig)).rejects.toMatchObject({
-      message: expect.stringContaining("envd unreachable"),
-    });
+    expect(client.killSandbox).not.toHaveBeenCalled();
   });
 
   it("threads the sandbox domain into code-server and tunnel URLs", async () => {
@@ -571,7 +556,7 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     );
   });
 
-  it("kills the sandbox and fails the create when the entrypoint cannot start on a prebuilt boot", async () => {
+  it("returns a prebuilt sandbox without cleanup when entrypoint launch is ambiguous", async () => {
     const client = mockClient({
       startProcess: vi.fn(async () => {
         throw new Error("envd process start exited non-zero: exit status 127");
@@ -582,9 +567,8 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
         ...baseCreateConfig,
         prebuiltImageId: "snap-repo:default",
       })
-    ).rejects.toThrow(/Failed to create E2B sandbox/);
-    // Without the kill the sandbox idles unbootable until its TTL.
-    expect(client.killSandbox).toHaveBeenCalledWith("e2b-id");
+    ).resolves.toMatchObject({ providerObjectId: "e2b-id" });
+    expect(client.killSandbox).not.toHaveBeenCalled();
   });
 
   it("takePrebuiltImageSnapshot sanitizes via pause(memory:false)+connect, scrubs the log, then snapshots", async () => {

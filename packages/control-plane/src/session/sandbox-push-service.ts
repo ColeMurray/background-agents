@@ -41,9 +41,12 @@ export class SandboxPushService {
   async pushBranchToRemote(
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    const sandboxWs = this.wsManager.getSandboxSocket();
+    const sandboxWs = this.wsManager.getExecutionSocket();
 
     if (!sandboxWs) {
+      if (this.wsManager.getSandboxControlSocket()) {
+        return { success: false, error: "Sandbox is not ready to push branches" };
+      }
       this.log.info("No sandbox connected, assuming branch was pushed manually");
       return { success: true };
     }

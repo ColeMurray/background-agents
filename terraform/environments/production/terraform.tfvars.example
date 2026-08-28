@@ -270,6 +270,14 @@ nextauth_secret = ""
 # - "e2b": direct E2B REST API integration with pause/resume
 sandbox_provider = "modal"
 
+# Activation barrier for the early sandbox control channel. Leave false until
+# the dual-mode control plane and every selected provider artifact are verified.
+enable_early_sandbox_control_channel = false
+# Set this to the runtime manifest generation only after all selected provider
+# artifacts have been deployed and verified. Activation fails while it is lower
+# than the v2 minimum generation.
+verified_sandbox_runtime_generation = 0
+
 # Platform for the web app deployment
 # - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
 # - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)

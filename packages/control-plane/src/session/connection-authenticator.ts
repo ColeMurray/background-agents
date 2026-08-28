@@ -65,7 +65,8 @@ export class SessionConnectionAuthenticator {
       messageQueue,
     } = this.deps;
     log.debug("WebSocket upgrade requested");
-    const isSandbox = url.searchParams.get("type") === "sandbox";
+    const isRuntimeControl = url.pathname.endsWith("/runtime-control");
+    const isSandbox = isRuntimeControl || url.searchParams.get("type") === "sandbox";
 
     // Validate sandbox authentication
     if (isSandbox) {
@@ -143,6 +144,15 @@ export class SessionConnectionAuthenticator {
         return new Response("Sandbox is stopped", { status: 410 });
       }
       if (
+        isRuntimeControl &&
+        currentSandbox &&
+        !["spawning", "connecting", "booting", "ready", "snapshotting"].includes(
+          currentSandbox.status
+        )
+      ) {
+        return new Response("Sandbox is not attachable", { status: 410 });
+      }
+      if (
         currentSandbox?.modal_sandbox_id !== expectedSandboxId ||
         currentSandbox?.auth_token_hash !== sandbox?.auth_token_hash ||
         currentSandbox?.auth_token !== sandbox?.auth_token
@@ -163,21 +173,41 @@ export class SessionConnectionAuthenticator {
         // The lifecycle manager publishes access after any pending provider
         // startup has persisted its URLs and credentials.
         const accessIsPersisted = !lifecycleManager.isProviderStartupPending();
-        const { replaced } = wsManager.acceptAndSetSandboxSocket(server, sandboxId ?? undefined);
+        const { replaced } = wsManager.acceptAndSetSandboxSocket(
+          server,
+          isRuntimeControl && sandboxId
+            ? {
+                role: "sandbox-control",
+                sandboxId,
+                protocolVersion: 2,
+                executionReady: false,
+              }
+            : (sandboxId ?? undefined)
+        );
         // Notify manager that sandbox connected so it can reset the spawning flag
         lifecycleManager.onSandboxConnected();
-        sandboxRepository.updateSandboxStatus("ready");
-        messenger.broadcast({ type: "sandbox_status", status: "ready" });
-        if (accessIsPersisted) {
-          messenger.broadcast({ type: "sandbox_access_changed" });
-        }
-
-        // Set initial activity timestamp and schedule inactivity check
-        // IMPORTANT: Must await to ensure alarm is scheduled before returning
         const now = Date.now();
-        lifecycleManager.updateLastActivity(now);
-        sandboxRepository.updateSandboxHeartbeat(now);
-        await lifecycleManager.scheduleInactivityCheck();
+        if (isRuntimeControl) {
+          if (!sandboxId || !sandboxRepository.attachRuntimeControl(sandboxId, now)) {
+            wsManager.close(server, 1008, "Sandbox state changed");
+            return new Response("Sandbox state changed", { status: 409 });
+          }
+          messenger.broadcast({
+            type: "sandbox_status",
+            status: sandboxRepository.getSandbox()?.status ?? "booting",
+          });
+          await lifecycleManager.scheduleDisconnectCheck();
+        } else {
+          sandboxRepository.updateSandboxStatus("ready");
+          messenger.broadcast({ type: "sandbox_status", status: "ready" });
+          if (accessIsPersisted) {
+            messenger.broadcast({ type: "sandbox_access_changed" });
+          }
+
+          lifecycleManager.updateLastActivity(now);
+          sandboxRepository.updateSandboxHeartbeat(now);
+          await lifecycleManager.scheduleInactivityCheck();
+        }
 
         log.info("ws.connect", {
           event: "ws.connect",
@@ -189,9 +219,11 @@ export class SessionConnectionAuthenticator {
         });
 
         // Process any pending messages now that sandbox is connected
-        backgroundTasks.submit(() => messageQueue.processMessageQueue(), {
-          name: "message_queue.process",
-        });
+        if (!isRuntimeControl) {
+          backgroundTasks.submit(() => messageQueue.processMessageQueue(), {
+            name: "message_queue.process",
+          });
+        }
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         wsManager.acceptClientSocket(server, wsId);

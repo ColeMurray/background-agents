@@ -7,6 +7,48 @@ const recordSchema = z.record(z.string(), z.unknown());
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
 export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
 
+export const BOOT_PHASES = [
+  "desktop",
+  "repository_sync",
+  "setup",
+  "tunnel",
+  "start",
+  "managed_skills",
+  "code_server",
+  "terminal",
+  "mcp_packages",
+  "opencode_start",
+  "opencode_health",
+  "restored_session_validation",
+  "git_signing",
+  "bridge_initialization",
+  "opencode_restart",
+] as const;
+export const bootPhaseSchema = z.enum(BOOT_PHASES);
+export type BootPhase = z.infer<typeof bootPhaseSchema>;
+
+export const BOOT_FAILURE_CODES = [
+  "repository_boot_failed",
+  "primary_start_failed",
+  "managed_skills_failed",
+  "opencode_start_failed",
+  "opencode_health_timeout",
+  "restored_session_validation_failed",
+  "git_signing_failed",
+  "bridge_initialization_failed",
+  "fatal_phase_timeout",
+  "internal_boot_error",
+] as const;
+export const bootFailureCodeSchema = z.enum(BOOT_FAILURE_CODES);
+export type BootFailureCode = z.infer<typeof bootFailureCodeSchema>;
+
+export const SANDBOX_EVENT_ACK_ID_MAX_LENGTH = 128;
+export const BOOT_PHASE_DETAIL_CODE_MAX_LENGTH = 100;
+export const BOOT_FAILURE_MESSAGE_MAX_LENGTH = 500;
+
+const bootPhaseDetailCodeSchema = z.string().min(1).max(BOOT_PHASE_DETAIL_CODE_MAX_LENGTH);
+const bootFailureAckIdSchema = z.string().min(1).max(SANDBOX_EVENT_ACK_ID_MAX_LENGTH);
+
 const tokenUsageDetailsSchema = z
   .object({
     total: z.number().optional(),
@@ -41,19 +83,38 @@ const sandboxEventBaseSchema = z.object({
   ackId: z.string().optional(),
 });
 
+export const sandboxBootPhaseEventSchema = sandboxEventBaseSchema.extend({
+  type: z.literal("boot_phase"),
+  phase: bootPhaseSchema,
+  detailCode: bootPhaseDetailCodeSchema.optional(),
+});
+export type SandboxBootPhaseEvent = z.infer<typeof sandboxBootPhaseEventSchema>;
+
+export const sandboxBootFailedEventSchema = sandboxEventBaseSchema.extend({
+  type: z.literal("boot_failed"),
+  ackId: bootFailureAckIdSchema,
+  phase: bootPhaseSchema,
+  code: bootFailureCodeSchema,
+  message: z.string().max(BOOT_FAILURE_MESSAGE_MAX_LENGTH).optional(),
+});
+export type SandboxBootFailedEvent = z.infer<typeof sandboxBootFailedEventSchema>;
+
 const messageSandboxEventBaseSchema = sandboxEventBaseSchema.extend({
   messageId: z.string(),
 });
 
 // Sandbox events from Modal or synthesized by the control plane.
 export const sandboxEventSchema = z.discriminatedUnion("type", [
+  sandboxBootPhaseEventSchema,
+  sandboxBootFailedEventSchema,
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
-    status: z.string(),
+    status: z.enum(["booting", "ready"]),
+    phase: bootPhaseSchema.optional(),
   }),
   sandboxEventBaseSchema.extend({
-    // Emitted once when the sandbox bridge connects and OpenCode is ready.
-    // Present in essentially every session's replay history.
+    // Authoritative declaration that the current runtime connection can execute prompts.
+    // Legacy runtimes emit this immediately after their late bridge connection.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
     // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any

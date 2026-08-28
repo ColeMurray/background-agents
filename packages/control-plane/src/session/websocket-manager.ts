@@ -9,6 +9,7 @@
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
 import type { ConnectionClassification } from "./ports";
+import type { AuthenticatedSandboxSender } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
 import type {
   WsClientMappingRepository,
@@ -19,6 +20,17 @@ import type {
 export interface WebSocketManagerConfig {
   authTimeoutMs: number;
 }
+
+export interface SandboxSocketAttachment {
+  role: "sandbox-control";
+  sandboxId: string;
+  protocolVersion: 1 | 2;
+  executionReady: boolean;
+}
+
+export type SandboxSenderContext = AuthenticatedSandboxSender<WebSocket> & {
+  socket: WebSocket;
+};
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -35,7 +47,10 @@ export interface SessionWebSocketManager {
    * Accept a sandbox WebSocket, close any existing sandbox socket, and set
    * as the active sandbox connection.
    */
-  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean };
+  acceptAndSetSandboxSocket(
+    ws: WebSocket,
+    sandboxIdOrAttachment?: string | SandboxSocketAttachment
+  ): { replaced: boolean };
 
   /** Parse a WebSocket's tags to determine its kind and identity. */
   classify(ws: WebSocket): ConnectionClassification;
@@ -45,6 +60,11 @@ export interface SessionWebSocketManager {
    * Validates sandbox ID against the repository during hibernation recovery.
    */
   getSandboxSocket(): WebSocket | null;
+  getSandboxControlSocket(): WebSocket | null;
+  getExecutionSocket(): WebSocket | null;
+  getSandboxSenderContext(ws: WebSocket): SandboxSenderContext | null;
+  isCurrentSandboxSender(sender: SandboxSenderContext): boolean;
+  updateSandboxAttachment(ws: WebSocket, executionReady: boolean): boolean;
 
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
@@ -116,9 +136,25 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     this.ctx.acceptWebSocket(ws, [`wsid:${wsId}`]);
   }
 
-  acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean } {
+  acceptAndSetSandboxSocket(
+    ws: WebSocket,
+    sandboxIdOrAttachment?: string | SandboxSocketAttachment
+  ): { replaced: boolean } {
+    const attachment =
+      typeof sandboxIdOrAttachment === "object"
+        ? sandboxIdOrAttachment
+        : sandboxIdOrAttachment
+          ? {
+              role: "sandbox-control" as const,
+              sandboxId: sandboxIdOrAttachment,
+              protocolVersion: 1 as const,
+              executionReady: true,
+            }
+          : null;
+    const sandboxId = attachment?.sandboxId;
     const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : [])];
     this.ctx.acceptWebSocket(ws, tags);
+    if (attachment) ws.serializeAttachment(attachment);
 
     let replaced = false;
     if (this.sandboxWs && this.sandboxWs !== ws) {
@@ -155,6 +191,10 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
 
   getSandboxSocket(): WebSocket | null {
+    return this.getSandboxControlSocket();
+  }
+
+  getSandboxControlSocket(): WebSocket | null {
     const sandbox = this.sandboxRepository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
@@ -199,6 +239,76 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       return ws;
     }
 
+    return null;
+  }
+
+  getExecutionSocket(): WebSocket | null {
+    const ws = this.getSandboxControlSocket();
+    if (!ws) return null;
+    const sender = this.getSandboxSenderContext(ws);
+    return sender?.executionReady === true &&
+      this.sandboxRepository.getSandbox()?.status === "ready"
+      ? ws
+      : null;
+  }
+
+  getSandboxSenderContext(ws: WebSocket): SandboxSenderContext | null {
+    const parsed = this.classify(ws);
+    if (parsed.kind !== "sandbox") return null;
+    const attachment = this.readSandboxAttachment(ws);
+    const sandboxId = attachment?.sandboxId ?? parsed.sandboxId;
+    if (!sandboxId) return null;
+    return {
+      connection: ws,
+      socket: ws,
+      sandboxId,
+      protocolVersion: attachment?.protocolVersion ?? 1,
+      executionReady: attachment?.executionReady ?? true,
+    };
+  }
+
+  isCurrentSandboxSender(sender: SandboxSenderContext): boolean {
+    if (this.sandboxRepository.getSandbox()?.modal_sandbox_id !== sender.sandboxId) return false;
+    if (this.sandboxWs) return this.sandboxWs === sender.socket;
+    if (
+      sender.socket.readyState === WebSocket.OPEN &&
+      this.classify(sender.socket).kind === "sandbox"
+    ) {
+      this.sandboxWs = sender.socket;
+      return true;
+    }
+    return false;
+  }
+
+  updateSandboxAttachment(ws: WebSocket, executionReady: boolean): boolean {
+    const sender = this.getSandboxSenderContext(ws);
+    if (!sender || this.getSandboxControlSocket() !== ws) return false;
+    ws.serializeAttachment({
+      role: "sandbox-control",
+      sandboxId: sender.sandboxId,
+      protocolVersion: sender.protocolVersion,
+      executionReady,
+    } satisfies SandboxSocketAttachment);
+    return true;
+  }
+
+  private readSandboxAttachment(ws: WebSocket): SandboxSocketAttachment | null {
+    try {
+      const value = ws.deserializeAttachment();
+      if (
+        value &&
+        typeof value === "object" &&
+        (value as SandboxSocketAttachment).role === "sandbox-control" &&
+        typeof (value as SandboxSocketAttachment).sandboxId === "string" &&
+        ((value as SandboxSocketAttachment).protocolVersion === 1 ||
+          (value as SandboxSocketAttachment).protocolVersion === 2) &&
+        typeof (value as SandboxSocketAttachment).executionReady === "boolean"
+      ) {
+        return value as SandboxSocketAttachment;
+      }
+    } catch {
+      // Legacy sockets have no serialized attachment.
+    }
     return null;
   }
 

@@ -320,6 +320,55 @@ describe("applyMigrations", () => {
     );
   });
 
+  it("adds the persisted runtime attach start for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("runtime_attach_started_at INTEGER");
+    expect(MIGRATIONS.find((migration) => migration.id === 49)?.run).toBe(
+      "ALTER TABLE sandbox ADD COLUMN runtime_attach_started_at INTEGER"
+    );
+  });
+
+  it("adds runtime control diagnostics for fresh and migrated DOs", () => {
+    for (const column of [
+      "runtime_protocol_version INTEGER",
+      "boot_phase TEXT",
+      "boot_phase_started_at INTEGER",
+      "ready_at INTEGER",
+    ]) {
+      expect(SCHEMA_SQL).toContain(column);
+    }
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 47);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+
+    try {
+      db.exec("CREATE TABLE sandbox (id TEXT PRIMARY KEY)");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+
+      expect(db.prepare("PRAGMA table_info(sandbox)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "runtime_protocol_version", type: "INTEGER" }),
+          expect.objectContaining({ name: "boot_phase", type: "TEXT" }),
+          expect.objectContaining({ name: "boot_phase_started_at", type: "INTEGER" }),
+          expect.objectContaining({ name: "ready_at", type: "INTEGER" }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists the stable boot failure code", () => {
+    expect(SCHEMA_SQL).toContain("boot_failure_code TEXT");
+    expect(MIGRATIONS.find((migration) => migration.id === 48)?.run).toBe(
+      "ALTER TABLE sandbox ADD COLUMN boot_failure_code TEXT"
+    );
+  });
+
   it("creates the final attachments schema in its single unshipped migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 35);
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");

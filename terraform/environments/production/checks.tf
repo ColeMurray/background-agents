@@ -63,3 +63,19 @@ resource "terraform_data" "sign_in_provider_gate" {
     }
   }
 }
+
+resource "terraform_data" "early_sandbox_control_channel_gate" {
+  lifecycle {
+    precondition {
+      condition = (
+        !var.enable_early_sandbox_control_channel ||
+        (
+          local.sandbox_runtime_manifest.minimumCompatibleGeneration >= local.sandbox_runtime_manifest.sandboxControlProtocolV2MinimumGeneration &&
+          local.sandbox_runtime_manifest.minimumRebuildGeneration >= local.sandbox_runtime_manifest.sandboxControlProtocolV2MinimumGeneration &&
+          var.verified_sandbox_runtime_generation >= local.sandbox_runtime_manifest.sandboxControlProtocolV2MinimumGeneration
+        )
+      )
+      error_message = "enable_early_sandbox_control_channel requires snapshot compatibility and image rebuild floors at or above sandboxControlProtocolV2MinimumGeneration, plus verified_sandbox_runtime_generation confirming all selected provider artifacts reached that generation."
+    }
+  }
+}

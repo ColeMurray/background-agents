@@ -43,6 +43,29 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 }
 
 describe("SessionHeader", () => {
+  it("renders an attached sandbox that is still booting", () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "booting" })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Booting session" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Sandbox status: Booting..." })).toBeInTheDocument();
+  });
+
   it("lets desktop users hide and show the session details sidebar", () => {
     const onToggleDesktopDetails = vi.fn();
     const { rerender } = render(

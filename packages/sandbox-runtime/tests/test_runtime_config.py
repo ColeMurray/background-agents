@@ -3,7 +3,7 @@ from types import MappingProxyType
 
 import pytest
 
-from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
+from sandbox_runtime.runtime_config import BootMode, RuntimeConfig, SandboxControlProtocol
 
 
 @pytest.mark.parametrize(
@@ -44,6 +44,23 @@ def test_runtime_config_parses_frozen_values_without_environment_patching(tmp_pa
 def test_runtime_config_rejects_non_object_session_config():
     with pytest.raises(ValueError, match="JSON object"):
         RuntimeConfig.from_env({"SESSION_CONFIG": "[]"})
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({}, SandboxControlProtocol.LEGACY),
+        ({"SANDBOX_CONTROL_PROTOCOL_VERSION": "2"}, SandboxControlProtocol.V2),
+    ],
+)
+def test_runtime_config_parses_sandbox_control_protocol(environment, expected):
+    assert RuntimeConfig.from_env(environment).sandbox_control_protocol is expected
+
+
+@pytest.mark.parametrize("value", ["", "1", "02", "3", "v2"])
+def test_runtime_config_rejects_unknown_sandbox_control_protocol(value):
+    with pytest.raises(ValueError, match="SANDBOX_CONTROL_PROTOCOL_VERSION"):
+        RuntimeConfig.from_env({"SANDBOX_CONTROL_PROTOCOL_VERSION": value})
 
 
 def test_session_config_is_recursively_immutable():

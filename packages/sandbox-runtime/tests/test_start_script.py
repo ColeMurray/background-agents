@@ -5,13 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sandbox_runtime.repository_boot import RepositoryBoot
+from sandbox_runtime.repository_boot import PrimaryStartError, RepositoryBoot
 from sandbox_runtime.repository_sync import (
     RepositorySyncOutcome,
     RepositorySyncResult,
     RepositorySyncStatus,
 )
 from sandbox_runtime.runtime_config import BootMode
+from sandbox_runtime.types import BootPhase
 from tests.runtime_helpers import make_repository_boot
 
 
@@ -238,7 +239,18 @@ class TestStartInRepositoryBootStrict:
         sup.hooks.run_setup = AsyncMock(return_value=True)
         sup.hooks.run_start = AsyncMock(return_value=False)
 
-        with pytest.raises(RuntimeError, match="start hook failed for acme/app"):
-            await sup.boot(BootMode.FRESH, [])
+        phases = []
+
+        async def report_phase(phase):
+            phases.append(phase)
+
+        with pytest.raises(PrimaryStartError, match="start hook failed for acme/app"):
+            await sup.boot(BootMode.FRESH, [], report_phase)
 
         sup.hooks.run_start.assert_awaited_once()
+        assert phases == [
+            BootPhase.REPOSITORY_SYNC,
+            BootPhase.SETUP,
+            BootPhase.TUNNEL,
+            BootPhase.START,
+        ]

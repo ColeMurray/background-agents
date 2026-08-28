@@ -97,21 +97,17 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
 }
 
 describe("SandboxHandler", () => {
-  it("accepts well-formed boot progress and rejects stale sandbox identities", async () => {
+  it("accepts legacy boot progress and rejects non-legacy startup states", async () => {
     const { handler, recordBootProgress, now } = createHandler();
     recordBootProgress.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const request = () =>
       new Request("http://internal/internal/boot-progress", {
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({ sandboxId: "sandbox-1" }),
       });
 
-    const accepted = await handler.bootProgress(request());
-    const stale = await handler.bootProgress(request());
-
-    expect(accepted.status).toBe(200);
-    expect(stale.status).toBe(409);
+    expect((await handler.bootProgress(request())).status).toBe(200);
+    expect((await handler.bootProgress(request())).status).toBe(409);
     expect(recordBootProgress).toHaveBeenNthCalledWith(1, "sandbox-1", 1234);
     expect(now).toHaveBeenCalledTimes(2);
   });
@@ -134,7 +130,7 @@ describe("SandboxHandler", () => {
     const event = {
       type: "heartbeat",
       sandboxId: "sandbox-1",
-      status: "running",
+      status: "ready",
       timestamp: 123,
     };
 

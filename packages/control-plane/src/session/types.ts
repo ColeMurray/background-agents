@@ -12,7 +12,12 @@ import type {
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
-import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
+import type {
+  BootFailureCode,
+  BootPhase,
+  EventType,
+  GitSyncStatus,
+} from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 import { z } from "zod";
 
@@ -155,6 +160,12 @@ export interface SandboxRow {
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
   snapshot_runtime_version: string | null; // SANDBOX_VERSION that produced snapshot_image_id
   runtime_version: string | null; // SANDBOX_VERSION reported by the running sandbox
+  runtime_protocol_version: number | null;
+  boot_phase: BootPhase | null;
+  boot_phase_started_at: number | null;
+  boot_failure_code: BootFailureCode | null;
+  ready_at: number | null;
+  runtime_attach_started_at: number | null;
   auth_token: string | null;
   auth_token_hash: string | null; // SHA-256 hash of sandbox auth token
   status: SandboxStatus;

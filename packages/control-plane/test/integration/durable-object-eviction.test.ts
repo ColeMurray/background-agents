@@ -8,6 +8,7 @@ import {
   initNamedSession,
   openClientWs,
   queryDO,
+  seedSandboxAuth,
   seedMessage,
   waitForSandboxStatus,
 } from "./helpers";
@@ -189,5 +190,44 @@ describe("SessionDO eviction and hibernation restore", () => {
         },
       ],
     });
+  });
+
+  it("recovers v2 readiness from a serialized sandbox attachment", async () => {
+    const sessionName = `do-evict-sandbox-attachment-${Date.now()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuth(stub, {
+      authToken: "attachment-token",
+      sandboxId: "sandbox-attachment",
+      status: "booting",
+    });
+
+    await runInSessionDO(stub, async (instance: SessionDO, state) => {
+      const pair = new WebSocketPair();
+      const restoredSocket = pair[1];
+      state.acceptWebSocket(restoredSocket, ["sandbox", "sid:sandbox-attachment"]);
+      restoredSocket.serializeAttachment({
+        role: "sandbox-control",
+        sandboxId: "sandbox-attachment",
+        protocolVersion: 2,
+        executionReady: false,
+      });
+      pair[0].accept();
+
+      await instance.webSocketMessage(
+        restoredSocket,
+        JSON.stringify({
+          type: "ready",
+          sandboxId: "sandbox-attachment",
+          timestamp: 1,
+        })
+      );
+    });
+
+    expect(
+      await queryDO<{ status: string; ready_at: number }>(
+        stub,
+        "SELECT status, ready_at FROM sandbox"
+      )
+    ).toEqual([{ status: "ready", ready_at: expect.any(Number) }]);
   });
 });

@@ -11,14 +11,16 @@ import {
   evaluateSpawnDecision,
   evaluateInactivityTimeout,
   evaluateHeartbeatHealth,
-  evaluateConnectingTimeout,
+  evaluateProviderOperationLease,
+  evaluateRuntimeAttachTimeout,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
   isSnapshotRuntimeCompatible,
-  DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  DEFAULT_PROVIDER_OPERATION_LEASE_CONFIG,
+  DEFAULT_RUNTIME_ATTACH_TIMEOUT_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
-  DEFAULT_MAX_BOOT_DURATION_MS,
+  DEFAULT_LEGACY_STARTUP_CAP_MS,
   type CircuitBreakerState,
   type CircuitBreakerConfig,
   type SandboxState,
@@ -26,7 +28,8 @@ import {
   type InactivityState,
   type InactivityConfig,
   type HeartbeatConfig,
-  type ConnectingTimeoutConfig,
+  type ProviderOperationLeaseConfig,
+  type RuntimeAttachTimeoutConfig,
   type WarmState,
   type ExecutionTimeoutConfig,
 } from "./decisions";
@@ -141,8 +144,9 @@ describe("evaluateSpawnDecision", () => {
   const config: SpawnConfig = {
     cooldownMs: 30000,
     readyWaitMs: 60000,
-    spawningTimeoutMs: 120000,
-    maxBootDurationMs: DEFAULT_MAX_BOOT_DURATION_MS,
+    providerOperationLeaseMs: 120000,
+    runtimeAttachTimeoutMs: 120000,
+    legacyStartupCapMs: DEFAULT_LEGACY_STARTUP_CAP_MS,
   };
 
   it('returns "restore" when snapshot exists and sandbox is stopped', () => {
@@ -294,7 +298,7 @@ describe("evaluateSpawnDecision", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "spawning",
-      createdAt: now - (config.spawningTimeoutMs + 1000),
+      createdAt: now - (config.providerOperationLeaseMs + 1000),
       snapshotImageId: null,
       snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
@@ -309,7 +313,8 @@ describe("evaluateSpawnDecision", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "connecting",
-      createdAt: now - (config.spawningTimeoutMs + 1000),
+      createdAt: now - 60_000,
+      runtimeAttachStartedAt: now - (config.runtimeAttachTimeoutMs + 1000),
       snapshotImageId: null,
       snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
@@ -320,31 +325,36 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("spawn");
   });
 
-  it('keeps waiting for an old "connecting" sandbox with recent boot progress', () => {
+  it("never replaces a booting sandbox based on total boot duration", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "booting",
+      createdAt: now - 24 * 60 * 60 * 1000,
+      snapshotImageId: null,
+      snapshotRuntimeVersion: null,
+      hasActiveWebSocket: false,
+    };
+
+    expect(evaluateSpawnDecision(state, config, now, false)).toEqual({
+      action: "skip",
+      reason: "already booting",
+    });
+  });
+
+  it('extends a legacy "connecting" lease with progress but enforces the absolute cap', () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "connecting",
-      createdAt: now - (config.spawningTimeoutMs + 1000),
-      bootProgressAt: now - 1000,
+      createdAt: now - config.runtimeAttachTimeoutMs - 1,
+      runtimeAttachStartedAt: now - config.runtimeAttachTimeoutMs - 1,
+      bootProgressAt: now - 1,
       snapshotImageId: null,
       snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
     };
 
     expect(evaluateSpawnDecision(state, config, now, false).action).toBe("skip");
-  });
-
-  it("spawns after the absolute boot duration despite recent boot progress", () => {
-    const now = Date.now();
-    const state: SandboxState = {
-      status: "connecting",
-      createdAt: now - config.maxBootDurationMs,
-      bootProgressAt: now,
-      snapshotImageId: null,
-      snapshotRuntimeVersion: null,
-      hasActiveWebSocket: false,
-    };
-
+    state.runtimeAttachStartedAt = now - config.legacyStartupCapMs;
     expect(evaluateSpawnDecision(state, config, now, false).action).toBe("spawn");
   });
 
@@ -352,7 +362,7 @@ describe("evaluateSpawnDecision", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "spawning",
-      createdAt: now - (config.spawningTimeoutMs + 1000),
+      createdAt: now - (config.providerOperationLeaseMs + 1000),
       snapshotImageId: null,
       snapshotRuntimeVersion: null,
       hasActiveWebSocket: false,
@@ -870,117 +880,86 @@ describe("evaluateHeartbeatHealth", () => {
   });
 });
 
-// ==================== Connecting Timeout Tests ====================
+// ==================== Startup Timing Tests ====================
 
-describe("evaluateConnectingTimeout", () => {
-  const config: ConnectingTimeoutConfig = DEFAULT_CONNECTING_TIMEOUT_CONFIG;
+describe("evaluateProviderOperationLease", () => {
+  const config: ProviderOperationLeaseConfig = DEFAULT_PROVIDER_OPERATION_LEASE_CONFIG;
 
-  it("returns not timed out for non-connecting status", () => {
+  it("allows a provider operation to exceed the runtime attach timeout", () => {
     const now = Date.now();
-    const result = evaluateConnectingTimeout("ready", now - 200_000, config, now);
+    const startedAt = now - DEFAULT_RUNTIME_ATTACH_TIMEOUT_CONFIG.timeoutMs - 1;
 
-    expect(result.isTimedOut).toBe(false);
-    expect(result.elapsedMs).toBe(0);
-  });
-
-  it("returns not timed out when within timeout window", () => {
-    const now = Date.now();
-    const createdAt = now - 60_000; // 60s ago, well within 120s timeout
-
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
-
-    expect(result.isTimedOut).toBe(false);
-    expect(result.elapsedMs).toBe(60_000);
-  });
-
-  it("returns timed out when past timeout", () => {
-    const now = Date.now();
-    const createdAt = now - 130_000; // 130s ago, past 120s timeout
-
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
-
-    expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(130_000);
-  });
-
-  it("uses recent boot progress instead of total wall-clock boot time", () => {
-    const now = Date.now();
-    const result = evaluateConnectingTimeout(
-      "connecting",
-      now - 300_000,
-      config,
-      now,
-      now - 20_000
-    );
-
-    expect(result).toEqual({
+    expect(evaluateProviderOperationLease("spawning", startedAt, null, config, now)).toEqual({
       isTimedOut: false,
-      elapsedMs: 20_000,
-      livenessAt: now - 20_000,
-      deadlineAt: now - 20_000 + config.timeoutMs,
+      elapsedMs: DEFAULT_RUNTIME_ATTACH_TIMEOUT_CONFIG.timeoutMs + 1,
+      livenessAt: startedAt,
+      deadlineAt: startedAt + config.timeoutMs,
     });
   });
 
-  it("times out at the absolute boot deadline despite recent progress", () => {
+  it("expires from the reservation timestamp and ignores legacy progress", () => {
     const now = Date.now();
-    const createdAt = now - config.maxBootDurationMs;
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now, now);
+    const startedAt = now - config.timeoutMs;
 
-    expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(config.maxBootDurationMs);
-    expect(result.deadlineAt).toBe(now);
+    expect(
+      evaluateProviderOperationLease("connecting", startedAt, null, config, now).isTimedOut
+    ).toBe(true);
   });
 
-  it("times out when boot progress is stale", () => {
+  it("stops applying once runtime attachment timing starts", () => {
     const now = Date.now();
-    const result = evaluateConnectingTimeout(
-      "connecting",
-      now - 300_000,
-      config,
-      now,
-      now - config.timeoutMs
-    );
+    expect(
+      evaluateProviderOperationLease("connecting", now - config.timeoutMs, now, config, now)
+        .isTimedOut
+    ).toBe(false);
+  });
+});
 
-    expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(config.timeoutMs);
+describe("evaluateRuntimeAttachTimeout", () => {
+  const config: RuntimeAttachTimeoutConfig = DEFAULT_RUNTIME_ATTACH_TIMEOUT_CONFIG;
+
+  it("starts a fresh attach window after a long provider operation", () => {
+    const now = Date.now();
+    const attachStartedAt = now - 1_000;
+
+    expect(evaluateRuntimeAttachTimeout("connecting", attachStartedAt, config, now)).toEqual({
+      isTimedOut: false,
+      elapsedMs: 1_000,
+      livenessAt: attachStartedAt,
+      deadlineAt: attachStartedAt + config.timeoutMs,
+    });
   });
 
-  it("returns timed out at exact boundary (>=)", () => {
+  it("extends legacy attach liveness without exceeding the attach cap", () => {
     const now = Date.now();
-    const createdAt = now - config.timeoutMs; // Exactly at timeout
+    const attachStartedAt = now - 300_000;
+    const recentProgress = now - 1_000;
 
-    const result = evaluateConnectingTimeout("connecting", createdAt, config, now);
+    expect(
+      evaluateRuntimeAttachTimeout("connecting", attachStartedAt, config, now, recentProgress)
+    ).toEqual({
+      isTimedOut: false,
+      elapsedMs: 1_000,
+      livenessAt: recentProgress,
+      deadlineAt: recentProgress + config.timeoutMs,
+    });
 
-    expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(config.timeoutMs);
+    const cappedStart = now - config.legacyStartupCapMs;
+    const capped = evaluateRuntimeAttachTimeout("connecting", cappedStart, config, now, now);
+    expect(capped.isTimedOut).toBe(true);
+    expect(capped.elapsedMs).toBe(config.legacyStartupCapMs);
   });
 
-  it("returns timed out when stuck in spawning past timeout (interrupted spawn)", () => {
-    const now = Date.now();
-    const createdAt = now - 130_000; // 130s ago, past 120s timeout
-
-    const result = evaluateConnectingTimeout("spawning", createdAt, config, now);
-
-    expect(result.isTimedOut).toBe(true);
-    expect(result.elapsedMs).toBe(130_000);
-  });
-
-  it("returns not timed out for spawning within timeout window", () => {
-    const now = Date.now();
-    const result = evaluateConnectingTimeout("spawning", now - 60_000, config, now);
-
-    expect(result.isTimedOut).toBe(false);
-  });
-
-  it("ignores all non-spawning/connecting statuses", () => {
-    const now = Date.now();
-    const old = now - 999_999;
-
-    for (const status of ["pending", "ready", "stopped", "failed", "stale"] as const) {
-      const result = evaluateConnectingTimeout(status, old, config, now);
-      expect(result.isTimedOut).toBe(false);
+  it.each(["booting", "ready", "snapshotting"] as const)(
+    "never applies total duration to attached %s",
+    (status) => {
+      const now = Date.now();
+      expect(
+        evaluateRuntimeAttachTimeout(status, now - config.legacyStartupCapMs * 2, config, now, now)
+          .isTimedOut
+      ).toBe(false);
     }
-  });
+  );
 });
 
 // ==================== Warm Decision Tests ====================
@@ -1044,6 +1023,16 @@ describe("evaluateWarmDecision", () => {
     if (decision.action === "skip") {
       expect(decision.reason).toContain("connecting");
     }
+  });
+
+  it('returns "skip" when sandbox status is booting without a socket', () => {
+    const decision = evaluateWarmDecision({
+      hasActiveWebSocket: false,
+      status: "booting",
+      isSpawningInMemory: false,
+    });
+
+    expect(decision).toEqual({ action: "skip", reason: "sandbox status is booting" });
   });
 
   it('returns "spawn" when conditions pass', () => {

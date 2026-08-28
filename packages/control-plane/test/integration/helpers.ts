@@ -512,6 +512,23 @@ export async function openSandboxWs(
   return { ws: response.webSocket ?? null, response };
 }
 
+export async function openRuntimeControlWs(
+  sessionName: string,
+  opts: { authToken: string; sandboxId: string }
+) {
+  const response = await SELF.fetch(
+    `https://test.local/sessions/${encodeURIComponent(sessionName)}/runtime-control`,
+    {
+      headers: {
+        Upgrade: "websocket",
+        Authorization: `Bearer ${opts.authToken}`,
+        "X-Sandbox-ID": opts.sandboxId,
+      },
+    }
+  );
+  return { ws: response.webSocket ?? null, response };
+}
+
 /**
  * Seed a sandbox with auth_token and modal_sandbox_id so sandbox auth can
  * pass, in the given lifecycle status (default: the "ready" steady state).

@@ -448,6 +448,30 @@ class TestExpectedTunnelPortsEnvVar:
         assert EXPECTED_TUNNEL_PORTS_ENV_VAR not in captured["env"]
 
     @pytest.mark.asyncio
+    async def test_create_returns_partial_result_when_tunnel_enrichment_raises(self, monkeypatch):
+        async def fake_create_aio(*args, **kwargs):
+            class FakeSandbox:
+                object_id = "obj-1"
+                stdout = None
+
+            return FakeSandbox()
+
+        fake_create_aio.aio = fake_create_aio
+        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+        monkeypatch.setattr(
+            SandboxManager,
+            "_resolve_and_setup_tunnels",
+            AsyncMock(side_effect=RuntimeError("tunnel service unavailable")),
+        )
+
+        handle = await SandboxManager().create_sandbox(
+            SandboxConfig(repo_owner="acme", repo_name="repo", code_server_enabled=True)
+        )
+
+        assert handle.modal_object_id == "obj-1"
+        assert handle.code_server_url is None
+
+    @pytest.mark.asyncio
     async def test_restore_from_snapshot_sets_env_var_when_tunnel_ports_configured(
         self, monkeypatch
     ):

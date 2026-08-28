@@ -12,6 +12,7 @@ export interface AlarmHandlerDeps {
     | "failStuckProcessingMessage"
     | "recoverStopConfirmationTimeout"
     | "resumeAfterSandboxTermination"
+    | "processMessageQueue"
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   alarmScheduler: AlarmScheduler;
@@ -71,6 +72,8 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       }
       if (lifecycleResult === "sandbox_terminated") {
         await deps.messageQueue.resumeAfterSandboxTermination();
+      } else if (lifecycleResult === "sandbox_failed") {
+        await deps.messageQueue.processMessageQueue();
       }
     },
   };

@@ -251,7 +251,7 @@ export class SandboxHandler {
     const accepted = await this.recordBootProgress(sandboxId, this.now());
     return accepted
       ? Response.json({ status: "ok" })
-      : Response.json({ error: "Sandbox is not booting" }, { status: 409 });
+      : Response.json({ error: "Sandbox is not in legacy provider startup" }, { status: 409 });
   }
 
   async openaiTokenRefresh(log: Logger): Promise<Response> {

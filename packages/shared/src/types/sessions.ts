@@ -37,6 +37,7 @@ export const sandboxStatusSchema = z.enum([
   "spawning",
   "connecting",
   "warming",
+  "booting",
   "ready",
   "stale",
   "snapshotting",

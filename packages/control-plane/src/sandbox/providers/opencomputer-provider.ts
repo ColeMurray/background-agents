@@ -55,6 +55,7 @@ import {
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
 const RESERVED_VNC_ENV_KEYS = ["VNC_PASSWORD", "NOVNC_PORT"] as const;
+const DEFINITIVE_RUNTIME_LAUNCH_REJECTION_STATUSES = new Set([400, 401, 403, 404, 422]);
 
 export interface OpenComputerProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -118,8 +119,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       if (timeoutSeconds !== undefined) {
         await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
       }
-      await this.client.startRuntime(providerObjectId);
-      const tunnels = await this.buildTunnelUrls(
+      await this.startInteractiveRuntime(providerObjectId, config.sandboxId);
+      const tunnels = await this.buildTunnelUrlsAfterLaunch(
         providerObjectId,
         config.sandboxId,
         config.codeServerEnabled,
@@ -177,8 +178,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       if (timeoutSeconds !== undefined) {
         await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
       }
-      await this.client.startRuntime(providerObjectId);
-      const tunnels = await this.buildTunnelUrls(
+      await this.startInteractiveRuntime(providerObjectId, config.sandboxId);
+      const tunnels = await this.buildTunnelUrlsAfterLaunch(
         providerObjectId,
         config.sandboxId,
         config.codeServerEnabled,
@@ -706,6 +707,61 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     }
 
     return { codeServerUrl, codeServerPassword, vncAccess, tunnelUrls };
+  }
+
+  private async buildTunnelUrlsAfterLaunch(
+    providerObjectId: string,
+    logicalSandboxId: string,
+    codeServerEnabled: boolean | undefined,
+    vncEnabled: boolean | undefined,
+    sandboxSettings: SandboxSettings | undefined,
+    sandbox: OpenComputerSandboxResponse | undefined
+  ): Promise<{
+    codeServerUrl?: string;
+    codeServerPassword?: string;
+    vncAccess?: VncAccess;
+    tunnelUrls?: Record<string, string>;
+  }> {
+    try {
+      return await this.buildTunnelUrls(
+        providerObjectId,
+        logicalSandboxId,
+        codeServerEnabled,
+        vncEnabled,
+        sandboxSettings,
+        sandbox
+      );
+    } catch (error) {
+      log.warn("opencomputer.launch_tunnel_urls_failed", {
+        sandbox_id: logicalSandboxId,
+        provider_object_id: providerObjectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
+  }
+
+  private async startInteractiveRuntime(
+    providerObjectId: string,
+    logicalSandboxId: string
+  ): Promise<void> {
+    try {
+      await this.client.startRuntime(providerObjectId);
+    } catch (error) {
+      if (
+        error instanceof OpenComputerNotFoundError ||
+        (error instanceof OpenComputerApiError &&
+          DEFINITIVE_RUNTIME_LAUNCH_REJECTION_STATUSES.has(error.status)) ||
+        (error instanceof SandboxProviderError && error.errorType === "permanent")
+      ) {
+        throw error;
+      }
+      log.warn("opencomputer.runtime_launch_unknown", {
+        sandbox_id: logicalSandboxId,
+        provider_object_id: providerObjectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private routeUrlsFromSandbox(sandbox?: OpenComputerSandboxResponse): Record<string, string> {

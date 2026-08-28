@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import shutil
+import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -15,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import httpx
+
+from .constants import MANAGED_SKILLS_PROCESS_TERMINATE_GRACE_SECONDS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -315,14 +320,14 @@ def validate_installation_page(
                 )
             paths.add(path)
             content = _require_string(file["content"], "skill file content", allow_empty=True)
-            content_bytes = content.encode("utf-8")
+            encoded_content = content.encode("utf-8")
             size_bytes = _require_int(file["sizeBytes"], "skill file size")
-            if len(content_bytes) > MAX_SKILL_FILE_BYTES or size_bytes != len(content_bytes):
+            if len(encoded_content) > MAX_SKILL_FILE_BYTES or size_bytes != len(encoded_content):
                 raise ManagedSkillsError(
                     f"invalid size for skill file {path}", code="installation_invalid"
                 )
             digest = _validate_sha256(file["sha256"], "skill file SHA-256")
-            if not hashlib.sha256(content_bytes).hexdigest() == digest:
+            if not hashlib.sha256(encoded_content).hexdigest() == digest:
                 raise ManagedSkillsError(
                     f"SHA-256 mismatch for skill file {path}", code="hash_mismatch"
                 )
@@ -335,7 +340,7 @@ def validate_installation_page(
                 raise ManagedSkillsError(
                     f"executable skill file must be under scripts/: {path}", code="path_invalid"
                 )
-            revision_bytes += len(content_bytes)
+            revision_bytes += len(encoded_content)
             files.append(ManagedSkillFile(path, content, digest, size_bytes, executable))
         if "SKILL.md" not in paths:
             raise ManagedSkillsError(
@@ -584,20 +589,10 @@ class ManagedSkillsMaterializer:
             self._abort_staging(staging, backup, journal)
             raise
 
-    async def _fetch_into_staging(self, staging: Path) -> tuple[str, set[str]]:
-        """Stream every page into staging, returning the digest and installed names.
-
-        Nothing outside the staging tree is touched until the caller commits, so
-        a failure part-way through a paged fetch leaves the previous
-        installation in place.
-
-        The loop has no page-count bound on purpose. A fixed one would cap the
-        installation at pages times page size, reintroducing exactly the kind of
-        invented skill limit this work removed; the session contract bounds
-        aggregate content, not count. Termination comes from that contract
-        instead — see validate_installation_page.
-        """
+    async def _fetch_installation(self) -> ManagedSkillInstallation:
+        """Fetch and validate all pages before entering the filesystem process."""
         names: set[str] = set()
+        skills: list[ManagedSkill] = []
         content_bytes = 0
         manifest_sha256: str | None = None
         cursor: str | None = None
@@ -612,36 +607,118 @@ class ManagedSkillsMaterializer:
                 expected_manifest_sha256=manifest_sha256,
             )
             manifest_sha256 = page.manifest_sha256
-            self._stage_skills(staging, page.skills)
+            skills.extend(page.skills)
             if page.next_cursor is None:
-                return manifest_sha256, names
+                return ManagedSkillInstallation(manifest_sha256, tuple(skills))
             cursor = page.next_cursor
 
-    async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
-        """Fetch, validate, collision-check, and install skills before OpenCode starts."""
+    def _run_filesystem_transaction(
+        self,
+        installation: ManagedSkillInstallation,
+        repositories: Sequence[RepoEntry],
+        workdir: Path,
+        result_sender: Any,
+    ) -> None:
+        """Run the complete mutating transaction in a killable forked child."""
         try:
             staging, backup, journal = self._begin_staging()
             try:
-                manifest_sha256, names = await self._fetch_into_staging(staging)
+                self._stage_skills(staging, installation.skills)
+                names = {skill.name for skill in installation.skills}
                 collisions = self._find_collisions(names, repositories, workdir)
-                if collisions:
-                    for name in collisions:
-                        self._remove_path(staging / name)
-                    names.difference_update(collisions)
-                    self.log.warn(
-                        "managed_skills.collisions_dropped",
-                        collisions=[
-                            {
-                                "name": name,
-                                "paths": sorted(str(path) for path in collisions[name]),
-                            }
-                            for name in sorted(collisions)
-                        ],
-                    )
+                for name in collisions:
+                    self._remove_path(staging / name)
+                names.difference_update(collisions)
                 self._commit_staging(staging, backup, journal)
             except Exception:
                 self._abort_staging(staging, backup, journal)
                 raise
+            result_sender.send(
+                {
+                    "ok": True,
+                    "names": sorted(names),
+                    "collisions": {
+                        name: sorted(str(path) for path in paths)
+                        for name, paths in collisions.items()
+                    },
+                }
+            )
+        except ManagedSkillsError as error:
+            result_sender.send({"ok": False, "message": str(error), "code": error.code})
+        except Exception as error:
+            result_sender.send({"ok": False, "message": str(error), "code": "install_failed"})
+        finally:
+            result_sender.close()
+
+    async def _terminate_filesystem_process(self, process: Any) -> None:
+        if not process.is_alive():
+            process.join()
+            return
+        process.terminate()
+        deadline = time.monotonic() + MANAGED_SKILLS_PROCESS_TERMINATE_GRACE_SECONDS
+        while process.is_alive() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        if process.is_alive():
+            process.kill()
+            while process.is_alive():
+                await asyncio.sleep(0.01)
+        process.join()
+
+    async def _apply_installation(
+        self,
+        installation: ManagedSkillInstallation,
+        repositories: Sequence[RepoEntry],
+        workdir: Path,
+    ) -> tuple[set[str], dict[str, list[str]]]:
+        if sys.platform != "linux":
+            raise ManagedSkillsError(
+                "managed skills filesystem transaction requires Linux",
+                code="install_failed",
+            )
+        context = multiprocessing.get_context("fork")
+        result_receiver, result_sender = context.Pipe(duplex=False)
+        process = context.Process(
+            target=self._run_filesystem_transaction,
+            args=(installation, repositories, workdir, result_sender),
+            daemon=False,
+        )
+        process.start()
+        result_sender.close()
+        result: dict[str, Any] | None = None
+        try:
+            while process.is_alive():
+                if result is None and result_receiver.poll():
+                    result = result_receiver.recv()
+                await asyncio.sleep(0.01)
+            process.join()
+            if result is None and result_receiver.poll():
+                result = result_receiver.recv()
+            if result is None:
+                raise ManagedSkillsError(
+                    f"managed skills filesystem process exited with status {process.exitcode}",
+                    code="install_failed",
+                )
+        except BaseException:
+            await self._terminate_filesystem_process(process)
+            raise
+        finally:
+            result_receiver.close()
+        if not result.get("ok"):
+            raise ManagedSkillsError(result["message"], code=result["code"])
+        return set(result["names"]), result["collisions"]
+
+    async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
+        """Fetch, validate, collision-check, and install skills before OpenCode starts."""
+        try:
+            installation = await self._fetch_installation()
+            names, collisions = await self._apply_installation(installation, repositories, workdir)
+            if collisions:
+                self.log.warn(
+                    "managed_skills.collisions_dropped",
+                    collisions=[
+                        {"name": name, "paths": collisions[name]} for name in sorted(collisions)
+                    ],
+                )
         except ManagedSkillsError:
             raise
         except Exception as error:
@@ -651,6 +728,6 @@ class ManagedSkillsMaterializer:
 
         self.log.info(
             "managed_skills.materialized",
-            manifest_sha256=manifest_sha256,
+            manifest_sha256=installation.manifest_sha256,
             skill_count=len(names),
         )

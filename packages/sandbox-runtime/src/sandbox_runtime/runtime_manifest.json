@@ -1,6 +1,7 @@
 {
-  "runtimeVersion": "v61-sandbox-sbin-path",
-  "generation": 61,
-  "minimumCompatibleGeneration": 60,
-  "minimumRebuildGeneration": 60
+  "runtimeVersion": "v62-early-control-channel",
+  "generation": 62,
+  "minimumCompatibleGeneration": 62,
+  "minimumRebuildGeneration": 62,
+  "sandboxControlProtocolV2MinimumGeneration": 62
 }

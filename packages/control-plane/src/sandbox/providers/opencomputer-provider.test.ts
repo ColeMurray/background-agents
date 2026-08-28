@@ -9,9 +9,10 @@ import type {
 import {
   OPENCOMPUTER_CHECKPOINT_KIND,
   OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
+  OpenComputerApiError,
   OpenComputerNotFoundError,
 } from "../opencomputer-rest-client";
-import type { CreateSandboxConfig } from "../provider";
+import { SandboxProviderError, type CreateSandboxConfig } from "../provider";
 
 function createMockClient(overrides: Partial<OpenComputerRestClient> = {}): OpenComputerRestClient {
   const client = {
@@ -422,10 +423,36 @@ describe("OpenComputerSandboxProvider", () => {
     );
   });
 
-  it("cleans up a created sandbox when runtime startup fails", async () => {
+  it.each([
+    ["5xx", new OpenComputerApiError("service unavailable", 503)],
+    ["network", new TypeError("fetch failed")],
+    ["transient provider", new SandboxProviderError("temporary failure", "transient")],
+  ])(
+    "returns a partial create result without cleanup for an ambiguous %s error",
+    async (_kind, launchError) => {
+      const client = createMockClient({
+        startRuntime: vi.fn(async () => {
+          throw launchError;
+        }),
+      });
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+
+      await expect(provider.createSandbox(baseConfig)).resolves.toMatchObject({
+        sandboxId: baseConfig.sandboxId,
+        providerObjectId: "oc-sandbox-1",
+      });
+      expect(client.deleteSandbox).not.toHaveBeenCalled();
+      expect(client.deleteSecretStore).not.toHaveBeenCalled();
+    }
+  );
+
+  it("throws and cleans up create when runtime startup is definitively rejected", async () => {
     const client = createMockClient({
       startRuntime: vi.fn(async () => {
-        throw new Error("runtime failed");
+        throw new OpenComputerApiError("unauthorized", 401);
       }),
     });
     const provider = new OpenComputerSandboxProvider(client, {
@@ -433,12 +460,52 @@ describe("OpenComputerSandboxProvider", () => {
       sandboxAccessPasswordSecret: "secret",
     });
 
-    await expect(provider.createSandbox(baseConfig)).rejects.toThrow(
-      "Failed to create OpenComputer sandbox"
-    );
-
+    await expect(provider.createSandbox(baseConfig)).rejects.toMatchObject({
+      errorType: "permanent",
+    });
     expect(client.deleteSandbox).toHaveBeenCalledWith("oc-sandbox-1");
     expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
+  });
+
+  it("cleans up a created sandbox on a definitive pre-launch timeout failure", async () => {
+    const client = createMockClient({
+      setSandboxTimeout: vi.fn(async () => {
+        throw new Error("timeout configuration failed");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    await expect(provider.createSandbox({ ...baseConfig, timeoutSeconds: 120 })).rejects.toThrow(
+      "Failed to create OpenComputer sandbox"
+    );
+    expect(client.startRuntime).not.toHaveBeenCalled();
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
+  });
+
+  it("returns a partial create result without cleanup when tunnel enrichment fails", async () => {
+    const client = createMockClient({
+      getTunnelUrl: vi.fn(async () => {
+        throw new Error("tunnel service unavailable");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.createSandbox({ ...baseConfig, codeServerEnabled: true })
+    ).resolves.toMatchObject({
+      sandboxId: baseConfig.sandboxId,
+      providerObjectId: "oc-sandbox-1",
+      codeServerUrl: undefined,
+    });
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
+    expect(client.deleteSecretStore).not.toHaveBeenCalled();
   });
 
   it("deletes a build sandbox, ignoring a missing sandbox", async () => {
@@ -578,10 +645,73 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.startRuntime).toHaveBeenCalledWith("oc-fork-1");
   });
 
-  it("cleans up a restored sandbox when runtime startup fails", async () => {
+  it("returns a partial restore result without cleanup when runtime startup is ambiguous", async () => {
     const client = createMockClient({
       startRuntime: vi.fn(async () => {
-        throw new Error("runtime failed");
+        throw new Error("request timed out before a response");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.restoreFromSnapshot({
+        ...baseConfig,
+        snapshotImageId: "checkpoint-session-1",
+      })
+    ).resolves.toMatchObject({ success: true, providerObjectId: "oc-fork-1" });
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
+    expect(client.deleteSecretStore).not.toHaveBeenCalled();
+  });
+
+  it("throws and cleans up restore when runtime startup is definitively rejected", async () => {
+    const client = createMockClient({
+      startRuntime: vi.fn(async () => {
+        throw new OpenComputerApiError("invalid runtime command", 422);
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.restoreFromSnapshot({
+        ...baseConfig,
+        snapshotImageId: "checkpoint-session-1",
+      })
+    ).rejects.toMatchObject({ errorType: "permanent" });
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-fork-1");
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
+  });
+
+  it("honors a permanent provider error as a definitive restore rejection", async () => {
+    const client = createMockClient({
+      startRuntime: vi.fn(async () => {
+        throw new SandboxProviderError("runtime configuration rejected", "permanent");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.restoreFromSnapshot({
+        ...baseConfig,
+        snapshotImageId: "checkpoint-session-1",
+      })
+    ).rejects.toMatchObject({ errorType: "permanent" });
+    expect(client.deleteSandbox).toHaveBeenCalledWith("oc-fork-1");
+    expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
+  });
+
+  it("throws and cleans up restore when runtime sandbox is not found", async () => {
+    const client = createMockClient({
+      startRuntime: vi.fn(async () => {
+        throw new OpenComputerNotFoundError("sandbox not found");
       }),
     });
     const provider = new OpenComputerSandboxProvider(client, {
@@ -595,9 +725,30 @@ describe("OpenComputerSandboxProvider", () => {
         snapshotImageId: "checkpoint-session-1",
       })
     ).rejects.toThrow("Failed to restore OpenComputer sandbox from checkpoint");
-
     expect(client.deleteSandbox).toHaveBeenCalledWith("oc-fork-1");
     expect(client.deleteSecretStore).toHaveBeenCalledWith("secret-store-1");
+  });
+
+  it("returns a partial restore result without cleanup when tunnel enrichment fails", async () => {
+    const client = createMockClient({
+      getTunnelUrl: vi.fn(async () => {
+        throw new Error("tunnel service unavailable");
+      }),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    await expect(
+      provider.restoreFromSnapshot({
+        ...baseConfig,
+        snapshotImageId: "checkpoint-session-1",
+        codeServerEnabled: true,
+      })
+    ).resolves.toMatchObject({ success: true, providerObjectId: "oc-fork-1" });
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
+    expect(client.deleteSecretStore).not.toHaveBeenCalled();
   });
 
   it("applies an explicit timeout when restoring from a snapshot", async () => {

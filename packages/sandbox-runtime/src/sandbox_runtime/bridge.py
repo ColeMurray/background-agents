@@ -16,12 +16,15 @@ import json
 import math
 import os
 import re
+import secrets
+import socket
 import tempfile
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
+from urllib.parse import quote
 
 import websockets
 from websockets import ClientConnection, State
@@ -33,8 +36,10 @@ from .attachment_processor import (
     parse_session_image_attachments,
 )
 from .constants import (
+    BOOT_FAILURE_ACK_TIMEOUT_SECONDS,
     BOOT_WARNINGS_FILE_PATH,
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    LOCAL_CONTROL_SEND_TIMEOUT_SECONDS,
     MAX_SNAPSHOT_RESERVE_SECONDS,
     REPO_MANIFEST_FILE_PATH,
     SANDBOX_TIMEOUT_ENV_VAR,
@@ -47,7 +52,8 @@ from .log_config import configure_logging, get_logger
 from .opencode_client import OpenCodeClient
 from .prompt_stream import OpenCodePromptStream
 from .repo_config import find_repo_entry, load_repo_manifest
-from .types import GitUser
+from .runtime_config import SandboxControlProtocol
+from .types import BootFailureCode, BootPhase, GitUser, RuntimeState
 
 configure_logging()
 
@@ -182,12 +188,15 @@ class AgentBridge:
         auth_token: str,
         opencode_port: int = 4096,
         opencode_client: OpenCodeClient | None = None,
+        protocol: SandboxControlProtocol = SandboxControlProtocol.LEGACY,
+        control_fd: int | None = None,
     ):
         self.sandbox_id = sandbox_id
         self.session_id = session_id
         self.control_plane_url = control_plane_url
         self.auth_token = auth_token
         self.opencode_port = opencode_port
+        self.protocol = protocol
         self.opencode_base_url = f"http://localhost:{opencode_port}"
 
         # Logger
@@ -231,6 +240,18 @@ class AgentBridge:
         self.ws: ClientConnection | None = None
         self.shutdown_event = asyncio.Event()
         self.git_sync_complete = asyncio.Event()
+        self.execution_ready = protocol is SandboxControlProtocol.LEGACY
+        self.execution_dependencies_ready = protocol is SandboxControlProtocol.LEGACY
+        self.boot_phase: BootPhase | None = None
+        self._execution_initialization_lock = asyncio.Lock()
+        self._execution_initialization_task: asyncio.Task[None] | None = None
+        self._control_socket = socket.socket(fileno=control_fd) if control_fd is not None else None
+        if self._control_socket is not None:
+            self._control_socket.setblocking(False)
+        self._local_send_lock = asyncio.Lock()
+        self._execution_ready_request_id: str | None = None
+        self._boot_failure_ack_events: dict[str, asyncio.Event] = {}
+        self._local_background_tasks: set[asyncio.Task[None]] = set()
 
         # Session state
         self.opencode_session_id: str | None = None
@@ -283,6 +304,8 @@ class AgentBridge:
     def ws_url(self) -> str:
         """WebSocket URL for control plane connection."""
         url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
+        if self.protocol is SandboxControlProtocol.V2:
+            return f"{url}/sessions/{quote(self.session_id, safe='')}/runtime-control"
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
     def _build_ready_event(self) -> dict[str, Any]:
@@ -325,16 +348,23 @@ class AgentBridge:
         """
         self.log.info("bridge.run_start")
 
-        await self._load_session_id()
         reconnect_attempts = 0
         run_outcome = "shutdown"
         signing_initialized = False
+        local_control_task: asyncio.Task[None] | None = None
+
+        if self.protocol is SandboxControlProtocol.LEGACY:
+            await self._load_session_id()
+        elif self._control_socket is None:
+            raise RuntimeError("V2 sandbox control requires a local control socket")
+        else:
+            local_control_task = asyncio.create_task(self._local_control_loop())
 
         try:
             while not self.shutdown_event.is_set():
                 run_outcome = "shutdown"
                 try:
-                    if not signing_initialized:
+                    if self.protocol is SandboxControlProtocol.LEGACY and not signing_initialized:
                         await self.git_signing.initialize(None)
                         signing_initialized = True
                     await self._connect_and_run()
@@ -380,6 +410,15 @@ class AgentBridge:
                 await asyncio.sleep(delay)
 
         finally:
+            if local_control_task is not None:
+                local_control_task.cancel()
+                await asyncio.gather(local_control_task, return_exceptions=True)
+            for task in self._local_background_tasks:
+                task.cancel()
+            if self._local_background_tasks:
+                await asyncio.gather(*self._local_background_tasks, return_exceptions=True)
+            if self._control_socket is not None:
+                self._control_socket.close()
             # Cancel any in-flight prompt task before closing resources
             if self._current_prompt_task and not self._current_prompt_task.done():
                 self._current_prompt_task.cancel()
@@ -487,11 +526,20 @@ class AgentBridge:
                         reconnect_count=max(0, self._connection_count - 1),
                         reconnect_attempt_count=self._reconnect_attempt_count,
                     )
+                    await self._send_heartbeat(ws)
+                    heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
                     await self.event_forwarder.bind(ws)
-                    await self._send_event(self._build_ready_event())
-                    await self._drain_boot_warnings()
+                    if self.protocol is SandboxControlProtocol.V2:
+                        if self.execution_ready:
+                            await self._send_ready(ws)
+                        elif self.execution_dependencies_ready:
+                            self._start_execution_initialization(
+                                ws, self._execution_ready_request_id
+                            )
+                    else:
+                        await self._send_ready(ws)
+                        await self._drain_boot_warnings()
 
-                    heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                     async for message in ws:
                         if self.shutdown_event.is_set():
                             break
@@ -518,6 +566,14 @@ class AgentBridge:
                 finally:
                     if heartbeat_task is not None:
                         heartbeat_task.cancel()
+                    if (
+                        self._execution_initialization_task is not None
+                        and not self._execution_initialization_task.done()
+                    ):
+                        self._execution_initialization_task.cancel()
+                        await asyncio.gather(
+                            self._execution_initialization_task, return_exceptions=True
+                        )
                     for task in background_tasks:
                         task.cancel()
                     self.ws = None
@@ -543,20 +599,199 @@ class AgentBridge:
                 ) from e
             raise
 
-    async def _heartbeat_loop(self) -> None:
+    async def _heartbeat_loop(self, ws: ClientConnection) -> None:
         """Send periodic heartbeat events."""
         while not self.shutdown_event.is_set():
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
 
-            if self.ws and self.ws.state == State.OPEN:
+            if self.ws is ws and ws.state == State.OPEN:
+                await self._send_heartbeat(ws)
+
+    async def _send_connection_event(
+        self, event: dict[str, Any], ws: ClientConnection | None = None
+    ) -> None:
+        connection = ws or self.ws
+        if connection is None or self.ws is not connection or connection.state != State.OPEN:
+            return
+        event["sandboxId"] = self.sandbox_id
+        event["timestamp"] = event.get("timestamp", time.time())
+        await connection.send(json.dumps(event))
+
+    async def _send_heartbeat(self, ws: ClientConnection | None = None) -> None:
+        status = RuntimeState.READY if self.execution_ready else RuntimeState.BOOTING
+        await self._send_connection_event(
+            {
+                "type": "heartbeat",
+                "status": status.value,
+                **({"phase": self.boot_phase.value} if self.boot_phase else {}),
+            },
+            ws,
+        )
+
+    async def _send_ready(self, ws: ClientConnection) -> None:
+        await self._send_connection_event(self._build_ready_event(), ws)
+
+    async def _local_control_loop(self) -> None:
+        if self._control_socket is None:
+            return
+        buffer = b""
+        while not self.shutdown_event.is_set():
+            chunk = await asyncio.get_running_loop().sock_recv(self._control_socket, 4096)
+            if not chunk:
+                self.shutdown_event.set()
+                return
+            buffer += chunk
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    self.log.warn("bridge.local_control_invalid")
+                    continue
+                await self._handle_local_control(message)
+
+    async def _send_local_result(self, result: dict[str, Any]) -> None:
+        if self._control_socket is None:
+            return
+        payload = json.dumps(result, separators=(",", ":")).encode() + b"\n"
+        async with self._local_send_lock:
+            try:
+                await asyncio.wait_for(
+                    asyncio.get_running_loop().sock_sendall(self._control_socket, payload),
+                    timeout=LOCAL_CONTROL_SEND_TIMEOUT_SECONDS,
+                )
+            except (TimeoutError, BrokenPipeError, ConnectionError, OSError) as error:
+                self.log.error(
+                    "bridge.local_control_result_failed",
+                    result_type=result.get("type"),
+                    error_type=type(error).__name__,
+                )
+
+    async def _handle_local_control(self, message: dict[str, Any]) -> None:
+        message_type = message.get("type")
+        if message_type == "boot_phase":
+            self.boot_phase = BootPhase(message["phase"])
+            if self.ws is not None:
                 await self._send_event(
                     {
-                        "type": "heartbeat",
-                        "sandboxId": self.sandbox_id,
-                        "status": "ready",
+                        "type": "boot_phase",
+                        "phase": self.boot_phase.value,
                         "timestamp": time.time(),
                     }
                 )
+            return
+        if message_type == "execution_dependencies_ready":
+            self.execution_dependencies_ready = True
+            self._execution_ready_request_id = str(message.get("requestId") or "") or None
+            if self.ws is not None:
+                self._start_execution_initialization(self.ws, self._execution_ready_request_id)
+            return
+        if message_type == "execution_dependencies_unavailable":
+            self.execution_dependencies_ready = False
+            self.execution_ready = False
+            self.boot_phase = BootPhase(message["phase"])
+            if (
+                self._execution_initialization_task is not None
+                and not self._execution_initialization_task.done()
+            ):
+                self._execution_initialization_task.cancel()
+                await asyncio.gather(self._execution_initialization_task, return_exceptions=True)
+            if self.ws is not None:
+                await self.ws.close(code=1012, reason="execution dependencies unavailable")
+            return
+        if message_type == "boot_failed":
+            code = BootFailureCode(message["code"])
+            task = asyncio.create_task(
+                self._report_boot_failure(
+                    code, request_id=str(message.get("requestId") or "") or None
+                )
+            )
+            self._local_background_tasks.add(task)
+            task.add_done_callback(self._local_background_tasks.discard)
+            return
+        if message_type == "shutdown":
+            self.shutdown_event.set()
+
+    def _start_execution_initialization(self, ws: ClientConnection, request_id: str | None) -> None:
+        if (
+            self._execution_initialization_task is not None
+            and not self._execution_initialization_task.done()
+        ):
+            return
+        self._execution_initialization_task = asyncio.create_task(
+            self._initialize_execution(ws, request_id)
+        )
+
+    async def _initialize_execution(self, ws: ClientConnection, request_id: str | None) -> None:
+        async with self._execution_initialization_lock:
+            if self.execution_ready or not self.execution_dependencies_ready or self.ws is not ws:
+                return
+            try:
+                self.boot_phase = BootPhase.RESTORED_SESSION_VALIDATION
+                await self._load_session_id()
+                self.boot_phase = BootPhase.GIT_SIGNING
+                await self.git_signing.initialize(None)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                code = (
+                    BootFailureCode.GIT_SIGNING_FAILED
+                    if isinstance(error, GitSigningError)
+                    else BootFailureCode.RESTORED_SESSION_VALIDATION_FAILED
+                )
+                self.log.error("bridge.execution_initialization_failed", code=code.value, exc=error)
+                await self._report_boot_failure(code)
+                if request_id is not None:
+                    await self._send_local_result(
+                        {
+                            "type": "execution_initialization_failed",
+                            "requestId": request_id,
+                            "code": code.value,
+                        }
+                    )
+                self.shutdown_event.set()
+                return
+            if not self.execution_dependencies_ready or self.ws is not ws:
+                return
+            self.execution_ready = True
+            self.boot_phase = None
+            if request_id is not None:
+                await self._send_local_result({"type": "execution_ready", "requestId": request_id})
+            await self._send_ready(ws)
+            await self._drain_boot_warnings()
+
+    async def _report_boot_failure(
+        self, code: BootFailureCode, *, request_id: str | None = None
+    ) -> None:
+        phase = self.boot_phase or BootPhase.BRIDGE_INITIALIZATION
+        event: dict[str, Any] = {
+            "type": "boot_failed",
+            "code": code.value,
+            "ackId": f"boot_failed:{secrets.token_hex(8)}",
+            "phase": phase.value,
+        }
+        ack_id = str(event["ackId"])
+        acknowledged = self._boot_failure_ack_events.setdefault(ack_id, asyncio.Event())
+        await self._send_event(event)
+        while not acknowledged.is_set() and not self.shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    acknowledged.wait(), timeout=BOOT_FAILURE_ACK_TIMEOUT_SECONDS
+                )
+            except TimeoutError:
+                connection_owner = self.ws
+                if connection_owner is not None:
+                    await connection_owner.close(code=1012, reason="boot failure ACK timeout")
+        if acknowledged.is_set():
+            if request_id is not None:
+                await self._send_local_result(
+                    {"type": "boot_failure_reported", "requestId": request_id}
+                )
+            self.shutdown_event.set()
+            connection_owner = self.ws
+            if connection_owner is not None:
+                await connection_owner.close(code=1000, reason="boot failure acknowledged")
+        self._boot_failure_ack_events.pop(ack_id, None)
 
     async def _drain_boot_warnings(self) -> None:
         """Forward supervisor boot warnings queued before the bridge existed.
@@ -605,6 +840,21 @@ class AgentBridge:
         """
         cmd_type = cmd.get("type")
         self.log.debug("bridge.command_received", cmd_type=cmd_type)
+
+        execution_commands = {
+            "prompt",
+            "snapshot",
+            "git_sync_complete",
+            "push",
+            "refresh_diff",
+        }
+        if (
+            self.protocol is SandboxControlProtocol.V2
+            and not self.execution_ready
+            and cmd_type in execution_commands
+        ):
+            self.log.error("bridge.command_before_ready", cmd_type=cmd_type)
+            return None
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
@@ -663,6 +913,8 @@ class AgentBridge:
         elif cmd_type == "ack":
             ack_id = cmd.get("ackId")
             if ack_id and self.event_forwarder.acknowledge(ack_id):
+                if event := self._boot_failure_ack_events.get(ack_id):
+                    event.set()
                 self.log.debug("bridge.ack_received", ack_id=ack_id)
         else:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
@@ -1170,6 +1422,12 @@ async def main() -> None:
     parser.add_argument("--control-plane", required=True, help="Control plane URL")
     parser.add_argument("--token", required=True, help="Auth token")
     parser.add_argument("--opencode-port", type=int, default=4096, help="OpenCode port")
+    parser.add_argument(
+        "--protocol",
+        choices=[protocol.value for protocol in SandboxControlProtocol],
+        default=SandboxControlProtocol.LEGACY.value,
+    )
+    parser.add_argument("--control-fd", type=int)
 
     args = parser.parse_args()
 
@@ -1179,6 +1437,8 @@ async def main() -> None:
         control_plane_url=args.control_plane,
         auth_token=args.token,
         opencode_port=args.opencode_port,
+        protocol=SandboxControlProtocol(args.protocol),
+        control_fd=args.control_fd,
     )
 
     await bridge.run()

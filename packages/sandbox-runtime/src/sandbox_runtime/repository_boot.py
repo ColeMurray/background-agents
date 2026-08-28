@@ -8,12 +8,19 @@ from .constants import REPO_MANIFEST_FILE_PATH
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repository_sync import RepositorySyncStatus
 from .runtime_config import BootMode, RepositoryConfig
+from .types import BootPhase
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from .boot_warnings import BootWarningSink
     from .repository_hooks import RepositoryHooks
     from .repository_sync import RepositorySynchronizer
     from .tunnel_environment import TunnelEnvironment
+
+
+class PrimaryStartError(RuntimeError):
+    """The primary repository's required start hook failed."""
 
 
 @dataclass(frozen=True)
@@ -147,10 +154,18 @@ class RepositoryBoot:
         return expected_ports
 
     async def boot(
-        self, boot_mode: BootMode, expected_tunnel_ports: list[int]
+        self,
+        boot_mode: BootMode,
+        expected_tunnel_ports: list[int],
+        report_phase: Callable[[BootPhase], Awaitable[None]] | None = None,
     ) -> RepositoryBootResult:
+        async def set_phase(phase: BootPhase) -> None:
+            if report_phase is not None:
+                await report_phase(phase)
+
         if self.repo_config_error:
             raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
+        await set_phase(BootPhase.REPOSITORY_SYNC)
         self._write_repo_manifest()
         if self.repositories:
             await self.synchronizer.ensure_credentials_configured()
@@ -206,6 +221,7 @@ class RepositoryBoot:
                 )
         setup_success: bool | None = None
         if self.repositories and boot_mode in (BootMode.FRESH, BootMode.BUILD):
+            await set_phase(BootPhase.SETUP)
             setup_success = True
             for repo in self.repositories:
                 if await self.hooks.run_setup(repo, boot_mode):
@@ -223,14 +239,16 @@ class RepositoryBoot:
 
         start_success: bool | None = None
         if self.repositories and boot_mode is not BootMode.BUILD:
+            await set_phase(BootPhase.TUNNEL)
             await self.tunnel_environment.wait_until_ready(expected_tunnel_ports)
+            await set_phase(BootPhase.START)
             start_success = True
             for index, repo in enumerate(self.repositories):
                 if await self.hooks.run_start(repo, boot_mode):
                     continue
                 start_success = False
                 if index == 0:
-                    raise RuntimeError(f"start hook failed for {repo.owner}/{repo.name}")
+                    raise PrimaryStartError(f"start hook failed for {repo.owner}/{repo.name}")
                 self.warnings.record(
                     "start",
                     f"start.sh failed for {repo.owner}/{repo.name}; the session continues without it.",

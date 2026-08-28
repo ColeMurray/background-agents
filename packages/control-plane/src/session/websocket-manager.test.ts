@@ -23,6 +23,7 @@ import type { SandboxRow } from "./types";
 
 /** Minimal fake WebSocket for testing. */
 function createFakeWebSocket(readyState = WebSocket.OPEN): WebSocket {
+  let attachment: unknown;
   return {
     readyState,
     send: vi.fn(),
@@ -46,8 +47,10 @@ function createFakeWebSocket(readyState = WebSocket.OPEN): WebSocket {
     accept: vi.fn(),
     serialize: vi.fn(),
     deserialize: vi.fn(),
-    serializeAttachment: vi.fn(),
-    deserializeAttachment: vi.fn(),
+    serializeAttachment: vi.fn((value: unknown) => {
+      attachment = value;
+    }),
+    deserializeAttachment: vi.fn(() => attachment),
   } as unknown as WebSocket;
 }
 
@@ -163,6 +166,12 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     snapshot_image_id: null,
     snapshot_runtime_version: null,
     runtime_version: null,
+    runtime_protocol_version: null,
+    boot_phase: null,
+    boot_phase_started_at: null,
+    boot_failure_code: null,
+    ready_at: null,
+    runtime_attach_started_at: null,
     auth_token: null,
     auth_token_hash: null,
     status: "ready",
@@ -257,6 +266,27 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("acceptAndSetSandboxSocket", () => {
+    it("serializes an unconfirmed v2 control attachment", () => {
+      const { manager } = createManager();
+      const ws = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(ws, {
+        role: "sandbox-control",
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: false,
+      });
+
+      expect(ws.serializeAttachment).toHaveBeenCalledWith({
+        role: "sandbox-control",
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: false,
+      });
+      expect(manager.getSandboxControlSocket()).toBe(ws);
+      expect(manager.getExecutionSocket()).toBeNull();
+    });
+
     it("accepts with sandbox + sid tags", () => {
       const { manager, sockets } = createManager();
       const ws = createFakeWebSocket();
@@ -313,6 +343,45 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("getSandboxSocket", () => {
+    it("recovers v2 execution readiness from a hibernation attachment", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      ws.serializeAttachment({
+        role: "sandbox-control",
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: true,
+      });
+      sockets.set(ws, ["sandbox", "sid:sb-1"]);
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+
+      expect(manager.getExecutionSocket()).toBe(ws);
+      expect(manager.getSandboxSenderContext(ws)).toMatchObject({
+        socket: ws,
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: true,
+      });
+    });
+
+    it("does not inherit execution readiness when persisted state is booting", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      ws.serializeAttachment({
+        role: "sandbox-control",
+        sandboxId: "sb-1",
+        protocolVersion: 2,
+        executionReady: true,
+      });
+      sockets.set(ws, ["sandbox", "sid:sb-1"]);
+      const row = createSandboxRow("sb-1");
+      row.status = "booting";
+      mockRepo.setSandbox(row);
+
+      expect(manager.getSandboxControlSocket()).toBe(ws);
+      expect(manager.getExecutionSocket()).toBeNull();
+    });
+
     it("returns cached socket if open", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();

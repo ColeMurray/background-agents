@@ -107,8 +107,8 @@ class TestConnectionLifecycle:
         await bridge._connect_and_run()
 
         types = [json.loads(data)["type"] for data in ws.sent]
-        # bind() delivered the disconnected-era backlog, then the ready event
-        assert types[0] == "execution_complete"
+        # Connection liveness is announced before backlog recovery, then ready.
+        assert types[0:2] == ["heartbeat", "execution_complete"]
         assert "ready" in types
 
         # The connection closed, so the forwarder is unbound again: new

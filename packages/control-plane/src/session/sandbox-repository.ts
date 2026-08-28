@@ -1,4 +1,8 @@
-import type { GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
+import type {
+  BootFailureCode,
+  BootPhase,
+  GitSyncStatus,
+} from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { SandboxRow } from "./types";
@@ -14,6 +18,7 @@ export interface SandboxCircuitBreakerState {
   status: SandboxStatus;
   created_at: number;
   boot_progress_at: number | null;
+  runtime_attach_started_at: number | null;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
@@ -52,6 +57,7 @@ export interface ProviderStartupPersistenceData {
   tunnelUrls: Record<string, string> | null;
   ttyd: { url: string; token: string } | null;
   preserveMissing: boolean;
+  runtimeAttachStartedAt: number;
 }
 
 /**
@@ -93,7 +99,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, boot_progress_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, boot_progress_at, runtime_attach_started_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
     const row = rows[0];
@@ -118,6 +124,83 @@ export class SandboxRepository {
     );
   }
 
+  attachRuntimeControl(sandboxId: string, timestamp: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         status = CASE WHEN status = 'snapshotting' THEN status ELSE 'booting' END,
+         runtime_protocol_version = 2,
+         last_heartbeat = ?
+       WHERE modal_sandbox_id = ?
+         AND status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting')`,
+      timestamp,
+      sandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  markExecutionReady(sandboxId: string, timestamp: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         status = CASE WHEN status = 'snapshotting' THEN status ELSE 'ready' END,
+         ready_at = COALESCE(ready_at, ?),
+         boot_phase = NULL,
+         boot_phase_started_at = NULL
+       WHERE modal_sandbox_id = ? AND status IN ('booting', 'ready', 'snapshotting')`,
+      timestamp,
+      sandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  recordBootPhase(sandboxId: string, phase: BootPhase, timestamp: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET boot_phase = ?, boot_phase_started_at = ?
+       WHERE modal_sandbox_id = ? AND status = 'booting'`,
+      phase,
+      timestamp,
+      sandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  failBoot(
+    sandboxId: string,
+    phase: BootPhase,
+    code: BootFailureCode,
+    message: string | undefined,
+    timestamp: number
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         status = 'failed',
+         boot_phase = ?,
+         boot_phase_started_at = ?,
+         boot_failure_code = ?,
+         last_spawn_error = ?,
+         last_spawn_error_at = ?,
+         code_server_url = NULL,
+         code_server_password = NULL,
+         vnc_url = NULL,
+         vnc_password = NULL,
+         tunnel_urls = NULL,
+         ttyd_url = NULL,
+         ttyd_token = NULL
+       WHERE modal_sandbox_id = ?
+         AND status IN ('spawning', 'connecting', 'booting')`,
+      phase,
+      timestamp,
+      code,
+      message ?? code,
+      timestamp,
+      sandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
   /**
    * Phase 1 of the two-phase spawn write (#1589): the reservation itself
    * invalidates credentials — no token can match the emptied hash — until
@@ -140,7 +223,13 @@ export class SandboxRepository {
          ttyd_url = NULL,
          ttyd_token = NULL,
          runtime_version = NULL,
-         boot_progress_at = NULL
+         boot_progress_at = NULL,
+         runtime_attach_started_at = NULL,
+         runtime_protocol_version = NULL,
+         boot_phase = NULL,
+         boot_phase_started_at = NULL,
+         boot_failure_code = NULL,
+         ready_at = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -170,7 +259,13 @@ export class SandboxRepository {
          status = ?,
          created_at = ?,
          last_heartbeat = NULL,
-         boot_progress_at = NULL
+         boot_progress_at = NULL,
+         runtime_attach_started_at = NULL,
+         runtime_protocol_version = NULL,
+         boot_phase = NULL,
+         boot_phase_started_at = NULL,
+         boot_failure_code = NULL,
+         ready_at = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt
@@ -236,24 +331,36 @@ export class SandboxRepository {
     );
   }
 
-  recordBootProgress(sandboxId: string, timestamp: number): boolean {
+  failProviderOperationIfUnchanged(sandboxId: string, createdAt: number): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET boot_progress_at = ?
-       WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting')`,
-      timestamp,
-      sandboxId
+      `UPDATE sandbox SET status = 'failed'
+       WHERE modal_sandbox_id = ?
+         AND status IN ('spawning', 'connecting')
+         AND created_at = ?
+         AND runtime_attach_started_at IS NULL`,
+      sandboxId,
+      createdAt
     );
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }
 
-  failBootIfUnchanged(sandboxId: string, livenessAt: number): boolean {
+  failRuntimeAttachIfUnchanged(
+    sandboxId: string,
+    createdAt: number,
+    runtimeAttachStartedAt: number,
+    livenessAt: number
+  ): boolean {
     const result = this.sql.exec(
       `UPDATE sandbox SET status = 'failed'
        WHERE modal_sandbox_id = ?
-         AND status IN ('spawning', 'connecting')
-         AND MAX(created_at, COALESCE(boot_progress_at, 0)) = ?`,
+         AND status = 'connecting'
+         AND created_at = ?
+         AND runtime_attach_started_at = ?
+         AND MAX(runtime_attach_started_at, COALESCE(boot_progress_at, 0)) = ?`,
       sandboxId,
+      createdAt,
+      runtimeAttachStartedAt,
       livenessAt
     );
     result.toArray();
@@ -277,10 +384,15 @@ export class SandboxRepository {
          vnc_password = ${value("vnc_password")},
          tunnel_urls = ${value("tunnel_urls")},
          ttyd_url = ${value("ttyd_url")},
-         ttyd_token = ${value("ttyd_token")}
+         ttyd_token = ${value("ttyd_token")},
+         status = CASE WHEN status IN ('spawning', 'connecting') THEN 'connecting' ELSE status END,
+         runtime_attach_started_at = CASE
+           WHEN status IN ('spawning', 'connecting') THEN ?
+           ELSE runtime_attach_started_at
+         END
        WHERE modal_sandbox_id = ?
          AND created_at = ?
-         AND status IN ('spawning', 'connecting', 'ready')`,
+         AND status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting')`,
       data.providerObjectId,
       data.codeServer?.url ?? null,
       codeServerPassword,
@@ -289,6 +401,7 @@ export class SandboxRepository {
       data.tunnelUrls ? JSON.stringify(data.tunnelUrls) : null,
       data.ttyd?.url ?? null,
       ttydToken,
+      data.runtimeAttachStartedAt,
       data.expectedSandboxId,
       data.expectedCreatedAt
     );
@@ -301,6 +414,17 @@ export class SandboxRepository {
       `UPDATE sandbox SET last_activity = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       timestamp
     );
+  }
+
+  recordBootProgress(sandboxId: string, timestamp: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET boot_progress_at = ?
+       WHERE modal_sandbox_id = ? AND status IN ('spawning', 'connecting')`,
+      timestamp,
+      sandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSandboxGitSyncStatus(status: GitSyncStatus): void {

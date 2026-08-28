@@ -72,7 +72,7 @@ describe("session runtime proxy routes", () => {
     await expect(requests[0].json()).resolves.toEqual({ sandboxId: "sandbox-1" });
   });
 
-  it("decodes session IDs before selecting the session runtime", async () => {
+  it("decodes boot-progress session IDs before selecting the session runtime", async () => {
     const fetch = vi.fn(async () => Response.json({ status: "ok" }));
     const env = createEnv(fetch);
     const path = "/sessions/session%2F1/boot-progress";
