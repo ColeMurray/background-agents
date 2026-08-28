@@ -1,9 +1,14 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
-import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
+import {
+  getSettingsCategoryLabel,
+  isSettingsCategory,
+  SettingsNav,
+  type SettingsCategory,
+} from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
 import { EnvironmentsSettings } from "@/components/settings/environments-settings";
 import { ModelsSettings } from "@/components/settings/models-settings";
@@ -17,57 +22,15 @@ import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
 import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
 import { SkillsSettings } from "@/components/settings/skills-settings";
-import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
+import { BackIcon, XIcon } from "@/components/ui/icons";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
-const CATEGORY_LABELS: Record<SettingsCategory, string> = {
-  secrets: "Secrets",
-  environments: "Environments",
-  models: "Models",
-  "provider-accounts": "Accounts",
-  images: "Images",
-  appearance: "Appearance",
-  "keyboard-shortcuts": "Keyboard",
-  "data-controls": "Data Controls",
-  sandbox: "Sandbox",
-  scm: "SCM Settings",
-  integrations: "Integrations",
-  skills: "Skills",
-  "mcp-servers": "MCP Servers",
-};
-
-const VALID_CATEGORIES = new Set<string>([
-  "secrets",
-  "environments",
-  "models",
-  "provider-accounts",
-  "images",
-  "appearance",
-  "keyboard-shortcuts",
-  "data-controls",
-  "sandbox",
-  "scm",
-  "integrations",
-  "skills",
-  "mcp-servers",
-]);
-
-function isValidCategory(tab: string | null): tab is SettingsCategory {
-  return tab !== null && VALID_CATEGORIES.has(tab);
-}
-
 function SettingsPageContent() {
-  const { labels } = useKeyboardShortcuts();
-  const { isOpen, toggle } = useSidebarContext();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
-  const initialCategory =
-    isValidCategory(tabParam) && (tabParam !== "images" || repoImagesEnabled)
-      ? tabParam
-      : "secrets";
+  const initialCategory = isSettingsCategory(tabParam, repoImagesEnabled) ? tabParam : "secrets";
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
   function setActiveCategory(category: SettingsCategory) {
@@ -76,12 +39,23 @@ function SettingsPageContent() {
   }
   const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState<"list" | "detail">(
-    isValidCategory(tabParam) && (tabParam !== "images" || repoImagesEnabled) ? "detail" : "list"
+    isSettingsCategory(tabParam, repoImagesEnabled) ? "detail" : "list"
   );
+  const mobileHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  function showMobileView(view: "list" | "detail") {
+    setMobileView(view);
+    requestAnimationFrame(() => mobileHeadingRef.current?.focus());
+  }
+
+  function showMobileList() {
+    window.history.replaceState(null, "", "/settings");
+    showMobileView("list");
+  }
 
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {
-    if (isValidCategory(tabParam) && (tabParam !== "images" || repoImagesEnabled)) {
+    if (isSettingsCategory(tabParam, repoImagesEnabled)) {
       setActiveCategoryRaw(tabParam);
       setMobileView("detail");
       return;
@@ -111,58 +85,62 @@ function SettingsPageContent() {
 
   if (isMobile) {
     return (
-      <div className="h-full flex flex-col">
+      <div className="flex h-full flex-col bg-background">
         {mobileView === "list" ? (
           <>
-            <header className="border-b border-border-muted flex-shrink-0">
-              <div className="px-4 py-3">
-                <button
-                  type="button"
-                  onClick={toggle}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  title={`Open sidebar (${labels["toggle-sidebar"]})`}
-                  aria-label={`Open sidebar (${labels["toggle-sidebar"]})`}
-                >
-                  <SidebarIcon className="w-4 h-4" />
-                </button>
-              </div>
+            <header className="grid h-14 shrink-0 grid-cols-[2.5rem_1fr_2.5rem] items-center border-b border-border-muted px-3">
+              <span aria-hidden="true" />
+              <h1
+                ref={mobileHeadingRef}
+                tabIndex={-1}
+                className="text-center text-sm font-medium text-foreground outline-none"
+              >
+                Settings
+              </h1>
+              <Link
+                href="/"
+                className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                aria-label="Close settings"
+              >
+                <XIcon className="h-4 w-4" />
+              </Link>
             </header>
-            <div className="flex-1 overflow-y-auto">
+            <div className="min-h-0 flex-1 overflow-y-auto">
               <SettingsNav
                 activeCategory={activeCategory}
                 onSelect={setActiveCategory}
-                onNavigate={() => setMobileView("detail")}
+                onNavigate={() => showMobileView("detail")}
               />
             </div>
           </>
         ) : (
           <>
-            <header className="border-b border-border-muted flex-shrink-0">
-              <div className="px-4 py-3 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={toggle}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  title={`Open sidebar (${labels["toggle-sidebar"]})`}
-                  aria-label={`Open sidebar (${labels["toggle-sidebar"]})`}
-                >
-                  <SidebarIcon className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobileView("list")}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  aria-label="Back to settings"
-                >
-                  <BackIcon className="w-4 h-4" />
-                </button>
-                <h2 className="text-sm font-medium text-foreground">
-                  {CATEGORY_LABELS[activeCategory]}
-                </h2>
-              </div>
+            <header className="grid h-14 shrink-0 grid-cols-[2.5rem_1fr_2.5rem] items-center border-b border-border-muted px-3">
+              <button
+                type="button"
+                onClick={showMobileList}
+                className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                aria-label="Back to settings"
+              >
+                <BackIcon className="h-4 w-4" />
+              </button>
+              <h1
+                ref={mobileHeadingRef}
+                tabIndex={-1}
+                className="truncate px-2 text-center text-sm font-medium text-foreground outline-none"
+              >
+                {getSettingsCategoryLabel(activeCategory)}
+              </h1>
+              <Link
+                href="/"
+                className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                aria-label="Close settings"
+              >
+                <XIcon className="h-4 w-4" />
+              </Link>
             </header>
-            <div className="flex-1 overflow-y-auto p-4">
-              <div className="max-w-2xl">{content}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+              <div className="mx-auto max-w-3xl">{content}</div>
             </div>
           </>
         )}
@@ -171,20 +149,10 @@ function SettingsPageContent() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3">
-            <CollapsedSidebarControls />
-          </div>
-        </header>
-      )}
-
-      <div className="flex-1 flex overflow-hidden">
-        <SettingsNav activeCategory={activeCategory} onSelect={setActiveCategory} />
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-2xl">{content}</div>
-        </div>
+    <div className="flex h-full overflow-hidden bg-background">
+      <SettingsNav activeCategory={activeCategory} onSelect={setActiveCategory} />
+      <div className="min-w-0 flex-1 overflow-y-auto px-8 py-10 lg:px-12">
+        <div className="mx-auto max-w-3xl">{content}</div>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import useSWR from "swr";
 import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
 import { GlobalCommandMenu } from "./global-command-menu";
@@ -75,6 +75,8 @@ export function CollapsedSidebarControls() {
 
 export function SidebarLayout({ children }: SidebarLayoutProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  const isSettingsRoute = pathname === "/settings" || pathname.startsWith("/settings/");
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
@@ -84,7 +86,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
     []
   );
   const sidebarPull = useMobileSidebarPull({
-    isMobile,
+    isMobile: isMobile && !isSettingsRoute,
     isSidebarOpen: sidebar.isOpen,
     getSidebarWidth: getMobileSidebarWidth,
     onOpen: sidebar.open,
@@ -119,6 +121,9 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const handleSearchSessions = useCallback(() => {
     setIsCommandMenuOpen(true);
   }, []);
+  const handleToggleSidebar = useCallback(() => {
+    if (!isSettingsRoute) sidebar.toggle();
+  }, [isSettingsRoute, sidebar]);
   const appShellActions = useMemo(
     () => ({ searchSessions: handleSearchSessions, newSession: handleNewSession }),
     [handleSearchSessions, handleNewSession]
@@ -128,7 +133,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
     enabled: true,
     onOpenCommandMenu: handleOpenCommandMenu,
     onNewSession: handleNewSession,
-    onToggleSidebar: sidebar.toggle,
+    onToggleSidebar: handleToggleSidebar,
   });
 
   return (
@@ -137,7 +142,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         <div
           data-testid="mobile-sidebar-gesture-boundary"
           className={`flex h-dvh overflow-hidden ${
-            isMobile && !sidebar.isOpen ? "touch-pan-y" : ""
+            isMobile && !isSettingsRoute && !sidebar.isOpen ? "touch-pan-y" : ""
           }`}
           onPointerDownCapture={sidebarPull.handlePointerDown}
           onPointerMoveCapture={sidebarPull.handlePointerMove}
@@ -145,7 +150,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           onPointerCancelCapture={sidebarPull.handlePointerCancel}
         >
           {/* Mobile: overlay backdrop */}
-          {isMobile && (
+          {!isSettingsRoute && isMobile && (
             <div
               className={`fixed inset-0 z-30 bg-overlay ${
                 sidebarPull.isDragging ? "" : "transition-opacity duration-200"
@@ -163,31 +168,33 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
             />
           )}
           {/* Sidebar: overlay on mobile, push on desktop */}
-          <div
-            ref={mobileSidebarRef}
-            data-testid="mobile-sidebar-drawer"
-            className={
-              isMobile
-                ? `fixed inset-y-0 left-0 z-40 w-72 ease-in-out ${
-                    sidebarPull.isDragging ? "" : "transition-transform duration-200"
-                  } ${sidebar.isOpen ? "translate-x-0" : "-translate-x-full"}`
-                : `transition-all duration-200 ease-in-out ${
-                    sidebar.isOpen ? "w-72" : "w-0"
-                  } flex-shrink-0 overflow-hidden`
-            }
-            style={
-              isMobile && !sidebar.isOpen && sidebarPull.dragDistance > 0
-                ? { transform: `translateX(calc(-100% + ${sidebarPull.dragDistance}px))` }
-                : undefined
-            }
-          >
-            <SessionSidebar
-              onNewSession={handleNewSession}
-              onSearchSessions={handleSearchSessions}
-              onToggle={sidebar.toggle}
-              onSessionSelect={sidebar.close}
-            />
-          </div>
+          {!isSettingsRoute && (
+            <div
+              ref={mobileSidebarRef}
+              data-testid="mobile-sidebar-drawer"
+              className={
+                isMobile
+                  ? `fixed inset-y-0 left-0 z-40 w-72 ease-in-out ${
+                      sidebarPull.isDragging ? "" : "transition-transform duration-200"
+                    } ${sidebar.isOpen ? "translate-x-0" : "-translate-x-full"}`
+                  : `transition-all duration-200 ease-in-out ${
+                      sidebar.isOpen ? "w-72" : "w-0"
+                    } flex-shrink-0 overflow-hidden`
+              }
+              style={
+                isMobile && !sidebar.isOpen && sidebarPull.dragDistance > 0
+                  ? { transform: `translateX(calc(-100% + ${sidebarPull.dragDistance}px))` }
+                  : undefined
+              }
+            >
+              <SessionSidebar
+                onNewSession={handleNewSession}
+                onSearchSessions={handleSearchSessions}
+                onToggle={sidebar.toggle}
+                onSessionSelect={sidebar.close}
+              />
+            </div>
+          )}
           <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
         </div>
         <GlobalCommandMenu

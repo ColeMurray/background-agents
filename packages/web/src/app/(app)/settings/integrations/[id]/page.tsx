@@ -1,16 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared/types/integrations";
-import {
-  CollapsedSidebarControls,
-  SidebarToggleButton,
-  useSidebarContext,
-} from "@/components/sidebar-layout";
-import { BackIcon } from "@/components/ui/icons";
-import { useIsMobile } from "@/hooks/use-media-query";
+import { BackIcon, XIcon } from "@/components/ui/icons";
 import { integrationSettingsComponents } from "@/components/settings/integrations/integration-settings-registry";
+import { SettingsNav } from "@/components/settings/settings-nav";
+import { useIsMobile } from "@/hooks/use-media-query";
 
 function getIntegration(id: string) {
   return INTEGRATION_DEFINITIONS.find((d) => d.id === id);
@@ -18,39 +14,72 @@ function getIntegration(id: string) {
 
 export default function IntegrationDetailPage() {
   const params = useParams<{ id: string }>();
-  const { isOpen } = useSidebarContext();
+  const router = useRouter();
   const isMobile = useIsMobile();
 
   const integration = getIntegration(params.id);
   const IntegrationDetail = integration ? integrationSettingsComponents[integration.id] : undefined;
+  const content = IntegrationDetail ? (
+    <IntegrationDetail />
+  ) : (
+    <div className="flex flex-col items-center justify-center gap-3 py-24 text-muted-foreground">
+      <p>Integration not found.</p>
+      <Link href="/settings?tab=integrations" className="text-sm text-accent hover:underline">
+        Back to integrations
+      </Link>
+    </div>
+  );
 
-  if (!integration) {
+  if (!isMobile) {
     return (
-      <div className="h-full flex items-center justify-center text-muted-foreground">
-        Integration not found.
+      <div className="flex h-full overflow-hidden bg-background">
+        <SettingsNav
+          activeCategory="integrations"
+          onSelect={(category) => router.push(`/settings?tab=${category}`)}
+        />
+        <div className="min-w-0 flex-1 overflow-y-auto px-8 py-10 lg:px-12">
+          <div className="mx-auto max-w-3xl">
+            {integration && (
+              <Link
+                href="/settings?tab=integrations"
+                className="mb-6 flex w-fit items-center gap-2 text-sm text-muted-foreground transition hover:text-foreground"
+              >
+                <BackIcon className="h-4 w-4" />
+                Integrations
+              </Link>
+            )}
+            {content}
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <header className="border-b border-border-muted flex-shrink-0">
-        <div className="px-4 py-3 flex items-center gap-2">
-          {!isOpen && <CollapsedSidebarControls />}
-          {isOpen && isMobile && <SidebarToggleButton label="Toggle sidebar" />}
-          <Link
-            href="/settings?tab=integrations"
-            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-            aria-label="Back to integrations"
-          >
-            <BackIcon className="w-4 h-4" />
-          </Link>
-          <h2 className="text-sm font-medium text-foreground">{integration.name}</h2>
-        </div>
+    <div className="flex h-full flex-col bg-background">
+      <header className="grid h-14 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-border-muted px-3 sm:px-4">
+        <Link
+          href="/settings?tab=integrations"
+          className="flex w-fit items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          aria-label="Back to integrations"
+        >
+          <BackIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Integrations</span>
+        </Link>
+        <h1 className="max-w-48 truncate px-2 text-center text-sm font-medium text-foreground sm:max-w-none">
+          {integration?.name ?? "Integrations"}
+        </h1>
+        <Link
+          href="/"
+          className="ml-auto flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          aria-label="Close settings"
+        >
+          <XIcon className="h-4 w-4" />
+        </Link>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-4 md:p-8">
-        <div className="max-w-2xl">{IntegrationDetail ? <IntegrationDetail /> : null}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-10">
+        <div className="mx-auto max-w-3xl">{content}</div>
       </div>
     </div>
   );
