@@ -59,7 +59,17 @@ describe("SettingsNav", () => {
     await user.click(screen.getByRole("button", { name: /Appearance/ }));
 
     expect(onSelect).toHaveBeenCalledWith("appearance");
-    expect(onNavigate).toHaveBeenCalledOnce();
+    expect(onNavigate).toHaveBeenCalledWith(expect.any(HTMLButtonElement));
+    expect(screen.getByRole("button", { name: /Secrets/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("uses the shared focus treatment for navigation and search", () => {
+    render(<SettingsNav activeCategory="appearance" onSelect={vi.fn()} />);
+
+    expect(screen.getByRole("searchbox", { name: "Search settings" })).toHaveClass(
+      "focus-visible:ring-2"
+    );
+    expect(screen.getByRole("button", { name: "Appearance" })).toHaveClass("focus-visible:ring-2");
   });
 
   it("hides image settings when the sandbox provider does not support them", () => {

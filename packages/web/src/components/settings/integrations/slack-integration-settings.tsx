@@ -136,7 +136,7 @@ export function SlackIntegrationSettings() {
 
   return (
     <div>
-      <h3 className="text-lg font-semibold text-foreground mb-1">Slack</h3>
+      <h2 className="text-lg font-semibold text-foreground mb-1">Slack</h2>
       <p className="text-sm text-muted-foreground mb-6">
         Let agents post Slack notifications when the user explicitly asks for them. Posts go through
         the control plane — the Slack token never enters the sandbox.
@@ -765,22 +765,25 @@ function RoutingRulesSection({
 
             return (
               <div key={rule.id}>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <input
                     aria-label="Routing keyword"
                     value={rule.keyword}
                     onChange={(e) => updateRule(rule.id, { keyword: e.target.value })}
                     placeholder="keyword"
-                    className="w-48 px-3 py-2 text-sm bg-input border border-border rounded-sm focus:outline-none focus:ring-2 focus:ring-ring text-foreground placeholder:text-secondary-foreground"
+                    className="w-full rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground placeholder:text-secondary-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:w-48"
                   />
-                  <span className="text-muted-foreground" aria-hidden="true">
+                  <span
+                    className="self-center text-muted-foreground max-sm:rotate-90"
+                    aria-hidden="true"
+                  >
                     &rarr;
                   </span>
                   <Select
                     value={selectValue}
                     onValueChange={(v) => updateRule(rule.id, { target: v })}
                   >
-                    <SelectTrigger className="flex-1" aria-label="Routing target">
+                    <SelectTrigger className="w-full sm:flex-1" aria-label="Routing target">
                       <SelectValue placeholder="Select a target..." />
                     </SelectTrigger>
                     <SelectContent>
@@ -882,9 +885,9 @@ function Section({
 }) {
   return (
     <section className="border border-border-muted rounded-md p-5 mb-5">
-      <h4 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
+      <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
         {title}
-      </h4>
+      </h3>
       <p className="text-sm text-muted-foreground mb-4">{description}</p>
       {children}
     </section>

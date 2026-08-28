@@ -87,7 +87,7 @@ export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegr
 
   return (
     <div>
-      <h3 className="text-lg font-semibold text-foreground mb-1">{copy.title}</h3>
+      <h2 className="text-lg font-semibold text-foreground mb-1">{copy.title}</h2>
       <p className="text-sm text-muted-foreground mb-6">{copy.intro}</p>
 
       <GlobalSettingsSection
@@ -506,9 +506,9 @@ function Section({
 }) {
   return (
     <section className="border border-border-muted rounded-md p-5 mb-5">
-      <h4 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
+      <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
         {title}
-      </h4>
+      </h3>
       <p className="text-sm text-muted-foreground mb-4">{description}</p>
       {children}
     </section>

@@ -51,7 +51,7 @@ export function GitHubIntegrationSettings() {
 
   return (
     <div>
-      <h3 className="text-lg font-semibold text-foreground mb-1">GitHub Bot</h3>
+      <h2 className="text-lg font-semibold text-foreground mb-1">GitHub Bot</h2>
       <p className="text-sm text-muted-foreground mb-6">
         Configure automated PR reviews and comment-triggered actions.
       </p>

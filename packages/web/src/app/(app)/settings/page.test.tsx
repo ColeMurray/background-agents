@@ -90,7 +90,7 @@ describe("SettingsPage mobile navigation", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
 
-    expect(screen.getByRole("heading", { name: "Settings" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /Appearance/ })).toHaveFocus();
     expect(window.location.pathname).toBe("/settings");
     expect(window.location.search).toBe("");
 
@@ -134,5 +134,22 @@ describe("SettingsPage mobile navigation", () => {
     await user.click(screen.getByRole("button", { name: "Back to settings" }));
 
     expect(back).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the mobile search and restores focus to the selected category", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const search = screen.getByRole("searchbox", { name: "Search settings" });
+    await user.type(search, "theme");
+    await user.click(screen.getByRole("button", { name: /Appearance/ }));
+
+    act(() => {
+      window.history.replaceState(null, "", "/settings");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(screen.getByRole("searchbox", { name: "Search settings" })).toHaveValue("theme");
+    expect(screen.getByRole("button", { name: /Appearance/ })).toHaveFocus();
   });
 });

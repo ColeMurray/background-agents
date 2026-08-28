@@ -107,9 +107,9 @@ export function CommitSigningSettings() {
 
   return (
     <section className="border-t border-border pt-6 mt-6" aria-labelledby="commit-signing-title">
-      <h4 id="commit-signing-title" className="text-base font-medium text-foreground">
+      <h3 id="commit-signing-title" className="text-base font-medium text-foreground">
         Commit signing
-      </h4>
+      </h3>
       <p className="mt-1 text-sm text-muted-foreground">
         Sign agent commits with one dedicated GitHub machine account while retaining trusted users
         as commit authors.

@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useIsMobile } from "@/hooks/use-media-query";
 import { BackIcon, ChevronRightIcon, SearchIcon } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useSettingsIsMobile } from "./settings-viewport-context";
 import { getSettingsGroups, type SettingsCategory } from "./settings-registry";
 
 export {
@@ -16,30 +18,29 @@ export {
 interface SettingsNavProps {
   activeCategory: SettingsCategory;
   onSelect: (category: SettingsCategory) => void;
-  onNavigate?: () => void;
+  onNavigate?: (trigger: HTMLButtonElement) => void;
 }
 
 function SettingsSearch({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
     <label className="relative block">
       <span className="sr-only">Search settings</span>
-      <SearchIcon
-        aria-hidden="true"
-        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-      />
-      <input
+      <span aria-hidden="true">
+        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+      </span>
+      <Input
         type="search"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder="Search settings"
-        className="h-9 w-full rounded-md border border-border bg-input pl-9 pr-3 text-sm text-foreground shadow-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30"
+        className="pl-9"
       />
     </label>
   );
 }
 
 export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNavProps) {
-  const isMobile = useIsMobile();
+  const isMobile = useSettingsIsMobile();
   const [query, setQuery] = useState("");
   const groups = getSettingsGroups({ query });
 
@@ -65,27 +66,29 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
               const Icon = item.icon;
               return (
                 <li key={item.id}>
-                  <button
+                  <Button
                     type="button"
-                    onClick={() => {
+                    variant="ghost"
+                    onClick={(event) => {
                       onSelect(item.id);
-                      onNavigate?.();
+                      onNavigate?.(event.currentTarget);
                     }}
-                    aria-current={!isMobile && isActive ? "page" : undefined}
-                    className={`flex w-full items-center gap-3 text-left transition ${
+                    aria-current={isActive ? "page" : undefined}
+                    className={`h-auto w-full justify-start gap-3 whitespace-normal rounded-md text-left ${
                       isMobile
                         ? "px-4 py-3.5 text-foreground hover:bg-muted/60"
-                        : `rounded-md px-3 py-2 ${
+                        : `px-3 py-2 ${
                             isActive
                               ? "bg-muted font-medium text-foreground"
                               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                           }`
                     }`}
                   >
-                    <Icon
-                      aria-hidden="true"
-                      className={`h-4 w-4 shrink-0 ${isActive ? "text-foreground" : "text-muted-foreground"}`}
-                    />
+                    <span aria-hidden="true">
+                      <Icon
+                        className={`h-4 w-4 shrink-0 ${isActive ? "text-foreground" : "text-muted-foreground"}`}
+                      />
+                    </span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm font-medium">{item.label}</span>
                       {isMobile && (
@@ -95,12 +98,11 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
                       )}
                     </span>
                     {isMobile && (
-                      <ChevronRightIcon
-                        aria-hidden="true"
-                        className="h-4 w-4 shrink-0 text-muted-foreground"
-                      />
+                      <span aria-hidden="true">
+                        <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      </span>
                     )}
-                  </button>
+                  </Button>
                 </li>
               );
             })}
@@ -108,7 +110,10 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
         </section>
       ))}
       {groups.length === 0 && (
-        <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+        <p
+          aria-live="polite"
+          className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground"
+        >
           No settings match “{query}”.
         </p>
       )}
@@ -135,13 +140,14 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
       className="flex w-60 shrink-0 flex-col border-r border-border-muted bg-muted/15"
     >
       <div className="border-b border-border-muted px-4 py-4">
-        <Link
-          href="/"
-          className="mb-5 flex items-center gap-2 text-sm text-muted-foreground transition hover:text-foreground"
-        >
-          <BackIcon aria-hidden="true" className="h-4 w-4" />
-          Back to app
-        </Link>
+        <Button asChild variant="ghost" size="sm" className="mb-5 -ml-3 gap-2">
+          <Link href="/">
+            <span aria-hidden="true">
+              <BackIcon className="h-4 w-4" />
+            </span>
+            Back to app
+          </Link>
+        </Button>
         <h1 className="mb-3 text-lg font-semibold text-foreground">Settings</h1>
         <SettingsSearch value={query} onChange={setQuery} />
       </div>
