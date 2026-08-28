@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxRepository } from "./sandbox-repository";
+import { decryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
 
@@ -16,12 +17,14 @@ function createLog() {
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const data = new Map<string, unknown[]>();
+  const written = new Map<string, number>();
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
       return {
         toArray: () => data.get(query) ?? [],
         one: () => null,
+        rowsWritten: written.get(query) ?? 0,
       };
     },
   };
@@ -29,8 +32,11 @@ function createMockSql() {
     sql,
     calls,
     setData: (query: string, rows: unknown[]) => data.set(query, rows),
+    setRowsWritten: (query: string, rows: number) => written.set(query, rows),
   };
 }
+
+const TEST_ENCRYPTION_KEY = generateEncryptionKey();
 
 describe("SandboxRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
@@ -40,7 +46,7 @@ describe("SandboxRepository", () => {
   beforeEach(() => {
     mock = createMockSql();
     log = createLog();
-    repository = new SandboxRepository(mock.sql, log);
+    repository = new SandboxRepository(mock.sql, log, TEST_ENCRYPTION_KEY);
   });
 
   describe("getSandbox", () => {
@@ -105,38 +111,55 @@ describe("SandboxRepository", () => {
   });
 
   describe("updateSandboxForSpawn", () => {
-    it("sets all spawn fields atomically", () => {
+    it("sets all spawn fields atomically and invalidates credentials", () => {
       repository.updateSandboxForSpawn({
         status: "spawning",
         createdAt: 1000,
-        authTokenHash: "token-hash-123",
         modalSandboxId: "modal-sb-1",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET");
       expect(mock.calls[0].query).toContain("status");
-      expect(mock.calls[0].query).toContain("auth_token_hash");
       expect(mock.calls[0].query).toContain("modal_sandbox_id");
+      // The reservation itself empties the hash (#1589 phase 1) — no caller
+      // can accidentally reserve with live credentials.
+      expect(mock.calls[0].query).toContain("auth_token_hash = ''");
       expect(mock.calls[0].query).toContain("auth_token = NULL");
       expect(mock.calls[0].query).toContain("modal_object_id = NULL");
       expect(mock.calls[0].query).toContain("vnc_url = NULL");
       expect(mock.calls[0].query).toContain("vnc_password = NULL");
       // A replacement sandbox must not inherit the predecessor's runtime.
       expect(mock.calls[0].query).toContain("runtime_version = NULL");
-      expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual(["spawning", 1000, "modal-sb-1"]);
     });
 
     it("can preserve the provider object ID while fencing a replacement", () => {
       repository.updateSandboxForSpawn({
         status: "spawning",
         createdAt: 123,
-        authTokenHash: "hash",
         modalSandboxId: "sandbox-new",
         preserveProviderObjectId: true,
       });
 
       expect(mock.calls[0].query).toContain("modal_object_id = modal_object_id");
+    });
+  });
+
+  describe("updateSandboxAuthTokenHash", () => {
+    const query = `UPDATE sandbox SET auth_token_hash = ? WHERE modal_sandbox_id = ?`;
+
+    it("publishes the hash scoped to the reserved identity", () => {
+      mock.setRowsWritten(query, 1);
+
+      expect(repository.updateSandboxAuthTokenHash("modal-sb-1", "hash-1")).toBe(true);
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toBe(query);
+      expect(mock.calls[0].params).toEqual(["hash-1", "modal-sb-1"]);
+    });
+
+    it("reports a superseded reservation instead of touching the current row", () => {
+      expect(repository.updateSandboxAuthTokenHash("modal-sb-stale", "hash-1")).toBe(false);
     });
   });
 
@@ -226,9 +249,9 @@ describe("SandboxRepository", () => {
     });
   });
 
-  describe("updateSandboxSpawnError", () => {
+  describe("setLastSpawnError", () => {
     it("updates spawn error fields", () => {
-      repository.updateSandboxSpawnError("Failed to spawn sandbox", 123456);
+      repository.setLastSpawnError("Failed to spawn sandbox", 123456);
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_spawn_error");
@@ -236,18 +259,37 @@ describe("SandboxRepository", () => {
     });
   });
 
-  describe("VNC access", () => {
-    it("stores and clears VNC credentials", () => {
-      repository.updateSandboxVnc("https://vnc.test", "encrypted-password");
-      repository.clearSandboxVnc();
+  describe("access artifacts", () => {
+    it("stores encrypted credentials and clears them", async () => {
+      await repository.updateSandboxAccess("vnc", "https://vnc.test", "vnc-secret");
+      repository.clearSandboxAccess("vnc");
 
       expect(mock.calls[0].query).toContain("SET vnc_url = ?, vnc_password = ?");
-      expect(mock.calls[0].params).toEqual(["https://vnc.test", "encrypted-password"]);
+      const [url, stored] = mock.calls[0].params as [string, string];
+      expect(url).toBe("https://vnc.test");
+      expect(stored).not.toBe("vnc-secret");
+      await expect(decryptToken(stored, TEST_ENCRYPTION_KEY)).resolves.toBe("vnc-secret");
       expect(mock.calls[1].query).toContain("SET vnc_url = NULL, vnc_password = NULL");
     });
 
-    it("can clear only the VNC URL", () => {
-      repository.clearSandboxVncUrl();
+    it("encrypts code-server and ttyd secrets the same way", async () => {
+      await repository.updateSandboxAccess("codeServer", "https://cs.test", "cs-secret");
+      await repository.updateSandboxAccess("ttyd", "https://ttyd.test", "ttyd-token");
+
+      expect(mock.calls[0].query).toContain("SET code_server_url = ?, code_server_password = ?");
+      expect(mock.calls[1].query).toContain("SET ttyd_url = ?, ttyd_token = ?");
+      for (const [call, plaintext] of [
+        [mock.calls[0], "cs-secret"],
+        [mock.calls[1], "ttyd-token"],
+      ] as const) {
+        const stored = call.params[1] as string;
+        expect(stored).not.toBe(plaintext);
+        await expect(decryptToken(stored, TEST_ENCRYPTION_KEY)).resolves.toBe(plaintext);
+      }
+    });
+
+    it("can clear only the URL", () => {
+      repository.clearSandboxAccessUrl("vnc");
 
       expect(mock.calls[0].query).toContain("SET vnc_url = NULL");
       expect(mock.calls[0].query).not.toContain("vnc_password");

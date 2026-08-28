@@ -26,10 +26,6 @@ function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
   return {
     id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: "Test Automation",
-    repo_owner: "test-owner",
-    repo_name: "test-repo",
-    base_branch: "main",
-    repo_id: 1,
     instructions: "Test instructions",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
@@ -57,7 +53,7 @@ async function createSentryAutomation(
   overrides: Partial<AutomationRow> = {}
 ): Promise<AutomationRow> {
   const store = new AutomationStore(env.DB);
-  const encrypted = await encryptToken(SENTRY_TEST_SECRET, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const encrypted = await encryptToken(SENTRY_TEST_SECRET, env.REPO_SECRETS_ENCRYPTION_KEY!);
   const automation = makeAutomation({
     trigger_type: "sentry",
     event_type: "issue.created",

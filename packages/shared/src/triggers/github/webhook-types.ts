@@ -1,8 +1,37 @@
 import { z } from "zod";
 
 import type { WebhookEventMap } from "@octokit/webhooks-types";
+import type { ConditionType } from "../types";
 
 type GitHubWebhookEvent = Extract<keyof WebhookEventMap, string>;
+
+export const DEFAULT_GITHUB_CONCLUSION = "success" as const;
+
+const SHARED_GITHUB_CONCLUSIONS = [
+  DEFAULT_GITHUB_CONCLUSION,
+  "failure",
+  "neutral",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "stale",
+] as const;
+
+export const CHECK_SUITE_CONCLUSIONS = [
+  ...SHARED_GITHUB_CONCLUSIONS,
+  "skipped",
+  "startup_failure",
+] as const;
+
+export const WORKFLOW_RUN_CONCLUSIONS = [...SHARED_GITHUB_CONCLUSIONS, "skipped"] as const;
+
+const NO_GITHUB_CONCLUSIONS: readonly string[] = [];
+
+export function getGitHubConclusionOptions(eventType?: string): readonly string[] {
+  if (eventType === "check_suite.completed") return CHECK_SUITE_CONCLUSIONS;
+  if (eventType === "workflow_run.completed") return WORKFLOW_RUN_CONCLUSIONS;
+  return NO_GITHUB_CONCLUSIONS;
+}
 
 type GitHubEventCatalogEntry<E extends GitHubWebhookEvent = GitHubWebhookEvent> = {
   event: E;
@@ -10,6 +39,7 @@ type GitHubEventCatalogEntry<E extends GitHubWebhookEvent = GitHubWebhookEvent> 
   displayName: string;
   description: string;
   shortLabel: string;
+  supportedConditions: readonly ConditionType[];
 };
 
 export const GITHUB_WEBHOOK_EVENT_CATALOG = [
@@ -19,6 +49,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Opened",
     description: "A pull request was opened",
     shortLabel: "PR opened",
+    supportedConditions: ["branch", "target_branch", "label", "actor"],
   },
   {
     event: "pull_request",
@@ -26,6 +57,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Updated",
     description: "New commits pushed to a pull request",
     shortLabel: "PR updated",
+    supportedConditions: ["branch", "target_branch", "label", "actor"],
   },
   {
     event: "pull_request",
@@ -33,6 +65,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Closed",
     description: "A pull request was closed or merged",
     shortLabel: "PR closed",
+    supportedConditions: ["branch", "target_branch", "label", "actor"],
   },
   {
     event: "issue_comment",
@@ -40,6 +73,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Issue Comment",
     description: "A comment was added to an issue or PR",
     shortLabel: "comment created",
+    supportedConditions: ["actor"],
   },
   {
     event: "pull_request_review_comment",
@@ -47,6 +81,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Review Comment",
     description: "A review comment was added to a pull request",
     shortLabel: "review comment created",
+    supportedConditions: ["branch", "target_branch", "actor"],
   },
   {
     event: "check_suite",
@@ -54,6 +89,15 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Check Suite Completed",
     description: "A CI check suite finished running",
     shortLabel: "CI completed",
+    supportedConditions: ["branch", "actor", "conclusion"],
+  },
+  {
+    event: "workflow_run",
+    action: "completed",
+    displayName: "Workflow Run Completed",
+    description: "A GitHub Actions workflow run finished",
+    shortLabel: "workflow completed",
+    supportedConditions: ["branch", "actor", "conclusion", "workflow_name"],
   },
   {
     event: "issues",
@@ -61,6 +105,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Issue Opened",
     description: "A new issue was opened",
     shortLabel: "issue opened",
+    supportedConditions: ["label", "actor"],
   },
   {
     event: "issues",
@@ -68,9 +113,26 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "Issue Labeled",
     description: "A label was added to an issue",
     shortLabel: "issue labeled",
+    supportedConditions: ["label", "actor"],
   },
 ] as const satisfies readonly GitHubEventCatalogEntry[];
 
+const NO_GITHUB_EVENT_CONDITIONS: readonly ConditionType[] = [];
+
+export function getGitHubEventConditionTypes(eventType: string): readonly ConditionType[] {
+  const entry = GITHUB_WEBHOOK_EVENT_CATALOG.find(
+    ({ event, action }) => `${event}.${action}` === eventType
+  );
+  return entry?.supportedConditions ?? NO_GITHUB_EVENT_CONDITIONS;
+}
+
+export function isGitHubConditionSupported(
+  eventType: string,
+  conditionType: ConditionType
+): boolean {
+  const preferredType = conditionType === "check_conclusion" ? "conclusion" : conditionType;
+  return getGitHubEventConditionTypes(eventType).includes(preferredType);
+}
 // ─── Webhook payload schemas ──────────────────────────────────────────────────
 //
 // Each schema is the single source of truth for one supported event: it produces
@@ -153,10 +215,21 @@ const issueObjectSchema = z.object({
 
 const checkSuiteObjectSchema = z.object({
   id: z.number(),
-  conclusion: z.string().nullable().optional(),
+  conclusion: z.enum(CHECK_SUITE_CONCLUSIONS).nullable().optional(),
   head_branch: z.string().nullable().optional(),
   head_sha: z.string().optional(),
   pull_requests: z.array(z.object({ number: z.number() })).optional(),
+});
+
+const workflowRunObjectSchema = z.object({
+  id: z.number(),
+  run_attempt: z.number().int().positive(),
+  name: z.string(),
+  conclusion: z.enum(WORKFLOW_RUN_CONCLUSIONS).nullable().optional(),
+  head_branch: z.string().nullable().optional(),
+  head_sha: z.string().optional(),
+  path: z.string().optional(),
+  html_url: z.string().optional(),
 });
 
 // GitHub always includes the event's primary object (a pull_request event always
@@ -181,6 +254,10 @@ export const checkSuiteEventSchema = baseEventSchema.extend({
   check_suite: checkSuiteObjectSchema,
 });
 
+export const workflowRunEventSchema = baseEventSchema.extend({
+  workflow_run: workflowRunObjectSchema,
+});
+
 export const issuesEventSchema = baseEventSchema.extend({
   issue: issueObjectSchema,
 });
@@ -191,4 +268,5 @@ export type PullRequestPayload = z.infer<typeof pullRequestEventSchema>;
 export type IssueCommentPayload = z.infer<typeof issueCommentEventSchema>;
 export type PullRequestReviewCommentPayload = z.infer<typeof pullRequestReviewCommentEventSchema>;
 export type CheckSuitePayload = z.infer<typeof checkSuiteEventSchema>;
+export type WorkflowRunPayload = z.infer<typeof workflowRunEventSchema>;
 export type IssuesPayload = z.infer<typeof issuesEventSchema>;

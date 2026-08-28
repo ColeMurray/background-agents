@@ -424,7 +424,7 @@ describe("browser authentication", () => {
     if (typeof generateId !== "function") {
       throw new Error("Better Auth canonical ID generator is not configured");
     }
-    expect(generateId({ model: "user" })).toMatch(/^[a-f0-9]{32}$/);
+    expect(generateId()).toMatch(/^[a-f0-9]{32}$/);
     expect(auth.options.session?.expiresIn).toBe(SESSION_EXPIRES_IN_MS / MS_PER_SECOND);
     expect(auth.options.session?.updateAge).toBe(SESSION_UPDATE_AGE_MS / MS_PER_SECOND);
   });

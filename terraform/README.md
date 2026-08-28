@@ -269,6 +269,7 @@ LINEAR_WEBHOOK_SECRET
 
 # API Keys
 ANTHROPIC_API_KEY
+CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY

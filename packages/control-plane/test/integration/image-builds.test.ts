@@ -46,16 +46,16 @@ const BASE = "https://test.local";
  */
 const WIRE_KEYS = [
   "id",
-  "scope_kind",
-  "scope_id",
+  "scopeKind",
+  "scopeId",
   "provider",
   "status",
-  "repositories_fingerprint",
-  "repository_shas",
-  "runtime_version",
-  "build_duration_seconds",
-  "error_message",
-  "created_at",
+  "repositoriesFingerprint",
+  "repositoryShas",
+  "runtimeVersion",
+  "buildDurationSeconds",
+  "errorMessage",
+  "createdAt",
 ].sort();
 
 // Modal-provider callback token: 64-hex like the planner mints (the route
@@ -451,10 +451,10 @@ describe("Image builds", () => {
       // crowd it.
       const all = await serviceFetch(`${BASE}/image-builds/status`);
       const allBody = (await all.json()) as {
-        images: Array<{ id: string; scope_kind: string; scope_id: string }>;
+        images: Array<{ id: string; scopeKind: string; scopeId: string }>;
       };
       expect(allBody.images.map((i) => i.id).sort()).toEqual(["st-failed", "st-other", "st-ready"]);
-      expect(allBody.images.every((i) => i.scope_kind === "environment")).toBe(true);
+      expect(allBody.images.every((i) => i.scopeKind === "environment")).toBe(true);
 
       // Per-scope debug view keeps failed rows, drops only superseded.
       const filtered = await serviceFetch(
@@ -494,6 +494,25 @@ describe("Image builds", () => {
       assertWireKeysOnly(
         ((await perScope.json()) as { images: Array<Record<string, unknown>> }).images
       );
+    });
+
+    it("GET /image-builds/status decodes provenance and tolerates malformed stored JSON", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await seedImageRow({ id: "valid-provenance", environmentId, status: "ready" });
+      await env.DB.prepare("UPDATE image_builds SET repository_shas = ? WHERE id = ?")
+        .bind("not-json", "valid-provenance")
+        .run();
+
+      const response = await serviceFetch(
+        `${BASE}/image-builds/status?scope_kind=environment&scope_id=${environmentId}`
+      );
+      const body = (await response.json()) as {
+        images: Array<Record<string, unknown>>;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.images[0]).toHaveProperty("repositoryShas", null);
+      expect(body.images[0]).not.toHaveProperty("repository_shas");
     });
 
     it("GET /image-builds/status rejects a scope_kind/scope_id half-pair", async () => {
@@ -592,14 +611,14 @@ describe("Image builds", () => {
 
       const response = await serviceFetch(`${BASE}/image-builds/status`);
       const body = (await response.json()) as {
-        images: Array<{ id: string; status: string; scope_id: string }>;
+        images: Array<{ id: string; status: string; scopeId: string }>;
       };
 
       expect(body.images).toHaveLength(1);
       expect(body.images[0]).toMatchObject({
         id: "only-failed",
         status: "failed",
-        scope_id: environmentId,
+        scopeId: environmentId,
       });
     });
   });
@@ -1140,7 +1159,7 @@ describe("Image builds", () => {
 
       const response = await serviceFetch(`${BASE}/image-builds/status`);
       const body = (await response.json()) as {
-        images: Array<{ id: string; scope_kind: string; scope_id: string }>;
+        images: Array<{ id: string; scopeKind: string; scopeId: string }>;
       };
 
       expect(body.images.map((i) => i.id).sort()).toEqual([
@@ -1149,8 +1168,8 @@ describe("Image builds", () => {
         "cs-repo-ready",
       ]);
       expect(body.images.find((i) => i.id === "cs-repo-ready")).toMatchObject({
-        scope_kind: "repo",
-        scope_id: "acme/web",
+        scopeKind: "repo",
+        scopeId: "acme/web",
       });
     });
 

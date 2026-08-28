@@ -116,6 +116,9 @@ CREATE TABLE IF NOT EXISTS messages (
   callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
   client_request_id TEXT,                           -- Web-client idempotency key
   request_fingerprint TEXT,                         -- Participant-scoped canonical request hash
+  autofix_feedback_key TEXT,                        -- Stable provider feedback identity for idempotency
+  autofix_pr_key TEXT,                              -- Stable provider PR identity for rolling attempt limits
+  origin_context TEXT,                              -- Typed JSON describing the external feedback origin
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
@@ -214,6 +217,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
 ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
 ON messages(status) WHERE status = 'processing';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_autofix_feedback
+ON messages(autofix_feedback_key) WHERE autofix_feedback_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
+ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
@@ -238,6 +245,21 @@ export interface SchemaMigration {
   readonly id: number;
   readonly description: string;
   readonly run: string | ((sql: SqlStorage) => void);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseSqlColumnNames(rows: unknown[]): string[] {
+  return rows.map((row, index) => {
+    if (!isRecord(row) || typeof row.name !== "string") {
+      throw new TypeError(
+        `Invalid SQLite column metadata at row ${index}: expected an object with a string name`
+      );
+    }
+    return row.name;
+  });
 }
 
 /**
@@ -283,10 +305,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 7,
     description: "Add refresh_token_encrypted to participants",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
-        name: string;
-      }>;
-      const names = new Set(columns.map((c) => c.name));
+      const names = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(participants)").toArray())
+      );
       // Fresh DOs (post-rename) already have scm_refresh_token_encrypted from SCHEMA_SQL.
       // Only add the old column name on pre-rename DOs that need migration 20 to rename it.
       if (
@@ -371,10 +392,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 20,
     description: "Rename github_* columns to scm_* in participants",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(participants)").toArray() as Array<{
-        name: string;
-      }>;
-      const columnNames = new Set(columns.map((c) => c.name));
+      const columnNames = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(participants)").toArray())
+      );
 
       const renames: [string, string][] = [
         ["github_user_id", "scm_user_id"],
@@ -407,10 +427,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Drop scm_provider from session and participants (now deployment-level)",
     run: (sql) => {
       for (const table of ["session", "participants"] as const) {
-        const columns = sql.exec(`PRAGMA table_info(${table})`).toArray() as Array<{
-          name: string;
-        }>;
-        if (columns.some((c) => c.name === "scm_provider")) {
+        if (
+          parseSqlColumnNames(sql.exec(`PRAGMA table_info(${table})`).toArray()).includes(
+            "scm_provider"
+          )
+        ) {
           sql.exec(`ALTER TABLE ${table} DROP COLUMN scm_provider`);
         }
       }
@@ -420,10 +441,9 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 24,
     description: "Rename repo_default_branch to base_branch in session",
     run: (sql) => {
-      const columns = sql.exec("PRAGMA table_info(session)").toArray() as Array<{
-        name: string;
-      }>;
-      const columnNames = new Set(columns.map((c) => c.name));
+      const columnNames = new Set(
+        parseSqlColumnNames(sql.exec("PRAGMA table_info(session)").toArray())
+      );
       if (columnNames.has("repo_default_branch") && !columnNames.has("base_branch")) {
         sql.exec(`ALTER TABLE session RENAME COLUMN repo_default_branch TO base_branch`);
       }
@@ -584,6 +604,19 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: (sql) => {
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN runtime_version TEXT`);
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_runtime_version TEXT`);
+    },
+  },
+  {
+    id: 45,
+    description: "Add Autofix message admission metadata",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN autofix_feedback_key TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN autofix_pr_key TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN origin_context TEXT`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_autofix_feedback
+        ON messages(autofix_feedback_key) WHERE autofix_feedback_key IS NOT NULL`);
+      sql.exec(`CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
+        ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL`);
     },
   },
 ];

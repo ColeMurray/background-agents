@@ -2,7 +2,10 @@ import {
   assertProviderAuthSelection,
   type ProviderAuthMode,
 } from "../model-provider-accounts/provider-auth-contracts";
-import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import {
+  modelProviderSelectionsSchema,
+  type ModelProviderSelections,
+} from "@open-inspect/shared/types/provider-accounts";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export interface AutomationModelProviderAuthRow {
@@ -17,7 +20,7 @@ export interface AutomationModelProviderAuthRow {
 export function toProviderSelections(
   rows: AutomationModelProviderAuthRow[]
 ): ModelProviderSelections {
-  return Object.fromEntries(
+  const selections = Object.fromEntries(
     rows.map((row) => {
       assertProviderAuthSelection(row.provider, row.auth_mode, row.provider_account_id);
       return [
@@ -27,7 +30,8 @@ export function toProviderSelections(
           : { mode: row.auth_mode },
       ];
     })
-  ) as ModelProviderSelections;
+  );
+  return modelProviderSelectionsSchema.parse(selections);
 }
 
 export class AutomationModelProviderAuthStore {

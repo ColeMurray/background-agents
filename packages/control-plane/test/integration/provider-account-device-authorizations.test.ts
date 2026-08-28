@@ -471,7 +471,7 @@ describe("provider account device authorization routes", () => {
     let injected = false;
     const racingDb: SqlDatabase = {
       prepare: (query: string) => env.DB.prepare(query) as SqlStatement,
-      batch: async <_T>(statements: SqlStatement[]) => {
+      batch: (async (statements: SqlStatement[]) => {
         if (!injected) {
           injected = true;
           await env.DB.prepare(
@@ -480,10 +480,8 @@ describe("provider account device authorization routes", () => {
             .bind(now + 1, now + 1, ACCOUNT_ID)
             .run();
         }
-        return env.DB.batch(statements as D1PreparedStatement[]) as ReturnType<
-          SqlDatabase["batch"]
-        >;
-      },
+        return env.DB.batch(statements as D1PreparedStatement[]);
+      }) as SqlDatabase["batch"],
     };
     const finalizer = new ProviderDeviceAuthorizationFinalizer(
       new ModelProviderAccountStore(env.DB),
@@ -633,15 +631,13 @@ describe("provider account device authorization routes", () => {
     let injected = false;
     const racingDb: SqlDatabase = {
       prepare: (query: string) => env.DB.prepare(query) as SqlStatement,
-      batch: async <_T>(statements: SqlStatement[]) => {
+      batch: (async (statements: SqlStatement[]) => {
         if (!injected) {
           injected = true;
           await accounts.setStatus(ACCOUNT_ID, "active", null, now + 1);
         }
-        return env.DB.batch(statements as D1PreparedStatement[]) as ReturnType<
-          SqlDatabase["batch"]
-        >;
-      },
+        return env.DB.batch(statements as D1PreparedStatement[]);
+      }) as SqlDatabase["batch"],
     };
     const credentials = new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!);
     const finalizer = new ProviderDeviceAuthorizationFinalizer(

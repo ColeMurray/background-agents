@@ -132,8 +132,15 @@ function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
     db: {} as SqlDatabase,
     metrics: createRequestMetrics(),
     executionCtx: {
-      submit: (task: Promise<unknown>) => {
-        waitUntilTasks?.push(task);
+      submit: (task: () => Promise<unknown>) => {
+        // Contract-faithful: run the factory even without a collector, and
+        // absorb synchronous throws like the production boundary does.
+        try {
+          const pending = task();
+          waitUntilTasks?.push(pending);
+        } catch {
+          // Absorbed like background_task.failed.
+        }
       },
     },
   };
@@ -447,6 +454,14 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
     const response = await callToggle(createModalEnv(), { enabled: "yes" });
 
     expect(response.status).toBe(400);
+    expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed toggle body", async () => {
+    const response = await callToggle(createModalEnv(), null);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "enabled must be a boolean" });
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
   });
 

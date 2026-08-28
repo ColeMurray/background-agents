@@ -25,6 +25,9 @@ export interface WebSocketManagerConfig {
 // ---------------------------------------------------------------------------
 
 export interface SessionWebSocketManager {
+  /** Create the client/server WebSocket pair for an upgrade response. */
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket };
+
   /** Accept a client WebSocket with a wsId tag for hibernation recovery. */
   acceptClientSocket(ws: WebSocket, wsId: string): void;
 
@@ -103,6 +106,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Accept
   // -------------------------------------------------------------------------
 
+  createUpgradeSockets(): { client: WebSocket; server: WebSocket } {
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    return { client, server };
+  }
+
   acceptClientSocket(ws: WebSocket, wsId: string): void {
     this.ctx.acceptWebSocket(ws, [`wsid:${wsId}`]);
   }
@@ -176,11 +185,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
 
-      if (expectedSandboxId && parsed.sandboxId && parsed.sandboxId !== expectedSandboxId) {
+      if (expectedSandboxId && parsed.sandboxId !== expectedSandboxId) {
         this.log.debug("Skipping WS with wrong sandbox ID", {
           tag_sandbox_id: parsed.sandboxId,
           expected_sandbox_id: expectedSandboxId,
         });
+        this.close(ws, 1000, "Sandbox identity changed");
         continue;
       }
 

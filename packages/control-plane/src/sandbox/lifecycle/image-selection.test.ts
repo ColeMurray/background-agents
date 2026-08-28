@@ -136,7 +136,14 @@ describe("evaluateImageBuildForSpawn", () => {
   });
 
   it("still selects when the provenance document is malformed — the SHA is informational", async () => {
-    for (const repositoryShas of ["not json", "[]", '[{"repoOwner":"acme"}]', '"scalar"']) {
+    for (const repositoryShas of [
+      "not json",
+      "[]",
+      '[{"repoOwner":"acme"}]',
+      '[{"baseSha":"sha-without-identity"}]',
+      "[[]]",
+      '"scalar"',
+    ]) {
       const image = await readyImage({ repository_shas: repositoryShas });
       const result = await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES);
 

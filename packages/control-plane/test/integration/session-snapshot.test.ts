@@ -37,11 +37,11 @@ describe("session snapshot synchronization", () => {
        SET status = 'ready', code_server_url = ?, code_server_password = ?,
            vnc_url = ?, vnc_password = ?, ttyd_url = ?, ttyd_token = ?`,
       "https://code.example.test",
-      await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
+      await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
       "https://desktop.example.test",
-      await encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
+      await encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
       "https://terminal.example.test",
-      await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY)
+      await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY!)
     );
 
     const response = await stub.fetch("http://internal/internal/snapshot");

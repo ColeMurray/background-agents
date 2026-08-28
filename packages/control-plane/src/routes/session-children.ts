@@ -1,6 +1,7 @@
 import {
   cancelChildSessionRequestSchema,
   childFollowUpPromptRequestSchema,
+  sendPromptResponseSchema,
   type CancelChildSessionRequest,
 } from "@open-inspect/shared/types/session-api";
 import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
@@ -133,8 +134,8 @@ export async function handlePromptChild(
   if (response.ok) {
     let messageId: string | undefined;
     try {
-      const payload = (await response.clone().json()) as { messageId?: unknown };
-      if (typeof payload.messageId === "string") messageId = payload.messageId;
+      const parsed = sendPromptResponseSchema.safeParse(await response.clone().json());
+      if (parsed.success) messageId = parsed.data.messageId;
     } catch {
       // The child response remains authoritative; logging is best-effort.
     }
@@ -148,15 +149,16 @@ export async function handlePromptChild(
       trace_id: ctx.trace_id,
     });
     ctx.executionCtx.submit(
-      sessionStore.touchUpdatedAt(childId).catch((error) => {
-        logger.error("session_index.touch_updated_at.background_error", {
-          parent_id: parentId,
-          child_id: childId,
-          request_id: ctx.request_id,
-          trace_id: ctx.trace_id,
-          error,
-        });
-      }),
+      () =>
+        sessionStore.touchUpdatedAt(childId).catch((error) => {
+          logger.error("session_index.touch_updated_at.background_error", {
+            parent_id: parentId,
+            child_id: childId,
+            request_id: ctx.request_id,
+            trace_id: ctx.trace_id,
+            error,
+          });
+        }),
       {
         name: "session_index.touch_updated_at",
         context: {

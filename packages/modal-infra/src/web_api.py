@@ -11,13 +11,17 @@ SECURITY: All sensitive endpoints require authentication via HMAC-signed tokens.
 The control plane must include an Authorization header with a valid token.
 """
 
+import asyncio
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, Self
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
@@ -38,6 +42,8 @@ IMAGE_BUILD_FINALIZATION_GRACE_SECONDS = 10 * 60
 
 
 class _ModalRequestModel(BaseModel):
+    # Ignore new top-level keys so old Modal deployments remain compatible
+    # while control-plane instances roll forward.
     model_config = ConfigDict(extra="ignore", strict=True)
 
 
@@ -87,6 +93,140 @@ class DeleteProviderImageRequest(_ModalRequestModel):
     provider_image_id: NonEmptyString
 
 
+class InteractiveRepositoryRequest(_ModalRequestModel):
+    repo_owner: NonEmptyString
+    repo_name: NonEmptyString
+    branch: str | None = None
+    base_sha: str | None = None
+
+
+class RestoreRepositoryRequest(InteractiveRepositoryRequest):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+
+class _RepositoryContextModel(_ModalRequestModel):
+    repo_owner: str | None = None
+    repo_name: str | None = None
+
+    @model_validator(mode="after")
+    def validate_repository_context(self) -> Self:
+        self.repo_owner, self.repo_name = _normalize_optional_repository_context(
+            self.repo_owner, self.repo_name
+        )
+        return self
+
+
+class CreateSandboxRequest(_RepositoryContextModel):
+    session_id: NonEmptyString
+    sandbox_id: str | None = None
+    control_plane_url: NonEmptyString
+    sandbox_auth_token: NonEmptyString
+    opencode_session_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    branch: str | None = None
+    base_sha: str | None = None
+    mcp_servers: list[dict[str, Any]] | None = None
+    repositories: list[InteractiveRepositoryRequest] | None = None
+    working_branch_name: str | None = None
+    user_env_vars: dict[str, str] | None = None
+    repo_image_id: str | None = None
+    repo_image_sha: str | None = None
+    timeout_seconds: int | None = Field(default=None, gt=0)
+    code_server_enabled: bool = False
+    vnc_enabled: bool | None = None
+    agent_slack_notify_enabled: bool = False
+    sandbox_settings: dict[str, Any] | None = None
+
+
+class RestoreSessionConfigRequest(_RepositoryContextModel):
+    # Snapshot SESSION_CONFIG may contain fields introduced by a newer control
+    # plane, so preserve unknown nested keys while validating known launch data.
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    session_id: str | None = None
+    branch: str | None = None
+    base_sha: str | None = None
+    opencode_session_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    mcp_servers: list[dict[str, Any]] | None = None
+    repositories: list[RestoreRepositoryRequest] | None = None
+    working_branch_name: str | None = None
+
+
+class RestoreSandboxRequest(_ModalRequestModel):
+    snapshot_image_id: NonEmptyString
+    session_config: RestoreSessionConfigRequest
+    sandbox_id: str | None = None
+    control_plane_url: NonEmptyString
+    sandbox_auth_token: NonEmptyString
+    user_env_vars: dict[str, str] | None = None
+    timeout_seconds: int | None = Field(default=None, gt=0)
+    code_server_enabled: bool = False
+    vnc_enabled: bool | None = None
+    agent_slack_notify_enabled: bool = False
+    sandbox_settings: dict[str, Any] | None = None
+
+
+@dataclass
+class _EndpointExecution:
+    endpoint_name: str
+    trace_id: str | None
+    request_id: str | None
+    log_fields: dict[str, object] = field(default_factory=dict)
+    start_time: float = field(default_factory=time.time)
+    http_status: int = 500
+    outcome: str = "error"
+
+
+@asynccontextmanager
+async def _execute_endpoint(
+    *,
+    endpoint_name: str,
+    authorization: str | None,
+    trace_id: str | None,
+    request_id: str | None,
+    **log_fields: object,
+) -> AsyncIterator[_EndpointExecution]:
+    execution = _EndpointExecution(
+        endpoint_name=endpoint_name,
+        trace_id=trace_id,
+        request_id=request_id,
+        log_fields=log_fields,
+    )
+    try:
+        require_auth(authorization)
+        yield execution
+        execution.http_status = 200
+        execution.outcome = "success"
+    except asyncio.CancelledError:
+        execution.http_status = 499
+        raise
+    except HTTPException as e:
+        execution.http_status = e.status_code
+        execution.outcome = "error"
+        raise
+    except Exception as e:
+        execution.http_status = 500
+        execution.outcome = "error"
+        log.error("api.error", exc=e, endpoint_name=endpoint_name)
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+    finally:
+        log.info(
+            "modal.http_request",
+            http_method="POST",
+            http_path=f"/{execution.endpoint_name}",
+            http_status=execution.http_status,
+            duration_ms=int((time.time() - execution.start_time) * 1000),
+            outcome=execution.outcome,
+            endpoint_name=execution.endpoint_name,
+            trace_id=execution.trace_id,
+            request_id=execution.request_id,
+            **execution.log_fields,
+        )
+
+
 def _parse_request[RequestModelT: BaseModel](
     model: type[RequestModelT], request: dict[str, object]
 ) -> RequestModelT:
@@ -112,6 +252,8 @@ def _parse_request[RequestModelT: BaseModel](
                 "dict_type": "user_env_vars must be an object",
                 "string_type": "user_env_vars values must be strings",
             }.get(error_type, "user_env_vars has an invalid value")
+        elif field == "timeout_seconds":
+            detail = "timeout_seconds must be a positive integer"
         elif len(location) > 1:
             detail = f"{field} has an invalid value"
         else:
@@ -120,6 +262,7 @@ def _parse_request[RequestModelT: BaseModel](
                 "string_too_short": f"{field} is required",
                 "string_type": f"{field} must be a string",
                 "int_type": f"{field} must be an integer",
+                "bool_type": f"{field} must be a boolean",
             }.get(error_type, f"{field} has an invalid value")
         raise HTTPException(status_code=400, detail=detail) from None
 
@@ -161,7 +304,7 @@ def require_valid_control_plane_url(url: str | None) -> None:
     if url and not validate_control_plane_url(url):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid control_plane_url: {url}. URL must match allowed patterns.",
+            detail="Invalid control_plane_url: URL must match allowed patterns.",
         )
 
 
@@ -178,23 +321,6 @@ def _normalize_optional_repository_context(
             detail="repo_owner and repo_name must be provided together",
         )
     return normalized_owner, normalized_name
-
-
-def _timeout_seconds_from_request(request: dict, default_timeout_seconds: int) -> int:
-    value = request.get("timeout_seconds")
-    if value is None:
-        return default_timeout_seconds
-    if isinstance(value, bool):
-        raise HTTPException(status_code=400, detail="timeout_seconds must be a positive integer")
-    try:
-        timeout_seconds = int(value)
-    except (TypeError, ValueError, OverflowError):
-        raise HTTPException(
-            status_code=400, detail="timeout_seconds must be a positive integer"
-        ) from None
-    if timeout_seconds < 1 or timeout_seconds != value:
-        raise HTTPException(status_code=400, detail="timeout_seconds must be a positive integer")
-    return timeout_seconds
 
 
 def _session_config_from_create_request(
@@ -251,16 +377,17 @@ async def api_create_sandbox(
         "model": "claude-sonnet-4-6"
     }
     """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
+    async with _execute_endpoint(
+        endpoint_name="api_create_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ):
+        parsed_request = _parse_request(CreateSandboxRequest, request)
+        require_valid_control_plane_url(parsed_request.control_plane_url)
 
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url")
-    require_valid_control_plane_url(control_plane_url)
-
-    try:
         from .sandbox.manager import (
             DEFAULT_SANDBOX_TIMEOUT_SECONDS,
             DEFAULT_VNC_ENABLED,
@@ -269,13 +396,8 @@ async def api_create_sandbox(
         )
 
         manager = SandboxManager()
-
-        repo_image_id = request.get("repo_image_id") or None
-        repo_owner, repo_name = _normalize_optional_repository_context(
-            request.get("repo_owner"),
-            request.get("repo_name"),
-        )
-
+        repo_owner = parsed_request.repo_owner
+        repo_name = parsed_request.repo_name
         session_config = _session_config_from_create_request(
             request, repo_owner=repo_owner, repo_name=repo_name
         )
@@ -283,18 +405,26 @@ async def api_create_sandbox(
         config = SandboxConfig(
             repo_owner=repo_owner,
             repo_name=repo_name,
-            sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
+            sandbox_id=parsed_request.sandbox_id,
             session_config=session_config,
-            control_plane_url=control_plane_url,
-            sandbox_auth_token=request.get("sandbox_auth_token"),
-            user_env_vars=request.get("user_env_vars") or None,
-            repo_image_id=repo_image_id,
-            repo_image_sha=request.get("repo_image_sha") or None,
-            code_server_enabled=bool(request.get("code_server_enabled", False)),
-            vnc_enabled=bool(request.get("vnc_enabled", DEFAULT_VNC_ENABLED)),
-            agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),
-            settings=request.get("sandbox_settings") or None,
-            timeout_seconds=_timeout_seconds_from_request(request, DEFAULT_SANDBOX_TIMEOUT_SECONDS),
+            control_plane_url=parsed_request.control_plane_url,
+            sandbox_auth_token=parsed_request.sandbox_auth_token,
+            user_env_vars=parsed_request.user_env_vars or None,
+            repo_image_id=parsed_request.repo_image_id or None,
+            repo_image_sha=parsed_request.repo_image_sha or None,
+            code_server_enabled=parsed_request.code_server_enabled,
+            vnc_enabled=(
+                parsed_request.vnc_enabled
+                if parsed_request.vnc_enabled is not None
+                else DEFAULT_VNC_ENABLED
+            ),
+            agent_slack_notify_enabled=parsed_request.agent_slack_notify_enabled,
+            settings=parsed_request.sandbox_settings or None,
+            timeout_seconds=(
+                parsed_request.timeout_seconds
+                if parsed_request.timeout_seconds is not None
+                else DEFAULT_SANDBOX_TIMEOUT_SECONDS
+            ),
         )
 
         handle = await manager.create_sandbox(config)
@@ -314,30 +444,6 @@ async def api_create_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_create_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_create_sandbox",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_create_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            session_id=x_session_id,
-            sandbox_id=x_sandbox_id,
-        )
 
 
 @app.function(image=function_image)
@@ -384,17 +490,19 @@ async def api_snapshot_sandbox(
         }
     }
     """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
+    async with _execute_endpoint(
+        endpoint_name="api_snapshot_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ) as execution:
+        sandbox_id = request.get("sandbox_id")
+        execution.log_fields["sandbox_id"] = x_sandbox_id or sandbox_id
+        if not sandbox_id:
+            raise HTTPException(status_code=400, detail="sandbox_id is required")
 
-    require_auth(authorization)
-
-    sandbox_id = request.get("sandbox_id")
-    if not sandbox_id:
-        raise HTTPException(status_code=400, detail="sandbox_id is required")
-
-    try:
         from .sandbox.manager import SandboxManager
 
         session_id = request.get("session_id")
@@ -417,30 +525,6 @@ async def api_snapshot_sandbox(
                 "reason": reason,
             },
         }
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_snapshot_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_snapshot_sandbox",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_snapshot_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            session_id=x_session_id,
-            sandbox_id=x_sandbox_id or sandbox_id,
-        )
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -452,15 +536,14 @@ async def api_snapshot_build_sandbox(
     x_request_id: str | None = Header(None),
 ) -> dict:
     """Snapshot the exact provider session bound to an image build."""
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-    build_id = request.get("build_id")
-    provider_session_id = request.get("provider_session_id")
-
-    require_auth(authorization)
-
-    try:
+    async with _execute_endpoint(
+        endpoint_name="api_snapshot_build_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        build_id=request.get("build_id"),
+        sandbox_id=request.get("provider_session_id"),
+    ) as execution:
         from .sandbox.build_session import (
             BuildSessionNotFoundError,
             ModalBuildSessionService,
@@ -469,10 +552,14 @@ async def api_snapshot_build_sandbox(
         parsed_request = _parse_request(SnapshotBuildSandboxRequest, request)
         build_id = parsed_request.build_id
         provider_session_id = parsed_request.provider_session_id
-        image_id = await ModalBuildSessionService().snapshot(
-            build_id=build_id,
-            provider_session_id=provider_session_id,
-        )
+        execution.log_fields.update(build_id=build_id, sandbox_id=provider_session_id)
+        try:
+            image_id = await ModalBuildSessionService().snapshot(
+                build_id=build_id,
+                provider_session_id=provider_session_id,
+            )
+        except BuildSessionNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
         return {
             "success": True,
             "data": {
@@ -481,33 +568,6 @@ async def api_snapshot_build_sandbox(
                 "provider_session_id": provider_session_id,
             },
         }
-    except BuildSessionNotFoundError as e:
-        outcome = "error"
-        http_status = 404
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_snapshot_build_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_snapshot_build_sandbox",
-            http_status=http_status,
-            duration_ms=int((time.time() - start_time) * 1000),
-            outcome=outcome,
-            endpoint_name="api_snapshot_build_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            build_id=build_id,
-            sandbox_id=provider_session_id,
-        )
 
 
 @app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
@@ -553,64 +613,52 @@ async def api_restore_sandbox(
         }
     }
     """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
+    async with _execute_endpoint(
+        endpoint_name="api_restore_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ):
+        parsed_request = _parse_request(RestoreSandboxRequest, request)
+        require_valid_control_plane_url(parsed_request.control_plane_url)
 
-    require_auth(authorization)
-
-    control_plane_url = request.get("control_plane_url", "")
-    require_valid_control_plane_url(control_plane_url)
-
-    snapshot_image_id = request.get("snapshot_image_id")
-    if not snapshot_image_id:
-        raise HTTPException(status_code=400, detail="snapshot_image_id is required")
-
-    try:
         from .sandbox.manager import (
             DEFAULT_SANDBOX_TIMEOUT_SECONDS,
             DEFAULT_VNC_ENABLED,
             SandboxManager,
         )
 
-        session_config = request.get("session_config", {})
-        sandbox_id = request.get("sandbox_id")
-        sandbox_auth_token = request.get("sandbox_auth_token", "")
-        user_env_vars = request.get("user_env_vars") or None
-        timeout_seconds = _timeout_seconds_from_request(request, DEFAULT_SANDBOX_TIMEOUT_SECONDS)
-        repo_owner, repo_name = _normalize_optional_repository_context(
-            session_config.get("repo_owner") if isinstance(session_config, dict) else None,
-            session_config.get("repo_name") if isinstance(session_config, dict) else None,
-        )
-        if isinstance(session_config, dict):
-            session_config = {
-                **session_config,
-                "repo_owner": repo_owner,
-                "repo_name": repo_name,
-            }
+        session_config = parsed_request.session_config.model_dump(exclude_unset=True)
+        repo_owner = parsed_request.session_config.repo_owner
+        repo_name = parsed_request.session_config.repo_name
 
         manager = SandboxManager()
         clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
-        code_server_enabled = bool(request.get("code_server_enabled", False))
-        vnc_enabled = bool(request.get("vnc_enabled", DEFAULT_VNC_ENABLED))
-        agent_slack_notify_enabled = bool(request.get("agent_slack_notify_enabled", False))
-        sandbox_settings = request.get("sandbox_settings") or None
-
         # Restore sandbox from snapshot
         handle = await manager.restore_from_snapshot(
-            snapshot_image_id=snapshot_image_id,
+            snapshot_image_id=parsed_request.snapshot_image_id,
             session_config=session_config,
-            sandbox_id=sandbox_id,
-            control_plane_url=control_plane_url,
-            sandbox_auth_token=sandbox_auth_token,
+            sandbox_id=parsed_request.sandbox_id,
+            control_plane_url=parsed_request.control_plane_url,
+            sandbox_auth_token=parsed_request.sandbox_auth_token,
             clone_token=clone_token,
-            user_env_vars=user_env_vars,
-            timeout_seconds=timeout_seconds,
-            code_server_enabled=code_server_enabled,
-            vnc_enabled=vnc_enabled,
-            agent_slack_notify_enabled=agent_slack_notify_enabled,
-            settings=sandbox_settings,
+            user_env_vars=parsed_request.user_env_vars or None,
+            timeout_seconds=(
+                parsed_request.timeout_seconds
+                if parsed_request.timeout_seconds is not None
+                else DEFAULT_SANDBOX_TIMEOUT_SECONDS
+            ),
+            code_server_enabled=parsed_request.code_server_enabled,
+            vnc_enabled=(
+                parsed_request.vnc_enabled
+                if parsed_request.vnc_enabled is not None
+                else DEFAULT_VNC_ENABLED
+            ),
+            agent_slack_notify_enabled=parsed_request.agent_slack_notify_enabled,
+            settings=parsed_request.sandbox_settings or None,
         )
 
         return {
@@ -627,30 +675,6 @@ async def api_restore_sandbox(
                 "tunnel_urls": handle.tunnel_urls,
             },
         }
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_restore_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_restore_sandbox",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_restore_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            session_id=x_session_id,
-            sandbox_id=x_sandbox_id,
-        )
 
 
 @app.function(
@@ -665,15 +689,14 @@ async def api_create_build_sandbox(
     x_request_id: str | None = Header(None),
 ) -> dict:
     """Create a dormant provider-session build sandbox."""
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-    build_id = request.get("build_id")
-    provider_session_id = None
-
-    require_auth(authorization)
-
-    try:
+    async with _execute_endpoint(
+        endpoint_name="api_create_build_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        build_id=request.get("build_id"),
+        sandbox_id=None,
+    ) as execution:
         from .sandbox.build_session import (
             DEFAULT_BUILD_TIMEOUT_SECONDS,
             MAX_BUILD_TIMEOUT_SECONDS,
@@ -682,6 +705,7 @@ async def api_create_build_sandbox(
 
         parsed_request = _parse_request(CreateBuildSandboxRequest, request)
         build_id = parsed_request.build_id
+        execution.log_fields["build_id"] = build_id
         scope_kind = parsed_request.scope_kind
         scope_id = parsed_request.scope_id
         if scope_kind not in {"repo", "environment"}:
@@ -724,31 +748,11 @@ async def api_create_build_sandbox(
             build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=provider_session_timeout_seconds,
         )
+        execution.log_fields["sandbox_id"] = provider_session_id
         return {
             "success": True,
             "data": {"provider_session_id": provider_session_id},
         }
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_create_build_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        _log_build_http_request(
-            start_time=start_time,
-            http_path="/api_create_build_sandbox",
-            http_status=http_status,
-            outcome=outcome,
-            endpoint_name="api_create_build_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            build_id=build_id,
-            provider_session_id=provider_session_id,
-        )
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -760,47 +764,26 @@ async def api_start_build_sandbox(
     x_request_id: str | None = Header(None),
 ) -> dict:
     """Start a build only after its provider session is bound in D1."""
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-    build_id = request.get("build_id")
-    provider_session_id = request.get("provider_session_id")
-
-    require_auth(authorization)
-
-    try:
+    async with _execute_endpoint(
+        endpoint_name="api_start_build_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        build_id=request.get("build_id"),
+        sandbox_id=request.get("provider_session_id"),
+    ) as execution:
         from .sandbox.build_session import ModalBuildSessionService
 
         parsed_request = _parse_request(StartBuildSandboxRequest, request)
         build_id = parsed_request.build_id
         provider_session_id = parsed_request.provider_session_id
+        execution.log_fields.update(build_id=build_id, sandbox_id=provider_session_id)
         await ModalBuildSessionService().start(
             build_id=build_id,
             provider_session_id=provider_session_id,
             callback_token=parsed_request.callback_token,
         )
         return {"success": True, "data": {"started": True}}
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_start_build_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        _log_build_http_request(
-            start_time=start_time,
-            http_path="/api_start_build_sandbox",
-            http_status=http_status,
-            outcome=outcome,
-            endpoint_name="api_start_build_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            build_id=build_id,
-            provider_session_id=provider_session_id,
-        )
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -812,74 +795,26 @@ async def api_terminate_build_sandbox(
     x_request_id: str | None = Header(None),
 ) -> dict:
     """Terminate the exactly tagged provider-session build sandbox."""
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-    build_id = request.get("build_id")
-    provider_session_id = request.get("provider_session_id")
-
-    require_auth(authorization)
-
-    try:
+    async with _execute_endpoint(
+        endpoint_name="api_terminate_build_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        build_id=request.get("build_id"),
+        sandbox_id=request.get("provider_session_id"),
+    ) as execution:
         from .sandbox.build_session import ModalBuildSessionService
 
         parsed_request = _parse_request(TerminateBuildSandboxRequest, request)
         build_id = parsed_request.build_id
         provider_session_id = parsed_request.provider_session_id
+        execution.log_fields.update(build_id=build_id, sandbox_id=provider_session_id)
         await ModalBuildSessionService().terminate(
             build_id=build_id,
             provider_session_id=provider_session_id,
             reason=parsed_request.reason,
         )
         return {"success": True, "data": {"terminated": True}}
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_terminate_build_sandbox")
-        return {"success": False, "error": str(e)}
-    finally:
-        _log_build_http_request(
-            start_time=start_time,
-            http_path="/api_terminate_build_sandbox",
-            http_status=http_status,
-            outcome=outcome,
-            endpoint_name="api_terminate_build_sandbox",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-            build_id=build_id,
-            provider_session_id=provider_session_id,
-        )
-
-
-def _log_build_http_request(
-    *,
-    start_time: float,
-    http_path: str,
-    http_status: int,
-    outcome: str,
-    endpoint_name: str,
-    trace_id: str | None,
-    request_id: str | None,
-    build_id: object,
-    provider_session_id: object,
-) -> None:
-    log.info(
-        "modal.http_request",
-        http_method="POST",
-        http_path=http_path,
-        http_status=http_status,
-        duration_ms=int((time.time() - start_time) * 1000),
-        outcome=outcome,
-        endpoint_name=endpoint_name,
-        trace_id=trace_id,
-        request_id=request_id,
-        build_id=build_id,
-        sandbox_id=provider_session_id,
-    )
 
 
 def _validated_timeout_seconds(
@@ -944,13 +879,12 @@ async def api_delete_provider_image(
         "provider_image_id": "..."
     }
     """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-
-    require_auth(authorization)
-
-    try:
+    async with _execute_endpoint(
+        endpoint_name="api_delete_provider_image",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+    ):
         parsed_request = _parse_request(DeleteProviderImageRequest, request)
         provider_image_id = parsed_request.provider_image_id
 
@@ -969,25 +903,3 @@ async def api_delete_provider_image(
                 "deleted": True,
             },
         }
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_delete_provider_image")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_delete_provider_image",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_delete_provider_image",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-        )

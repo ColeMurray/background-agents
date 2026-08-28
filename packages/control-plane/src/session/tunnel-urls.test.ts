@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseTunnelUrls } from "./tunnel-urls";
+import { describe, expect, it, vi } from "vitest";
+import { parseTunnelUrls, safeParseTunnelUrls } from "./tunnel-urls";
 
 describe("parseTunnelUrls", () => {
   it("parses a port -> url map", () => {
@@ -31,5 +31,27 @@ describe("parseTunnelUrls", () => {
       parseTunnelUrls(JSON.stringify({ "3000": "https://a.example", "5000": null }))
     ).toBeNull();
     expect(parseTunnelUrls(JSON.stringify({ "3000": { nested: true } }))).toBeNull();
+  });
+});
+
+describe("safeParseTunnelUrls", () => {
+  function warnLog() {
+    return { warn: vi.fn() };
+  }
+
+  it("returns the parsed map without warning", () => {
+    const log = warnLog();
+
+    expect(safeParseTunnelUrls(JSON.stringify({ "3000": "https://a.example" }), log)).toEqual({
+      "3000": "https://a.example",
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns once and returns null when the stored blob is malformed", () => {
+    const log = warnLog();
+
+    expect(safeParseTunnelUrls("{not json", log)).toBeNull();
+    expect(log.warn).toHaveBeenCalledWith("Invalid sandbox tunnel_urls JSON");
   });
 });

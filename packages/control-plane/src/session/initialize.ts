@@ -8,6 +8,7 @@ import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { createLogger } from "../logger";
 import type { SessionSkillManifestInput } from "./skill-resolution";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 const logger = createLogger("session-init");
 
@@ -106,7 +107,7 @@ export async function initializeSession(
   const defaultBranch = hasRepoOwner ? input.defaultBranch : null;
 
   const now = Date.now();
-  const baseBranch = hasRepoOwner ? branch || defaultBranch || "main" : null;
+  const baseBranch = hasRepoOwner ? branch || defaultBranch || DEFAULT_BASE_BRANCH : null;
 
   if (input.repositories?.length) {
     const primary = input.repositories[0];

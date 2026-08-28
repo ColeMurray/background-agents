@@ -128,6 +128,36 @@ describe("handlePromptChild", () => {
     expect(reserve).not.toHaveBeenCalled();
   });
 
+  it("accepts the child response when the best-effort message id payload is malformed", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+      id: "child",
+      parentSessionId: "parent",
+      status: "active",
+    } as never);
+    vi.spyOn(SessionIndexStore.prototype, "touchUpdatedAt").mockResolvedValue(true);
+    const childResponse = new Response("[]", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const fetch = vi.fn<SessionRuntimeClient["fetch"]>(async () => childResponse);
+
+    const response = await handlePromptChild(
+      new Request("https://test.local/sessions/parent/children/child/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Continue" }),
+      }),
+      {} as Env,
+      routeMatch(
+        "/sessions/parent/children/child/prompt",
+        "/sessions/:id/children/:childId/prompt"
+      ),
+      routeContext(fetch)
+    );
+
+    expect(response).toBe(childResponse);
+    expect(response.status).toBe(200);
+  });
+
   it("forwards the parent active prompt author to the child", async () => {
     vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
       id: "child",

@@ -7,12 +7,15 @@ import {
   triggerConfigSchema,
   validateConditions,
   conditionRegistry,
+  isGitHubConditionSupported,
+  triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
-import type {
-  CreateAutomationRequest,
-  UpdateAutomationRequest,
+import {
+  createAutomationRequestSchema,
+  sentryClientSecretSchema,
+  updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { listChannels } from "@open-inspect/shared/slack";
@@ -45,13 +48,9 @@ import { generateId } from "../auth/crypto";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import { Scheduler } from "../scheduler/scheduler";
+import { AutomationTriggerBlockedError, Scheduler } from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
-import {
-  automationRepositoriesInputSchema,
-  MAX_AUTOMATION_REPOSITORIES,
-} from "@open-inspect/shared/types/automations";
-import { isEnvironmentId } from "@open-inspect/shared/types/environments";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import {
   type Route,
   type RequestContext,
@@ -81,40 +80,128 @@ const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
 const RECENT_EXECUTION_COUNT = 10;
 
-type ParseTriggerConfigResult =
-  | { ok: true; triggerConfig: TriggerConfig }
-  | { ok: false; error: string };
+const createAutomationBodySchema = createAutomationRequestSchema.extend({
+  // Bot-asserted actor display fields are cosmetic only; identity enforcement
+  // still runs against the raw pre-Zod body before these parsed values are used.
+  actorDisplayName: z.string().optional(),
+  actorEmail: z.string().optional(),
+  actorAvatarUrl: z.string().optional(),
+});
 
-function parseTriggerConfig(value: unknown): ParseTriggerConfigResult {
-  const parsed = triggerConfigSchema.safeParse(value);
-  if (parsed.success) return { ok: true, triggerConfig: parsed.data };
+type CreateAutomationBody = z.infer<typeof createAutomationBodySchema>;
 
-  const issue = parsed.error.issues[0];
-  if (issue?.path.length === 1 && issue.path[0] === "conditions") {
-    return { ok: false, error: "triggerConfig.conditions must be an array" };
+const regenerateSentrySecretBodySchema = z.object({
+  sentryClientSecret: sentryClientSecretSchema,
+});
+
+function formatAutomationRequestError(parseError: z.ZodError, rawBody: unknown): string {
+  const issue = parseError.issues[0];
+  const field = issue?.path[0];
+
+  if (field === "environmentIds") {
+    return issue.message === "must not contain duplicates"
+      ? "environmentIds must not contain duplicates"
+      : "environmentIds must be an array of environment ids (env_…)";
   }
 
-  const path = ["triggerConfig", ...(issue?.path ?? [])].map(String).join(".");
-  const conditionIndex = issue?.path[0] === "conditions" ? issue.path[1] : undefined;
-  const rawConditions =
-    typeof value === "object" && value !== null && "conditions" in value
-      ? (value as { conditions?: unknown }).conditions
-      : undefined;
-  const rawCondition =
-    typeof conditionIndex === "number" && Array.isArray(rawConditions)
-      ? rawConditions[conditionIndex]
-      : undefined;
-  const conditionType =
-    typeof rawCondition === "object" &&
-    rawCondition !== null &&
-    "type" in rawCondition &&
-    typeof rawCondition.type === "string"
-      ? `${rawCondition.type}: `
-      : "";
-  return {
-    ok: false,
-    error: `${path}: ${conditionType}${issue?.message ?? "invalid trigger config"}`,
-  };
+  if (field === "repositories") {
+    const index = typeof issue.path[1] === "number" ? `[${String(issue.path[1])}]` : "";
+    return `repositories${index}: ${issue.message}`;
+  }
+
+  if (field === "eventType") return "eventType must be a non-empty string";
+
+  if (field === "triggerConfig") {
+    if (issue.path.length === 2 && issue.path[1] === "conditions") {
+      return "triggerConfig.conditions must be an array";
+    }
+
+    const path = issue.path.map(String).join(".");
+    const conditionIndex = issue.path[1] === "conditions" ? issue.path[2] : undefined;
+    const conditions =
+      rawBody &&
+      typeof rawBody === "object" &&
+      "triggerConfig" in rawBody &&
+      rawBody.triggerConfig &&
+      typeof rawBody.triggerConfig === "object" &&
+      "conditions" in rawBody.triggerConfig &&
+      Array.isArray(rawBody.triggerConfig.conditions)
+        ? rawBody.triggerConfig.conditions
+        : undefined;
+    const condition = typeof conditionIndex === "number" ? conditions?.[conditionIndex] : undefined;
+    const conditionType =
+      condition &&
+      typeof condition === "object" &&
+      "type" in condition &&
+      typeof condition.type === "string"
+        ? `${condition.type}: `
+        : "";
+    return `${path}: ${conditionType}${issue.message}`;
+  }
+
+  return "Invalid automation request";
+}
+
+interface TriggerConditionError {
+  condition: TriggerConfig["conditions"][number];
+  code: "event_incompatible" | "invalid";
+  message: string;
+}
+
+function getTriggerConditionErrors(
+  triggerType: AutomationTriggerType,
+  triggerConfig: TriggerConfig,
+  eventType?: string
+): TriggerConditionError[] {
+  const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
+  if (!source) return [];
+  return triggerConfig.conditions.flatMap((condition) => {
+    const code =
+      source === "github" &&
+      eventType !== undefined &&
+      !isGitHubConditionSupported(eventType, condition.type)
+        ? "event_incompatible"
+        : "invalid";
+    return validateConditions([condition], source, conditionRegistry, eventType).map((message) => ({
+      condition,
+      code,
+      message,
+    }));
+  });
+}
+
+function consumeCondition(
+  triggerConfig: TriggerConfig,
+  condition: TriggerConditionError["condition"],
+  consumedIndexes: Set<number>
+): boolean {
+  const serialized = JSON.stringify(condition);
+  const index = triggerConfig.conditions.findIndex(
+    (existing, candidateIndex) =>
+      !consumedIndexes.has(candidateIndex) && JSON.stringify(existing) === serialized
+  );
+  if (index === -1) return false;
+  consumedIndexes.add(index);
+  return true;
+}
+
+function getTriggerEventTypeError(
+  triggerType: AutomationTriggerType,
+  eventType: unknown
+): string | null {
+  if (eventType !== undefined && (typeof eventType !== "string" || eventType.trim().length === 0)) {
+    return "eventType must be a non-empty string";
+  }
+
+  const source = triggerSources.find((candidate) => candidate.triggerType === triggerType);
+  if (!source?.supportsEventTypes) return null;
+  if (typeof eventType !== "string" || eventType.trim().length === 0) {
+    return `eventType is required for ${triggerType} triggers`;
+  }
+  if (!source.eventTypes.some((candidate) => candidate.eventType === eventType)) {
+    return `Unsupported eventType for ${triggerType}: ${eventType}`;
+  }
+  return null;
 }
 
 /** Warn if next run is more than 31 days away. */
@@ -128,21 +215,15 @@ function resolveReasoningEffort(
   return isValidReasoningEffort(model, reasoningEffort) ? reasoningEffort : null;
 }
 
-interface NormalizedRepositoryInput {
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string | null;
-}
+type NormalizedRepositoryInput = NonNullable<CreateAutomationBody["repositories"]>[number];
 
 type RepositorySelectionRequest =
   | { kind: "unchanged" }
   | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
- * Thrown by {@link parseRepositorySelection} and {@link parseEnvironmentBinding}
- * when the session-target payload is invalid. Route handlers catch it and answer
- * 400 — the parsers stay free of HTTP concerns (mirrors
- * normalizeOptionalRepositoryPair / RepositoryPairValidationError).
+ * Thrown when selection semantics cannot be satisfied. Route handlers catch it
+ * and answer 400 while request shape validation remains in the shared schemas.
  */
 class TargetSelectionError extends Error {
   constructor(message: string) {
@@ -152,20 +233,14 @@ class TargetSelectionError extends Error {
 }
 
 /**
- * Parse the repository selection from a create/update body. `unchanged` means
- * the body did not touch the selection (create treats that as empty).
- *
- * @throws TargetSelectionError when the `repositories` payload is invalid.
+ * Select the repositories from an already-parsed create/update body. `unchanged`
+ * means the body did not touch the selection (create treats that as empty).
  */
-function parseRepositorySelection(body: { repositories?: unknown }): RepositorySelectionRequest {
+function getRepositorySelection(body: {
+  repositories?: NormalizedRepositoryInput[];
+}): RepositorySelectionRequest {
   if (body.repositories === undefined) return { kind: "unchanged" };
-  const parsed = automationRepositoriesInputSchema.safeParse(body.repositories);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const path = issue?.path.length ? `[${String(issue.path[0])}]` : "";
-    throw new TargetSelectionError(`repositories${path}: ${issue?.message ?? "invalid"}`);
-  }
-  return { kind: "replace", repositories: parsed.data };
+  return { kind: "replace", repositories: body.repositories };
 }
 
 /**
@@ -203,27 +278,13 @@ type EnvironmentSelectionRequest =
   | { kind: "replace"; environmentIds: string[] };
 
 /**
- * Parse the environment selection from a create/update body (design §13.3).
- * `unchanged` means the body did not touch the selection (create treats that
- * as empty); an array replaces it wholesale (empty clears).
- *
- * @throws TargetSelectionError when the `environmentIds` payload is malformed.
+ * Select the environments from an already-parsed create/update body (design
+ * §13.3). `unchanged` means the body did not touch the selection (create treats
+ * that as empty); an array replaces it wholesale (empty clears).
  */
-function parseEnvironmentSelection(body: {
-  environmentIds?: unknown;
-}): EnvironmentSelectionRequest {
+function getEnvironmentSelection(body: { environmentIds?: string[] }): EnvironmentSelectionRequest {
   if (body.environmentIds === undefined) return { kind: "unchanged" };
-  if (
-    !Array.isArray(body.environmentIds) ||
-    body.environmentIds.some((id) => typeof id !== "string" || !isEnvironmentId(id))
-  ) {
-    throw new TargetSelectionError("environmentIds must be an array of environment ids (env_…)");
-  }
-  const environmentIds = body.environmentIds as string[];
-  if (new Set(environmentIds).size !== environmentIds.length) {
-    throw new TargetSelectionError("environmentIds must not contain duplicates");
-  }
-  return { kind: "replace", environmentIds };
+  return { kind: "replace", environmentIds: body.environmentIds };
 }
 
 /**
@@ -444,27 +505,21 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<
-    CreateAutomationRequest & {
-      // Bot-asserted actor display fields — cosmetic, never identity.
-      actorDisplayName?: string;
-      actorEmail?: string;
-      actorAvatarUrl?: string;
-    }
-  >(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
-    const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-    body.triggerConfig = parsedTriggerConfig.triggerConfig;
-  }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
 
   // Automation attribution comes from the verified principal. The stored
   // values are replayed by the scheduler as session identity at fire time,
   // so this is where they become trustworthy.
-  const enforcement = applyIdentityEnforcement(ctx, "automation-create", body);
+  const enforcement = applyIdentityEnforcement(ctx, "automation-create", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
+
+  const parsedBody = createAutomationBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
+  }
+  const body: CreateAutomationBody = parsedBody.data;
 
   // Validate required fields
   if (!body.name || typeof body.name !== "string" || body.name.trim().length === 0) {
@@ -484,13 +539,7 @@ async function handleCreateAutomation(
     return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
   }
 
-  let selection: RepositorySelectionRequest;
-  try {
-    selection = parseRepositorySelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
+  const selection = getRepositorySelection(body);
   const requestedRepositories = selection.kind === "replace" ? selection.repositories : [];
 
   // Validate trigger type
@@ -508,7 +557,7 @@ async function handleCreateAutomation(
   }
   let requestedEnvironmentIds: string[];
   try {
-    const environmentSelection = parseEnvironmentSelection(body);
+    const environmentSelection = getEnvironmentSelection(body);
     requestedEnvironmentIds =
       environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
     validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
@@ -539,23 +588,18 @@ async function handleCreateAutomation(
     }
   }
 
-  // Event-type validation for sentry triggers
-  if (triggerType === "sentry" && !body.eventType) {
-    return error("eventType is required for sentry triggers", 400);
-  }
+  const eventTypeError = getTriggerEventTypeError(triggerType, body.eventType);
+  if (eventTypeError) return error(eventTypeError, 400);
 
   // Validate conditions
-  if (body.triggerConfig?.conditions) {
-    const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
-    if (source) {
-      const conditionErrors = validateConditions(
-        body.triggerConfig.conditions,
-        source,
-        conditionRegistry
-      );
-      if (conditionErrors.length > 0) {
-        return error(conditionErrors.join("; "), 400);
-      }
+  if (body.triggerConfig) {
+    const conditionErrors = getTriggerConditionErrors(
+      triggerType,
+      body.triggerConfig,
+      body.eventType
+    );
+    if (conditionErrors.length > 0) {
+      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
     }
   }
 
@@ -733,17 +777,16 @@ async function handleUpdateAutomation(
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
 
-  const body = await parseJsonBody<UpdateAutomationRequest>(request);
-  if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined) {
-    if (existing.trigger_type === "schedule") {
-      return error("Cannot set triggerConfig on schedule automations", 400);
-    }
-    if (body.triggerConfig !== null) {
-      const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-      if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-      body.triggerConfig = parsedTriggerConfig.triggerConfig;
-    }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
+  const parsedBody = updateAutomationRequestSchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return error(formatAutomationRequestError(parsedBody.error, rawBody), 400);
+  }
+  const body = parsedBody.data;
+
+  if (body.triggerConfig !== undefined && existing.trigger_type === "schedule") {
+    return error("Cannot set triggerConfig on schedule automations", 400);
   }
 
   let replacementProviderSelections: ModelProviderSelections | null = null;
@@ -829,21 +872,8 @@ async function handleUpdateAutomation(
   // active-invocation guard. In-flight invocations already materialized their
   // children from their firing-time snapshot, so an edit cannot corrupt them;
   // it simply applies from the next invocation.
-  let selection: RepositorySelectionRequest;
-  try {
-    selection = parseRepositorySelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
-
-  let environmentSelection: EnvironmentSelectionRequest;
-  try {
-    environmentSelection = parseEnvironmentSelection(body);
-  } catch (e) {
-    if (e instanceof TargetSelectionError) return error(e.message, 400);
-    throw e;
-  }
+  const selection = getRepositorySelection(body);
+  const environmentSelection = getEnvironmentSelection(body);
 
   // The count rules span both selections, so when EITHER is replaced they are
   // validated against the automation's FINAL state (the replacement plus the
@@ -888,38 +918,71 @@ async function handleUpdateAutomation(
     updateFields.event_type = body.eventType;
   }
 
-  // Validate trigger config (conditions) — only for non-schedule types
-  if (body.triggerConfig !== undefined) {
-    if (body.triggerConfig === null) {
-      // A slack_event's trigger_config holds its required scoping (channel +
-      // text_match) and the watched-channel index is derived from it. Clearing
-      // it would leave the automation enabled but untriggerable, so reject null
-      // — pause or delete instead. (Other sources may clear conditions to a
-      // match-all, so null stays allowed for them.)
-      if (existing.trigger_type === "slack_event") {
-        return error(
-          "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
-          400
-        );
-      }
-    } else {
-      if (existing.trigger_type === "slack_event") {
-        const slackError = validateSlackTriggerConfig(body.triggerConfig);
-        if (slackError) return error(slackError, 400);
-      }
-      if (body.triggerConfig.conditions) {
-        const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type as AutomationTriggerType];
-        if (source) {
-          const conditionErrors = validateConditions(
-            body.triggerConfig.conditions,
-            source,
-            conditionRegistry
-          );
-          if (conditionErrors.length > 0) {
-            return error(conditionErrors.join("; "), 400);
-          }
+  const effectiveEventType =
+    body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
+  const eventTypeError = getTriggerEventTypeError(
+    existing.trigger_type as AutomationTriggerType,
+    effectiveEventType
+  );
+  if (eventTypeError) return error(eventTypeError, 400);
+
+  let triggerConfigToValidate = body.triggerConfig;
+  if (
+    body.eventType !== undefined &&
+    triggerConfigToValidate === undefined &&
+    existing.trigger_config
+  ) {
+    // This column was written through parseTriggerConfig, so a failure here is a
+    // corrupt row, not user input — parseTriggerConfig's per-condition messages
+    // would have no one to help.
+    try {
+      triggerConfigToValidate = triggerConfigSchema.parse(JSON.parse(existing.trigger_config));
+    } catch {
+      return error("Stored triggerConfig is invalid", 500);
+    }
+  }
+
+  // A slack_event's trigger_config holds its required channel scope. Clearing it
+  // would leave the automation enabled but untriggerable.
+  if (body.triggerConfig === null && existing.trigger_type === "slack_event") {
+    return error(
+      "Cannot clear triggerConfig on slack_event automations; pause or delete instead",
+      400
+    );
+  }
+  if (body.triggerConfig && existing.trigger_type === "slack_event") {
+    const slackError = validateSlackTriggerConfig(body.triggerConfig);
+    if (slackError) return error(slackError, 400);
+  }
+
+  if (triggerConfigToValidate) {
+    let conditionErrors = getTriggerConditionErrors(
+      existing.trigger_type as AutomationTriggerType,
+      triggerConfigToValidate,
+      effectiveEventType
+    );
+
+    // Existing source-wide GitHub conditions predate event-scoped validation.
+    // Preserve an unchanged condition on unrelated edits, but validate strictly
+    // when its value or the selected event changes.
+    const eventTypeChanged = body.eventType !== undefined && body.eventType !== existing.event_type;
+    if (existing.trigger_type === "github_event" && !eventTypeChanged && existing.trigger_config) {
+      try {
+        const parsedExisting = triggerConfigSchema.safeParse(JSON.parse(existing.trigger_config));
+        if (parsedExisting.success) {
+          const consumedIndexes = new Set<number>();
+          conditionErrors = conditionErrors.filter(({ code, condition }) => {
+            if (code !== "event_incompatible") return true;
+            return !consumeCondition(parsedExisting.data, condition, consumedIndexes);
+          });
         }
+      } catch {
+        // A valid replacement should be able to repair malformed stored JSON.
       }
+    }
+
+    if (conditionErrors.length > 0) {
+      return error(conditionErrors.map(({ message }) => message).join("; "), 400);
     }
   }
 
@@ -1093,28 +1156,22 @@ async function handleTriggerAutomation(
   if (!automation) return error("Automation not found", 404);
 
   // The scheduler performs the authoritative D1-backed concurrency check.
-  const triggerResponse = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger({
-    automationId: id,
-  });
-
-  if (!triggerResponse.ok) {
-    const text = await triggerResponse.text().catch(() => "");
+  let triggerResult;
+  try {
+    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
+  } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",
       automation_id: id,
-      status: triggerResponse.status,
-      response: text.slice(0, 500),
+      error: triggerError instanceof Error ? triggerError : new Error(String(triggerError)),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    // Forward 409 (concurrent run) with descriptive message; wrap others as 500
-    if (triggerResponse.status === 409) {
+    if (triggerError instanceof AutomationTriggerBlockedError) {
       return error("A run is already active for this automation", 409);
     }
     return error("Failed to trigger automation", 500);
   }
-
-  const triggerResult = await triggerResponse.json();
 
   logger.info("automation.triggered", {
     event: "automation.triggered",
@@ -1123,7 +1180,7 @@ async function handleTriggerAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json(triggerResult, 201);
+  return json({ invocationId: triggerResult.invocationId, runs: triggerResult.runs }, 201);
 }
 
 function parseRunListParams(request: Request): { limit: number; offset: number } {
@@ -1190,16 +1247,17 @@ async function handleRegenerateKey(
 
   if (automation.trigger_type === "sentry") {
     // Sentry: user provides a new client secret
-    const body = await parseJsonBody<{ sentryClientSecret?: string }>(request);
-    if (body instanceof Response) return body;
-    if (!body.sentryClientSecret || typeof body.sentryClientSecret !== "string") {
+    const rawBody = await parseJsonBody<unknown>(request);
+    if (rawBody instanceof Response) return rawBody;
+    const parsedBody = regenerateSentrySecretBodySchema.safeParse(rawBody);
+    if (!parsedBody.success) {
       return error("sentryClientSecret is required", 400);
     }
     if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
       return error("Encryption key not configured", 503);
     }
     const encrypted = await encryptSentrySecret(
-      body.sentryClientSecret,
+      parsedBody.data.sentryClientSecret,
       env.REPO_SECRETS_ENCRYPTION_KEY
     );
     await store.update(id, { trigger_auth_data: encrypted } as Record<string, unknown>);

@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { buildTimelineItems } from "@/lib/timeline-items";
@@ -26,6 +26,8 @@ function mockScrollIntoView() {
   });
 }
 beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
   vi.stubGlobal(
     "IntersectionObserver",
     class {
@@ -67,6 +69,32 @@ function toolCall(callId: string, tool: string, filePath: string): SandboxEvent 
 }
 
 describe("user message authors", () => {
+  it("presents Autofix provenance and links to the originating review", () => {
+    render(
+      <EventItem
+        event={{
+          ...event("user-2"),
+          origin: {
+            kind: "review",
+            authorType: "bot",
+            feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+          },
+        }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.getByText("Resumed by PR feedback")).toBeInTheDocument();
+    expect(screen.getByText("Review · Bot")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open feedback" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widgets/pull/42#pullrequestreview-5678"
+    );
+  });
+
   it("uses the canonical profile name and avatar when available", () => {
     render(
       <EventItem
@@ -1152,5 +1180,134 @@ describe("task activity grouping", () => {
       false
     );
     consoleError.mockRestore();
+  });
+});
+
+describe("timeline virtualization", () => {
+  it("mounts only a bounded window for large histories", () => {
+    const events: SandboxEvent[] = Array.from({ length: 500 }, (_, index) => ({
+      type: "user_message",
+      content: `Message ${index}`,
+      messageId: `message-${index}`,
+      timestamp: index + 1,
+    }));
+
+    const { container } = render(<SessionTimeline {...baseTimelineProps} events={events} />);
+
+    expect(container.querySelectorAll("[data-index]").length).toBeLessThanOrEqual(20);
+    expect(container).not.toHaveTextContent("Message 250");
+  });
+
+  it("preserves task expansion after its row leaves the virtual window", async () => {
+    const task: SandboxEvent = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "task-message",
+      callId: "task-call",
+      tool: "Task",
+      args: { description: "Inspect the timeline" },
+      timestamp: 1,
+    };
+    const events: SandboxEvent[] = [
+      task,
+      ...Array.from(
+        { length: 500 },
+        (_, index): SandboxEvent => ({
+          type: "user_message",
+          content: `Message ${index}`,
+          messageId: `message-${index}`,
+          timestamp: index + 2,
+        })
+      ),
+    ];
+    const { container } = render(<SessionTimeline {...baseTimelineProps} events={events} />);
+    const taskButton = screen.getByRole("button", { name: /Task Inspect the timeline/ });
+    await userEvent.click(taskButton);
+    expect(taskButton).toHaveAttribute("aria-expanded", "true");
+
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 800 },
+      scrollHeight: { configurable: true, value: 500_000 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    await act(async () => {
+      timeline.scrollTop = 400_000;
+      fireEvent.scroll(timeline);
+    });
+    expect(screen.queryByRole("button", { name: /Task Inspect the timeline/ })).toBeNull();
+
+    await act(async () => {
+      timeline.scrollTop = 0;
+      fireEvent.scroll(timeline);
+    });
+    expect(screen.getByRole("button", { name: /Task Inspect the timeline/ })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+  });
+
+  it("reattaches terminal read observation when its row re-enters the virtual window", async () => {
+    const observedTerminalTargets: Element[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe(target: Element) {
+          if (target.hasAttribute("data-terminal-message-id")) {
+            observedTerminalTargets.push(target);
+          }
+        }
+        disconnect() {}
+      }
+    );
+    const events: SandboxEvent[] = [
+      {
+        type: "execution_complete",
+        sandboxId: "sandbox-1",
+        messageId: "terminal-message",
+        success: true,
+        timestamp: 1,
+      },
+      ...Array.from(
+        { length: 500 },
+        (_, index): SandboxEvent => ({
+          type: "user_message",
+          content: `Message ${index}`,
+          messageId: `message-${index}`,
+          timestamp: index + 2,
+        })
+      ),
+    ];
+    const { container } = render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={events}
+        terminalMessageReadObservationEnabled
+        onMarkMessageRead={async () => "complete"}
+      />
+    );
+    const firstTarget = container.querySelector('[data-terminal-message-id="terminal-message"]');
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 800 },
+      scrollHeight: { configurable: true, value: 500_000 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+
+    await act(async () => {
+      timeline.scrollTop = 400_000;
+      fireEvent.scroll(timeline);
+    });
+    expect(container.querySelector('[data-terminal-message-id="terminal-message"]')).toBeNull();
+
+    await act(async () => {
+      timeline.scrollTop = 0;
+      fireEvent.scroll(timeline);
+    });
+    const remountedTarget = container.querySelector(
+      '[data-terminal-message-id="terminal-message"]'
+    );
+    expect(remountedTarget).not.toBe(firstTarget);
+    expect(observedTerminalTargets).toEqual([firstTarget, remountedTarget]);
   });
 });

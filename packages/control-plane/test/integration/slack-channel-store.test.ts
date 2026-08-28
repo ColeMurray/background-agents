@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
+import { sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
@@ -9,10 +10,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
     name: "Test Automation",
-    repo_owner: "acme",
-    repo_name: "web-app",
-    base_branch: "main",
-    repo_id: 12345,
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
@@ -57,9 +54,9 @@ describe("SlackChannelStore (D1 integration)", () => {
       })
     );
 
-    await env.DB.batch(channels.bindChannelStatements("auto-s2", ["C1"]));
-    await env.DB.batch(channels.bindChannelStatements("auto-s3", ["C1"]));
-    await env.DB.batch(channels.bindChannelStatements("auto-s4", ["C1"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements("auto-s2", ["C1"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements("auto-s3", ["C1"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements("auto-s4", ["C1"]));
 
     const matches = await channels.getSlackAutomationsForChannel("C1");
     expect(matches.map((m) => m.id)).toEqual(["auto-s2"]);
@@ -72,9 +69,9 @@ describe("SlackChannelStore (D1 integration)", () => {
     await store.create(makeSlackAutomation({ id: "auto-s6" }));
     await store.create(makeSlackAutomation({ id: "auto-s7", enabled: 0 }));
 
-    await env.DB.batch(channels.bindChannelStatements("auto-s5", ["C1", "C2"]));
-    await env.DB.batch(channels.bindChannelStatements("auto-s6", ["C2", "C3"]));
-    await env.DB.batch(channels.bindChannelStatements("auto-s7", ["C9"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements("auto-s5", ["C1", "C2"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements("auto-s6", ["C2", "C3"]));
+    await sqlDatabase(env.DB).batch(channels.bindChannelStatements("auto-s7", ["C9"]));
 
     expect((await channels.getWatchedSlackChannels()).sort()).toEqual(["C1", "C2", "C3"]);
   });
