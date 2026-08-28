@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,11 +69,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("SettingsPage mobile navigation", () => {
-  it("opens a category and returns to the root URL", async () => {
+  it("pushes category selections and follows browser Back and Forward state", async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
@@ -82,6 +83,40 @@ describe("SettingsPage mobile navigation", () => {
     expect(screen.getByRole("heading", { name: "Appearance" })).toHaveFocus();
     expect(screen.getByText("Appearance panel")).toBeInTheDocument();
     expect(window.location.href).toContain("/settings?tab=appearance");
+    expect(window.history.state).toMatchObject({ openInspectSettingsDetail: true });
+
+    act(() => {
+      window.history.replaceState(null, "", "/settings");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(screen.getByRole("heading", { name: "Settings" })).toHaveFocus();
+    expect(window.location.pathname).toBe("/settings");
+    expect(window.location.search).toBe("");
+
+    act(() => {
+      window.history.replaceState(
+        { openInspectSettingsDetail: true },
+        "",
+        "/settings?tab=appearance"
+      );
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(screen.getByRole("heading", { name: "Appearance" })).toHaveFocus();
+    expect(screen.getByText("Appearance panel")).toBeInTheDocument();
+  });
+
+  it("returns a direct deep link to the settings root", async () => {
+    mocks.tab = "appearance";
+    window.history.replaceState(null, "", "/settings?tab=appearance");
+    const user = userEvent.setup();
+
+    render(<SettingsPage />);
+
+    expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
+    expect(screen.getByText("Appearance panel")).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search settings" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Back to settings" }));
 
@@ -90,13 +125,14 @@ describe("SettingsPage mobile navigation", () => {
     expect(window.location.search).toBe("");
   });
 
-  it("opens a valid deep link directly in detail view", () => {
-    mocks.tab = "appearance";
-
+  it("uses browser history for the in-app back action", async () => {
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+    const user = userEvent.setup();
     render(<SettingsPage />);
 
-    expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
-    expect(screen.getByText("Appearance panel")).toBeInTheDocument();
-    expect(screen.queryByRole("searchbox", { name: "Search settings" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Appearance/ }));
+    await user.click(screen.getByRole("button", { name: "Back to settings" }));
+
+    expect(back).toHaveBeenCalledOnce();
   });
 });

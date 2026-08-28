@@ -30,14 +30,23 @@ function SettingsPageContent() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
+  const isMobile = useIsMobile();
   const initialCategory = isSettingsCategory(tabParam, repoImagesEnabled) ? tabParam : "secrets";
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
   function setActiveCategory(category: SettingsCategory) {
     setActiveCategoryRaw(category);
-    window.history.replaceState(null, "", `/settings?tab=${category}`);
+    const url = `/settings?tab=${category}`;
+    if (isMobile) {
+      window.history.pushState(
+        { ...window.history.state, openInspectSettingsDetail: true },
+        "",
+        url
+      );
+    } else {
+      window.history.replaceState(window.history.state, "", url);
+    }
   }
-  const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState<"list" | "detail">(
     isSettingsCategory(tabParam, repoImagesEnabled) ? "detail" : "list"
   );
@@ -49,9 +58,32 @@ function SettingsPageContent() {
   }
 
   function showMobileList() {
-    window.history.replaceState(null, "", "/settings");
+    if (window.history.state?.openInspectSettingsDetail) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState(window.history.state, "", "/settings");
     showMobileView("list");
   }
+
+  useEffect(() => {
+    if (!isMobile) return;
+
+    const syncFromHistory = () => {
+      const category = new URLSearchParams(window.location.search).get("tab");
+      if (isSettingsCategory(category, repoImagesEnabled)) {
+        setActiveCategoryRaw(category);
+        setMobileView("detail");
+      } else {
+        setActiveCategoryRaw("secrets");
+        setMobileView("list");
+      }
+      requestAnimationFrame(() => mobileHeadingRef.current?.focus());
+    };
+
+    window.addEventListener("popstate", syncFromHistory);
+    return () => window.removeEventListener("popstate", syncFromHistory);
+  }, [isMobile, repoImagesEnabled]);
 
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {
