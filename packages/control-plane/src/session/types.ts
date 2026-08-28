@@ -173,6 +173,13 @@ export interface SandboxRow {
   created_at: number;
 }
 
+/**
+ * The sandbox access artifacts that pair a URL with an encrypted secret:
+ * code-server and VNC carry passwords, ttyd carries a minted JWT. Tunnel URLs
+ * are not a kind — they are a single JSON column with no secret.
+ */
+export type SandboxAccessKind = "codeServer" | "vnc" | "ttyd";
+
 // Command types for sandbox communication
 
 interface PromptCommand {

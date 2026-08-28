@@ -7,10 +7,9 @@ import type { ImageBuildAdapterFactory } from "./provider-factory";
 import { ImageBuildReaper } from "./reaper";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import type { ImageBuildAdapter } from "./types";
+import { errorMessage } from "./errors";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 import { parseRepositoryShasJson } from "./provenance";
-
-export { ImageBuildFinalizationAttemptError } from "./finalization-error";
 
 /** Lease exceeds the provider deadline so overlapping creation attempts cannot run. */
 const IMAGE_BUILD_FINALIZATION_LEASE_MS = 6 * 60 * 1000;
@@ -103,14 +102,14 @@ export class ImageBuildFinalizer {
     }
 
     if (expiredAttemptWithoutArtifact && !build.provider_image_id) {
-      await this.store.finalization.markFailed({
-        buildId: build.id,
-        leaseToken,
-        error: "Previous provider finalization attempt outcome unknown after lease expiry",
-      });
-      const failed = await this.store.finalization.getBuild(build.id);
-      if (failed) await this.cleanupTerminalBuild(failed, correlation);
-      return completed();
+      return this.failAndCleanup(
+        {
+          buildId: build.id,
+          leaseToken,
+          error: "Previous provider finalization attempt outcome unknown after lease expiry",
+        },
+        correlation
+      );
     }
 
     const adapter = this.adapterFactory.create(build.provider, "existing_session");
@@ -136,14 +135,7 @@ export class ImageBuildFinalizer {
           error instanceof ImageBuildFinalizationAttemptError && error.outcome === "ambiguous"
             ? `Provider finalization outcome unknown: ${errorMessage(error)}`
             : errorMessage(error);
-        await this.store.finalization.markFailed({
-          buildId: build.id,
-          leaseToken,
-          error: message,
-        });
-        const failed = await this.store.finalization.getBuild(build.id);
-        if (failed) await this.cleanupTerminalBuild(failed, correlation);
-        return completed();
+        return this.failAndCleanup({ buildId: build.id, leaseToken, error: message }, correlation);
       }
 
       let recorded: boolean;
@@ -194,14 +186,10 @@ export class ImageBuildFinalizer {
 
     const repositoryShas = parseRepositoryShasJson(build.repository_shas);
     if (!repositoryShas) {
-      await this.store.finalization.markFailed({
-        buildId: build.id,
-        leaseToken,
-        error: "Stored repository_shas is invalid",
-      });
-      const failed = await this.store.finalization.getBuild(build.id);
-      if (failed) await this.cleanupTerminalBuild(failed, correlation);
-      return completed();
+      return this.failAndCleanup(
+        { buildId: build.id, leaseToken, error: "Stored repository_shas is invalid" },
+        correlation
+      );
     }
     const ready = await this.store.tryMarkImageBuildReady(
       build.id,
@@ -296,14 +284,21 @@ export class ImageBuildFinalizer {
     }
   }
 
+  /** Marks the leased build failed, then runs terminal cleanup on the failed row. */
+  private async failAndCleanup(
+    params: { buildId: string; leaseToken: string; error: string },
+    correlation: CorrelationContext
+  ): Promise<ImageBuildFinalizationResult> {
+    await this.store.finalization.markFailed(params);
+    const failed = await this.store.finalization.getBuild(params.buildId);
+    if (failed) await this.cleanupTerminalBuild(failed, correlation);
+    return completed();
+  }
+
   private async cleanupTerminalBuild(
     build: ImageBuildFinalizationRow,
     correlation: CorrelationContext
   ): Promise<void> {
     await this.sessionCleanup.run(build, correlation);
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

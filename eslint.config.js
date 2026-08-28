@@ -30,6 +30,17 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
 
+  // Repository-authored and runtime-injected OpenCode extensions run under Node.js.
+  {
+    files: [".opencode/**/*.{js,ts}"],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+    },
+  },
+
   // TypeScript files configuration
   {
     files: ["packages/**/*.{ts,tsx}"],

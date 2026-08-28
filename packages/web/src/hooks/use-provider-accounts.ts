@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import type { ZodType } from "zod";
+import { z, type ZodType } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
@@ -30,6 +30,10 @@ import {
 const ACCOUNTS_KEY = "/api/model-provider-accounts";
 const DEFAULTS_KEY = "/api/model-provider-account-defaults";
 const LEGACY_CREDENTIALS_KEY = "/api/model-provider-accounts/legacy-credentials";
+const providerErrorResponseSchema = z.object({
+  error: z.string(),
+  retryable: z.boolean().optional(),
+});
 
 export type { LegacyProviderKeyLocation };
 
@@ -55,14 +59,11 @@ async function requestProviderResponse(
     signal: init?.signal,
   });
   if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      retryable?: boolean;
-    };
+    const parsed = providerErrorResponseSchema.safeParse(await response.json().catch(() => null));
     throw new ProviderResourceError(
-      payload.error || "Provider account request failed",
+      (parsed.success && parsed.data.error) || "Provider account request failed",
       response.status,
-      typeof payload.retryable === "boolean" ? payload.retryable : undefined
+      parsed.success ? parsed.data.retryable : undefined
     );
   }
   return response;

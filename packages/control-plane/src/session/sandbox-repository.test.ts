@@ -259,10 +259,10 @@ describe("SandboxRepository", () => {
     });
   });
 
-  describe("VNC access", () => {
+  describe("access artifacts", () => {
     it("stores encrypted credentials and clears them", async () => {
-      await repository.updateSandboxVnc("https://vnc.test", "vnc-secret");
-      repository.clearSandboxVnc();
+      await repository.updateSandboxAccess("vnc", "https://vnc.test", "vnc-secret");
+      repository.clearSandboxAccess("vnc");
 
       expect(mock.calls[0].query).toContain("SET vnc_url = ?, vnc_password = ?");
       const [url, stored] = mock.calls[0].params as [string, string];
@@ -273,9 +273,11 @@ describe("SandboxRepository", () => {
     });
 
     it("encrypts code-server and ttyd secrets the same way", async () => {
-      await repository.updateSandboxCodeServer("https://cs.test", "cs-secret");
-      await repository.updateSandboxTtyd("https://ttyd.test", "ttyd-token");
+      await repository.updateSandboxAccess("codeServer", "https://cs.test", "cs-secret");
+      await repository.updateSandboxAccess("ttyd", "https://ttyd.test", "ttyd-token");
 
+      expect(mock.calls[0].query).toContain("SET code_server_url = ?, code_server_password = ?");
+      expect(mock.calls[1].query).toContain("SET ttyd_url = ?, ttyd_token = ?");
       for (const [call, plaintext] of [
         [mock.calls[0], "cs-secret"],
         [mock.calls[1], "ttyd-token"],
@@ -286,8 +288,8 @@ describe("SandboxRepository", () => {
       }
     });
 
-    it("can clear only the VNC URL", () => {
-      repository.clearSandboxVncUrl();
+    it("can clear only the URL", () => {
+      repository.clearSandboxAccessUrl("vnc");
 
       expect(mock.calls[0].query).toContain("SET vnc_url = NULL");
       expect(mock.calls[0].query).not.toContain("vnc_password");

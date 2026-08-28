@@ -43,4 +43,32 @@ describe("SCM settings routes", () => {
       });
     }
   );
+
+  it.each([
+    ["PUT", "/scm-settings", { settings: { enabledRepos: ["acme/web"] } }, "Unrecognized key"],
+    [
+      "PUT",
+      "/scm-settings/repos/acme/web",
+      { settings: { alwaysUseDraftMode: "yes" } },
+      "alwaysUseDraftMode must be a boolean",
+    ],
+  ])("rejects malformed settings for %s %s before storage", async (method, path, body, message) => {
+    const { route, match } = findRoute(method, path);
+
+    const response = await route.handler(
+      new Request(`https://test.local${path}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      {} as never,
+      match,
+      failingContext()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining(message),
+    });
+  });
 });

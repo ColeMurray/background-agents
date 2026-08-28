@@ -2,6 +2,43 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 28, 2026
+
+**Faster long session timelines.** Session timelines now render only visible rows, keeping histories
+with tens of thousands of events responsive while preserving scroll position, older-history loading,
+unread observation, and expanded task details.
+
+## August 27, 2026
+
+**Pull request feedback Autofix.** Opt in globally or per repository to resume a pull request's
+owning session when eligible human comments or actionable reviews arrive. Autofix supports reviews
+from the Open-Inspect GitHub App and allowlisted bots, deduplicates feedback, and enforces a rolling
+per-PR attempt limit.
+
+**GitHub Actions workflow automations.** Automations can now start when a GitHub Actions workflow
+run completes, with exact workflow-name and conclusion filters, run metadata in the agent context,
+and rerun-aware deduplication.
+
+**Configurable bot classifiers.** Slack and Linear target classifiers can now use Anthropic or
+OpenAI with provider-specific credentials. Classification requests are bounded to 15 seconds so a
+stalled provider falls back promptly to manual target selection.
+
+**Rich pull request timeline events.** Pull request tool calls now render dedicated previews for
+created, updated, draft, pending, manual, and failed outcomes, with sanitized descriptions, branch
+details, safe links, and expandable long bodies.
+
+## August 26, 2026
+
+**Reliable long-running tool calls.** Bridge heartbeats now renew sandbox activity while a prompt is
+processing, preventing event-silent work from being stopped by inactivity cleanup while preserving
+ordinary idle cleanup.
+
+## August 24, 2026
+
+**Import managed skills from repositories.** Import and re-import skills from connected GitHub or
+GitLab repositories with a complete file preview, pinned source revision, and provenance. Validation
+rejects changed, invalid, oversized, or unsupported repository content before saving.
+
 ## August 22, 2026
 
 **Unified model and reasoning selection.** New-session and follow-up composers now combine model and

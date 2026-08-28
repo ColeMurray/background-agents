@@ -1,16 +1,14 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRepository } from "../../participant-repository";
+import { sessionScmDisplayFieldsSchema } from "../../contracts";
 import { z } from "zod";
 
 const nullableOptionalString = z.string().nullable().optional();
 
-const generateWsTokenRequestSchema = z.object({
+const generateWsTokenRequestSchema = sessionScmDisplayFieldsSchema.extend({
   userId: z.string().optional(),
   canonicalUserId: nullableOptionalString,
   scmUserId: nullableOptionalString,
-  scmLogin: nullableOptionalString,
-  scmName: nullableOptionalString,
-  scmEmail: nullableOptionalString,
   scmTokenEncrypted: nullableOptionalString,
   scmRefreshTokenEncrypted: nullableOptionalString,
   scmTokenExpiresAt: z.number().nullable().optional(),

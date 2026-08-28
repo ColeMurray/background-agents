@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { ResolvedGitHubAutofixSettings } from "@open-inspect/shared";
+import { GITHUB_AUTOFIX_DEFAULTS, type ResolvedGitHubAutofixSettings } from "@open-inspect/shared";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 
@@ -134,7 +134,7 @@ export function GitHubAutofixSettingsFields({
           }}
           className={compact ? "h-8 text-xs" : "max-w-32"}
         />
-        {value.maxAttemptsPerPrPer24Hours > 10 && (
+        {value.maxAttemptsPerPrPer24Hours > GITHUB_AUTOFIX_DEFAULTS.maxAttemptsPerPrPer24Hours && (
           <span className="block text-xs text-amber-600 dark:text-amber-400 mt-1">
             Higher attempt caps increase autonomous work and spend. Raise this only after reviewing
             dogfood volume and queue health.

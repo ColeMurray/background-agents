@@ -1,18 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import { SessionSandboxEventProcessor } from "./sandbox-events";
-import type { GitPushSpec } from "../source-control";
+import { createTestBackgroundTasks } from "../../background-tasks.test-support";
+import { SessionSandboxEventProcessor } from "./processor";
+import { SandboxArtifactEventHandler } from "./artifact.handler";
+import { SandboxExecutionEventHandler } from "./execution.handler";
+import { SandboxRuntimeEventHandler } from "./runtime.handler";
+import { SandboxPushService } from "../sandbox-push-service";
+import { SandboxStreamingEventHandler } from "./streaming.handler";
+import type { GitPushSpec } from "../../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
-import type { CallbackNotificationService } from "./callback-notification-service";
-import type { SessionDiffService } from "./diffs/service";
-import type { SessionCoreRepository } from "./session-core-repository";
-import type { SandboxRepository } from "./sandbox-repository";
-import type { ArtifactRepository } from "./artifact-repository";
-import type { EventRepository } from "./event-repository";
-import type { MessageRepository } from "./message-repository";
-import type { SessionStatusService } from "./session-status-service";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { CallbackNotificationService } from "../callback-notification-service";
+import type { SessionDiffService } from "../diffs/service";
+import type { SessionCoreRepository } from "../session-core-repository";
+import type { SandboxRepository } from "../sandbox-repository";
+import type { ArtifactRepository } from "../artifact-repository";
+import type { EventRepository } from "../event-repository";
+import type { MessageRepository } from "../message-repository";
+import type { SessionStatusService } from "../session-status-service";
+import type { SessionWebSocketManager } from "../websocket-manager";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -85,30 +90,56 @@ function createProcessor() {
   };
   const backgroundTasks = createTestBackgroundTasks();
 
+  // The real family composition, mirroring components.ts, so the suite keeps
+  // pinning end-to-end processSandboxEvent behavior across the split.
+  const pushService = new SandboxPushService(log, wsManager as unknown as SessionWebSocketManager);
   const processor = new SessionSandboxEventProcessor(
-    backgroundTasks,
     log,
-    repository as unknown as SessionCoreRepository,
-    repository as unknown as SandboxRepository,
     repository as unknown as MessageRepository,
-    eventRepository,
-    artifactRepository,
-    callbackService as unknown as CallbackNotificationService,
     wsManager as unknown as SessionWebSocketManager,
-    messenger,
-    diffService as unknown as SessionDiffService,
-    applySessionTitleUpdate,
-    triggerSnapshot,
-    projectTerminalMessage,
-    statusService as unknown as SessionStatusService,
-    updateLastActivity,
-    scheduleInactivityCheck,
-    processMessageQueue,
-    broadcastPromptQueue
+    new SandboxStreamingEventHandler(
+      backgroundTasks,
+      repository as unknown as SessionCoreRepository,
+      eventRepository,
+      callbackService as unknown as CallbackNotificationService,
+      messenger,
+      updateLastActivity
+    ),
+    new SandboxArtifactEventHandler(
+      artifactRepository,
+      eventRepository,
+      messenger,
+      updateLastActivity
+    ),
+    new SandboxExecutionEventHandler(
+      backgroundTasks,
+      log,
+      repository as unknown as MessageRepository,
+      callbackService as unknown as CallbackNotificationService,
+      messenger,
+      projectTerminalMessage,
+      statusService as unknown as SessionStatusService,
+      triggerSnapshot,
+      updateLastActivity,
+      scheduleInactivityCheck,
+      processMessageQueue,
+      broadcastPromptQueue
+    ),
+    new SandboxRuntimeEventHandler(
+      repository as unknown as SessionCoreRepository,
+      repository as unknown as SandboxRepository,
+      eventRepository,
+      messenger,
+      diffService as unknown as SessionDiffService,
+      applySessionTitleUpdate,
+      updateLastActivity
+    ),
+    pushService
   );
 
   return {
     processor,
+    pushService,
     artifactRepository,
     repository,
     eventRepository,
@@ -542,7 +573,7 @@ describe("SessionSandboxEventProcessor", () => {
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    const pushPromise = h.processor.pushBranchToRemote(
+    const pushPromise = h.pushService.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")
     );
 
@@ -572,10 +603,10 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.processor.pushBranchToRemote(
+      const webPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "open-inspect/session-1")
       );
-      const backendPush = h.processor.pushBranchToRemote(
+      const backendPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "backend", "open-inspect/session-1")
       );
 
@@ -606,7 +637,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -624,7 +655,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -647,7 +678,7 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const pushPromise = h.processor.pushBranchToRemote(
+      const pushPromise = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "web", "feature/test")
       );
 
@@ -677,8 +708,8 @@ describe("SessionSandboxEventProcessor", () => {
       const h = createProcessor();
       connectSandbox(h);
 
-      const webPush = h.processor.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
-      const backendPush = h.processor.pushBranchToRemote(
+      const webPush = h.pushService.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
+      const backendPush = h.pushService.pushBranchToRemote(
         createPushSpec("acme", "backend", "feature/b")
       );
 

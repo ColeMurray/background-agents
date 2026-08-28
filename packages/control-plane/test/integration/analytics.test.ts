@@ -194,7 +194,7 @@ describe("Analytics API", () => {
 
   it("returns daily timeseries grouped by user", async () => {
     const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
+    const now = new Date().setUTCHours(12, 0, 0, 0);
 
     const completedAt = now - 2 * 24 * 60 * 60 * 1000;
     const failedAt = completedAt + 60_000;
@@ -753,7 +753,7 @@ describe("Analytics API", () => {
 
   it("sums timeseries counts when distinct users share the same display name", async () => {
     const store = new SessionIndexStore(env.DB);
-    const now = Date.now();
+    const now = new Date().setUTCHours(12, 0, 0, 0);
     const dayAgo = now - 24 * 60 * 60 * 1000;
 
     // Two distinct users with the same display name

@@ -177,7 +177,6 @@ export const PromptSkillTextarea = forwardRef<HTMLTextAreaElement, PromptSkillTe
           disabled={disabled}
           maxLength={maxLength}
           aria-autocomplete="list"
-          aria-expanded={open}
           aria-controls={open ? listboxId : undefined}
           aria-activedescendant={activeOptionId}
           onBlur={(event) => {

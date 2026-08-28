@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import useSWR, { mutate } from "swr";
+import { mutate } from "swr";
 import { toast } from "sonner";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
@@ -10,7 +10,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
+import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
+import { useImageBuilds } from "@/hooks/use-image-builds";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
@@ -28,6 +29,9 @@ type View =
 
 export function EnvironmentsSettings() {
   const { environments, loading } = useEnvironments();
+  const { data: imageBuildsFeed, error: imageBuildsError } = useImageBuilds(
+    environments.some((environment) => environment.prebuildEnabled)
+  );
   const [view, setView] = useState<View>({ mode: "list" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -122,7 +126,7 @@ export function EnvironmentsSettings() {
         setError(data?.error || "Failed to toggle prebuilds");
       } else {
         mutate(ENVIRONMENTS_KEY);
-        mutate(environmentImagesKey(environment.id));
+        mutate(IMAGE_BUILDS_KEY);
       }
     } catch {
       setError("Failed to toggle prebuilds");
@@ -146,7 +150,7 @@ export function EnvironmentsSettings() {
         const data = await response.json();
         setError(data?.error || "Failed to trigger build");
       } else {
-        mutate(environmentImagesKey(environment.id));
+        mutate(IMAGE_BUILDS_KEY);
       }
     } catch {
       setError("Failed to trigger build");
@@ -317,7 +321,14 @@ export function EnvironmentsSettings() {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {prebuildsSupported && (
                       <>
-                        <EnvironmentImageStatus environment={environment} />
+                        <EnvironmentImageStatus
+                          environment={environment}
+                          image={imageBuildsFeed?.images.find(
+                            (image) =>
+                              image.scopeKind === "environment" && image.scopeId === environment.id
+                          )}
+                          feedUnavailable={Boolean(imageBuildsError) && !imageBuildsFeed}
+                        />
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <span>
@@ -395,21 +406,26 @@ export function EnvironmentsSettings() {
   );
 }
 
-function environmentImagesKey(environmentId: string): string {
-  return `/api/environments/${environmentId}/images`;
-}
-
 /**
- * Latest build status for an environment. Fetches only while prebuilds are
- * enabled — disabled environments show the static label. Presentation is the
- * shared ImageBuildStatus.
+ * Latest build status for an environment, out of the unified feed the page
+ * fetches once. Presentation is the shared ImageBuildStatus.
  */
-function EnvironmentImageStatus({ environment }: { environment: Environment }) {
-  const { data } = useSWR<{ images: ImageBuildRecordView[] }>(
-    environment.prebuildEnabled ? environmentImagesKey(environment.id) : null
-  );
+function EnvironmentImageStatus({
+  environment,
+  image: latestImage,
+  feedUnavailable,
+}: {
+  environment: Environment;
+  image: ImageBuildRecordView | undefined;
+  feedUnavailable: boolean;
+}) {
+  // Distinguish a failed fetch from a genuinely build-less environment —
+  // "No image" invites a manual rebuild the environment may not need.
+  if (environment.prebuildEnabled && feedUnavailable) {
+    return <span className="text-xs text-muted-foreground">Status unavailable</span>;
+  }
 
-  const image = environment.prebuildEnabled ? data?.images?.[0] : undefined;
+  const image = environment.prebuildEnabled ? latestImage : undefined;
 
   return (
     <ImageBuildStatus
@@ -417,12 +433,12 @@ function EnvironmentImageStatus({ environment }: { environment: Environment }) {
       image={
         image && {
           status: image.status,
-          createdAt: image.created_at,
+          createdAt: image.createdAt,
           readyDetails: formatReadyDetails(
-            parsePrimaryBuildSha(image.repository_shas),
-            image.build_duration_seconds
+            parsePrimaryBuildSha(image.repositoryShas),
+            image.buildDurationSeconds
           ),
-          errorMessage: image.error_message,
+          errorMessage: image.errorMessage,
         }
       }
     />

@@ -285,7 +285,8 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
 3. Fill in the basics:
    - **Name**: `Open-Inspect-YourName` (must be globally unique)
    - **Homepage URL**: Your web app URL (see below)
-   - **Webhook**: Uncheck "Active" (not needed)
+   - **Webhook**: Leave "Active" unchecked for now. Step 7c enables it when
+     `enable_github_bot = true` for GitHub automations or bot commands.
 4. If enabling GitHub sign-in, configure **Identifying and authorizing users** (OAuth):
    - **Callback URL**: `{your-web-app-url}/api/auth/callback/github`
 
@@ -307,6 +308,8 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > identity for repository access.
 
 5. Set **Repository permissions**:
+   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
+   - Checks: **Read-only** _(required for GitHub check-suite automations)_
    - Contents: **Read & Write**
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
@@ -563,6 +566,12 @@ linear_webhook_secret  = ""          # From Step 4b (required if enabled)
 # API Keys
 anthropic_api_key = "sk-ant-..."
 
+# Slack/Linear classifier provider, chosen by classification_model.
+# An OpenAI model requires classification_openai_api_key. An Anthropic model
+# needs no new value — it is served by anthropic_api_key above.
+# classification_model = "claude-haiku-4-5"   # e.g. "gpt-5.4-mini" to classify on OpenAI
+classification_openai_api_key = ""   # Required when classification_model is an OpenAI id
+
 # Security Secrets (from Step 5)
 token_encryption_key          = "your-generated-value"
 repo_secrets_encryption_key   = "your-generated-value"
@@ -777,9 +786,12 @@ Now that the GitHub bot worker is deployed, configure the GitHub App for webhook
    - **Webhook secret**: Enter the `github_webhook_secret` value from your terraform.tfvars
 4. Under **Subscribe to events**, check:
    - **Pull requests**
+   - **Issues**
    - **Issue comments**
    - **Pull request reviews**
    - **Pull request review comments**
+   - **Check suites**
+   - **Workflow runs** _(required for GitHub workflow-run automations)_
 5. Click **Save changes**
 
 ### Find Your Bot Username
@@ -968,6 +980,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
 | `ANTHROPIC_API_KEY`                | Anthropic API key                                                                           |
+| `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |
 | `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
 | `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                     |
 | `DEEPSEEK_API_KEY`                 | DeepSeek API key (optional, required only for DeepSeek models)                              |
@@ -986,6 +999,12 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `GH_BOT_USERNAME`                  | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)               |
 | `APP_NAME`                         | Optional display name for whitelabeling (default: `Open-Inspect`)                           |
 | `APP_ICON_URL`                     | Optional URL to a custom logo/favicon (default: built-in icon)                              |
+
+`CLASSIFICATION_MODEL` is an optional Actions **variable**, not a secret — add it under Settings →
+Secrets and variables → Actions → _Variables_ to point the Slack/Linear classifiers at a different
+model (for example `gpt-5.4-mini`). Leave it unset to keep the Terraform default. An OpenAI value
+also requires the `CLASSIFICATION_OPENAI_API_KEY` secret; an Anthropic value is served by
+`ANTHROPIC_API_KEY`.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed
