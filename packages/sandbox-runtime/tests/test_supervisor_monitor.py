@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from sandbox_runtime.supervisor import SandboxSupervisor
+from sandbox_runtime.supervisor import FATAL_ERROR_REPORT_MAX_CHARS, SandboxSupervisor
 from tests.runtime_helpers import make_supervisor
 
 
@@ -73,6 +73,7 @@ class TestBridgeGracefulShutdown:
 class TestFatalErrorHttpReporting:
     async def test_posts_to_session_scoped_sandbox_error_endpoint(self):
         supervisor = _make_reporting_supervisor()
+        message = "prefix" + "x" * FATAL_ERROR_REPORT_MAX_CHARS
         client = AsyncMock()
         response = MagicMock(spec=httpx.Response)
         client.post.return_value = response
@@ -80,11 +81,11 @@ class TestFatalErrorHttpReporting:
         client_context.__aenter__.return_value = client
 
         with patch("sandbox_runtime.supervisor.httpx.AsyncClient", return_value=client_context):
-            await supervisor._report_fatal_error("Bridge repeatedly crashed")
+            await supervisor._report_fatal_error(message)
 
         client.post.assert_awaited_once_with(
             "https://cp.example.com/sessions/session%2Fone/sandbox-error",
-            json={"error": "Bridge repeatedly crashed", "fatal": True},
+            json={"error": "x" * FATAL_ERROR_REPORT_MAX_CHARS, "fatal": True},
             headers={"Authorization": "Bearer tok", "X-Sandbox-ID": "test-sandbox"},
             timeout=5.0,
         )

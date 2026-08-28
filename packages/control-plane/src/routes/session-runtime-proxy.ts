@@ -1,4 +1,5 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
@@ -35,6 +36,8 @@ const participantsResponseSchema = z.object({
     })
   ),
 });
+
+const SANDBOX_ERROR_BODY_MAX_BYTES = 2 * 1024;
 
 type SimpleProxyRouteConfig = {
   policy: RoutePolicy;
@@ -135,15 +138,22 @@ async function handleSandboxError(
 ): Promise<Response> {
   const sessionId = getSessionId(match);
   if (sessionId instanceof Response) return sessionId;
+  const authorization = request.headers.get("Authorization");
+  const sandboxId = request.headers.get("X-Sandbox-ID");
+  if (!authorization?.startsWith("Bearer ") || !sandboxId) {
+    return error("Unauthorized", 401);
+  }
+  const body = await readBodyCapped(request.body, SANDBOX_ERROR_BODY_MAX_BYTES);
+  if (!body) return error("Sandbox error body is too large", 413);
 
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.sandboxError, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: request.headers.get("Authorization") ?? "",
-      "X-Sandbox-ID": request.headers.get("X-Sandbox-ID") ?? "",
+      Authorization: authorization,
+      "X-Sandbox-ID": sandboxId,
     },
-    body: await request.text(),
+    body,
   });
 }
 

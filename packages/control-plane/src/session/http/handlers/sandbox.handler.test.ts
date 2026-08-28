@@ -148,12 +148,23 @@ describe("SandboxHandler", () => {
   });
 
   it("rejects an empty sandbox error", async () => {
-    const { handler, failSandbox } = createHandler();
+    const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+    } as SandboxRow);
+    isValidSandboxToken.mockResolvedValue(true);
 
     const response = await handler.sandboxError(
       new Request("http://internal/internal/sandbox-error", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
         body: JSON.stringify({ error: "" }),
       })
     );
@@ -161,6 +172,50 @@ describe("SandboxHandler", () => {
     expect(response.status).toBe(400);
     expect(failSandbox).not.toHaveBeenCalled();
   });
+
+  it("authenticates before parsing the sandbox error body", async () => {
+    const { handler, failSandbox } = createHandler();
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        body: "not json",
+      })
+    );
+
+    expect(response.status).toBe(401);
+    expect(failSandbox).not.toHaveBeenCalled();
+  });
+
+  it.each(["stopped", "stale"] as const)(
+    "does not overwrite a %s sandbox with a delayed fatal report",
+    async (status) => {
+      const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+      getSandbox.mockReturnValue({
+        id: "sandbox-row-1",
+        modal_sandbox_id: "sandbox-1",
+        auth_token_hash: "token-hash-1",
+        auth_token: null,
+        status,
+      } as SandboxRow);
+      isValidSandboxToken.mockResolvedValue(true);
+
+      const response = await handler.sandboxError(
+        new Request("http://internal/internal/sandbox-error", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Authorization: "Bearer sandbox-token",
+            "X-Sandbox-ID": "sandbox-1",
+          },
+          body: JSON.stringify({ error: "Delayed failure" }),
+        })
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ status: "ignored" });
+      expect(failSandbox).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects a sandbox generation replaced while its token is being hashed", async () => {
     const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();

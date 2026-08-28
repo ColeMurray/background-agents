@@ -32,6 +32,7 @@ _ResultT = TypeVar("_ResultT")
 FATAL_ERROR_REPORT_MAX_ATTEMPTS = 3
 FATAL_ERROR_REPORT_BACKOFF_BASE_SECONDS = 2
 FATAL_ERROR_REPORT_TIMEOUT_SECONDS = 5.0
+FATAL_ERROR_REPORT_MAX_CHARS = 1000
 
 
 class ImageBuildExecutionCancelled(Exception):
@@ -78,12 +79,13 @@ class SandboxSupervisor:
             return
         try:
             session_id = quote(self.config.session_id, safe="")
+            reported_message = message[-FATAL_ERROR_REPORT_MAX_CHARS:]
             async with httpx.AsyncClient() as client:
                 for attempt in range(1, FATAL_ERROR_REPORT_MAX_ATTEMPTS + 1):
                     try:
                         response = await client.post(
                             f"{self.config.control_plane_url.rstrip('/')}/sessions/{session_id}/sandbox-error",
-                            json={"error": message, "fatal": True},
+                            json={"error": reported_message, "fatal": True},
                             headers={
                                 "Authorization": f"Bearer {self.config.sandbox_token}",
                                 "X-Sandbox-ID": self.config.sandbox_id,

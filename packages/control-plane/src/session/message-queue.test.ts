@@ -210,6 +210,7 @@ function buildQueue() {
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
+    terminateFailedSandbox: vi.fn(async () => true),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
   const backgroundTasks = createTestBackgroundTasks();
@@ -1475,6 +1476,28 @@ describe("SessionMessageQueue", () => {
       "OpenCode repeatedly crashed"
     );
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+  });
+
+  it("redrives a pending prompt after fatal sandbox termination completes", async () => {
+    const h = buildQueue();
+    let resolveTermination!: (terminated: boolean) => void;
+    h.sandboxLifecycle.terminateFailedSandbox.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTermination = resolve;
+      })
+    );
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
+
+    const handling = h.queue.handleFatalSandboxFailure("Sandbox crashed");
+    await Promise.resolve();
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+
+    resolveTermination(true);
+    await handling;
+    await h.backgroundTasks.settle();
+
+    expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
+    expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();
   });
 
   describe("enqueuePromptFromApi", () => {

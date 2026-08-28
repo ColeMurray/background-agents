@@ -123,6 +123,45 @@ describe("session runtime proxy routes", () => {
     });
   });
 
+  it("rejects oversized sandbox errors before forwarding them", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const path = "/sessions/session-1/sandbox-error";
+    const { handler, match } = getHandler("POST", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: "x".repeat(2049),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(413);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing sandbox credentials before reading or forwarding the body", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const path = "/sessions/session-1/sandbox-error";
+    const { handler, match } = getHandler("POST", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, { method: "POST", body: "not json" }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("returns deduplicated canonical participant profiles with safe fields only", async () => {
     const fetch = vi.fn(async () =>
       Response.json({

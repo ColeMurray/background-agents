@@ -2360,6 +2360,73 @@ describe("SandboxLifecycleManager", () => {
     });
   });
 
+  describe("terminateFailedSandbox", () => {
+    it("detaches dispatch and gates replacement spawn until provider termination completes", async () => {
+      let resolveStop!: (result: StopResult) => void;
+      const stopSandbox = vi.fn(
+        () =>
+          new Promise<StopResult>((resolve) => {
+            resolveStop = resolve;
+          })
+      );
+      const createSandbox = vi.fn();
+      const storage = createMockStorage();
+      const wsManager = createMockWebSocketManager(true);
+      const manager = new SandboxLifecycleManager(
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox,
+          createSandbox,
+        }),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const termination = manager.terminateFailedSandbox("OpenCode repeatedly crashed");
+
+      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(
+        1011,
+        "Fatal sandbox runtime error"
+      );
+      expect(manager.isSpawning()).toBe(true);
+      await manager.spawnSandbox();
+      expect(createSandbox).not.toHaveBeenCalled();
+
+      resolveStop({ success: true });
+      await expect(termination).resolves.toBe(true);
+      expect(manager.isSpawning()).toBe(false);
+    });
+
+    it.each(["stopped", "stale"] as const)(
+      "does not overwrite or detach a %s sandbox",
+      async (status) => {
+        const storage = createMockStorage(createMockSession(), createMockSandbox({ status }));
+        const wsManager = createMockWebSocketManager(true);
+        const manager = new SandboxLifecycleManager(
+          createMockProvider(),
+          storage,
+          storage,
+          createMockBroadcaster(),
+          wsManager,
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await expect(manager.terminateFailedSandbox("Delayed failure")).resolves.toBe(false);
+
+        expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+        expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      }
+    );
+  });
+
   describe("scheduleDisconnectCheck", () => {
     it("schedules alarm at heartbeat timeout from now", async () => {
       const storage = createMockStorage();

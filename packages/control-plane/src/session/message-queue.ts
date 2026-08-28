@@ -571,6 +571,12 @@ export class SessionMessageQueue {
     await this.processMessageQueue();
   }
 
+  async handleFatalSandboxFailure(reason: string): Promise<void> {
+    const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
+    await this.failStuckProcessingMessage(reason);
+    if (await termination) await this.resumeAfterSandboxTermination();
+  }
+
   /** Close every unfinished message synchronously; status projection happens afterwards. */
   cancelExecution(): void {
     const now = Date.now();

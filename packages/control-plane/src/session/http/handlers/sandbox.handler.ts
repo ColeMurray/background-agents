@@ -38,7 +38,7 @@ const addParticipantRequestSchema = z.object({
 });
 
 const sandboxErrorRequestSchema = z.object({
-  error: z.string().trim().min(1),
+  error: z.string().trim().min(1).max(1000),
 });
 
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
@@ -94,17 +94,6 @@ export class SandboxHandler {
   }
 
   async sandboxError(request: Request): Promise<Response> {
-    let raw: unknown;
-    try {
-      raw = await request.json();
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    const result = sandboxErrorRequestSchema.safeParse(raw);
-    if (!result.success) {
-      return Response.json({ error: "Invalid sandbox error" }, { status: 400 });
-    }
     const authHeader = request.headers.get("Authorization");
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
     const sandboxId = request.headers.get("X-Sandbox-ID");
@@ -120,6 +109,17 @@ export class SandboxHandler {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+    const result = sandboxErrorRequestSchema.safeParse(raw);
+    if (!result.success) {
+      return Response.json({ error: "Invalid sandbox error" }, { status: 400 });
+    }
+
     const currentSandbox = this.sandboxRepository.getSandbox();
     if (
       currentSandbox?.modal_sandbox_id !== sandbox.modal_sandbox_id ||
@@ -127,6 +127,9 @@ export class SandboxHandler {
       currentSandbox?.auth_token !== sandbox.auth_token
     ) {
       return Response.json({ error: "Sandbox credentials changed" }, { status: 403 });
+    }
+    if (currentSandbox.status === "stopped" || currentSandbox.status === "stale") {
+      return Response.json({ status: "ignored" });
     }
 
     await this.failSandbox(result.data.error);
