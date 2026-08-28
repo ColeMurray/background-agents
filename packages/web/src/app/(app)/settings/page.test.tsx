@@ -6,17 +6,22 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "./page";
+import { SettingsViewportProvider } from "@/components/settings/settings-viewport-context";
 
 expect.extend(matchers);
 
-const mocks = vi.hoisted(() => ({ tab: null as string | null }));
+const mocks = vi.hoisted(() => ({
+  tab: null as string | null,
+  repoImagesEnabled: true,
+}));
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(mocks.tab ? `tab=${mocks.tab}` : ""),
 }));
 
-vi.mock("@/hooks/use-media-query", () => ({ useIsMobile: () => true }));
-vi.mock("@/lib/sandbox-provider", () => ({ supportsRepoImages: () => true }));
+vi.mock("@/lib/sandbox-provider", () => ({
+  supportsRepoImages: () => mocks.repoImagesEnabled,
+}));
 
 vi.mock("@/components/settings/secrets-settings", () => ({
   SecretsSettings: () => <div>Secrets panel</div>,
@@ -60,12 +65,21 @@ vi.mock("@/components/settings/mcp-servers-settings", () => ({
 
 beforeEach(() => {
   mocks.tab = null;
+  mocks.repoImagesEnabled = true;
   window.history.replaceState(null, "", "/settings");
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
     return 1;
   });
 });
+
+function renderSettingsPage() {
+  return render(
+    <SettingsViewportProvider value={true}>
+      <SettingsPage />
+    </SettingsViewportProvider>
+  );
+}
 
 afterEach(() => {
   cleanup();
@@ -76,7 +90,7 @@ afterEach(() => {
 describe("SettingsPage mobile navigation", () => {
   it("pushes category selections and follows browser Back and Forward state", async () => {
     const user = userEvent.setup();
-    render(<SettingsPage />);
+    renderSettingsPage();
 
     await user.click(screen.getByRole("button", { name: /Appearance/ }));
 
@@ -112,7 +126,7 @@ describe("SettingsPage mobile navigation", () => {
     window.history.replaceState(null, "", "/settings?tab=appearance");
     const user = userEvent.setup();
 
-    render(<SettingsPage />);
+    renderSettingsPage();
 
     expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
     expect(screen.getByText("Appearance panel")).toBeInTheDocument();
@@ -128,7 +142,7 @@ describe("SettingsPage mobile navigation", () => {
   it("uses browser history for the in-app back action", async () => {
     const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
     const user = userEvent.setup();
-    render(<SettingsPage />);
+    renderSettingsPage();
 
     await user.click(screen.getByRole("button", { name: /Appearance/ }));
     await user.click(screen.getByRole("button", { name: "Back to settings" }));
@@ -138,7 +152,7 @@ describe("SettingsPage mobile navigation", () => {
 
   it("preserves the mobile search and restores focus to the selected category", async () => {
     const user = userEvent.setup();
-    render(<SettingsPage />);
+    renderSettingsPage();
 
     const search = screen.getByRole("searchbox", { name: "Search settings" });
     await user.type(search, "theme");
@@ -151,5 +165,21 @@ describe("SettingsPage mobile navigation", () => {
 
     expect(screen.getByRole("searchbox", { name: "Search settings" })).toHaveValue("theme");
     expect(screen.getByRole("button", { name: /Appearance/ })).toHaveFocus();
+  });
+
+  it.each([
+    { description: "invalid", tab: "bogus", repoImagesEnabled: true },
+    { description: "unavailable", tab: "images", repoImagesEnabled: false },
+  ])("returns focus to the list for an $description history tab", ({ tab, repoImagesEnabled }) => {
+    mocks.repoImagesEnabled = repoImagesEnabled;
+    renderSettingsPage();
+
+    act(() => {
+      window.history.replaceState(null, "", `/settings?tab=${tab}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(screen.getByRole("heading", { name: "Settings" })).toHaveFocus();
+    expect(screen.getByRole("searchbox", { name: "Search settings" })).toBeInTheDocument();
   });
 });

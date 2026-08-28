@@ -4,18 +4,16 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsNav } from "./settings-nav";
+import { SettingsViewportProvider } from "./settings-viewport-context";
 
 expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   isMobile: false,
   repoImagesEnabled: true,
-}));
-
-vi.mock("@/hooks/use-media-query", () => ({
-  useIsMobile: () => mocks.isMobile,
 }));
 
 vi.mock("@/lib/sandbox-provider", () => ({
@@ -28,10 +26,22 @@ afterEach(() => {
   mocks.repoImagesEnabled = true;
 });
 
+function renderSettingsNav(
+  props: Omit<ComponentProps<typeof SettingsNav>, "onSelect"> & {
+    onSelect?: ComponentProps<typeof SettingsNav>["onSelect"];
+  }
+) {
+  return render(
+    <SettingsViewportProvider value={mocks.isMobile}>
+      <SettingsNav onSelect={vi.fn()} {...props} />
+    </SettingsViewportProvider>
+  );
+}
+
 describe("SettingsNav", () => {
   it("groups settings and filters labels, descriptions, and keywords", async () => {
     const user = userEvent.setup();
-    render(<SettingsNav activeCategory="appearance" onSelect={vi.fn()} />);
+    renderSettingsNav({ activeCategory: "appearance" });
 
     expect(screen.getByRole("heading", { name: "Personal" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Sessions" })).toBeInTheDocument();
@@ -51,20 +61,18 @@ describe("SettingsNav", () => {
   it("shows descriptions and opens a selected setting on mobile", async () => {
     mocks.isMobile = true;
     const onSelect = vi.fn();
-    const onNavigate = vi.fn();
     const user = userEvent.setup();
-    render(<SettingsNav activeCategory="secrets" onSelect={onSelect} onNavigate={onNavigate} />);
+    renderSettingsNav({ activeCategory: "secrets", onSelect });
 
     expect(screen.getByText("Theme and code highlighting")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Appearance/ }));
 
-    expect(onSelect).toHaveBeenCalledWith("appearance");
-    expect(onNavigate).toHaveBeenCalledWith(expect.any(HTMLButtonElement));
+    expect(onSelect).toHaveBeenCalledWith("appearance", expect.any(HTMLButtonElement));
     expect(screen.getByRole("button", { name: /Secrets/ })).toHaveAttribute("aria-current", "page");
   });
 
   it("uses the shared focus treatment for navigation and search", () => {
-    render(<SettingsNav activeCategory="appearance" onSelect={vi.fn()} />);
+    renderSettingsNav({ activeCategory: "appearance" });
 
     expect(screen.getByRole("searchbox", { name: "Search settings" })).toHaveClass(
       "focus-visible:ring-2"
@@ -74,7 +82,7 @@ describe("SettingsNav", () => {
 
   it("hides image settings when the sandbox provider does not support them", () => {
     mocks.repoImagesEnabled = false;
-    render(<SettingsNav activeCategory="secrets" onSelect={vi.fn()} />);
+    renderSettingsNav({ activeCategory: "secrets" });
 
     expect(screen.queryByRole("button", { name: "Images" })).not.toBeInTheDocument();
   });

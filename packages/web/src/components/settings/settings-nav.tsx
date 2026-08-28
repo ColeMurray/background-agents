@@ -17,8 +17,7 @@ export {
 
 interface SettingsNavProps {
   activeCategory: SettingsCategory;
-  onSelect: (category: SettingsCategory) => void;
-  onNavigate?: (trigger: HTMLButtonElement) => void;
+  onSelect: (category: SettingsCategory, trigger: HTMLButtonElement) => void;
 }
 
 function SettingsSearch({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -39,7 +38,7 @@ function SettingsSearch({ value, onChange }: { value: string; onChange: (value: 
   );
 }
 
-export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNavProps) {
+export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
   const isMobile = useSettingsIsMobile();
   const [query, setQuery] = useState("");
   const groups = getSettingsGroups({ query });
@@ -70,8 +69,7 @@ export function SettingsNav({ activeCategory, onSelect, onNavigate }: SettingsNa
                     type="button"
                     variant="ghost"
                     onClick={(event) => {
-                      onSelect(item.id);
-                      onNavigate?.(event.currentTarget);
+                      onSelect(item.id, event.currentTarget);
                     }}
                     aria-current={isActive ? "page" : undefined}
                     className={`h-auto w-full justify-start gap-3 whitespace-normal rounded-md text-left ${

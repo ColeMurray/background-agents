@@ -52,15 +52,17 @@ function SettingsPageContent() {
     : DEFAULT_SETTINGS_CATEGORY;
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
-  function setActiveCategory(category: SettingsCategory) {
+  function selectCategory(category: SettingsCategory, trigger: HTMLButtonElement) {
     setActiveCategoryRaw(category);
     const url = `/settings?tab=${category}`;
     if (isMobile) {
+      mobileTriggerRef.current = trigger;
       window.history.pushState(
         { ...window.history.state, openInspectSettingsDetail: true },
         "",
         url
       );
+      showMobileView("detail");
     } else {
       window.history.replaceState(window.history.state, "", url);
     }
@@ -97,19 +99,22 @@ function SettingsPageContent() {
     if (!isMobile) return;
 
     const syncFromHistory = () => {
-      const category = new URLSearchParams(window.location.search).get("tab");
-      if (isSettingsCategory(category, repoImagesEnabled)) {
-        setActiveCategoryRaw(category);
+      const requestedCategory = new URLSearchParams(window.location.search).get("tab");
+      const nextCategory = isSettingsCategory(requestedCategory, repoImagesEnabled)
+        ? requestedCategory
+        : null;
+      if (nextCategory) {
+        setActiveCategoryRaw(nextCategory);
         setMobileView("detail");
       } else {
         if (!mobileTriggerRef.current) setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
         setMobileView("list");
       }
       requestAnimationFrame(() => {
-        if (!category && mobileTriggerRef.current) {
+        if (!nextCategory && mobileTriggerRef.current) {
           mobileTriggerRef.current.focus();
         } else {
-          (category ? mobileDetailHeadingRef : mobileListHeadingRef).current?.focus();
+          (nextCategory ? mobileDetailHeadingRef : mobileListHeadingRef).current?.focus();
         }
       });
     };
@@ -147,14 +152,7 @@ function SettingsPageContent() {
         >
           <SettingsMobileHeader title="Settings" headingRef={mobileListHeadingRef} />
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <SettingsNav
-              activeCategory={activeCategory}
-              onSelect={setActiveCategory}
-              onNavigate={(trigger) => {
-                mobileTriggerRef.current = trigger;
-                showMobileView("detail");
-              }}
-            />
+            <SettingsNav activeCategory={activeCategory} onSelect={selectCategory} />
           </div>
         </div>
         <div

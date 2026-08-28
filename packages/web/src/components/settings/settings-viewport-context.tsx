@@ -1,14 +1,15 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import { useIsMobile } from "@/hooks/use-media-query";
 
-const SettingsViewportContext = createContext<boolean | null>(null);
+const SettingsViewportContext = createContext<boolean | undefined>(undefined);
 
 export const SettingsViewportProvider = SettingsViewportContext.Provider;
 
 export function useSettingsIsMobile(): boolean {
-  const shellValue = useContext(SettingsViewportContext);
-  const mediaQueryValue = useIsMobile();
-  return shellValue ?? mediaQueryValue;
+  const value = useContext(SettingsViewportContext);
+  if (value === undefined) {
+    throw new Error("useSettingsIsMobile must be used within SettingsViewportProvider");
+  }
+  return value;
 }
