@@ -18,8 +18,10 @@ import {
   postCommitStatus,
   postReaction,
   checkSenderPermission,
+  getPullRequestApproval,
   getPullRequestSnapshot,
   REVIEW_PENDING_DESCRIPTION,
+  REVIEW_SKIPPED_APPROVED_DESCRIPTION,
   REVIEW_START_FAILED_DESCRIPTION,
   REVIEW_STATUS_CONTEXT,
   REVIEW_SUPERSEDED_DESCRIPTION,
@@ -159,7 +161,7 @@ interface ReviewStatusTarget {
 
 async function postReviewStatus(
   target: ReviewStatusTarget,
-  status: { state: "pending" | "error"; description: string }
+  status: { state: "pending" | "error" | "success"; description: string }
 ): Promise<void> {
   const result = await postCommitStatus(
     target.token,
@@ -246,6 +248,43 @@ async function sendReviewPrompt(
   }
 }
 
+/**
+ * Stand down an auto-review on a PR that already carries an approval, leaving nothing behind that
+ * outlives the decision.
+ *
+ * Claiming a generation is what actually stops work: a review still running against the head this
+ * push replaced is now both superseded and unwanted, and the claim alone fences it out of its final
+ * GitHub write even if the sweep cannot reach it. The two commit statuses then close the loop —
+ * the replaced head stops advertising a review that will never finish, and the new head reports
+ * the skip rather than leaving a required context pending forever.
+ *
+ * Best-effort throughout: this runs on the path where no review will happen, so a failure here
+ * must degrade to a plain skip rather than surface as a webhook error and a redelivery.
+ */
+async function standDownApprovedReview(
+  env: Env,
+  log: Logger,
+  traceId: string,
+  params: { repoId: number; prNumber: number },
+  statusTarget: ReviewStatusTarget,
+  previousHeadSha: string | undefined
+): Promise<void> {
+  try {
+    const generation = await claimReviewGeneration(env, traceId, params);
+    await sweepStaleReviews(env, log, traceId, { ...params, generation });
+  } catch (error) {
+    log.warn("handler.approved_skip_sweep_failed", {
+      ...statusTarget.meta,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+  }
+  await closeOutSupersededHeadStatus(statusTarget, previousHeadSha);
+  await postReviewStatus(statusTarget, {
+    state: "success",
+    description: REVIEW_SKIPPED_APPROVED_DESCRIPTION,
+  });
+}
+
 type CallerGatingResult =
   | { allowed: true; ghToken: string }
   | {
@@ -263,7 +302,13 @@ async function resolveCallerGating(
   traceId: string,
   repoFullName: string
 ): Promise<CallerGatingResult> {
-  if (config.allowedTriggerUsers !== null) {
+  // An event whose sender is our own app identity — a PR this app opened, a push it made to its
+  // own branch — is the app acting, not a third party asking it to act. Neither caller gate can
+  // express that: a human allowlist never names the bot, and the collaborator-permission lookup
+  // 404s for a `[bot]` login, so both fail closed on every self-originated event.
+  const isOwnAppIdentity = senderLogin.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase();
+
+  if (!isOwnAppIdentity && config.allowedTriggerUsers !== null) {
     if (!config.allowedTriggerUsers.some((u) => u.toLowerCase() === senderLogin.toLowerCase())) {
       log.info("handler.sender_not_allowed", { trace_id: traceId, sender: senderLogin });
       return { allowed: false, reason: "sender_not_allowed" };
@@ -278,7 +323,7 @@ async function resolveCallerGating(
     userAgent,
   });
 
-  if (config.allowedTriggerUsers === null) {
+  if (!isOwnAppIdentity && config.allowedTriggerUsers === null) {
     const { hasPermission, error } = await checkSenderPermission(
       ghToken,
       owner,
@@ -514,6 +559,34 @@ export async function handlePullRequestReviewTrigger(
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   const userAgent = resolveAppName(env);
+
+  // A standing approval ends automatic reviewing of this PR: once someone has signed off, spending
+  // a full session on every follow-up push re-reviews work the approval already covers. Only the
+  // automatic triggers stop here — an @mention or a `review_requested` is a person asking for the
+  // review regardless, and neither routes through this handler.
+  //
+  // `opened` is exempt from the lookup rather than the rule: a PR GitHub has just created cannot
+  // carry a review yet, so the call could only ever come back empty.
+  if (payload.action !== "opened") {
+    const approval = await getPullRequestApproval(ghToken, owner, repoName, pr.number, userAgent);
+    if (!approval.ok) {
+      // Fail open. An unreadable approval state is not evidence of an approval, and losing a
+      // review outright is a worse failure than one redundant run.
+      log.warn("handler.approval_check_failed", { ...meta, error: approval.error });
+    } else if (approval.approved) {
+      await standDownApprovedReview(
+        env,
+        log,
+        traceId,
+        { repoId: repo.id, prNumber: pr.number },
+        { log, token: ghToken, owner, repo: repoName, headSha: pr.head.sha, userAgent, meta },
+        // Present only on `synchronize`; the other trigger actions carry no prior head.
+        payload.before
+      );
+      log.info("handler.pr_already_approved", meta);
+      return { outcome: "skipped", skip_reason: "pr_approved" };
+    }
+  }
 
   return withReaction(
     log,
