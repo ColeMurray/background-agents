@@ -44,6 +44,9 @@ export class SandboxPushService {
     const sandboxWs = this.wsManager.getExecutionSocket();
 
     if (!sandboxWs) {
+      if (this.wsManager.getSandboxSocket()) {
+        return { success: false, error: "Sandbox is not ready to push branches" };
+      }
       this.log.info("No sandbox connected, assuming branch was pushed manually");
       return { success: true };
     }
