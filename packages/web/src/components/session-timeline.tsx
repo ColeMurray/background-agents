@@ -322,15 +322,12 @@ export function SessionTimeline({
       // ancestor overflow clip, and grow the page itself.
       className="relative h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
     >
-      <div className="w-full min-w-0 max-w-3xl mx-auto">
+      <div className="relative w-full min-w-0 max-w-3xl mx-auto">
+        <div ref={topSentinelRef} className="absolute left-0 top-0 h-1 w-full" />
         {showSkeleton ? (
-          <>
-            <div ref={topSentinelRef} className="h-1" />
-            <TimelineSkeleton />
-          </>
+          <TimelineSkeleton />
         ) : (
           <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
-            <div ref={topSentinelRef} className="absolute left-0 top-0 h-1 w-full" />
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = virtualRows[virtualRow.index];
               return (

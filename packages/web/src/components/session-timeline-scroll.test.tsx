@@ -60,6 +60,53 @@ function toolEvent(
 }
 
 describe("timeline auto-scrolling", () => {
+  it("keeps observing the history sentinel after the skeleton clears", () => {
+    const observedElements: Element[] = [];
+    let notifyIntersection = (_isIntersecting: boolean) => {};
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          notifyIntersection = (isIntersecting) => {
+            callback(
+              [{ isIntersecting } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver
+            );
+          };
+        }
+        observe(element: Element) {
+          observedElements.push(element);
+        }
+        disconnect() {}
+      }
+    );
+    const onLoadOlder = vi.fn();
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={[]} showSkeleton onLoadOlder={onLoadOlder} />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 800 },
+    });
+    const sentinel = observedElements[0];
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[]}
+        showSkeleton={false}
+        onLoadOlder={onLoadOlder}
+      />
+    );
+    fireEvent.scroll(timeline);
+    notifyIntersection(true);
+
+    expect(observedElements).toEqual([sentinel]);
+    expect(sentinel.isConnected).toBe(true);
+    expect(onLoadOlder).toHaveBeenCalledOnce();
+  });
+
   it("does not scroll the timeline when the pending prompt stack changes", () => {
     const events: SandboxEvent[] = [];
     const { container, rerender } = render(
