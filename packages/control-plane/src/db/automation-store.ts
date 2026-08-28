@@ -15,6 +15,7 @@ import type {
   AutomationRun,
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
+import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
 import {
   toProviderSelections,
@@ -22,6 +23,7 @@ import {
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { AutomationListCursor } from "./automation-list-cursor";
+import { z } from "zod";
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -142,6 +144,21 @@ export interface AutomationInvocationRow {
   created_at: number;
   updated_at: number;
 }
+
+const enrichedAutomationInvocationRowSchema = z.object({
+  id: z.string(),
+  automation_id: z.string(),
+  source: z.enum(["schedule", "manual", "event"]),
+  scheduled_at: z.number().nullable(),
+  skip_reason: z.string().nullable(),
+  created_at: z.number(),
+  derived_status: automationInvocationStatusSchema,
+  derived_completed_at: z.number().nullable(),
+});
+
+type EnrichedAutomationInvocationRow = z.infer<typeof enrichedAutomationInvocationRowSchema>;
+
+const countRowSchema = z.object({ count: z.number() });
 
 /**
  * Overlap scope for a new invocation: schedule/manual firings block on any
@@ -294,14 +311,14 @@ export function deriveInvocationStatus(counts: {
 }
 
 function toAutomationInvocation(
-  row: AutomationInvocationRow & { derived_status: string; derived_completed_at: number | null },
+  row: EnrichedAutomationInvocationRow,
   runs: AutomationRun[]
 ): AutomationInvocation {
   const skipped = row.skip_reason !== null;
   return {
     id: row.id,
     automationId: row.automation_id,
-    status: row.derived_status as AutomationInvocationStatus,
+    status: row.derived_status,
     source: row.source,
     scheduledAt: row.scheduled_at,
     skipReason: row.skip_reason,
@@ -1125,11 +1142,12 @@ export class AutomationStore {
         .bind(automationId, options.limit, options.offset),
     ]);
 
-    const total = (countResult.results?.[0] as { count: number } | undefined)?.count ?? 0;
-    const rows = (pageResult.results ?? []) as (AutomationInvocationRow & {
-      derived_status: string;
-      derived_completed_at: number | null;
-    })[];
+    const total = countRowSchema.safeParse(countResult.results?.[0]).data?.count ?? 0;
+    const rows: EnrichedAutomationInvocationRow[] = [];
+    for (const row of pageResult.results ?? []) {
+      const parsed = enrichedAutomationInvocationRowSchema.safeParse(row);
+      if (parsed.success) rows.push(parsed.data);
+    }
     if (rows.length === 0) return { invocations: [], total };
 
     const placeholders = rows.map(() => "?").join(", ");

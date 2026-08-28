@@ -10,6 +10,7 @@ import type {
   GitHubAutofixSessionCommand,
   GitHubAutofixSessionResponse,
 } from "@open-inspect/shared";
+import { githubAutofixOriginSchema } from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -677,7 +678,9 @@ export class SessionMessageQueue {
     let origin: GitHubAutofixOrigin | undefined;
     if (originContext) {
       try {
-        origin = JSON.parse(originContext) as GitHubAutofixOrigin;
+        const parsedOrigin = githubAutofixOriginSchema.safeParse(JSON.parse(originContext));
+        if (!parsedOrigin.success) throw new Error("invalid shape");
+        origin = parsedOrigin.data;
       } catch {
         this.log.error("prompt.invalid_origin_context", { message_id: messageId });
       }
