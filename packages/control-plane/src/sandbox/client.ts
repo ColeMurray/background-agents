@@ -106,17 +106,6 @@ const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
   modalErrorResponseSchema,
 ]);
 
-const deleteProviderImageModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z.object({
-      provider_image_id: z.string(),
-      deleted: z.boolean(),
-    }),
-  }),
-  modalErrorResponseSchema,
-]);
-
 function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
   if (!result.success) {
@@ -283,16 +272,6 @@ export interface TerminateImageBuildSandboxRequest {
   signal?: AbortSignal;
 }
 
-export interface DeleteProviderImageRequest {
-  providerImageId: string;
-  signal?: AbortSignal;
-}
-
-export interface DeleteProviderImageResponse {
-  providerImageId: string;
-  deleted: boolean;
-}
-
 /**
  * Error thrown by ModalClient when the Modal API returns a non-OK HTTP status.
  * Carries the numeric status code so callers can classify without string parsing.
@@ -320,7 +299,6 @@ export class ModalClient {
   private createImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
   private terminateImageBuildSandboxUrl: string;
-  private deleteProviderImageUrl: string;
   private secret: string;
 
   private async postJson<T>(
@@ -366,7 +344,6 @@ export class ModalClient {
     this.createImageBuildSandboxUrl = `${baseUrl}-api-create-build-sandbox.modal.run`;
     this.startImageBuildSandboxUrl = `${baseUrl}-api-start-build-sandbox.modal.run`;
     this.terminateImageBuildSandboxUrl = `${baseUrl}-api-terminate-build-sandbox.modal.run`;
-    this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
   }
 
   /**
@@ -759,56 +736,6 @@ export class ModalClient {
         endpoint,
         build_id: request.buildId,
         sandbox_id: request.providerSessionId,
-        trace_id: correlation?.trace_id,
-        request_id: correlation?.request_id,
-        http_status: httpStatus,
-        duration_ms: Date.now() - startTime,
-        outcome,
-      });
-    }
-  }
-
-  /**
-   * Delete a provider image. Missing images count as deleted so retried
-   * cleanups stay idempotent; other provider failures reject.
-   */
-  async deleteProviderImage(
-    request: DeleteProviderImageRequest,
-    correlation?: CorrelationContext
-  ): Promise<DeleteProviderImageResponse> {
-    const startTime = Date.now();
-    const endpoint = "deleteProviderImage";
-    let httpStatus: number | undefined;
-    let outcome: "success" | "error" = "error";
-
-    try {
-      const result = await this.postJson(
-        this.deleteProviderImageUrl,
-        endpoint,
-        MODAL_CLEANUP_REQUEST_DEADLINE_MS,
-        {
-          provider_image_id: request.providerImageId,
-        },
-        deleteProviderImageModalResponseSchema,
-        correlation,
-        request.signal,
-        (status) => (httpStatus = status)
-      );
-
-      if (result.success === false) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
-
-      outcome = "success";
-      return {
-        providerImageId: result.data.provider_image_id,
-        deleted: result.data.deleted,
-      };
-    } finally {
-      log.info("modal.request", {
-        event: "modal.request",
-        endpoint,
-        provider_image_id: request.providerImageId,
         trace_id: correlation?.trace_id,
         request_id: correlation?.request_id,
         http_status: httpStatus,

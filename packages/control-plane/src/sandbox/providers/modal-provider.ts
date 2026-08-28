@@ -324,29 +324,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   }
 
   /**
-   * Delete a Modal provider image.
+   * Modal has no image-delete API — images are garbage-collected once no
+   * longer referenced — so deletion is a local no-op. Callers (the image
+   * reaper and finalizer) log each attempt and outcome.
    */
-  async deleteProviderImage(
-    providerImageId: string,
-    correlation?: CorrelationContext,
-    signal?: AbortSignal
-  ): Promise<void> {
-    try {
-      await this.client.deleteProviderImage({ providerImageId, signal }, correlation);
-    } catch (error) {
-      if (error instanceof ModalApiError) {
-        throw this.classifyErrorWithStatus(
-          `Provider image deletion failed with HTTP ${error.status}: ${error.message}`,
-          error.status,
-          error
-        );
-      }
-      if (error instanceof SandboxProviderError) {
-        throw error;
-      }
-      throw this.classifyError("Failed to delete Modal provider image", error);
-    }
-  }
+  async deleteProviderImage(): Promise<void> {}
 
   private classifyImageBuildError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;
