@@ -19,15 +19,12 @@ export interface ImageBuildFinalizationQueue {
   send(job: ImageBuildFinalizationJob): Promise<unknown>;
 }
 
-/**
- * Rebuilds the Queue command for a completion that was already accepted and
- * persisted on the row (the cron republish path).
- */
-export function republishedImageBuildFinalizationJob(row: {
-  id: string;
-  completion_hash: string;
-}): ImageBuildFinalizationJob {
-  return { version: 1, buildId: row.id, completionHash: row.completion_hash };
+/** The one constructor of the versioned Queue command shape. */
+export function imageBuildFinalizationJob(
+  buildId: string,
+  completionHash: string
+): ImageBuildFinalizationJob {
+  return { version: 1, buildId, completionHash };
 }
 
 type FinalizationOutcome =
@@ -83,5 +80,5 @@ export async function createImageBuildFinalizationJob(
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
-  return { version: 1, buildId, completionHash };
+  return imageBuildFinalizationJob(buildId, completionHash);
 }

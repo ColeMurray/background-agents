@@ -3,7 +3,6 @@ import { createExecutionContext, env } from "cloudflare:test";
 import worker from "../../src/index";
 import { ImageBuildStore } from "../../src/db/image-builds";
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
-import type { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { IMAGE_BUILD_SCHEDULER_CRON, ImageBuildScheduler } from "../../src/image-builds/scheduler";
 import type { ImageBuildWorkflow } from "../../src/image-builds/workflow";
 import type { Env } from "../../src/types";
@@ -54,13 +53,6 @@ describe("image build scheduler integration", () => {
 
     const send = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
-    const reaper = {
-      cleanupImages: vi.fn(async () => ({
-        deletedFailed: 0,
-        reapedFailed: 0,
-        reapedSuperseded: 0,
-      })),
-    } as unknown as ImageBuildReaper;
     const scheduler = new ImageBuildScheduler(
       { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
       env.DB,
@@ -68,7 +60,6 @@ describe("image build scheduler integration", () => {
       store,
       workflow,
       { create: vi.fn() } as unknown as ImageBuildAdapterFactory,
-      reaper,
       null
     );
 
@@ -117,13 +108,6 @@ describe("image build scheduler integration", () => {
 
     const send = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
-    const reaper = {
-      cleanupImages: vi.fn(async () => ({
-        deletedFailed: 0,
-        reapedFailed: 0,
-        reapedSuperseded: 0,
-      })),
-    } as unknown as ImageBuildReaper;
     const scheduler = new ImageBuildScheduler(
       { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
       env.DB,
@@ -131,7 +115,6 @@ describe("image build scheduler integration", () => {
       store,
       workflow,
       { create: vi.fn() } as unknown as ImageBuildAdapterFactory,
-      reaper,
       null
     );
 
@@ -158,13 +141,6 @@ describe("image build scheduler integration", () => {
 
     const cleanupFailedBuild = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
-    const reaper = {
-      cleanupImages: vi.fn(async () => ({
-        deletedFailed: 0,
-        reapedFailed: 0,
-        reapedSuperseded: 0,
-      })),
-    } as unknown as ImageBuildReaper;
     const scheduler = new ImageBuildScheduler(
       {} as Env,
       env.DB,
@@ -177,7 +153,6 @@ describe("image build scheduler integration", () => {
           cleanupCompletedBuild: vi.fn(async () => undefined),
         })),
       } as unknown as ImageBuildAdapterFactory,
-      reaper,
       null
     );
 

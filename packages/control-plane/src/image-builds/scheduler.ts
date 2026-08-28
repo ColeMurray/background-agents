@@ -2,7 +2,7 @@ import { ImageBuildStore } from "../db/image-builds";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import { errorMessage } from "./errors";
-import { republishedImageBuildFinalizationJob } from "./finalization-job";
+import { imageBuildFinalizationJob } from "./finalization-job";
 import type { ImageBuildProvider } from "./model";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
@@ -41,6 +41,7 @@ export interface ImageBuildSchedulerStats {
 
 export class ImageBuildScheduler {
   private readonly sessionCleanup: ImageBuildSessionCleanup;
+  private readonly reaper: ImageBuildReaper;
 
   constructor(
     private readonly env: Env,
@@ -49,12 +50,12 @@ export class ImageBuildScheduler {
     private readonly store: ImageBuildStore,
     private readonly workflow: ImageBuildWorkflow,
     adapterFactory: ImageBuildAdapterFactory,
-    private readonly reaper: ImageBuildReaper,
     private readonly sourceControl: SourceControlProvider | null,
     private readonly resolveTarget: typeof resolveScopeTarget = resolveScopeTarget,
     private readonly listScopes: typeof listEnabledScopes = listEnabledScopes
   ) {
     this.sessionCleanup = new ImageBuildSessionCleanup(store, adapterFactory);
+    this.reaper = new ImageBuildReaper(store, adapterFactory);
   }
 
   async run(correlation: CorrelationContext): Promise<ImageBuildSchedulerStats> {
@@ -141,7 +142,7 @@ export class ImageBuildScheduler {
     let published = 0;
     for (const row of rows) {
       try {
-        await queue.send(republishedImageBuildFinalizationJob(row));
+        await queue.send(imageBuildFinalizationJob(row.id, row.completion_hash));
         published += 1;
       } catch (error) {
         logger.warn("image_build.scheduler_finalization_republish_row_failed", {
@@ -268,15 +269,13 @@ export async function runImageBuildScheduler(
       });
     }
   }
-  const adapterFactory = createImageBuildAdapterFactory(env);
   return new ImageBuildScheduler(
     env,
     db,
     provider,
     store,
     createImageBuildWorkflowFromEnv(env, db),
-    adapterFactory,
-    new ImageBuildReaper(store, adapterFactory),
+    createImageBuildAdapterFactory(env),
     sourceControl
   ).run(correlation);
 }

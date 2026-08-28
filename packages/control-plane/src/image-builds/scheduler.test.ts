@@ -5,7 +5,6 @@ import type { SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
-import type { ImageBuildReaper } from "./reaper";
 import { ImageBuildScheduler } from "./scheduler";
 import type { ResolvedImageBuildTarget } from "./scope";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
@@ -56,6 +55,34 @@ function harness(
     listSessionCleanup,
     clearProviderSessionCleanup,
     listRecoverableFinalizations,
+    // The scheduler constructs its reaper internally, so the cleanup phase
+    // runs real reap logic over these rows: one failed and one superseded
+    // artifact delete → artifactsReaped 2, two aged rows → rowsAged 2.
+    getFailedImagesWithArtifacts: vi.fn(async () => [
+      {
+        id: "reap-failed",
+        scope_kind: "environment" as const,
+        scope_id: "env_1",
+        provider: "modal" as const,
+        provider_image_id: "im-failed",
+        provider_session_id: null,
+        created_at: 1,
+      },
+    ]),
+    clearFailedImageArtifact: vi.fn(async () => true),
+    deleteOldFailedBuilds: vi.fn(async () => 2),
+    getSupersededImages: vi.fn(async () => [
+      {
+        id: "reap-superseded",
+        scope_kind: "environment" as const,
+        scope_id: "env_1",
+        provider: "modal" as const,
+        provider_image_id: "im-superseded",
+        provider_session_id: null,
+        created_at: 2,
+      },
+    ]),
+    deleteSupersededImage: vi.fn(async () => true),
     finalization: {
       clearSessionCleanup: clearProviderSessionCleanup,
     },
@@ -73,13 +100,6 @@ function harness(
     triggerBuildWithTarget: vi.fn(async (_scope: ImageBuildScope) => ({
       type: "triggered" as const,
       buildId: "build-new",
-    })),
-  };
-  const reaper = {
-    cleanupImages: vi.fn(async () => ({
-      deletedFailed: 2,
-      reapedFailed: 1,
-      reapedSuperseded: 1,
     })),
   };
   const resolveTarget = vi.fn(
@@ -101,7 +121,6 @@ function harness(
     store as unknown as ImageBuildStore,
     workflow as unknown as ImageBuildWorkflow,
     { create: vi.fn(() => adapter) } as unknown as ImageBuildAdapterFactory,
-    reaper as unknown as ImageBuildReaper,
     options.sourceControl === undefined ? ({} as SourceControlProvider) : options.sourceControl,
     resolveTarget,
     listScopes
@@ -111,7 +130,6 @@ function harness(
     store,
     adapter,
     workflow,
-    reaper,
     resolveTarget,
     listScopes,
     listSessionCleanup,
@@ -184,14 +202,14 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("continues reconciliation and artifact cleanup when a cleanup phase query fails", async () => {
-    const { scheduler, store, reaper } = harness();
+    const { scheduler, store } = harness();
     store.listSessionCleanup.mockRejectedValueOnce(new Error("D1 cleanup unavailable"));
 
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
     expect(stats.scopesScanned).toBe(1);
     expect(stats.triggered).toBe(1);
-    expect(reaper.cleanupImages).toHaveBeenCalledOnce();
+    expect(store.deleteOldFailedBuilds).toHaveBeenCalledOnce();
   });
 
   it("checks every enabled scope in one full scan", async () => {
@@ -267,7 +285,7 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("runs provider-neutral maintenance when rebuild reconciliation is unavailable", async () => {
-    const { scheduler, listScopes, reaper } = harness({
+    const { scheduler, store, listScopes } = harness({
       provider: null,
       sourceControl: null,
     });
@@ -278,7 +296,7 @@ describe("ImageBuildScheduler", () => {
     expect(stats.cleanupAttempted).toBe(2);
     expect(stats.scopesScanned).toBe(0);
     expect(listScopes).not.toHaveBeenCalled();
-    expect(reaper.cleanupImages).toHaveBeenCalledOnce();
+    expect(store.deleteOldFailedBuilds).toHaveBeenCalledOnce();
   });
 
   it("republishes persisted artifacts left behind by exhausted Queue delivery", async () => {
