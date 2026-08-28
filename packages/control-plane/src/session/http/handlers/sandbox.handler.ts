@@ -70,7 +70,7 @@ export class SandboxHandler {
       token: string | null,
       sandbox: SandboxRow | null
     ) => Promise<boolean>,
-    private readonly reportSandboxError: (reason: string) => void,
+    private readonly failSandbox: (reason: string) => Promise<void>,
     private readonly generateId: () => string,
     private readonly now: () => number = Date.now
   ) {}
@@ -105,13 +105,31 @@ export class SandboxHandler {
     if (!result.success) {
       return Response.json({ error: "Invalid sandbox error" }, { status: 400 });
     }
-    if (!this.sandboxRepository.getSandbox()) {
-      return Response.json({ error: "No sandbox" }, { status: 404 });
+    const authHeader = request.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
+    const sandboxId = request.headers.get("X-Sandbox-ID");
+    const sandbox = this.sandboxRepository.getSandbox();
+    if (!sandbox || !token) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (sandbox.modal_sandbox_id && sandboxId !== sandbox.modal_sandbox_id) {
+      return Response.json({ error: "Wrong sandbox" }, { status: 403 });
     }
 
-    this.sandboxRepository.updateSandboxStatus("failed");
-    this.messenger.broadcast({ type: "sandbox_status", status: "failed" });
-    this.reportSandboxError(result.data.error);
+    if (!(await this.isValidSandboxToken(token, sandbox))) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const currentSandbox = this.sandboxRepository.getSandbox();
+    if (
+      currentSandbox?.modal_sandbox_id !== sandbox.modal_sandbox_id ||
+      currentSandbox?.auth_token_hash !== sandbox.auth_token_hash ||
+      currentSandbox?.auth_token !== sandbox.auth_token
+    ) {
+      return Response.json({ error: "Sandbox credentials changed" }, { status: 403 });
+    }
+
+    await this.failSandbox(result.data.error);
     return Response.json({ status: "ok" });
   }
 

@@ -1451,6 +1451,32 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });
 
+  it("uses a fatal sandbox reason for completion and callback notification", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-crashed",
+      created_at: 800,
+    });
+
+    await h.queue.failStuckProcessingMessage("OpenCode repeatedly crashed");
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-crashed",
+        error: "OpenCode repeatedly crashed",
+      }),
+      expect.any(Number),
+      "processing"
+    );
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-crashed",
+      false,
+      "OpenCode repeatedly crashed"
+    );
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+  });
+
   describe("enqueuePromptFromApi", () => {
     it.each(["cancelled", "archived"] as const)(
       "rejects prompts for a %s session before inserting a message",

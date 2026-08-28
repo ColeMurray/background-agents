@@ -17,6 +17,7 @@ import {
   parseJsonBody,
   parsePattern,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
+  SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
@@ -137,7 +138,11 @@ async function handleSandboxError(
 
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.sandboxError, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: request.headers.get("Authorization") ?? "",
+      "X-Sandbox-ID": request.headers.get("X-Sandbox-ID") ?? "",
+    },
     body: await request.text(),
   });
 }
@@ -311,7 +316,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     runtimeMethod: "POST",
   }),
   defineRoute(
-    SCM_AGNOSTIC_SANDBOX_ROUTE,
+    SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/sandbox-error"),

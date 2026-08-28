@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 
 _ResultT = TypeVar("_ResultT")
 
+FATAL_ERROR_REPORT_MAX_ATTEMPTS = 3
+FATAL_ERROR_REPORT_BACKOFF_BASE_SECONDS = 2
+FATAL_ERROR_REPORT_TIMEOUT_SECONDS = 5.0
+
 
 class ImageBuildExecutionCancelled(Exception):
     """A handled process signal interrupted image-build work."""
@@ -75,13 +79,31 @@ class SandboxSupervisor:
         try:
             session_id = quote(self.config.session_id, safe="")
             async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.config.control_plane_url.rstrip('/')}/sessions/{session_id}/sandbox-error",
-                    json={"error": message, "fatal": True},
-                    headers={"Authorization": f"Bearer {self.config.sandbox_token}"},
-                    timeout=5.0,
-                )
-                response.raise_for_status()
+                for attempt in range(1, FATAL_ERROR_REPORT_MAX_ATTEMPTS + 1):
+                    try:
+                        response = await client.post(
+                            f"{self.config.control_plane_url.rstrip('/')}/sessions/{session_id}/sandbox-error",
+                            json={"error": message, "fatal": True},
+                            headers={
+                                "Authorization": f"Bearer {self.config.sandbox_token}",
+                                "X-Sandbox-ID": self.config.sandbox_id,
+                            },
+                            timeout=FATAL_ERROR_REPORT_TIMEOUT_SECONDS,
+                        )
+                        response.raise_for_status()
+                        return
+                    except Exception as error:
+                        if attempt == FATAL_ERROR_REPORT_MAX_ATTEMPTS:
+                            raise
+                        delay_seconds = FATAL_ERROR_REPORT_BACKOFF_BASE_SECONDS**attempt
+                        self.log.warn(
+                            "supervisor.report_error_retry",
+                            attempt=attempt,
+                            max_attempts=FATAL_ERROR_REPORT_MAX_ATTEMPTS,
+                            delay_seconds=delay_seconds,
+                            exc=error,
+                        )
+                        await asyncio.sleep(delay_seconds)
         except Exception as error:
             self.log.error("supervisor.report_error_failed", exc=error)
 

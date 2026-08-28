@@ -38,7 +38,7 @@ function getHandler(method: string, path: string) {
   for (const route of sessionRuntimeProxyRoutes) {
     if (route.method !== method) continue;
     const match = path.match(route.pattern);
-    if (match) return { handler: route.handler, match };
+    if (match) return { handler: route.handler, match, route };
   }
   throw new Error(`No route found for ${method} ${path}`);
 }
@@ -95,12 +95,16 @@ describe("session runtime proxy routes", () => {
       return Response.json({ status: "ok" });
     });
     const path = "/sessions/session-1/sandbox-error";
-    const { handler, match } = getHandler("POST", path);
+    const { handler, match, route } = getHandler("POST", path);
 
     const response = await handler(
       new Request(`https://test.local${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
         body: JSON.stringify({ error: "Bridge repeatedly crashed", fatal: true }),
       }),
       createEnv(fetch),
@@ -109,7 +113,10 @@ describe("session runtime proxy routes", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(route.authentication.kind).toBe("handler-authenticated");
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.sandboxError);
+    expect(requests[0].headers.get("Authorization")).toBe("Bearer sandbox-token");
+    expect(requests[0].headers.get("X-Sandbox-ID")).toBe("sandbox-1");
     await expect(requests[0].json()).resolves.toEqual({
       error: "Bridge repeatedly crashed",
       fatal: true,

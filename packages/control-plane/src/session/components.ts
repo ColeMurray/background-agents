@@ -582,7 +582,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,
-    (reason) => lifecycleManager.reportSandboxError(reason),
+    async (reason) => {
+      sandboxRepository.updateSandboxStatus("failed");
+      messenger.broadcast({ type: "sandbox_status", status: "failed" });
+      lifecycleManager.reportSandboxError(reason);
+      await messageQueue.failStuckProcessingMessage(reason);
+    },
     generateId
   );
 

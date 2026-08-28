@@ -25,14 +25,13 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
   const artifactRepository = { createArtifact: vi.fn() } as unknown as ArtifactRepository;
   const processSandboxEvent = vi.fn();
   const getSandbox = vi.fn<() => SandboxRow | null>();
-  const updateSandboxStatus = vi.fn();
   const isValidSandboxToken = vi.fn();
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
   const refreshXaiToken = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
-  const reportSandboxError = vi.fn();
+  const failSandbox = vi.fn(async (_reason: string) => {});
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
@@ -51,7 +50,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     repository as unknown as ParticipantRepository,
     artifactRepository,
     { getSession } as unknown as SessionCoreRepository,
-    { getSandbox, updateSandboxStatus } as unknown as SandboxRepository,
+    { getSandbox } as unknown as SandboxRepository,
     { processSandboxEvent } as unknown as SessionSandboxEventProcessor,
     messenger,
     managedSecretsConfigured,
@@ -59,7 +58,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,
-    reportSandboxError,
+    failSandbox,
     generateId,
     now
   );
@@ -84,14 +83,13 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     artifactRepository,
     processSandboxEvent,
     getSandbox,
-    updateSandboxStatus,
     isValidSandboxToken,
     getSession,
     refreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     broadcast,
-    reportSandboxError,
+    failSandbox,
     generateId,
     now,
     log,
@@ -121,27 +119,36 @@ describe("SandboxHandler", () => {
     expect(processSandboxEvent).toHaveBeenCalledWith(event);
   });
 
-  it("marks a sandbox failed and reports a fatal runtime error", async () => {
-    const { handler, getSandbox, updateSandboxStatus, broadcast, reportSandboxError } =
-      createHandler();
-    getSandbox.mockReturnValue({ id: "sandbox-1" } as SandboxRow);
+  it("authenticates the current sandbox generation and coordinates a fatal runtime error", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+    const sandbox = {
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+    } as SandboxRow;
+    getSandbox.mockReturnValue(sandbox);
+    isValidSandboxToken.mockResolvedValue(true);
 
     const response = await handler.sandboxError(
       new Request("http://internal/internal/sandbox-error", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
         body: JSON.stringify({ error: "OpenCode repeatedly crashed", fatal: true }),
       })
     );
 
     expect(response.status).toBe(200);
-    expect(updateSandboxStatus).toHaveBeenCalledWith("failed");
-    expect(broadcast).toHaveBeenCalledWith({ type: "sandbox_status", status: "failed" });
-    expect(reportSandboxError).toHaveBeenCalledWith("OpenCode repeatedly crashed");
+    expect(isValidSandboxToken).toHaveBeenCalledWith("sandbox-token", sandbox);
+    expect(failSandbox).toHaveBeenCalledWith("OpenCode repeatedly crashed");
   });
 
   it("rejects an empty sandbox error", async () => {
-    const { handler, updateSandboxStatus, reportSandboxError } = createHandler();
+    const { handler, failSandbox } = createHandler();
 
     const response = await handler.sandboxError(
       new Request("http://internal/internal/sandbox-error", {
@@ -152,8 +159,39 @@ describe("SandboxHandler", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(updateSandboxStatus).not.toHaveBeenCalled();
-    expect(reportSandboxError).not.toHaveBeenCalled();
+    expect(failSandbox).not.toHaveBeenCalled();
+  });
+
+  it("rejects a sandbox generation replaced while its token is being hashed", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+    const originalSandbox = {
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+    } as SandboxRow;
+    const replacementSandbox = {
+      ...originalSandbox,
+      modal_sandbox_id: "sandbox-2",
+      auth_token_hash: "token-hash-2",
+    };
+    getSandbox.mockReturnValueOnce(originalSandbox).mockReturnValue(replacementSandbox);
+    isValidSandboxToken.mockResolvedValue(true);
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer old-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: JSON.stringify({ error: "Old sandbox failed" }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(failSandbox).not.toHaveBeenCalled();
   });
 
   it("rejects malformed sandbox events", async () => {
