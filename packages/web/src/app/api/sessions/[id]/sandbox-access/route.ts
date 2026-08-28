@@ -16,7 +16,15 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     `/sessions/${encodeURIComponent(id)}/sandbox-access`,
     { cache: "no-store" }
   );
-  if (response.status === 409) {
+  const conflict =
+    response.status === 409
+      ? ((await response
+          .clone()
+          .json()
+          .catch(() => null)) as { error?: unknown } | null)
+      : null;
+  if (conflict?.error === "Sandbox access is unavailable") {
+    await response.body?.cancel();
     return new Response(null, {
       status: 204,
       headers: { "Cache-Control": "private, no-store", Vary: "Cookie" },

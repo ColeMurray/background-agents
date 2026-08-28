@@ -14,9 +14,13 @@ describe("sandbox access BFF", () => {
   });
 
   it("returns no content when sandbox access is temporarily unavailable", async () => {
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ error: "Sandbox access is unavailable" }, { status: 409 })
-    );
+    const cancel = vi.fn();
+    const upstream = {
+      status: 409,
+      clone: () => Response.json({ error: "Sandbox access is unavailable" }),
+      body: { cancel },
+    } as unknown as Response;
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(upstream);
 
     const response = await GET({} as Request, {
       params: Promise.resolve({ id: "session-1" }),
@@ -25,6 +29,22 @@ describe("sandbox access BFF", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await response.text()).toBe("");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("preserves access-change conflicts for retry", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Sandbox access changed; retry" }, { status: 409 })
+    );
+
+    const response = await GET({} as Request, {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
+    await expect(response.json()).resolves.toEqual({ error: "Sandbox access changed; retry" });
   });
 
   it("preserves unexpected control-plane errors", async () => {
