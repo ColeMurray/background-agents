@@ -13,6 +13,7 @@ function createHandler() {
     failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
     recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
     resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
+    processMessageQueue: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const lifecycleManager = {
     handleAlarm: vi.fn<() => Promise<SandboxAlarmResult>>().mockResolvedValue("no_action"),
@@ -120,6 +121,7 @@ describe("createAlarmHandler", () => {
       failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
       recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
       resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
+      processMessageQueue: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
 
     const handler = createAlarmHandler({
@@ -160,7 +162,7 @@ describe("createAlarmHandler", () => {
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 
-  it("fails stuck work without resuming after a connecting timeout", async () => {
+  it("fails stuck work and resumes after a connecting timeout", async () => {
     const { handler, repository, messageQueue, lifecycleManager } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
     lifecycleManager.handleAlarm.mockResolvedValue("sandbox_failed");
@@ -168,7 +170,9 @@ describe("createAlarmHandler", () => {
     await handler.handle();
 
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
-    expect(messageQueue.resumeAfterSandboxTermination).not.toHaveBeenCalled();
+    // Bot-triggered prompts never send the "next message" the old recovery
+    // waited for, so the alarm itself must re-drive the queued prompt.
+    expect(messageQueue.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
   });
 
   it("fails stuck work and resumes after lifecycle termination", async () => {
@@ -179,6 +183,31 @@ describe("createAlarmHandler", () => {
     await handler.handle();
 
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
+    expect(messageQueue.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
+  });
+
+  it("re-drives the queue when the lifecycle alarm took no action", async () => {
+    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    lifecycleManager.handleAlarm.mockResolvedValue("no_action");
+
+    await handler.handle();
+
+    // The circuit-breaker retry alarm lands here: the sandbox row is dead and
+    // nothing else will move a pending bot prompt.
+    expect(messageQueue.processMessageQueue).toHaveBeenCalledOnce();
+    // resumeAfterSandboxTermination would clear a live sandbox's stop marker.
+    expect(messageQueue.resumeAfterSandboxTermination).not.toHaveBeenCalled();
+  });
+
+  it("does not re-drive the queue when the lifecycle alarm acted", async () => {
+    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    lifecycleManager.handleAlarm.mockResolvedValue("sandbox_terminated");
+
+    await handler.handle();
+
+    expect(messageQueue.processMessageQueue).not.toHaveBeenCalled();
     expect(messageQueue.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
   });
 });

@@ -21,6 +21,8 @@ import {
   type RestoreResult,
   type SnapshotConfig,
   type SnapshotResult,
+  type StopConfig,
+  type StopResult,
 } from "../provider";
 
 interface StartModalImageBuildConfig {
@@ -90,7 +92,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: false,
-    supportsExplicitStop: false,
+    supportsExplicitStop: true,
   };
 
   constructor(private readonly client: ModalClient) {}
@@ -238,6 +240,33 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         throw error;
       }
       throw this.classifyError("Failed to take snapshot", error);
+    }
+  }
+
+  /**
+   * Stop a sandbox explicitly via Modal's terminate-by-id API. Terminal: Modal
+   * sandboxes cannot pause, so every stop reason kills the sandbox.
+   */
+  async stopSandbox(config: StopConfig): Promise<StopResult> {
+    try {
+      const result = await this.client.terminateSandbox(
+        {
+          providerObjectId: config.providerObjectId,
+          sessionId: config.sessionId,
+          reason: config.reason,
+          signal: config.signal,
+        },
+        config.correlation
+      );
+      return result;
+    } catch (error) {
+      if (error instanceof ModalApiError) {
+        throw this.classifyErrorWithStatus(`Stop failed with HTTP ${error.status}`, error.status);
+      }
+      if (error instanceof SandboxProviderError) {
+        throw error;
+      }
+      throw this.classifyError("Failed to stop sandbox", error);
     }
   }
 

@@ -39,6 +39,7 @@ from .log_config import configure_logging, get_logger
 configure_logging()
 log = get_logger("web_api")
 IMAGE_BUILD_FINALIZATION_GRACE_SECONDS = 10 * 60
+DEFAULT_TERMINATION_REASON = "manual"
 
 
 class _ModalRequestModel(BaseModel):
@@ -455,6 +456,97 @@ def api_health() -> dict:
 
 @app.function(image=function_image, secrets=[internal_api_secret])
 @fastapi_endpoint(method="POST")
+async def api_terminate_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    """
+    Terminate a sandbox by its Modal object id.
+
+    Used by the control plane when a sandbox is failed without its bridge
+    connected (e.g. a connecting timeout): the provider sandbox keeps running
+    until its timeout, so an explicit terminate is the only way it dies.
+
+    POST body:
+    {
+        "sandbox_id": "...",  # Modal object id
+        "session_id": "...",
+        "reason": "connecting_timeout" | ...
+    }
+
+    A sandbox that no longer exists is success: the caller's goal is that the
+    sandbox stop existing.
+
+    Errors are reported in-band like every other endpoint in this module: the
+    response stays HTTP 200 and carries ``success: false``, which the
+    control-plane client parses from the body. The request log therefore
+    records the 200 that actually shipped, with ``outcome`` carrying the
+    error signal.
+    """
+    start_time = time.time()
+    http_status = 200
+    outcome = "success"
+    sandbox_id = request.get("sandbox_id")
+
+    require_auth(authorization)
+
+    if not sandbox_id:
+        raise HTTPException(status_code=400, detail="sandbox_id is required")
+
+    try:
+        from .sandbox.manager import SandboxManager
+
+        session_id = request.get("session_id")
+        reason = request.get("reason", DEFAULT_TERMINATION_REASON)
+
+        manager = SandboxManager()
+
+        handle = await manager.get_sandbox_by_id(sandbox_id)
+        if handle is not None:
+            await handle.terminate()
+
+        return {
+            "success": True,
+            "data": {
+                "sandbox_id": sandbox_id,
+                "session_id": session_id,
+                "reason": reason,
+                "terminated": True,
+            },
+        }
+    except HTTPException as e:
+        outcome = "error"
+        http_status = e.status_code
+        raise
+    except Exception as e:
+        # http_status stays 200: the response above is the in-band error
+        # envelope, and outcome is the error signal in the log.
+        outcome = "error"
+        log.error("api.error", exc=e, endpoint_name="api_terminate_sandbox")
+        return {"success": False, "error": str(e)}
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log.info(
+            "modal.http_request",
+            http_method="POST",
+            http_path="/api_terminate_sandbox",
+            http_status=http_status,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            endpoint_name="api_terminate_sandbox",
+            trace_id=x_trace_id,
+            request_id=x_request_id,
+            session_id=x_session_id,
+            sandbox_id=x_sandbox_id or sandbox_id,
+        )
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
 async def api_snapshot_sandbox(
     request: dict,
     authorization: str | None = Header(None),
@@ -506,7 +598,7 @@ async def api_snapshot_sandbox(
         from .sandbox.manager import SandboxManager
 
         session_id = request.get("session_id")
-        reason = request.get("reason", "manual")
+        reason = request.get("reason", DEFAULT_TERMINATION_REASON)
 
         manager = SandboxManager()
 
