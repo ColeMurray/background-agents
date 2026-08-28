@@ -60,6 +60,22 @@ describe("router sandbox-token fallback", () => {
     expect(response.status).toBe(202);
   });
 
+  it("requires a valid sandbox token for boot progress", async () => {
+    const { env } = createEnv(204);
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/boot-progress", {
+        method: "POST",
+        headers: { Authorization: "Bearer valid-sandbox-token" },
+        body: JSON.stringify({ sandboxId: "sandbox-current" }),
+      }),
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(202);
+  });
+
   it("rejects when sandbox verification also fails", async () => {
     const { env } = createEnv(401);
 

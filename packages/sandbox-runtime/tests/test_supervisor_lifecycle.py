@@ -1,6 +1,9 @@
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from sandbox_runtime.repository_boot import RepositoryBootResult
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
@@ -78,6 +81,66 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
         "opencode",
         "bridge",
     ]
+
+
+async def test_boot_progress_runs_until_bridge_starts(tmp_path, monkeypatch):
+    events = []
+    supervisor, repository, opencode_server, agent_bridge, *_ = _supervisor(tmp_path, events)
+    original_repository_boot = repository.boot.side_effect
+    original_opencode_start = opencode_server.start.side_effect
+
+    async def boot(mode, ports):
+        await asyncio.sleep(0)
+        assert supervisor._boot_progress_task is not None
+        return original_repository_boot(mode, ports)
+
+    async def start_opencode(repositories, workdir):
+        assert supervisor._boot_progress_task is not None
+        return original_opencode_start(repositories, workdir)
+
+    async def start_bridge():
+        assert supervisor._boot_progress_task is not None
+        events.append("bridge")
+
+    repository.boot.side_effect = boot
+    opencode_server.start.side_effect = start_opencode
+    agent_bridge.start.side_effect = start_bridge
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+
+    assert await supervisor.run() is True
+    assert supervisor._boot_progress_task is None
+
+
+async def test_report_boot_progress_uses_session_route_and_sandbox_token(tmp_path, monkeypatch):
+    supervisor, *_ = _supervisor(tmp_path, [])
+    supervisor.config = replace(
+        supervisor.config,
+        control_plane_url="https://control.example/",
+        sandbox_token="secret-token",
+        session_config={"session_id": "session/one"},
+    )
+    post = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock()))
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=MagicMock(post=post))
+    client.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "sandbox_runtime.supervisor.httpx.AsyncClient", MagicMock(return_value=client)
+    )
+
+    sleep = AsyncMock(side_effect=asyncio.CancelledError)
+    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._boot_progress_loop()
+
+    post.assert_awaited_once_with(
+        "https://control.example/sessions/session%2Fone/boot-progress",
+        json={"sandboxId": "sandbox-1"},
+        headers={"Authorization": "Bearer secret-token"},
+        timeout=supervisor.BOOT_PROGRESS_TIMEOUT_SECONDS,
+    )
 
 
 async def test_regular_boot_passes_repository_workspace_to_services(tmp_path, monkeypatch):

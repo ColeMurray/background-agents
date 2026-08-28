@@ -179,6 +179,7 @@ function createMockStorage(
         sandbox.auth_token = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
         sandbox.runtime_version = null;
+        sandbox.last_heartbeat = null;
         if (!data.preserveProviderObjectId) sandbox.modal_object_id = null;
       }
     }),
@@ -193,6 +194,7 @@ function createMockStorage(
       if (sandbox) {
         sandbox.status = data.status;
         sandbox.created_at = data.createdAt;
+        sandbox.last_heartbeat = null;
       }
     }),
     updateSandboxModalObjectId: vi.fn((id: string | null) => {
@@ -215,6 +217,32 @@ function createMockStorage(
     updateSandboxLastActivity: vi.fn((timestamp: number) => {
       calls.push("updateSandboxLastActivity");
       if (sandbox) sandbox.last_activity = timestamp;
+    }),
+    recordBootProgress: vi.fn((sandboxId: string, timestamp: number) => {
+      calls.push(`recordBootProgress:${sandboxId}`);
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== sandboxId ||
+        (sandbox.status !== "spawning" && sandbox.status !== "connecting")
+      ) {
+        return false;
+      }
+      sandbox.last_heartbeat = timestamp;
+      return true;
+    }),
+    failStartupIfUnchanged: vi.fn((sandboxId: string, createdAt: number, livenessAt: number) => {
+      calls.push(`failStartupIfUnchanged:${sandboxId}`);
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== sandboxId ||
+        sandbox.created_at !== createdAt ||
+        Math.max(sandbox.created_at, sandbox.last_heartbeat ?? 0) !== livenessAt ||
+        (sandbox.status !== "spawning" && sandbox.status !== "connecting")
+      ) {
+        return false;
+      }
+      sandbox.status = "failed";
+      return true;
     }),
     incrementCircuitBreakerFailure: vi.fn((timestamp: number) => {
       calls.push("incrementCircuitBreakerFailure");
@@ -1666,10 +1694,8 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      // Should go: pending -> spawning -> connecting
-      const statusCalls = storage.calls.filter((c) => c.startsWith("updateSandbox"));
-      expect(statusCalls).toContain("updateSandboxForSpawn");
-      expect(statusCalls).toContain("updateSandboxStatus:connecting");
+      expect(storage.calls).toContain("updateSandboxForSpawn");
+      expect(storage.calls).toContain("updateSandboxStatus:connecting");
     });
 
     it("handles provider errors and increments failure count for permanent errors", async () => {
@@ -2246,7 +2272,7 @@ describe("SandboxLifecycleManager", () => {
       const result = await manager.handleAlarm();
 
       expect(result).toBe("sandbox_failed");
-      expect(storage.calls).toContain("updateSandboxStatus:failed");
+      expect(storage.calls).toContain(`failStartupIfUnchanged:${sandbox.modal_sandbox_id}`);
       expect(storage.calls).toContain("clearSandboxAccess:codeServer");
       expect(broadcaster.messages.some((m) => (m as { status?: string }).status === "failed")).toBe(
         true
@@ -2259,6 +2285,58 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_error).toContain("failed to connect");
       // Should NOT trigger snapshot (nothing to snapshot)
       expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("keeps an arbitrarily old boot alive while progress is recent", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        created_at: now - 60 * 60_000,
+        last_heartbeat: now - 10_000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        alarmScheduler,
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      expect(await manager.handleAlarm()).toBe("no_action");
+      expect(storage.calls).not.toContain("updateSandboxStatus:failed");
+      expect(alarmScheduler.alarms).toEqual([
+        sandbox.last_heartbeat! + createTestConfig().connectingTimeout.timeoutMs,
+      ]);
+    });
+
+    it("does not fail a replacement when timeout state changed", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        created_at: now - 130_000,
+        last_heartbeat: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      vi.mocked(storage.failStartupIfUnchanged).mockReturnValue(false);
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      expect(await manager.handleAlarm()).toBe("no_action");
+      expect(broadcaster.messages).toEqual([]);
     });
 
     it("does not timeout connecting sandbox within timeout window", async () => {
@@ -2287,6 +2365,49 @@ describe("SandboxLifecycleManager", () => {
       expect(storage.calls).not.toContain("updateSandboxStatus:failed");
       // Should schedule a follow-up alarm
       expect(alarmScheduler.alarms.length).toBe(1);
+    });
+  });
+
+  describe("recordBootProgress", () => {
+    it("records current startup liveness and rearms the watchdog", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({ status: "connecting", last_heartbeat: null });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      const config = createTestConfig();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        alarmScheduler,
+        createMockIdGenerator(),
+        config
+      );
+
+      await expect(manager.recordBootProgress(sandbox.modal_sandbox_id!, now)).resolves.toBe(true);
+      expect(sandbox.last_heartbeat).toBe(now);
+      expect(alarmScheduler.alarms).toEqual([now + config.connectingTimeout.timeoutMs]);
+    });
+
+    it("rejects progress from a replaced sandbox", async () => {
+      const sandbox = createMockSandbox({ status: "connecting" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const alarmScheduler = createMockAlarmScheduler();
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        alarmScheduler,
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.recordBootProgress("sandbox-replaced", Date.now())).resolves.toBe(false);
+      expect(alarmScheduler.alarms).toEqual([]);
     });
   });
 

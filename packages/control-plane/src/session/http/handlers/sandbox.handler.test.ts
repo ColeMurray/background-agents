@@ -34,6 +34,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
+  const recordBootProgress = vi.fn(async () => true);
 
   const log = {
     debug: vi.fn(),
@@ -58,6 +59,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     getScmCredentials,
     isValidSandboxToken,
     generateId,
+    recordBootProgress,
     now
   );
 
@@ -68,6 +70,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     createMediaArtifact: (request: Request) => sandboxHandler.createMediaArtifact(request),
     addParticipant: (request: Request) => sandboxHandler.addParticipant(request),
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
+    bootProgress: (request: Request) => sandboxHandler.bootProgress(request),
     openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
     xaiTokenRefresh: () => sandboxHandler.xaiTokenRefresh(log),
     scmCredentials: () => sandboxHandler.scmCredentials(log),
@@ -88,11 +91,40 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     broadcast,
     generateId,
     now,
+    recordBootProgress,
     log,
   };
 }
 
 describe("SandboxHandler", () => {
+  it("records boot progress for the requested logical sandbox", async () => {
+    const { handler, recordBootProgress, now } = createHandler();
+
+    const response = await handler.bootProgress(
+      new Request("http://internal/internal/boot-progress", {
+        method: "POST",
+        body: JSON.stringify({ sandboxId: "sandbox-current" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(recordBootProgress).toHaveBeenCalledWith("sandbox-current", now());
+  });
+
+  it("rejects stale boot progress", async () => {
+    const { handler, recordBootProgress } = createHandler();
+    recordBootProgress.mockResolvedValue(false);
+
+    const response = await handler.bootProgress(
+      new Request("http://internal/internal/boot-progress", {
+        method: "POST",
+        body: JSON.stringify({ sandboxId: "sandbox-stale" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+  });
+
   it("processes sandbox event and returns ok response", async () => {
     const { handler, processSandboxEvent } = createHandler();
     const event = {

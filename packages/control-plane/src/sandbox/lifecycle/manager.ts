@@ -76,6 +76,7 @@ const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 interface SandboxCircuitBreakerInfo {
   status: SandboxStatus;
   created_at: number;
+  last_heartbeat: number | null;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
@@ -152,6 +153,10 @@ export interface SandboxStorage {
   ): void;
   /** Update last activity timestamp */
   updateSandboxLastActivity(timestamp: number): void;
+  /** Record authenticated startup liveness for the current logical sandbox. */
+  recordBootProgress(sandboxId: string, timestamp: number): boolean;
+  /** Fail startup only if identity, attempt, status, and liveness are unchanged. */
+  failStartupIfUnchanged(sandboxId: string, createdAt: number, livenessAt: number): boolean;
   /** Increment circuit breaker failure count */
   incrementCircuitBreakerFailure(timestamp: number): void;
   /** Reset circuit breaker failure count */
@@ -413,6 +418,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     const spawnState = {
       status: sandboxState?.status ?? DEFAULT_SANDBOX_STATUS,
       createdAt: sandboxState?.created_at || 0,
+      lastHeartbeat: sandboxState?.last_heartbeat ?? null,
       providerObjectId: sandboxState?.modal_object_id || null,
       snapshotImageId: sandboxState?.snapshot_image_id || null,
       snapshotRuntimeVersion: sandboxState?.snapshot_runtime_version || null,
@@ -1288,6 +1294,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     const connectingResult = evaluateConnectingTimeout(
       sandbox.status,
       sandbox.created_at,
+      sandbox.last_heartbeat,
       this.config.connectingTimeout,
       now
     );
@@ -1296,9 +1303,20 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.log.warn("Connecting timeout", {
         event: "sandbox.connecting_timeout",
         elapsed_ms: connectingResult.elapsedMs,
-        timeout_ms: this.config.connectingTimeout.timeoutMs,
+        timeout_ms: connectingResult.deadlineAt - connectingResult.livenessAt,
       });
-      this.storage.updateSandboxStatus("failed");
+      const sandboxId = sandbox.modal_sandbox_id;
+      const failed =
+        sandboxId &&
+        this.storage.failStartupIfUnchanged(
+          sandboxId,
+          sandbox.created_at,
+          connectingResult.livenessAt
+        );
+      if (!failed) {
+        this.log.info("Connecting timeout superseded by newer startup liveness");
+        return "no_action";
+      }
       this.clearSandboxAccessState();
       if (this.canStopProviderSandbox()) {
         try {
@@ -1314,6 +1332,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         "Sandbox failed to connect within the allowed time. It will be retried on your next message."
       );
       return "sandbox_failed";
+    }
+
+    if (sandbox.status === "spawning" || sandbox.status === "connecting") {
+      await this.alarmScheduler.schedule(connectingResult.deadlineAt);
+      return "no_action";
     }
 
     // Check heartbeat health
@@ -1507,6 +1530,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   updateLastActivity(timestamp: number): void {
     this.storage.updateSandboxLastActivity(timestamp);
+  }
+
+  async recordBootProgress(sandboxId: string, timestamp: number): Promise<boolean> {
+    if (!this.storage.recordBootProgress(sandboxId, timestamp)) return false;
+    await this.alarmScheduler.schedule(timestamp + this.config.connectingTimeout.timeoutMs);
+    return true;
   }
 
   /**

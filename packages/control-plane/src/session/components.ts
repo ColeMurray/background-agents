@@ -582,7 +582,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,
-    generateId
+    generateId,
+    (sandboxId, timestamp) => lifecycleManager.recordBootProgress(sandboxId, timestamp)
   );
 
   const attachmentsHandler = new AttachmentsHandler(attachmentRepository, log);
@@ -721,6 +722,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, requestLog) =>
       sandboxHandler.verifySandboxToken(request, requestLog),
+    bootProgress: (request) => sandboxHandler.bootProgress(request),
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
