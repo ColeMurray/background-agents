@@ -370,8 +370,8 @@ After deploying the Slack worker, you can configure the app from
 [`packages/slack-bot/slack-app-manifest.yaml`](../packages/slack-bot/slack-app-manifest.yaml)
 instead of entering the settings below individually. Replace `SLACK_EVENTS_URL` with the worker's
 `/events` URL and `SLACK_INTERACTIONS_URL` with its `/interactions` URL before applying the
-manifest. The least-privilege template omits the optional `message.channels` and `message.groups`
-automation subscriptions; add them only when using channel-message automations.
+manifest. The template includes `message.channels` and `message.groups` for channel-message
+automations; remove those subscriptions if the deployment will not use that feature.
 
 Before `terraform apply`, configure the OAuth scopes below, install the app, and collect its bot
 token and signing secret. Apply the URL-dependent manifest after deployment, when Slack can verify

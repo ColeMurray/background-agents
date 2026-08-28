@@ -266,8 +266,9 @@ After Terraform deployment, guide user:
 
 The user can apply `packages/slack-bot/slack-app-manifest.yaml` instead of configuring the following
 settings individually. Replace `SLACK_EVENTS_URL` with the worker's `/events` URL and
-`SLACK_INTERACTIONS_URL` with its `/interactions` URL first. Add the optional `message.channels` and
-`message.groups` subscriptions only when channel-message automations are needed.
+`SLACK_INTERACTIONS_URL` with its `/interactions` URL first. The template includes
+`message.channels` and `message.groups` for channel-message automations; remove them if the
+deployment will not use that feature.
 
 OAuth scopes, app installation, the bot token, and the signing secret must be configured before
 `terraform apply`. Apply the URL-dependent manifest after deployment.

@@ -1,5 +1,4 @@
 # Replace SLACK_EVENTS_URL and SLACK_INTERACTIONS_URL with the deployed worker endpoints.
-# Add message.channels and message.groups only when using channel-message automations.
 display_information:
   name: Open Inspect
   description: AI coding assistant for your codebase
@@ -38,6 +37,8 @@ settings:
     bot_events:
       - app_home_opened
       - app_mention
+      - message.channels
+      - message.groups
       - message.im
       - message.mpim
   interactivity:
