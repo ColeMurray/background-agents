@@ -31,7 +31,7 @@ notification controls and safety notes are covered near the end.
 | Workflow                    | How it works                                                               |
 | --------------------------- | -------------------------------------------------------------------------- |
 | Start from a channel        | Invite the bot, then `@mention` it with a request                          |
-| Start from a DM             | Send a DM, or mention the bot in a group direct message                    |
+| Start from a DM             | Send the bot a direct message                                              |
 | Continue a session          | Reply in the same Slack thread                                             |
 | Send images to the agent    | Attach PNG, JPEG, WebP, or GIF images to an interactive request            |
 | Forward a message           | Share another Slack message with the bot; text, images, and source travel  |
@@ -79,18 +79,16 @@ has associated the Slack channel with exactly one repository, that repository is
 infers the repository from your message. When the match is unclear, Open-Inspect asks you to choose
 from candidate repositories in the Slack thread.
 
-### From a DM or group DM
+### From a DM
 
-Open a direct message with the Open-Inspect bot, or add it to a group direct message, and send the
-request:
+Open a direct message with the Open-Inspect bot and send the request:
 
 ```text
 Can you investigate the flaky login test in acme/web?
 ```
 
-Direct messages do not need an `@mention`. In a group direct message, mention Open-Inspect to start
-or continue a coding session; ordinary participant conversation is ignored. Open-Inspect strips its
-own mention while preserving mentions of other participants in the request.
+DMs do not need an `@mention`. If you include one anyway, Open-Inspect strips it before sending the
+request to the agent.
 
 To continue a session that started from a DM, reply in the Slack thread created for that DM request.
 Sending a new top-level DM is treated as a new request and may start repository selection again.
@@ -400,10 +398,10 @@ Slack Message automation; verify its watched channel and conditions.
 If setup was just changed, confirm the Slack app event subscriptions and interactivity URLs in
 [Complete Slack Setup](../GETTING_STARTED.md#step-7b-complete-slack-setup-if-using-slack).
 
-### Direct or group direct messages do not start sessions
+### DMs do not start sessions
 
-The Slack app needs the corresponding `message.im` or `message.mpim` event subscription configured.
-Once that is set up, send the bot a direct message or mention it in a group direct message.
+The Slack app needs the direct message event subscription configured. Once that is set up, send the
+bot a plain DM with your request. No `@mention` is required.
 
 ### Open-Inspect asks which repository to use
 

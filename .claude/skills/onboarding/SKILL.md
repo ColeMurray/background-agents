@@ -189,8 +189,8 @@ Guide user:
 
 1. https://api.slack.com/apps → "Create New App" → "From scratch"
 2. OAuth & Permissions → Add scopes: `assistant:write`, `app_mentions:read`, `chat:write`,
-   `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`,
-   `mpim:history`, `files:read`, `files:write`, `reactions:write`, `users:read`, `users:read.email`
+   `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `files:read`,
+   `files:write`, `reactions:write`, `users:read`, `users:read.email`
 3. Install to Workspace, note **Bot Token** (`xoxb-...`)
 4. Basic Information → note **Signing Secret**
 5. **App Home and Event Subscriptions configured AFTER deployment** (worker must be running for URL
@@ -292,7 +292,7 @@ writable Messages tab lets users start direct-message sessions.
 1. Event Subscriptions → Enable → Request URL from `terraform output -raw slack_bot_events_url`
 2. Wait for "Verified" checkmark
 3. Subscribe to bot events: `app_home_opened`, `app_mention`, `message.channels`, `message.groups`,
-   `message.im`, `message.mpim`
+   `message.im`
 
 ### Configure Interactivity
 

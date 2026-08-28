@@ -1,7 +1,6 @@
 import { publishAppHome } from "../app-home";
-import { getBotUserId } from "../bot-identity";
 import { handleChannelTrigger } from "../channel-trigger";
-import { isDmDispatchable, isGroupDmDispatchable } from "../dm-utils";
+import { isDmDispatchable } from "../dm-utils";
 import type { BackgroundTaskScheduler } from "../messages/blocks";
 import type { Env } from "../types";
 import { handleAppMention, handleDirectMessage } from "./message-handler";
@@ -26,12 +25,7 @@ export async function handleSlackEvent(
     await publishAppHome(env, event.user);
     return;
   }
-  let dispatchDirectMessage = isDmDispatchable(event);
-  if (!dispatchDirectMessage && event.channel_type === "mpim") {
-    const botUserId = await getBotUserId(env, traceId);
-    dispatchDirectMessage = !!botUserId && isGroupDmDispatchable(event, botUserId);
-  }
-  if (dispatchDirectMessage) {
+  if (isDmDispatchable(event)) {
     await handleDirectMessage(
       {
         type: event.type,

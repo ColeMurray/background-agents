@@ -20,8 +20,7 @@ import {
 } from "../attachments";
 import { createClassifier } from "../classifier";
 import { loadTargetCatalog } from "../classifier/catalog";
-import { getBotUserId } from "../bot-identity";
-import { stripMentions, stripUserMention } from "../dm-utils";
+import { stripMentions } from "../dm-utils";
 import {
   collectForwardedMessages,
   FORWARD_ONLY_PROMPT_TEXT,
@@ -452,11 +451,7 @@ export async function handleDirectMessage(
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
-  let messageText = stripMentions(event.text);
-  if (event.channel_type === "mpim") {
-    const botUserId = await getBotUserId(env, traceId);
-    messageText = botUserId ? stripUserMention(event.text, botUserId) : event.text.trim();
-  }
+  const messageText = stripMentions(event.text);
   const forwarded = collectForwardedMessages(event.attachments);
   const images = toImageAttachments([...(event.files ?? []), ...forwarded.files], traceId);
   const content = { text: messageText, images, forwarded };

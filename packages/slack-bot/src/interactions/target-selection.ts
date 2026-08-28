@@ -1,7 +1,6 @@
 import {
   escapeMrkdwnText,
   getMessageDetails,
-  postEphemeral,
   postMessage,
   updateMessage,
 } from "@open-inspect/shared/slack";
@@ -28,7 +27,6 @@ export async function handleTargetSelection(
   channel: string,
   messageTs: string,
   threadTs: string | undefined,
-  interactionUserId: string,
   env: Env,
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
@@ -55,16 +53,6 @@ export async function handleTargetSelection(
     sourceMessage,
     unattributedPrompt,
   } = pendingData;
-  if (interactionUserId !== userId) {
-    await postEphemeral(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      interactionUserId,
-      "Only the person who made the request can choose its repository or environment.",
-      { thread_ts: threadKey }
-    );
-    return;
-  }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
     await postMessage(

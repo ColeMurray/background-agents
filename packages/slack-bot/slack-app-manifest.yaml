@@ -26,7 +26,6 @@ oauth_config:
       - groups:history
       - groups:read
       - im:history
-      - mpim:history
       - reactions:write
       - users:read
       - users:read.email
@@ -40,7 +39,6 @@ settings:
       - message.channels
       - message.groups
       - message.im
-      - message.mpim
   interactivity:
     is_enabled: true
     request_url: SLACK_INTERACTIONS_URL

@@ -23,14 +23,12 @@ export async function handleSlackInteraction(
     case SELECT_TARGET_QUICK_PICK_ACTION_ID: {
       if (!channel || !messageTs) return;
       const selectedValue = action.selected_option?.value ?? action.value;
-      const interactionUserId = payload.user?.id;
-      if (selectedValue && interactionUserId) {
+      if (selectedValue) {
         await handleTargetSelection(
           selectedValue,
           channel,
           messageTs,
           threadTs,
-          interactionUserId,
           env,
           traceId,
           scheduleBackground

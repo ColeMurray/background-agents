@@ -389,7 +389,6 @@ the worker's `/events` and `/interactions` endpoints.
    - `groups:history`
    - `groups:read`
    - `im:history`
-   - `mpim:history`
    - `files:read` (lets the bot read images attached to messages and forward them to sessions)
    - `files:write`
    - `reactions:write`
@@ -408,10 +407,10 @@ Queued delivery applies to every Slack completion, including text-only replies. 
 
 1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
    this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
-2. Ensure the Slack app has `assistant:write`, `mpim:history`, `users:read`, `users:read.email`,
-   `files:read`, and `files:write`. Reinstall the app once for the workspace, and update
-   `slack_bot_token` if Slack issued a replacement. These scopes enable Agent view, group direct
-   messages, user identity resolution, inbound images, and generated-media delivery.
+2. Ensure the Slack app has `assistant:write`, `users:read`, `users:read.email`, `files:read`, and
+   `files:write`. Reinstall the app once for the workspace, and update `slack_bot_token` if Slack
+   issued a replacement. These scopes enable Agent view, user identity resolution, inbound images,
+   and generated-media delivery.
 3. Run `terraform apply`, then verify a text completion, an inbound image attached to a prompt, and
    a generated-media attachment. If the token lacks Queue access, the apply fails while provisioning
    the new resources; grant the permission and rerun the apply.
@@ -763,7 +762,6 @@ writable Messages tab lets users start direct-message sessions.
    - `message.channels` (optional - if you want the bot to see all channel messages)
    - `message.groups` (optional - if you want automations in private channels)
    - `message.im` (enables direct message support)
-   - `message.mpim` (enables mentioned requests in group direct messages)
 6. Click **Save Changes**
 
 ### Configure Interactivity

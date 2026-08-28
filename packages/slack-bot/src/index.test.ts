@@ -24,7 +24,6 @@ vi.mock("@open-inspect/shared/slack", async () => {
 });
 
 import app from "./index";
-import { clearBotUserIdCache } from "./bot-identity";
 import { clearLocalCache } from "./classifier/repos";
 
 function createMockKV() {
@@ -277,13 +276,6 @@ function mockSlackFetch(
       });
     }
 
-    if (url.includes("auth.test")) {
-      return new Response(JSON.stringify({ ok: true, user_id: "B123" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
     if (url.includes("conversations.info")) {
       order.push("channelInfo");
       return new Response(
@@ -412,7 +404,6 @@ function slackEventRequest(event: Record<string, unknown>, eventId = crypto.rand
 describe("POST /events", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearBotUserIdCache();
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
@@ -819,61 +810,6 @@ describe("POST /events", () => {
     });
     expect(startingStatusBodies(slackFetch)).toHaveLength(3);
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
-
-    slackFetch.mockRestore();
-  });
-
-  it("preserves participant mentions in a group direct message", async () => {
-    const order: string[] = [];
-    const slackFetch = mockSlackFetch(order);
-    const env = makeSessionEnv(order);
-    const ctx = makeCtx();
-
-    const response = await app.fetch(
-      slackEventRequest({
-        type: "message",
-        text: "<@B123> ask <@U456> about the auth tests",
-        user: "U123",
-        channel: "G123",
-        ts: "444.555",
-        channel_type: "mpim",
-      }),
-      env,
-      ctx
-    );
-
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    const prompts = promptFetchBodies(env.CONTROL_PLANE.fetch);
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]?.content).toContain("ask <@U456> about the auth tests");
-    expect(prompts[0]?.content).not.toContain("<@B123>");
-
-    slackFetch.mockRestore();
-  });
-
-  it("ignores group direct messages that do not mention the bot", async () => {
-    const slackFetch = mockSlackFetch([]);
-    const env = makeSessionEnv([]);
-    const ctx = makeCtx();
-
-    const response = await app.fetch(
-      slackEventRequest({
-        type: "message",
-        text: "ask <@U456> about the auth tests",
-        user: "U123",
-        channel: "G123",
-        ts: "444.555",
-        channel_type: "mpim",
-      }),
-      env,
-      ctx
-    );
-
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
 
     slackFetch.mockRestore();
   });

@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  stripMentions,
-  stripUserMention,
-  isDmDispatchable,
-  isGroupDmDispatchable,
-  isChannelTriggerCandidate,
-} from "./dm-utils";
+import { stripMentions, isDmDispatchable, isChannelTriggerCandidate } from "./dm-utils";
 
 describe("stripMentions", () => {
   it("removes a single mention", () => {
@@ -35,16 +29,6 @@ describe("stripMentions", () => {
   });
 });
 
-describe("stripUserMention", () => {
-  it("strips only the selected user mention", () => {
-    expect(stripUserMention("<@UBOT> ask <@U123> to review", "UBOT")).toBe("ask <@U123> to review");
-  });
-
-  it("strips piped mentions", () => {
-    expect(stripUserMention("hello <@UBOT|open-inspect>", "UBOT")).toBe("hello");
-  });
-});
-
 describe("isDmDispatchable", () => {
   const baseEvent = {
     type: "message",
@@ -59,10 +43,6 @@ describe("isDmDispatchable", () => {
     expect(isDmDispatchable(baseEvent)).toBe(true);
   });
 
-  it("returns false for a group DM event", () => {
-    expect(isDmDispatchable({ ...baseEvent, channel_type: "mpim", channel: "G12345" })).toBe(false);
-  });
-
   it("returns false when subtype is present (e.g. bot_message)", () => {
     expect(isDmDispatchable({ ...baseEvent, subtype: "bot_message" })).toBe(false);
   });
@@ -71,7 +51,7 @@ describe("isDmDispatchable", () => {
     expect(isDmDispatchable({ ...baseEvent, subtype: "message_changed" })).toBe(false);
   });
 
-  it("returns false for non-DM channel type", () => {
+  it("returns false for non-im channel type", () => {
     expect(isDmDispatchable({ ...baseEvent, channel_type: "channel" })).toBe(false);
   });
 
@@ -103,28 +83,6 @@ describe("isDmDispatchable", () => {
 
   it("still rejects other subtypes even when files are present", () => {
     expect(isDmDispatchable({ ...baseEvent, subtype: "message_changed", files: [{}] })).toBe(false);
-  });
-});
-
-describe("isGroupDmDispatchable", () => {
-  const baseEvent = {
-    type: "message",
-    channel_type: "mpim",
-    text: "<@UBOT> help",
-    channel: "G12345",
-    ts: "1234567890.123456",
-    user: "U12345",
-  };
-
-  it("requires a bot mention", () => {
-    expect(isGroupDmDispatchable(baseEvent, "UBOT")).toBe(true);
-    expect(isGroupDmDispatchable({ ...baseEvent, text: "talking to the group" }, "UBOT")).toBe(
-      false
-    );
-  });
-
-  it("rejects non-MPIM channels", () => {
-    expect(isGroupDmDispatchable({ ...baseEvent, channel_type: "im" }, "UBOT")).toBe(false);
   });
 });
 

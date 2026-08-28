@@ -9,23 +9,15 @@ export function stripMentions(text: string): string {
   return applyMentionPolicy(text, "strip").replace(/\s+/g, " ").trim();
 }
 
-/** Strip only one user's mention while preserving mentions of other participants. */
-export function stripUserMention(text: string, userId: string): string {
-  return text
-    .replace(new RegExp(`<@${userId}(?:\\|[^>]*)?>`, "g"), "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 /**
- * Returns true if a Slack message event should be dispatched as a direct or group-direct message.
+ * Returns true if a Slack message event should be dispatched as a DM.
  * Filters out subtypes (bot_message, message_changed, message_deleted, etc.)
  * to prevent processing bot replies and edit/delete notifications. Messages
  * with file uploads arrive as the `file_share` subtype and may carry no text,
  * so they dispatch on their files instead; a forwarded message with no comment
  * likewise carries its content in `attachments` and no text at all.
  */
-type DirectMessageEvent = {
+export function isDmDispatchable(event: {
   type: string;
   subtype?: string;
   channel_type?: string;
@@ -35,32 +27,18 @@ type DirectMessageEvent = {
   user?: string;
   files?: unknown[];
   attachments?: unknown[];
-};
-
-function hasDispatchableMessage(event: DirectMessageEvent): boolean {
+}): boolean {
   const subtypeOk = !event.subtype || event.subtype === "file_share";
   const hasContent =
     !!event.text || (event.files?.length ?? 0) > 0 || (event.attachments?.length ?? 0) > 0;
   return (
     event.type === "message" &&
     subtypeOk &&
+    event.channel_type === "im" &&
     hasContent &&
     !!event.channel &&
     !!event.ts &&
     !!event.user
-  );
-}
-
-export function isDmDispatchable(event: DirectMessageEvent): boolean {
-  return event.channel_type === "im" && hasDispatchableMessage(event);
-}
-
-export function isGroupDmDispatchable(event: DirectMessageEvent, botUserId: string): boolean {
-  return (
-    event.channel_type === "mpim" &&
-    !!event.text &&
-    mentionsUser(event.text, botUserId) &&
-    hasDispatchableMessage(event)
   );
 }
 
@@ -85,7 +63,7 @@ function mentionsUser(text: string, userId: string): boolean {
  *   opens a thread invisible whenever it came with a file. Only its text
  *   triggers — the attachment is not forwarded to the session (matching
  *   automation thread replies).
- * - DM (`im`) and group-DM (`mpim`) channels — handled by the direct-message path
+ * - DM (`im`) and group-DM (`mpim`) channels — handled by the DM path
  * - messages from the bot itself
  * - messages that @mention the bot — those are explicit requests dispatched by
  *   the `app_mention` path; processing them here too would double-handle.
