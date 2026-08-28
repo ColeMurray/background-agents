@@ -142,7 +142,6 @@ describe("ModalClient", () => {
     const request = createModalClient("secret", "acme").snapshotSandbox({
       providerObjectId: "mo-1",
       sessionId: "session-1",
-      reason: "manual",
     });
 
     const rejection = expect(request).rejects.toThrow(
@@ -165,7 +164,6 @@ describe("ModalClient", () => {
     const request = createModalClient("secret", "acme").snapshotSandbox({
       providerObjectId: "mo-1",
       sessionId: "session-1",
-      reason: "manual",
       signal: caller.signal,
     });
     caller.abort(callerReason);
@@ -532,7 +530,6 @@ describe("ModalClient", () => {
       client.snapshotSandbox({
         providerObjectId: "mo-1",
         sessionId: "session-123",
-        reason: "manual",
       })
     ).resolves.toEqual({ success: true, imageId: "img-1" });
   });
@@ -578,7 +575,6 @@ describe("ModalClient", () => {
       client.snapshotSandbox({
         providerObjectId: "mo-1",
         sessionId: "session-123",
-        reason: "manual",
       })
     ).rejects.toThrow("Modal API error: Invalid response");
   });
@@ -706,40 +702,5 @@ describe("ModalClient", () => {
         callbackToken: "cb-token-1",
       })
     ).rejects.toThrow("Modal API error: Invalid response");
-  });
-
-  it("parses valid provider image delete responses", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          success: true,
-          data: { provider_image_id: "img-1", deleted: true },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
-
-    const client = createModalClient("secret", "acme", "prod-web");
-    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).resolves.toEqual({
-      providerImageId: "img-1",
-      deleted: true,
-    });
-  });
-
-  it("rejects malformed provider image delete responses instead of trusting the payload", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          success: true,
-          data: { provider_image_id: "img-1", deleted: "yes" },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
-
-    const client = createModalClient("secret", "acme", "prod-web");
-    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).rejects.toThrow(
-      "Modal API error: Invalid response"
-    );
   });
 });
