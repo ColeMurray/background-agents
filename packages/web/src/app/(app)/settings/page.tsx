@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState, type ComponentType } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  DEFAULT_SETTINGS_CATEGORY,
   getSettingsCategoryLabel,
   isSettingsCategory,
   SettingsNav,
@@ -46,7 +47,9 @@ function SettingsPageContent() {
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
   const isMobile = useIsMobile();
-  const initialCategory = isSettingsCategory(tabParam, repoImagesEnabled) ? tabParam : "secrets";
+  const initialCategory = isSettingsCategory(tabParam, repoImagesEnabled)
+    ? tabParam
+    : DEFAULT_SETTINGS_CATEGORY;
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
   function setActiveCategory(category: SettingsCategory) {
@@ -90,7 +93,7 @@ function SettingsPageContent() {
         setActiveCategoryRaw(category);
         setMobileView("detail");
       } else {
-        setActiveCategoryRaw("secrets");
+        setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
         setMobileView("list");
       }
       requestAnimationFrame(() => mobileHeadingRef.current?.focus());
@@ -108,13 +111,13 @@ function SettingsPageContent() {
       return;
     }
 
-    setActiveCategoryRaw("secrets");
+    setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
     setMobileView("list");
   }, [repoImagesEnabled, tabParam]);
 
   const renderedCategory = isSettingsCategory(activeCategory, repoImagesEnabled)
     ? activeCategory
-    : "secrets";
+    : DEFAULT_SETTINGS_CATEGORY;
   const ActivePanel = SETTINGS_PANELS[renderedCategory];
   const content = <ActivePanel />;
 

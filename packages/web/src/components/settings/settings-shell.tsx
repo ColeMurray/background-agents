@@ -3,7 +3,11 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
-import { isSettingsCategory, SettingsNav } from "@/components/settings/settings-nav";
+import {
+  DEFAULT_SETTINGS_CATEGORY,
+  isSettingsCategory,
+  SettingsNav,
+} from "@/components/settings/settings-nav";
 
 export function SettingsShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -15,7 +19,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
     ? "integrations"
     : isSettingsCategory(tab, supportsRepoImages())
       ? tab
-      : "secrets";
+      : DEFAULT_SETTINGS_CATEGORY;
 
   if (isMobile) return <main className="h-dvh overflow-hidden">{children}</main>;
 

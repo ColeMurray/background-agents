@@ -3,16 +3,18 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_SETTINGS_CATEGORY } from "./settings-nav";
 import { SettingsShell } from "./settings-shell";
 
 expect.extend(matchers);
 
-const mocks = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({ isMobile: false, pathname: "", tab: "" }));
+const SHELL_FIXTURE_DEFAULTS = {
   isMobile: false,
   pathname: "/settings",
-  tab: "secrets",
-}));
+  tab: DEFAULT_SETTINGS_CATEGORY,
+};
 
 vi.mock("next/navigation", () => ({
   usePathname: () => mocks.pathname,
@@ -23,11 +25,12 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/hooks/use-media-query", () => ({ useIsMobile: () => mocks.isMobile }));
 vi.mock("@/lib/sandbox-provider", () => ({ supportsRepoImages: () => true }));
 
+beforeEach(() => {
+  Object.assign(mocks, SHELL_FIXTURE_DEFAULTS);
+});
+
 afterEach(() => {
   cleanup();
-  mocks.isMobile = false;
-  mocks.pathname = "/settings";
-  mocks.tab = "secrets";
 });
 
 describe("SettingsShell", () => {

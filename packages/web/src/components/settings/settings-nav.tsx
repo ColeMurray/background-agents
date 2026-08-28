@@ -138,6 +138,7 @@ export const SETTINGS_GROUPS = [
 
 type SettingsItem = (typeof SETTINGS_GROUPS)[number]["items"][number];
 export type SettingsCategory = SettingsItem["id"];
+export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = "secrets";
 
 function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean): boolean {
   return !("requiresRepoImages" in item) || repoImagesEnabled;
