@@ -154,6 +154,7 @@ describe("SandboxRepository", () => {
       // ...nor its bridge: the predecessor's socket loses dispatch authority
       // here. Revoked is '' — NULL is reserved for rows that predate identities.
       expect(mock.calls[0].query).toContain("active_socket_id = ''");
+      expect(mock.calls[0].query).toContain("last_heartbeat = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "modal-sb-1"]);
     });
 
@@ -274,6 +275,27 @@ describe("SandboxRepository", () => {
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_heartbeat");
       expect(mock.calls[0].params).toEqual([5000]);
+    });
+  });
+
+  describe("recordBootProgress", () => {
+    it("records liveness only for the current booting sandbox identity", () => {
+      repository.recordBootProgress("sandbox-current", 5000);
+
+      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
+      expect(mock.calls[0].query).toContain("modal_sandbox_id = ?");
+      expect(mock.calls[0].params).toEqual([5000, "sandbox-current"]);
+    });
+  });
+
+  describe("failStartupIfUnchanged", () => {
+    it("compares identity, attempt, status, and observed liveness", () => {
+      repository.failStartupIfUnchanged("sandbox-current", 1000, 3000);
+
+      expect(mock.calls[0].query).toContain("status = 'failed'");
+      expect(mock.calls[0].query).toContain("status IN ('spawning', 'connecting')");
+      expect(mock.calls[0].query).toContain("MAX(created_at, COALESCE(last_heartbeat, 0)) = ?");
+      expect(mock.calls[0].params).toEqual(["sandbox-current", 1000, 3000]);
     });
   });
 
