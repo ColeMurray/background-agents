@@ -880,6 +880,14 @@ export class Scheduler {
 
   // ─── Event handler ───────────────────────────────────────────────────────
 
+  /**
+   * Handle an inbound automation event: route Slack follow-ups into an
+   * already-active thread session when one exists, then match the event
+   * against enabled automations, apply concurrency and cooldown gates, and
+   * start an invocation for each automation that clears them. Prompts for
+   * those invocations are assembled by composeAutomationPrompt, so the
+   * ordering contract lives there rather than at the call sites.
+   */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
 
