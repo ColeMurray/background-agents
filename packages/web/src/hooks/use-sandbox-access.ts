@@ -22,8 +22,10 @@ const sandboxAccessSchema = z
 
 type SandboxAccess = z.infer<typeof sandboxAccessSchema>;
 
-export function useSandboxAccess(sessionId: string) {
-  const key: BrowserApiPath = `/api/sessions/${encodeURIComponent(sessionId)}/sandbox-access`;
+export function useSandboxAccess(sessionId: string, isSandboxReady: boolean) {
+  const key: BrowserApiPath | null = isSandboxReady
+    ? `/api/sessions/${encodeURIComponent(sessionId)}/sandbox-access`
+    : null;
   const { data, mutate } = useSWR<SandboxAccess | null>(key, async (url: BrowserApiPath) => {
     const response = await browserApiFetch(url, { cache: "no-store" });
     if (response.status === 204 || response.status === 404) return null;

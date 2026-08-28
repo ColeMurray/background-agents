@@ -117,7 +117,7 @@ export function useSessionSocket(
     sandboxAccess,
     clear: clearSandboxAccess,
     refresh: refreshSandboxAccess,
-  } = useSandboxAccess(sessionId);
+  } = useSandboxAccess(sessionId, state.sessionState?.sandboxStatus === "ready");
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
