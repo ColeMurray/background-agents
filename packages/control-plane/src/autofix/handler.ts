@@ -26,7 +26,7 @@ function completeAutofixSettings(
         prCommentsEnabled?: boolean;
         openInspectReviewsEnabled?: boolean;
         allowedReviewBots?: string[];
-        maxAttemptsPerPrPer24Hours?: number;
+        maxAttemptsPerPrPer24Hours?: number | null;
       }
     | undefined
 ): ResolvedGitHubAutofixSettings {

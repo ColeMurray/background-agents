@@ -43,7 +43,7 @@ export interface AdmitAutofixMessageData {
   feedbackKey: string;
   pullRequestKey: string;
   originContext: string;
-  attemptLimit: number;
+  attemptLimit: number | null;
   windowStart: number;
   sessionClosed: boolean;
 }
@@ -179,16 +179,18 @@ export class MessageRepository {
         return { kind: "rejected", reason: "queue_full" };
       }
 
-      const count = this.sql
-        .exec(
-          `SELECT COUNT(*) AS count FROM messages
-         WHERE autofix_pr_key = ? AND created_at >= ?`,
-          data.pullRequestKey,
-          data.windowStart
-        )
-        .one() as { count: number };
-      if (count.count >= data.attemptLimit) {
-        return { kind: "rejected", reason: "attempt_limit" };
+      if (data.attemptLimit !== null) {
+        const count = this.sql
+          .exec(
+            `SELECT COUNT(*) AS count FROM messages
+           WHERE autofix_pr_key = ? AND created_at >= ?`,
+            data.pullRequestKey,
+            data.windowStart
+          )
+          .one() as { count: number };
+        if (count.count >= data.attemptLimit) {
+          return { kind: "rejected", reason: "attempt_limit" };
+        }
       }
 
       this.createMessage({
