@@ -11,6 +11,7 @@ import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
+import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -323,9 +324,8 @@ function createEnv(overrides?: Partial<Env>): Env {
   } as Env;
 }
 
-function createSchedulerDO(env = createEnv()) {
-  const scheduler = new Scheduler(env.DB, env, createTestBackgroundTasks());
-  return Object.assign(scheduler, { fetch: (request: Request) => scheduler.dispatch(request) });
+function createScheduler(env = createEnv()): InstanceType<typeof Scheduler> {
+  return new Scheduler(env.DB, env, createTestBackgroundTasks());
 }
 
 // ─── Sample data ─────────────────────────────────────────────────────────────
@@ -409,6 +409,17 @@ function sampleRunRow(overrides?: Record<string, unknown>) {
   };
 }
 
+function runCompletion(overrides?: Record<string, unknown>) {
+  return {
+    automationId: "auto-1",
+    runId: "run-1",
+    sessionId: "sess-1",
+    messageId: "msg-1",
+    success: true,
+    ...overrides,
+  };
+}
+
 const sampleSlackAutomation = {
   ...sampleAutomation,
   id: "auto-slack",
@@ -428,7 +439,7 @@ const sampleSlackAutomation = {
 const sampleSlackPermalink = "https://example.slack.com/archives/C1/p1700000000000200";
 const sampleSlackContextBlock = `A message was posted in #ops.\nPermalink: ${sampleSlackPermalink}`;
 
-function makeSlackEvent(overrides?: Record<string, unknown>) {
+function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomationEvent {
   const ts = "1700000000.000200";
   return {
     source: "slack",
@@ -445,14 +456,6 @@ function makeSlackEvent(overrides?: Record<string, unknown>) {
     text: "please deploy the api",
     ...overrides,
   };
-}
-
-function slackEventRequest(overrides?: Record<string, unknown>): Request {
-  return new Request("http://internal/internal/event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(makeSlackEvent(overrides)),
-  });
 }
 
 /** All children handed to the last insertInvocationGuarded call, as inserted. */
@@ -483,48 +486,22 @@ describe("Scheduler", () => {
     });
   });
 
-  describe("/internal/health", () => {
-    it("returns healthy status with overdue count", async () => {
-      mockStore.countOverdue.mockResolvedValue(5);
-
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/health", { method: "GET" })
-      );
-
-      expect(res.status).toBe(200);
-      const body = await res.json<{ status: string; overdueCount: number }>();
-      expect(body.status).toBe("healthy");
-      expect(body.overdueCount).toBe(5);
-    });
-  });
-
-  describe("/internal/tick", () => {
+  describe("tick", () => {
     it("returns empty summary when no overdue automations", async () => {
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.processed).toBe(0);
-      expect(body.skipped).toBe(0);
-      expect(body.failed).toBe(0);
+      expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
     });
 
     it("starts an invocation for an overdue automation and launches its run", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.processed).toBe(1);
+      expect(result).toMatchObject({ processed: 1 });
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
@@ -556,12 +533,10 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const response = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler(env);
+      const result = await scheduler.tick();
 
-      expect(await response.json()).toMatchObject({ processed: 0, failed: 1 });
+      expect(result).toMatchObject({ processed: 0, failed: 1 });
       expect(promptCallCount(fetchMock)).toBe(0);
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
@@ -589,12 +564,8 @@ describe("Scheduler", () => {
         })
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler();
+      await scheduler.tick();
       const children = lastInsertedChildren();
       expect(children).toHaveLength(2);
       expect(children[0]).toMatchObject({
@@ -648,12 +619,8 @@ describe("Scheduler", () => {
           { provider: "xai", authMode: "api_key", selectionSource: "unattended_policy" },
         ]);
 
-      const scheduler = createSchedulerDO();
-      const response = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(response.status).toBe(200);
+      const scheduler = createScheduler();
+      await scheduler.tick();
       expect(mockResolveSessionProviderAuth).toHaveBeenCalledTimes(1);
       expect(mockSessionStoreCreate).toHaveBeenCalledTimes(2);
       expect(mockSessionStoreCreate.mock.calls.map(([session]) => session.providerAuth)).toEqual([
@@ -698,12 +665,8 @@ describe("Scheduler", () => {
         return { inserted: true };
       });
 
-      const scheduler = createSchedulerDO();
-      const response = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(response.status).toBe(200);
+      const scheduler = createScheduler();
+      await scheduler.tick();
       expect(mockSessionStoreCreate.mock.calls[0][0].providerAuth).toContainEqual({
         provider: "openai",
         authMode: "provider_account",
@@ -745,10 +708,8 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue({ fetch: fetchMock } as never);
 
-      const scheduler = createSchedulerDO(env);
-      const tickPromise = scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler(env);
+      const tickPromise = scheduler.tick();
 
       await firstInitStarted.promise;
 
@@ -774,12 +735,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       const initBody = await getInitBody(fetchMock);
       expect(initBody.reasoningEffort).toBe("high");
       expect(initBody).not.toHaveProperty("providerAuth");
@@ -799,12 +756,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       expect(mockCheckRepositoryAccess).toHaveBeenCalledWith({
         owner: "acme",
         name: "web-app",
@@ -840,12 +793,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       expect(mockCheckRepositoryAccess).not.toHaveBeenCalled();
 
       expect(lastInsertedChildren()).toEqual([
@@ -894,12 +843,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       // One child per environment, snapshotting the environment id — no
       // repository snapshot of its own.
       expect(lastInsertedChildren()).toEqual([
@@ -949,12 +894,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       expect(lastInsertedChildren()).toEqual([
         expect.objectContaining({
           repo_owner: "acme",
@@ -986,12 +927,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       expect(promptCallCount(fetchMock)).toBe(0);
       expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
@@ -1023,12 +960,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       expect(promptCallCount(fetchMock)).toBe(0);
       expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
@@ -1053,12 +986,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       const initBody = await getInitBody(fetchMock);
       expect(initBody.defaultBranch).toBe("develop");
     });
@@ -1071,15 +1000,10 @@ describe("Scheduler", () => {
         aggregate({ active: 0, failed: 1, completed: 0 })
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; failed: number }>();
-      expect(body.processed).toBe(0);
-      expect(body.failed).toBe(1);
+      expect(result).toMatchObject({ processed: 0, failed: 1 });
 
       // The child is born failed inside the atomic batch — no separate update.
       expect(lastInsertedChildren()[0]).toMatchObject({
@@ -1110,14 +1034,10 @@ describe("Scheduler", () => {
         aggregate({ total: 2, active: 1, failed: 1 })
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; failed: number }>();
-      expect(body.processed).toBe(1);
+      expect(result).toMatchObject({ processed: 1 });
 
       const children = lastInsertedChildren();
       expect(children[0]).toMatchObject({ repo_name: "broken", status: "failed" });
@@ -1140,12 +1060,8 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
       const initBody = await getInitBody(fetchMock);
       expect(initBody.codeServerEnabled).toBe(true);
       expect(initBody.vncEnabled).toBe(true);
@@ -1159,15 +1075,10 @@ describe("Scheduler", () => {
         status: "running",
       });
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.skipped).toBe(1);
-      expect(body.processed).toBe(0);
+      expect(result).toMatchObject({ skipped: 1, processed: 0 });
 
       // Childless skip invocation + schedule advance in ONE atomic call.
       expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
@@ -1189,14 +1100,10 @@ describe("Scheduler", () => {
       // insert (a run went active in between). The batch already advanced.
       mockStore.insertInvocationGuarded.mockResolvedValue({ inserted: false });
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ skipped: number }>();
-      expect(body.skipped).toBe(1);
+      expect(result.skipped).toBe(1);
 
       expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
         expect.objectContaining({ skip_reason: "concurrent_run_active" }),
@@ -1215,15 +1122,10 @@ describe("Scheduler", () => {
         )
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ skipped: number; failed: number }>();
-      expect(body.skipped).toBe(1);
-      expect(body.failed).toBe(0);
+      expect(result).toMatchObject({ skipped: 1, failed: 0 });
 
       expect(mockStore.advanceNextRunAt).toHaveBeenCalledWith("auto-1", expect.any(Number));
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
@@ -1255,14 +1157,10 @@ describe("Scheduler", () => {
         })
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number }>();
-      expect(body.processed).toBe(5);
+      expect(result.processed).toBe(5);
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(5);
     });
 
@@ -1293,12 +1191,8 @@ describe("Scheduler", () => {
         })
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      const scheduler = createScheduler();
+      await scheduler.tick();
       // Five automations admitted (49 children); the sixth deferred to next tick.
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(5);
     });
@@ -1317,14 +1211,10 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const scheduler = createScheduler(env);
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.failed).toBe(1);
+      expect(result.failed).toBe(1);
 
       expect(mockStore.updateRun).toHaveBeenCalledWith(
         expect.any(String),
@@ -1337,8 +1227,8 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockStore.claimRunSession).toHaveBeenCalledWith(
         expect.any(String),
@@ -1358,8 +1248,8 @@ describe("Scheduler", () => {
         aggregate({ active: 0, failed: 1, completed: 0 })
       );
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockSessionStoreCreate).not.toHaveBeenCalled();
     });
@@ -1379,8 +1269,8 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
 
-      const scheduler = createSchedulerDO(env);
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
 
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
     });
@@ -1400,8 +1290,8 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
 
-      const scheduler = createSchedulerDO(env);
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
 
       expect(mockStore.autoPause).not.toHaveBeenCalled();
     });
@@ -1420,8 +1310,8 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
 
-      const scheduler = createSchedulerDO(env);
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler(env);
+      await scheduler.tick();
 
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
     });
@@ -1431,8 +1321,8 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([automation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockSessionStoreCreate).toHaveBeenCalledWith(
         expect.objectContaining({ userId: "canonical-user-1" })
@@ -1444,8 +1334,8 @@ describe("Scheduler", () => {
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockUserStoreGetIdentity.mockResolvedValue({ userId: "looked-up-user" });
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockUserStoreGetIdentity).toHaveBeenCalledWith("github", "user-1");
       expect(mockSessionStoreCreate).toHaveBeenCalledWith(
@@ -1458,8 +1348,8 @@ describe("Scheduler", () => {
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockUserStoreGetIdentity.mockResolvedValue(null);
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockSessionStoreCreate).toHaveBeenCalledWith(
         expect.objectContaining({ userId: null })
@@ -1481,18 +1371,14 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
 
-      const scheduler = createSchedulerDO(env);
+      const scheduler = createScheduler(env);
       const errorSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
+      const result = await scheduler.tick();
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ processed: number; skipped: number; failed: number }>();
-      expect(body.failed).toBe(1);
+      expect(result.failed).toBe(1);
 
       const failTrackCall = errorSpy.mock.calls.find(
         ([, data]) =>
@@ -1540,8 +1426,8 @@ describe("Scheduler", () => {
         aggregate({ total: 2, active: 0, failed: 2 })
       );
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-a", "orphan-b"],
@@ -1566,8 +1452,8 @@ describe("Scheduler", () => {
         aggregate({ total: 1, active: 0, failed: 1 })
       );
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
@@ -1590,16 +1476,12 @@ describe("Scheduler", () => {
         aggregate({ total: 1, active: 0, failed: 1 })
       );
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       const errorSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      await scheduler.tick();
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
@@ -1648,8 +1530,8 @@ describe("Scheduler", () => {
         aggregate({ total: 3, active: 0, failed: 3 })
       );
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledTimes(1);
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
@@ -1674,12 +1556,12 @@ describe("Scheduler", () => {
       );
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       const warnSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
         .mockImplementation(() => {});
 
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      await scheduler.tick();
 
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
       const autoPauseCall = warnSpy.mock.calls.find(
@@ -1722,7 +1604,7 @@ describe("Scheduler", () => {
         }
       });
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       const errorSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
@@ -1730,11 +1612,7 @@ describe("Scheduler", () => {
         .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
         .mockImplementation(() => {});
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      await scheduler.tick();
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-2");
 
@@ -1770,16 +1648,12 @@ describe("Scheduler", () => {
       mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
       mockStore.bulkFailStartingRuns.mockRejectedValue(new Error("D1 timeout"));
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       const errorSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      await scheduler.tick();
       const bulkFailErrorCall = errorSpy.mock.calls.find(
         ([, data]) =>
           (data as Record<string, unknown> | undefined)?.event ===
@@ -1817,16 +1691,12 @@ describe("Scheduler", () => {
         aggregate({ total: 1, active: 0, failed: 1 })
       );
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       const errorSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      await scheduler.tick();
 
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
@@ -1866,16 +1736,12 @@ describe("Scheduler", () => {
       mockStore.getOrphanedStartingRuns.mockResolvedValue([orphanedRun]);
       mockStore.getInvocationRunAggregate.mockRejectedValue(new Error("D1 timeout"));
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       const errorSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/tick", { method: "POST" })
-      );
-
-      expect(res.status).toBe(200);
+      await scheduler.tick();
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
         "session_creation_timeout",
@@ -1905,8 +1771,8 @@ describe("Scheduler", () => {
         aggregate({ total: 2, active: 0, failed: 1, completed: 1 })
       );
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-crashed");
       expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
@@ -1920,15 +1786,15 @@ describe("Scheduler", () => {
         aggregate({ total: 2, active: 0, failed: 0, completed: 2 })
       );
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+      const scheduler = createScheduler();
+      await scheduler.tick();
 
       expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
     });
   });
 
-  describe("/internal/run-complete", () => {
+  describe("runComplete", () => {
     beforeEach(() => {
       mockStore.getRunById.mockResolvedValue(sampleRunRow());
     });
@@ -1938,22 +1804,10 @@ describe("Scheduler", () => {
         aggregate({ total: 1, active: 0, failed: 0, completed: 1 })
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: true,
-          }),
-        })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.runComplete(runCompletion());
 
-      expect(res.status).toBe(200);
+      expect(result).toBeUndefined();
       expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
         status: "completed",
         completed_at: expect.any(Number),
@@ -1967,20 +1821,8 @@ describe("Scheduler", () => {
         aggregate({ total: 2, active: 1, failed: 0, completed: 1 })
       );
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: true,
-          }),
-        })
-      );
+      const scheduler = createScheduler();
+      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
 
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
@@ -1994,65 +1836,11 @@ describe("Scheduler", () => {
       );
       mockStore.tryMarkInvocationFailureCounted.mockResolvedValue(false);
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: true,
-          }),
-        })
-      );
+      const scheduler = createScheduler();
+      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
 
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
-    });
-
-    it("returns 400 for malformed run-complete callbacks", async () => {
-      const scheduler = createSchedulerDO();
-
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: "true",
-          }),
-        })
-      );
-
-      expect(res.status).toBe(400);
-      expect(mockStore.getRunById).not.toHaveBeenCalled();
-      expect(mockStore.updateRun).not.toHaveBeenCalled();
-    });
-
-    it("requires a message id for run-complete callbacks", async () => {
-      const scheduler = createSchedulerDO();
-
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            success: true,
-          }),
-        })
-      );
-
-      expect(res.status).toBe(400);
-      expect(mockStore.getRunById).not.toHaveBeenCalled();
     });
 
     it("reads slack coordinates from the invocation and labels from the run snapshot", async () => {
@@ -2082,28 +1870,16 @@ describe("Scheduler", () => {
       );
 
       const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
-      const scheduler = createSchedulerDO(
+      const scheduler = createScheduler(
         createEnv({
           SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         })
       );
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-slack",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: true,
-          }),
-        })
-      );
+      const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
 
-      expect(res.status).toBe(200);
+      expect(result).toBeUndefined();
       expect(slackFetch).toHaveBeenCalledOnce();
       const [, init] = slackFetch.mock.calls[0];
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -2151,28 +1927,16 @@ describe("Scheduler", () => {
       });
 
       const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
-      const scheduler = createSchedulerDO(
+      const scheduler = createScheduler(
         createEnv({
           SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
           SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
         })
       );
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-slack",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: true,
-          }),
-        })
-      );
+      const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
 
-      expect(res.status).toBe(200);
+      expect(result).toBeUndefined();
       expect(slackFetch).toHaveBeenCalledOnce();
       const [, init] = slackFetch.mock.calls[0];
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -2188,23 +1952,12 @@ describe("Scheduler", () => {
         aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: false,
-            error: "Sandbox crashed",
-          }),
-        })
+      const scheduler = createScheduler();
+      const result = await scheduler.runComplete(
+        runCompletion({ success: false, error: "Sandbox crashed" })
       );
 
-      expect(res.status).toBe(200);
+      expect(result).toBeUndefined();
       expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
         status: "failed",
         failure_reason: "Sandbox crashed",
@@ -2221,24 +1974,10 @@ describe("Scheduler", () => {
       // The SQL guard suppresses the write.
       mockStore.updateRun.mockResolvedValue(false);
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: true,
-          }),
-        })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.runComplete(runCompletion());
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ ok: boolean; ignored: boolean }>();
-      expect(body.ignored).toBe(true);
+      expect(result).toBeUndefined();
       expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
       expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
     });
@@ -2249,21 +1988,10 @@ describe("Scheduler", () => {
       );
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
 
-      const scheduler = createSchedulerDO();
-      await scheduler.fetch(
-        new Request("http://internal/internal/run-complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            automationId: "auto-1",
-            runId: "run-1",
-            sessionId: "sess-1",
-            messageId: "msg-1",
-            success: false,
-            error: "Third failure",
-          }),
-        })
-      );
+      const scheduler = createScheduler();
+      await expect(
+        scheduler.runComplete(runCompletion({ success: false, error: "Third failure" }))
+      ).resolves.toBeUndefined();
 
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
     });
@@ -2271,80 +1999,27 @@ describe("Scheduler", () => {
     it("propagates failure-tracking errors so the callback caller retries", async () => {
       mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       await expect(
-        scheduler.fetch(
-          new Request("http://internal/internal/run-complete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              automationId: "auto-1",
-              runId: "run-1",
-              sessionId: "sess-1",
-              messageId: "msg-1",
-              success: false,
-              error: "Sandbox crashed",
-            }),
-          })
-        )
+        scheduler.runComplete(runCompletion({ success: false, error: "Sandbox crashed" }))
       ).rejects.toThrow("D1 timeout");
     });
   });
 
-  describe("/internal/trigger", () => {
-    it("returns 400 when automationId is missing", async () => {
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        })
-      );
-      expect(res.status).toBe(400);
-    });
-
-    it("returns 400 when automationId is not a string", async () => {
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ automationId: 123 }),
-        })
-      );
-
-      expect(res.status).toBe(400);
-      expect(mockStore.getById).not.toHaveBeenCalled();
-    });
-
-    it("returns 404 when automation not found", async () => {
+  describe("trigger", () => {
+    it("rejects when automation is missing", async () => {
       mockStore.getById.mockResolvedValue(null);
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ automationId: "nonexistent" }),
-        })
-      );
-      expect(res.status).toBe(404);
+      const scheduler = createScheduler();
+      await expect(scheduler.trigger("nonexistent")).rejects.toThrow("Automation not found");
     });
 
-    it("returns 409 when active run exists, recording nothing", async () => {
+    it("rejects when active run exists, recording nothing", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
       mockStore.getActiveRunForAutomation.mockResolvedValue({ id: "run-active" });
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ automationId: "auto-1" }),
-        })
-      );
-      expect(res.status).toBe(409);
+      const scheduler = createScheduler();
+      await expect(scheduler.trigger("auto-1")).rejects.toThrow("An active run already exists");
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
@@ -2354,16 +2029,13 @@ describe("Scheduler", () => {
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ automationId: "auto-1" }),
-        })
-      );
+      const scheduler = createScheduler();
+      const result = await scheduler.trigger("auto-1");
 
-      expect(res.status).toBe(201);
+      expect(result).toEqual({
+        invocationId: expect.any(String),
+        runs: [expect.objectContaining({ status: "running" })],
+      });
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
       expect(params.invocation).toMatchObject({
         automation_id: "auto-1",
@@ -2376,17 +2048,9 @@ describe("Scheduler", () => {
         expect.any(String),
         expect.any(Number)
       );
-
-      const body = await res.json<{
-        invocationId: string;
-        runs: Array<{ status: string }>;
-      }>();
-      expect(body.invocationId).toEqual(expect.any(String));
-      expect(body.runs[0].status).toBe("running");
-      expect(body.runs).toHaveLength(1);
     });
 
-    it("returns 500 when every launch fails, still recording the failed children", async () => {
+    it("rejects when every launch fails, still recording the failed children", async () => {
       mockStore.getById.mockResolvedValue(sampleAutomation);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
@@ -2402,22 +2066,12 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
 
-      const scheduler = createSchedulerDO(env);
+      const scheduler = createScheduler(env);
       const errorSpy = vi
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ automationId: "auto-1" }),
-        })
-      );
-
-      expect(res.status).toBe(500);
-      const body = await res.json<{ error: string }>();
-      expect(body.error).toBe("Failed to trigger automation");
+      await expect(scheduler.trigger("auto-1")).rejects.toThrow("Failed to trigger automation");
 
       const failTrackCall = errorSpy.mock.calls.find(
         ([, data]) =>
@@ -2427,32 +2081,7 @@ describe("Scheduler", () => {
     });
   });
 
-  describe("/internal/event — slack thread continuity", () => {
-    it("returns 400 for malformed automation events", async () => {
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(
-        new Request("http://internal/internal/event", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            source: "slack",
-            eventType: "message.posted",
-            triggerKey: "slack:msg:C1:1700000000.000200",
-            concurrencyKey: "slack:C1:thread-root",
-            contextBlock: "A message was posted in #ops.",
-            meta: {},
-            channelId: "C1",
-            ts: "1700000000.000200",
-            actorUserId: "U1",
-          }),
-        })
-      );
-
-      expect(res.status).toBe(400);
-      expect(mockGetSlackAutomationsForChannel).not.toHaveBeenCalled();
-      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
-    });
-
+  describe("event", () => {
     describe("lazy thread context", () => {
       /** A slack-bot binding that records thread-context calls. */
       function threadContextEnv(threadContext = "<thread_context>[]</thread_context>") {
@@ -2480,7 +2109,9 @@ describe("Scheduler", () => {
         const { slackFetch, env } = threadContextEnv();
 
         // Fails the automation's text condition, so no run is admitted.
-        await createSchedulerDO(env).fetch(slackEventRequest({ text: "unrelated chatter" }));
+        expect(
+          await createScheduler(env).event(makeSlackEvent({ text: "unrelated chatter" }))
+        ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2492,9 +2123,9 @@ describe("Scheduler", () => {
         );
         const { slackFetch, env } = threadContextEnv();
 
-        await createSchedulerDO(env).fetch(
-          slackEventRequest({ text: "also update the changelog" })
-        );
+        expect(
+          await createScheduler(env).event(makeSlackEvent({ text: "also update the changelog" }))
+        ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2505,7 +2136,11 @@ describe("Scheduler", () => {
         mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
         const { slackFetch, env } = threadContextEnv();
 
-        await createSchedulerDO(env).fetch(slackEventRequest());
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+        });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2518,7 +2153,11 @@ describe("Scheduler", () => {
         );
         const { slackFetch, env } = threadContextEnv();
 
-        await createSchedulerDO(env).fetch(slackEventRequest());
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+        });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2529,7 +2168,11 @@ describe("Scheduler", () => {
         const { slackFetch, env } = threadContextEnv();
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
 
-        await createSchedulerDO(env).fetch(slackEventRequest());
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
+        });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(1);
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -2553,7 +2196,11 @@ describe("Scheduler", () => {
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
-        await createSchedulerDO(env).fetch(slackEventRequest());
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 2,
+          skipped: 0,
+          steered: 0,
+        });
 
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(2);
         // Two admitted runs, one Slack read.
@@ -2570,7 +2217,11 @@ describe("Scheduler", () => {
         } as Partial<Env>);
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
 
-        await createSchedulerDO(env).fetch(slackEventRequest());
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
+        });
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
@@ -2590,7 +2241,11 @@ describe("Scheduler", () => {
         } as Partial<Env>);
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
 
-        await createSchedulerDO(env).fetch(slackEventRequest());
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
+        });
 
         // The run still launches — a slow Slack read must not strand children.
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -2603,7 +2258,7 @@ describe("Scheduler", () => {
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const { env } = threadContextEnv();
         const stub = env.SESSION.get(env.SESSION.idFromName("any"));
-        const scheduler = createSchedulerDO(env);
+        const scheduler = createScheduler(env);
         const promptBuilder = scheduler as unknown as {
           buildSlackContextWithThread: () => Promise<string>;
         };
@@ -2611,7 +2266,11 @@ describe("Scheduler", () => {
           new Error("prompt provider failed")
         );
 
-        await scheduler.fetch(slackEventRequest());
+        expect(await scheduler.event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
+        });
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
@@ -2628,7 +2287,11 @@ describe("Scheduler", () => {
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
-        await createSchedulerDO(env).fetch(slackEventRequest({ threadTs: undefined }));
+        expect(await createScheduler(env).event(makeSlackEvent({ threadTs: undefined }))).toEqual({
+          triggered: 1,
+          skipped: 0,
+          steered: 0,
+        });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
@@ -2644,16 +2307,14 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
+      const scheduler = createScheduler(env);
       // A natural follow-up reply won't repeat the "deploy" trigger keyword, yet
       // it must still steer the thread's session — conditions gate new runs only.
-      const res = await scheduler.fetch(
-        slackEventRequest({ text: "thanks — also update the changelog" })
+      const result = await scheduler.event(
+        makeSlackEvent({ text: "thanks — also update the changelog" })
       );
 
-      expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
       // The continuity lookup is scoped to the thread's concurrency key and a
       // 7-day window measured from now.
@@ -2702,13 +2363,12 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        slackEventRequest({ text: "actually, can you also bump the version?" })
+      const scheduler = createScheduler(env);
+      const result = await scheduler.event(
+        makeSlackEvent({ text: "actually, can you also bump the version?" })
       );
 
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.source).toBe("slack");
@@ -2736,13 +2396,12 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(
-        slackEventRequest({ text: "thanks — also check the rollout" })
+      const scheduler = createScheduler(env);
+      const result = await scheduler.event(
+        makeSlackEvent({ text: "thanks — also check the rollout" })
       );
 
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.callbackContext).toMatchObject({
@@ -2761,9 +2420,13 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
+      const scheduler = createScheduler(env);
       // No threadTs → the follow-up should anchor to its own ts.
-      await scheduler.fetch(slackEventRequest({ threadTs: undefined }));
+      expect(await scheduler.event(makeSlackEvent({ threadTs: undefined }))).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 1,
+      });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.callbackContext).toMatchObject({
@@ -2778,12 +2441,11 @@ describe("Scheduler", () => {
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createScheduler();
       // Matching text so the trigger conditions pass.
-      const res = await scheduler.fetch(slackEventRequest());
+      const result = await scheduler.event(makeSlackEvent());
 
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
 
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
       expect(params.invocation).toMatchObject({
@@ -2811,11 +2473,11 @@ describe("Scheduler", () => {
 
       const env = createEnv({ DB: createIntegrationSettingsDbMock("Always run tests.") });
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
-      const scheduler = createSchedulerDO(env);
+      const scheduler = createScheduler(env);
 
-      const response = await scheduler.fetch(slackEventRequest());
+      const result = await scheduler.event(makeSlackEvent());
 
-      expect(response.status).toBe(200);
+      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
         `${sampleSlackContextBlock}\n---\n\nRun tests\n\n` +
@@ -2830,9 +2492,13 @@ describe("Scheduler", () => {
 
       const env = createEnv({ DB: createIntegrationSettingsDbMock("   \n") });
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
-      const scheduler = createSchedulerDO(env);
+      const scheduler = createScheduler(env);
 
-      await scheduler.fetch(slackEventRequest());
+      expect(await scheduler.event(makeSlackEvent())).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+      });
 
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
@@ -2845,12 +2511,11 @@ describe("Scheduler", () => {
 
       const env = createEnv({ DB: createIntegrationSettingsDbMock(undefined, true) });
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
-      const scheduler = createSchedulerDO(env);
+      const scheduler = createScheduler(env);
 
-      const response = await scheduler.fetch(slackEventRequest());
+      const result = await scheduler.event(makeSlackEvent());
 
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
     });
@@ -2869,11 +2534,10 @@ describe("Scheduler", () => {
       const stub = env.SESSION.get(env.SESSION.idFromName("any"));
       const fetchMock = vi.mocked(stub.fetch);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(slackEventRequest());
+      const scheduler = createScheduler(env);
+      const result = await scheduler.event(makeSlackEvent());
 
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
       // The skip is a childless invocation carrying the message coordinates
       // but never the dedup trigger_key (a skip must not consume the slot).
       expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
@@ -2901,11 +2565,10 @@ describe("Scheduler", () => {
         )
       );
 
-      const scheduler = createSchedulerDO();
-      const res = await scheduler.fetch(slackEventRequest());
+      const scheduler = createScheduler();
+      const result = await scheduler.event(makeSlackEvent());
 
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
-      expect(body).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
       // Dedup is a silent no-op — no skip row, no schedule advance.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
       expect(mockStore.update).not.toHaveBeenCalled();
@@ -2932,13 +2595,12 @@ describe("Scheduler", () => {
       const env = createEnv();
       vi.mocked(env.SESSION.get).mockReturnValue(failingStub);
 
-      const scheduler = createSchedulerDO(env);
-      const res = await scheduler.fetch(slackEventRequest());
+      const scheduler = createScheduler(env);
+      const result = await scheduler.event(makeSlackEvent());
 
-      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
       // Steer failed → fell through → matched conditions → invocation created
       // but its only child failed to launch, so triggered stays 0.
-      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
         expect.objectContaining({
           invocation: expect.objectContaining({ automation_id: "auto-slack", source: "event" }),
@@ -2947,11 +2609,5 @@ describe("Scheduler", () => {
       // Not treated as a concurrency skip.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
     });
-  });
-
-  it("returns 404 for unknown routes", async () => {
-    const scheduler = createSchedulerDO();
-    const res = await scheduler.fetch(new Request("http://internal/unknown", { method: "GET" }));
-    expect(res.status).toBe(404);
   });
 });

@@ -7,7 +7,10 @@ import {
   resolveEnabledModel,
 } from "@open-inspect/shared/models";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
-import type { UserPreferences } from "@open-inspect/shared/types/session-api";
+import {
+  userPreferencesSchema,
+  type UserPreferences,
+} from "@open-inspect/shared/types/session-api";
 import type { Env } from "./types";
 import {
   getValidatedBranch,
@@ -120,26 +123,6 @@ function mergeUserPreferencesPatch(
   return prefs;
 }
 
-function isValidUserPreferences(data: unknown): data is UserPreferences {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return false;
-  }
-
-  const obj = data as Record<string, unknown>;
-  const modelValid = obj.model === undefined || typeof obj.model === "string";
-  const reasoningEffortValid =
-    obj.reasoningEffort === undefined || typeof obj.reasoningEffort === "string";
-  const branchValid = obj.branch === undefined || typeof obj.branch === "string";
-
-  return (
-    typeof obj.userId === "string" &&
-    modelValid &&
-    reasoningEffortValid &&
-    typeof obj.updatedAt === "number" &&
-    branchValid
-  );
-}
-
 export function resolveUserPreferences(
   prefs: UserPreferences | null | undefined,
   defaultModel: string | undefined,
@@ -168,7 +151,8 @@ export async function getUserPreferences(
   try {
     const key = getUserPreferencesKey(userId);
     const data = await createKvCacheStore(env.SLACK_KV).get(key, "json");
-    return isValidUserPreferences(data) ? data : null;
+    const parsed = userPreferencesSchema.safeParse(data);
+    return parsed.success ? parsed.data : null;
   } catch (e) {
     log.error("kv.get", {
       key_prefix: "user_prefs",

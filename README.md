@@ -12,7 +12,8 @@ Open-Inspect provides a hosted background coding agent that can:
 - Connect from anywhere — web UI, Slack, GitHub PRs, Linear issues, or webhooks
 - Enable multiplayer sessions where multiple people can collaborate in real time
 - Create PRs with proper commit attribution to the prompting user
-- Run on a schedule — cron jobs, Sentry alerts, and webhook-triggered automations
+- Run scheduled automations for cron jobs, or event-driven automations for GitHub events, Sentry
+  alerts, and webhooks
 - Spawn parallel sub-tasks that work in separate sandboxes simultaneously
 - Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), xAI Grok
   (via SuperGrok subscription), or OpenCode Zen
@@ -234,6 +235,8 @@ Schedule recurring tasks or react to external events — no human in the loop:
 
 - **Cron schedules** — Hourly, daily, weekly, monthly, or custom 5-field cron with timezone support
 - **Sentry alerts** — Auto-triage on new errors, regressions, or critical metric alerts
+- **GitHub workflow runs** — Start work when a GitHub Actions workflow finishes, with optional
+  workflow-name and conclusion filters
 - **Inbound webhooks** — JSONPath condition filters to gate which payloads spawn sessions
 - **Multi-repo fan-out** — One scheduled automation can run across up to 10 repositories, opening a
   separate session and pull request for each

@@ -35,7 +35,7 @@ export class EnvironmentSecretsStore {
 
   async setSecrets(
     environmentId: string,
-    secrets: Record<string, string>
+    secrets: Record<string, unknown>
   ): Promise<SecretsWriteResult> {
     const now = Date.now();
     const normalized = prepareSecretsForWrite(secrets);

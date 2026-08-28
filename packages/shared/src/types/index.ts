@@ -45,6 +45,7 @@ export {
   MAX_SESSION_REPOSITORIES,
   sessionRepositoryStateSchema,
   prArtifactBelongsToRepo,
+  repositoryPairInputSchema,
   repositoryInputSchema,
   repositoriesInputSchema,
   sessionRepositoriesInputSchema,
@@ -173,6 +174,7 @@ export {
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  sentryClientSecretSchema,
   createAutomationRequestSchema,
   updateAutomationRequestSchema,
   listAutomationsResponseSchema,
@@ -248,6 +250,7 @@ export type {
   RepositoryShaEntry,
   ImageBuildRecordView,
 } from "./image-builds";
+export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
 export type {

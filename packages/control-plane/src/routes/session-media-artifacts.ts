@@ -67,35 +67,45 @@ export async function persistMediaArtifact(input: {
 }): Promise<Response | null> {
   const { sessionId, artifactId, artifactType, objectKey, metadata, storage, ctx, parseFallback } =
     input;
-  const createArtifactResponse = await ctx.sessionRuntime.fetch(
-    sessionId,
-    SessionInternalPaths.createMediaArtifact,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        artifactId,
-        artifactType,
-        objectKey,
-        metadata,
-      }),
+  const cleanupUploadedObject = async () => {
+    try {
+      await storage.delete(objectKey);
+    } catch (cleanupError) {
+      logger.error("media.upload.cleanup_failed", {
+        session_id: sessionId,
+        artifact_id: artifactId,
+        object_key: objectKey,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        error: cleanupError instanceof Error ? cleanupError : String(cleanupError),
+      });
     }
-  );
+  };
+
+  let createArtifactResponse: Response;
+  try {
+    createArtifactResponse = await ctx.sessionRuntime.fetch(
+      sessionId,
+      SessionInternalPaths.createMediaArtifact,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artifactId,
+          artifactType,
+          objectKey,
+          metadata,
+        }),
+      }
+    );
+  } catch (runtimeError) {
+    await cleanupUploadedObject();
+    throw runtimeError;
+  }
 
   if (createArtifactResponse.ok) return null;
 
-  try {
-    await storage.delete(objectKey);
-  } catch (cleanupError) {
-    logger.error("media.upload.cleanup_failed", {
-      session_id: sessionId,
-      artifact_id: artifactId,
-      object_key: objectKey,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-      error: cleanupError instanceof Error ? cleanupError : String(cleanupError),
-    });
-  }
+  await cleanupUploadedObject();
 
   const doErrorMessage = await parseErrorMessage(createArtifactResponse, parseFallback);
   const logData = {

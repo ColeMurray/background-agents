@@ -23,7 +23,7 @@ import type { EventRepository } from "../../event-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
-import type { SessionSandboxEventProcessor } from "../../sandbox-events";
+import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";

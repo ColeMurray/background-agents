@@ -14,7 +14,7 @@ import type { EventRepository } from "../../event-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
-import type { SessionSandboxEventProcessor } from "../../sandbox-events";
+import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 
 function createHandler({ managedSecretsConfigured = true } = {}) {
   const repository = {

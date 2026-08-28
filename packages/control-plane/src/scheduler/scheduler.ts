@@ -9,16 +9,19 @@
  */
 
 import {
-  automationEventSchema,
   matchesConditions,
   conditionRegistry,
   buildSlackContextBlock,
   slackChannelLabel,
+  type AutomationEvent,
   type SlackAutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
-import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
+import type {
+  AutomationInvocationSource,
+  AutomationRun,
+} from "@open-inspect/shared/types/automations";
 import type {
   AutomationCallbackContext,
   SlackCallbackContext,
@@ -148,30 +151,41 @@ function appendSlackSessionInstructions(prompt: string, instructions: string | u
   return instructions ? `${prompt}\n\n## Additional Instructions\n\n${instructions}` : prompt;
 }
 
-const manualTriggerBodySchema = z.object({
-  automationId: z.string().min(1),
-});
-
 const slackThreadContextResponseSchema = z.object({
   threadContext: z.string(),
 });
 
-const runCompleteBodySchema = z.object({
-  automationId: z.string(),
-  runId: z.string(),
-  sessionId: z.string(),
-  messageId: z.string().min(1),
-  success: z.boolean(),
-  error: z.string().optional(),
-});
+export interface AutomationRunCompletion {
+  automationId: string;
+  runId: string;
+  sessionId: string;
+  messageId: string;
+  success: boolean;
+  error?: string;
+}
 
-export type AutomationRunCompletion = z.infer<typeof runCompleteBodySchema>;
+export interface SchedulerTickResult {
+  processed: number;
+  skipped: number;
+  failed: number;
+}
 
-function badJsonRequest(message: string): Response {
-  return new Response(JSON.stringify({ error: message }), {
-    status: 400,
-    headers: { "Content-Type": "application/json" },
-  });
+export interface SchedulerEventResult {
+  triggered: number;
+  skipped: number;
+  steered: number;
+}
+
+export interface SchedulerTriggerResult {
+  invocationId: string;
+  runs: AutomationRun[];
+}
+
+export class AutomationTriggerBlockedError extends Error {
+  constructor() {
+    super("An active run already exists");
+    this.name = "AutomationTriggerBlockedError";
+  }
 }
 
 interface StartInvocationParams {
@@ -242,23 +256,6 @@ export class Scheduler {
     private readonly backgroundJobs: BackgroundTasks
   ) {
     this.log = createLogger("scheduler", {}, parseLogLevel(env.LOG_LEVEL));
-  }
-
-  /** Dispatch helper for logic tests and callers that already hold an internal Request. */
-  async dispatch(request: Request): Promise<Response> {
-    const path = new URL(request.url).pathname;
-    if (request.method === "POST" && path === "/internal/tick") return this.tick();
-    if (request.method === "POST" && path === "/internal/trigger") {
-      return this.trigger(await request.json());
-    }
-    if (request.method === "POST" && path === "/internal/event") {
-      return this.event(await request.json());
-    }
-    if (request.method === "POST" && path === "/internal/run-complete") {
-      return this.runComplete(await request.json());
-    }
-    if (request.method === "GET" && path === "/internal/health") return this.health();
-    return new Response("Not Found", { status: 404 });
   }
 
   /**
@@ -604,7 +601,7 @@ export class Scheduler {
 
   // ─── Tick handler ────────────────────────────────────────────────────────
 
-  async tick(): Promise<Response> {
+  async tick(): Promise<SchedulerTickResult> {
     const store = new AutomationStore(this.db);
     const now = Date.now();
     let processed = 0;
@@ -692,9 +689,7 @@ export class Scheduler {
       overdue_count: overdue.length,
     });
 
-    return new Response(JSON.stringify({ processed, skipped, failed }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return { processed, skipped, failed };
   }
 
   // ─── Recovery sweep ──────────────────────────────────────────────────────
@@ -859,13 +854,7 @@ export class Scheduler {
 
   // ─── Event handler ───────────────────────────────────────────────────────
 
-  async event(input: unknown): Promise<Response> {
-    const parsedEvent = automationEventSchema.safeParse(input);
-    if (!parsedEvent.success) {
-      return badJsonRequest("Invalid automation event");
-    }
-
-    const event = parsedEvent.data;
+  async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
 
     // 1. Find matching automations
@@ -908,8 +897,8 @@ export class Scheduler {
     // created only on the first admission. Several automations can watch the
     // same channel; they must not each re-read the thread.
     let slackContextPromise: Promise<string> | undefined;
-    const slackContextBlock = (): Promise<string> => {
-      slackContextPromise ??= this.buildSlackContextWithThread(event as SlackAutomationEvent);
+    const slackContextBlock = (slackEvent: SlackAutomationEvent): Promise<string> => {
+      slackContextPromise ??= this.buildSlackContextWithThread(slackEvent);
       return slackContextPromise;
     };
 
@@ -983,7 +972,7 @@ export class Scheduler {
           ? {
               instructionsOverrideFactory: async () =>
                 appendSlackSessionInstructions(
-                  `${await slackContextBlock()}\n---\n\n${automation.instructions}`,
+                  `${await slackContextBlock(event)}\n---\n\n${automation.instructions}`,
                   slackSessionInstructions
                 ),
             }
@@ -1026,36 +1015,23 @@ export class Scheduler {
       candidates: candidates.length,
     });
 
-    return new Response(JSON.stringify({ triggered, skipped, steered }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return { triggered, skipped, steered };
   }
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
-  async trigger(input: unknown): Promise<Response> {
-    const parsedBody = manualTriggerBodySchema.safeParse(input);
-    if (!parsedBody.success) return badJsonRequest("automationId required");
-
-    const { automationId } = parsedBody.data;
-
+  async trigger(automationId: string): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
-      return new Response(JSON.stringify({ error: "Automation not found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
+      throw new Error("Automation not found");
     }
 
     const result = await this.startInvocation(store, { automation, source: "manual" });
 
     if (result.outcome !== "started") {
-      // Manual overlap (pre-check or lost race) records nothing and answers 409.
-      return new Response(JSON.stringify({ error: "An active run already exists" }), {
-        status: 409,
-        headers: { "Content-Type": "application/json" },
-      });
+      // Manual overlap (pre-check or lost race) records nothing.
+      throw new AutomationTriggerBlockedError();
     }
 
     const runs = result.runs.map((run) =>
@@ -1071,10 +1047,7 @@ export class Scheduler {
         error: result.runs[0]?.failure_reason ?? "unknown",
       });
 
-      return new Response(JSON.stringify({ error: "Failed to trigger automation" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      throw new Error("Failed to trigger automation");
     }
 
     this.log.info("Manual trigger succeeded", {
@@ -1084,22 +1057,12 @@ export class Scheduler {
       launched: result.launched,
     });
 
-    // `run` (first child) is the deprecated pre-invocations response field;
-    // removed with the other one-release compatibility artifacts.
-    return new Response(JSON.stringify({ invocationId: result.invocationId, runs }), {
-      status: 201,
-      headers: { "Content-Type": "application/json" },
-    });
+    return { invocationId: result.invocationId, runs };
   }
 
   // ─── Run complete callback ───────────────────────────────────────────────
 
-  async runComplete(input: unknown): Promise<Response> {
-    const parsedBody = runCompleteBodySchema.safeParse(input);
-    if (!parsedBody.success) return badJsonRequest("Invalid run-complete callback");
-
-    const body = parsedBody.data;
-
+  async runComplete(body: AutomationRunCompletion): Promise<void> {
     const store = new AutomationStore(this.db);
 
     const run = await store.getRunById(body.automationId, body.runId);
@@ -1110,9 +1073,7 @@ export class Scheduler {
         run_id: body.runId,
         current_status: "not_found",
       });
-      return new Response(JSON.stringify({ ok: true, ignored: true }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return;
     }
 
     // SQL-guarded transition: only an active run may go terminal. When the
@@ -1137,9 +1098,7 @@ export class Scheduler {
         run_id: body.runId,
         current_status: run.status,
       });
-      return new Response(JSON.stringify({ ok: true, ignored: true }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return;
     }
 
     // Invocation-level accounting: one CAS-guarded strike per invocation on
@@ -1181,10 +1140,6 @@ export class Scheduler {
         reasoningEffort: automation?.reasoning_effort ?? undefined,
       });
     }
-
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { "Content-Type": "application/json" },
-    });
   }
 
   /**
@@ -1333,21 +1288,6 @@ export class Scheduler {
         error: e instanceof Error ? e : new Error(String(e)),
       });
     }
-  }
-
-  // ─── Health check ────────────────────────────────────────────────────────
-
-  async health(): Promise<Response> {
-    const store = new AutomationStore(this.db);
-    const overdueCount = await store.countOverdue(Date.now());
-
-    return new Response(
-      JSON.stringify({
-        status: "healthy",
-        overdueCount,
-      }),
-      { headers: { "Content-Type": "application/json" } }
-    );
   }
 
   // ─── Session creation ────────────────────────────────────────────────────

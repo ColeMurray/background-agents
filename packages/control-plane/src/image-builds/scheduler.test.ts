@@ -55,6 +55,34 @@ function harness(
     listSessionCleanup,
     clearProviderSessionCleanup,
     listRecoverableFinalizations,
+    // The scheduler constructs its reaper internally, so the cleanup phase
+    // runs real reap logic over these rows: one failed and one superseded
+    // artifact delete → artifactsReaped 2, two aged rows → rowsAged 2.
+    getFailedImagesWithArtifacts: vi.fn(async () => [
+      {
+        id: "reap-failed",
+        scope_kind: "environment" as const,
+        scope_id: "env_1",
+        provider: "modal" as const,
+        provider_image_id: "im-failed",
+        provider_session_id: null,
+        created_at: 1,
+      },
+    ]),
+    clearFailedImageArtifact: vi.fn(async () => true),
+    deleteOldFailedBuilds: vi.fn(async () => 2),
+    getSupersededImages: vi.fn(async () => [
+      {
+        id: "reap-superseded",
+        scope_kind: "environment" as const,
+        scope_id: "env_1",
+        provider: "modal" as const,
+        provider_image_id: "im-superseded",
+        provider_session_id: null,
+        created_at: 2,
+      },
+    ]),
+    deleteSupersededImage: vi.fn(async () => true),
     finalization: {
       clearSessionCleanup: clearProviderSessionCleanup,
     },
@@ -72,11 +100,6 @@ function harness(
     triggerBuildWithTarget: vi.fn(async (_scope: ImageBuildScope) => ({
       type: "triggered" as const,
       buildId: "build-new",
-    })),
-    cleanupImages: vi.fn(async () => ({
-      deletedFailed: 2,
-      reapedFailed: 1,
-      reapedSuperseded: 1,
     })),
   };
   const resolveTarget = vi.fn(
@@ -179,14 +202,14 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("continues reconciliation and artifact cleanup when a cleanup phase query fails", async () => {
-    const { scheduler, store, workflow } = harness();
+    const { scheduler, store } = harness();
     store.listSessionCleanup.mockRejectedValueOnce(new Error("D1 cleanup unavailable"));
 
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
     expect(stats.scopesScanned).toBe(1);
     expect(stats.triggered).toBe(1);
-    expect(workflow.cleanupImages).toHaveBeenCalledOnce();
+    expect(store.deleteOldFailedBuilds).toHaveBeenCalledOnce();
   });
 
   it("checks every enabled scope in one full scan", async () => {
@@ -221,22 +244,20 @@ describe("ImageBuildScheduler", () => {
       return [
         {
           id: `build-${scope.id}`,
-          scope_kind: scope.kind,
-          scope_id: scope.id,
+          scopeKind: scope.kind,
+          scopeId: scope.id,
           provider: "modal",
           status: "ready",
-          repositories_fingerprint: target.repositoriesFingerprint,
-          repository_shas: JSON.stringify(
-            target.repositories.map((repository) => ({
-              repoOwner: repository.repoOwner,
-              repoName: repository.repoName,
-              baseSha: "abc123",
-            }))
-          ),
-          runtime_version: COMPATIBLE_RUNTIME_VERSION,
-          build_duration_seconds: 1,
-          error_message: null,
-          created_at: 1,
+          repositoriesFingerprint: target.repositoriesFingerprint,
+          repositoryShas: target.repositories.map((repository) => ({
+            repoOwner: repository.repoOwner,
+            repoName: repository.repoName,
+            baseSha: "abc123",
+          })),
+          runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+          buildDurationSeconds: 1,
+          errorMessage: null,
+          createdAt: 1,
         },
       ];
     });
@@ -264,7 +285,7 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("runs provider-neutral maintenance when rebuild reconciliation is unavailable", async () => {
-    const { scheduler, listScopes, workflow } = harness({
+    const { scheduler, store, listScopes } = harness({
       provider: null,
       sourceControl: null,
     });
@@ -275,7 +296,7 @@ describe("ImageBuildScheduler", () => {
     expect(stats.cleanupAttempted).toBe(2);
     expect(stats.scopesScanned).toBe(0);
     expect(listScopes).not.toHaveBeenCalled();
-    expect(workflow.cleanupImages).toHaveBeenCalledOnce();
+    expect(store.deleteOldFailedBuilds).toHaveBeenCalledOnce();
   });
 
   it("republishes persisted artifacts left behind by exhausted Queue delivery", async () => {
