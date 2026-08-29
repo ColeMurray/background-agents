@@ -92,7 +92,13 @@ export function staticUserPermission(method: string, path: string): PermissionId
     return method === "GET" ? "provider_accounts.read" : "provider_accounts.manage";
   }
 
-  if (path.startsWith("/integration-settings/slack/")) return "automations.read";
+  if (
+    method === "GET" &&
+    (path === "/integration-settings/slack/channels" ||
+      path === "/integration-settings/slack/watched-channels")
+  ) {
+    return "automations.read";
+  }
   if (path.startsWith("/integration-settings/")) {
     if (method === "GET") return "integrations.read";
     if (/\/repos\/[^/]+\/[^/]+$/.test(path)) return "repositories.settings.manage";
