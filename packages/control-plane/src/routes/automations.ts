@@ -70,6 +70,7 @@ import {
   bindAutomationAuthorizationGuard,
   bindPermissionSetGuard,
   isAutomationAuthorizationCurrent,
+  isAutomationExecutionAuthorized,
   type AutomationAuthorizationOperation,
 } from "../automation/authorization-guard";
 
@@ -1308,6 +1309,9 @@ async function handleTriggerAutomation(
       !(await isAutomationAuthorizationCurrent(ctx.db, id, ctx.authorization, "trigger"))
     ) {
       return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
+    }
+    if (!(await isAutomationExecutionAuthorized(ctx.db, id))) {
+      return json({ error: "Execution authorization required" }, 403);
     }
     return error("Failed to trigger automation", 500);
   }

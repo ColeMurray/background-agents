@@ -21,6 +21,7 @@ import {
   type AutomationModelProviderAuthRow,
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { bindAutomationExecutionGuard } from "../automation/authorization-guard";
 import type { AutomationListCursor } from "./automation-list-cursor";
 
 function escapeLikePattern(value: string): string {
@@ -914,12 +915,16 @@ export class AutomationStore {
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
     authorizationGuard?: SqlStatement;
+    enforceExecutionAuthorization?: boolean;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
     const statements: SqlStatement[] = [];
 
     if (params.authorizationGuard) statements.push(params.authorizationGuard);
+    if (params.enforceExecutionAuthorization) {
+      statements.push(bindAutomationExecutionGuard(this.db, invocation.automation_id));
+    }
     const invocationStatementIndex = statements.length;
     statements.push(
       this.db

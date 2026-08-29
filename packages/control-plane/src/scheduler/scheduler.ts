@@ -441,6 +441,7 @@ export class Scheduler {
             ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
             : undefined,
         authorizationGuard: params.authorizationGuard,
+        enforceExecutionAuthorization: true,
       }));
     } catch (e) {
       if (isDuplicateKeyError(e)) {

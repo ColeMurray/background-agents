@@ -92,6 +92,65 @@ async function countRows(table: string, where = "1=1"): Promise<number> {
 describe("automation invocations (D1 integration)", () => {
   beforeEach(cleanD1Tables);
 
+  it("reauthorizes the owner and target-use permissions at invocation admission", async () => {
+    const ownerId = "11111111111111111111111111111111";
+    const roleId = "role_execution_test";
+    const store = new AutomationStore(env.DB);
+    const automation = makeAutomation({ user_id: ownerId, created_by: ownerId });
+    const invocation = makeInvocation(automation.id);
+    const child = makeChild(automation.id, { invocation_id: invocation.id });
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+         VALUES (?, 'Execution Owner', NULL, 0, NULL, 1, 1)`
+      ).bind(ownerId),
+      env.DB.prepare(
+        `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system, revision,
+           created_by, updated_by, created_at, updated_at)
+         VALUES (?, NULL, 'Execution Test', 'execution test', NULL, 0, 1, ?, ?, 1, 1)`
+      ).bind(roleId, ownerId, ownerId),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        roleId,
+        ownerId
+      ),
+    ]);
+    await store.create(automation);
+    await Promise.all(
+      [
+        ...store.bindRepositoryInserts(
+          automation.id,
+          [{ repo_owner: "acme", repo_name: "app", repo_id: 1, base_branch: "main" }],
+          Date.now()
+        ),
+        ...store.bindEnvironmentInserts(automation.id, ["env_1"], Date.now()),
+      ].map((statement) => statement.run())
+    );
+
+    const admit = () =>
+      store.insertInvocationGuarded({
+        invocation,
+        children: [child],
+        overlapScope: { kind: "automation" },
+        enforceExecutionAuthorization: true,
+      });
+    const grant = (permission: string) =>
+      env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)")
+        .bind(roleId, permission)
+        .run();
+
+    await expect(admit()).rejects.toThrow();
+    await grant("sessions.create");
+    await expect(admit()).rejects.toThrow();
+    await grant("repositories.use");
+    await expect(admit()).rejects.toThrow();
+    await grant("environments.use");
+    await expect(admit()).resolves.toEqual({ inserted: true });
+    expect(await countRows("automation_invocations")).toBe(1);
+  });
+
   // ─── Derived status ────────────────────────────────────────────────────────
 
   describe("derived status", () => {
