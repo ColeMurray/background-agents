@@ -19,6 +19,7 @@ import {
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { listChannels } from "@open-inspect/shared/slack";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import {
   getValidModelOrDefault,
   isValidModel,
@@ -79,13 +80,23 @@ const logger = createLogger("router:automations");
 async function authorizeAutomationMutation(
   ctx: RequestContext,
   automation: AutomationRow,
-  operation: "manage" | "trigger"
+  operation: "manage" | "trigger",
+  requiredPermissions: readonly PermissionId[] = []
 ): Promise<{ authorizationGuard: SqlStatement | null } | Response> {
   if (ctx.principal?.kind !== "user") return { authorizationGuard: null };
   const authorization = ctx.authorization;
   if (!authorization) return json({ error: "Authorization unavailable" }, 503);
   const anyPermission = `automations.${operation}.any` as const;
   const ownPermission = `automations.${operation}.own` as const;
+  const missingPermission = requiredPermissions.find(
+    (permission) => !authorization.permissions.includes(permission)
+  );
+  if (missingPermission) {
+    return json(
+      { error: "Forbidden", code: "permission_required", permission: missingPermission },
+      403
+    );
+  }
   if (
     authorization.permissions.includes(anyPermission) ||
     (authorization.permissions.includes(ownPermission) &&
@@ -96,7 +107,8 @@ async function authorizeAutomationMutation(
         ctx.db,
         automation.id,
         authorization,
-        operation
+        operation,
+        requiredPermissions
       ),
     };
   }
@@ -108,7 +120,8 @@ async function runAuthorizedAutomationBatch(
   automation: AutomationRow,
   operation: AutomationAuthorizationOperation,
   authorizationGuard: SqlStatement | null,
-  statements: SqlStatement[]
+  statements: SqlStatement[],
+  requiredPermissions: readonly PermissionId[] = []
 ): Promise<SqlResult[] | Response> {
   try {
     return await ctx.db.batch(
@@ -117,7 +130,13 @@ async function runAuthorizedAutomationBatch(
   } catch (cause) {
     if (
       ctx.authorization &&
-      !(await isAutomationAuthorizationCurrent(ctx.db, automation.id, ctx.authorization, operation))
+      !(await isAutomationAuthorizationCurrent(
+        ctx.db,
+        automation.id,
+        ctx.authorization,
+        operation,
+        requiredPermissions
+      ))
     ) {
       return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
     }
@@ -962,6 +981,20 @@ async function handleUpdateAutomation(
   // it simply applies from the next invocation.
   const selection = getRepositorySelection(body);
   const environmentSelection = getEnvironmentSelection(body);
+  const requiredTargetPermissions: PermissionId[] = [
+    ...(selection.kind === "replace" ? (["repositories.use"] as const) : []),
+    ...(environmentSelection.kind === "replace" ? (["environments.use"] as const) : []),
+  ];
+  if (requiredTargetPermissions.length > 0) {
+    const targetAdmission = await authorizeAutomationMutation(
+      ctx,
+      existing,
+      "manage",
+      requiredTargetPermissions
+    );
+    if (targetAdmission instanceof Response) return targetAdmission;
+    admission.authorizationGuard = targetAdmission.authorizationGuard;
+  }
 
   // The count rules span both selections, so when EITHER is replaced they are
   // validated against the automation's FINAL state (the replacement plus the
@@ -1129,7 +1162,8 @@ async function handleUpdateAutomation(
       existing,
       "manage",
       admission.authorizationGuard,
-      statements
+      statements,
+      requiredTargetPermissions
     );
     if (result instanceof Response) return result;
   }

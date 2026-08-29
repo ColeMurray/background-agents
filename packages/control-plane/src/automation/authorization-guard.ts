@@ -96,10 +96,17 @@ export function bindAutomationAuthorizationGuard(
   db: SqlDatabase,
   automationId: string,
   authorization: EffectiveAuthorization,
-  operation: AutomationAuthorizationOperation
+  operation: AutomationAuthorizationOperation,
+  requiredPermissions: readonly PermissionId[] = []
 ): SqlStatement {
   const anyPermission = `automations.${operation}.any`;
   const ownPermission = `automations.${operation}.own`;
+  const requiredPermissionGuards = requiredPermissions
+    .map(
+      () =>
+        "EXISTS (SELECT 1 FROM role_permissions required_rp WHERE required_rp.role_id = ura.role_id AND required_rp.permission_id = ?)"
+    )
+    .join(" AND ");
   return db
     .prepare(
       `SELECT CASE WHEN EXISTS (
@@ -107,12 +114,13 @@ export function bindAutomationAuthorizationGuard(
          JOIN user_role_assignments ura ON ura.user_id = u.id
          JOIN role_permissions rp ON rp.role_id = ura.role_id
          WHERE u.id = ? AND u.access_status = 'active' AND u.authorization_version = ?
-           AND (
+            AND (
              rp.permission_id = ?
              OR (rp.permission_id = ? AND EXISTS (
                SELECT 1 FROM automations a WHERE a.id = ? AND a.user_id = u.id
-             ))
-           )
+              ))
+            )
+            ${requiredPermissionGuards ? `AND ${requiredPermissionGuards}` : ""}
        ) THEN 1 ELSE abs(-9223372036854775808) END AS authorization_guard`
     )
     .bind(
@@ -120,7 +128,8 @@ export function bindAutomationAuthorizationGuard(
       authorization.authorizationVersion,
       anyPermission,
       ownPermission,
-      automationId
+      automationId,
+      ...requiredPermissions
     );
 }
 
@@ -128,22 +137,30 @@ export async function isAutomationAuthorizationCurrent(
   db: SqlDatabase,
   automationId: string,
   authorization: EffectiveAuthorization,
-  operation: AutomationAuthorizationOperation
+  operation: AutomationAuthorizationOperation,
+  requiredPermissions: readonly PermissionId[] = []
 ): Promise<boolean> {
   const anyPermission = `automations.${operation}.any`;
   const ownPermission = `automations.${operation}.own`;
+  const requiredPermissionGuards = requiredPermissions
+    .map(
+      () =>
+        "EXISTS (SELECT 1 FROM role_permissions required_rp WHERE required_rp.role_id = ura.role_id AND required_rp.permission_id = ?)"
+    )
+    .join(" AND ");
   const row = await db
     .prepare(
       `SELECT 1 AS authorized FROM users u
        JOIN user_role_assignments ura ON ura.user_id = u.id
        JOIN role_permissions rp ON rp.role_id = ura.role_id
        WHERE u.id = ? AND u.access_status = 'active' AND u.authorization_version = ?
-         AND (
+          AND (
            rp.permission_id = ?
            OR (rp.permission_id = ? AND EXISTS (
              SELECT 1 FROM automations a WHERE a.id = ? AND a.user_id = u.id
-           ))
-         )
+            ))
+          )
+          ${requiredPermissionGuards ? `AND ${requiredPermissionGuards}` : ""}
        LIMIT 1`
     )
     .bind(
@@ -151,7 +168,8 @@ export async function isAutomationAuthorizationCurrent(
       authorization.authorizationVersion,
       anyPermission,
       ownPermission,
-      automationId
+      automationId,
+      ...requiredPermissions
     )
     .first();
   return row !== null;

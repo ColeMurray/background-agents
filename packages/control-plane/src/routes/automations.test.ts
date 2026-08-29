@@ -14,7 +14,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import { AutomationTriggerBlockedError } from "../scheduler/scheduler";
-import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
+import { PERMISSION_IDS, type PermissionId } from "@open-inspect/shared/rbac";
 
 const mockProviderAdapterGet = vi.hoisted(() => vi.fn());
 
@@ -182,7 +182,10 @@ const SLACK_BOT_PRINCIPAL: Principal = {
   },
 };
 
-function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
+function createCtx(
+  principal: Principal = USER_PRINCIPAL,
+  permissions: readonly PermissionId[] = PERMISSION_IDS
+): RequestContext {
   const statement = {
     bind: vi.fn(() => statement),
     first: vi.fn(async () => ({
@@ -206,7 +209,7 @@ function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
             userId: principal.userId,
             accessStatus: "active" as const,
             role: { id: "role_builtin_owner", key: "owner" as const, name: "Owner" },
-            permissions: [...PERMISSION_IDS],
+            permissions: [...permissions],
             authorizationVersion: 1,
           },
         }
@@ -229,6 +232,7 @@ async function callRoute(
     body?: unknown;
     query?: Record<string, string | string[]>;
     principal?: Principal;
+    permissions?: readonly PermissionId[];
   }
 ): Promise<Response> {
   const { handler, match } = getHandler(method, path);
@@ -245,7 +249,12 @@ async function callRoute(
     init.headers = { "Content-Type": "application/json" };
     init.body = JSON.stringify(options.body);
   }
-  return handler(new Request(url, init), createEnv(), match, createCtx(options?.principal));
+  return handler(
+    new Request(url, init),
+    createEnv(),
+    match,
+    createCtx(options?.principal, options?.permissions)
+  );
 }
 
 // ─── Sample data ────────────────────────────────────────────────────────────
@@ -1026,6 +1035,29 @@ describe("automation route handlers", () => {
   });
 
   describe("PUT /automations/:id (update)", () => {
+    it.each([
+      ["repository", { repositories: [] }, "repositories.use"],
+      ["environment", { environmentIds: [] }, "environments.use"],
+    ] as const)(
+      "requires target-use permission for %s replacement",
+      async (_target, body, permission) => {
+        mockStore.getById.mockResolvedValue(sampleRow);
+
+        const res = await callRoute("PUT", "/automations/auto-1", {
+          body,
+          permissions: PERMISSION_IDS.filter((candidate) => candidate !== permission),
+        });
+
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toEqual({
+          error: "Forbidden",
+          code: "permission_required",
+          permission,
+        });
+        expect(mockBatch).not.toHaveBeenCalled();
+      }
+    );
+
     it("updates automation fields", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
