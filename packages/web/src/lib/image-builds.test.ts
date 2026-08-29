@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import {
+  activeBuildScopeKeys,
   currentFingerprintBuilds,
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
@@ -13,10 +14,9 @@ import {
   imageBuildsEnabledReposResponseSchema,
   imageBuildsEnabledResponseSchema,
   imageBuildUnitViewSchema,
-  latestCurrentBuild,
+  latestCurrentBuildsByScope,
   parsePrimaryBuildSha,
   repoImageBuildScopeId,
-  type ImageBuildsFeed,
   type ImageBuildUnitView,
 } from "./image-builds";
 
@@ -253,47 +253,55 @@ describe("currentFingerprintBuilds", () => {
   });
 });
 
-describe("latestCurrentBuild", () => {
-  function feed(images: ImageBuildRecordView[], units: ImageBuildUnitView[]): ImageBuildsFeed {
-    return { units, enabledRepos: [], images };
-  }
-
+describe("latestCurrentBuildsByScope", () => {
   it("skips a newer stale-fingerprint row in favor of the newest current one", () => {
     // Feed order is createdAt DESC: the stale ready row is newest overall.
-    const build = latestCurrentBuild(
-      feed(
-        [
-          record({ id: "stale-newest", status: "ready", repositoriesFingerprint: "fp-stale" }),
-          record({ id: "current-failed", status: "failed" }),
-          record({ id: "current-older", status: "ready" }),
-        ],
-        [unit()]
-      ),
-      "environment",
-      "env-1"
+    const latest = latestCurrentBuildsByScope(
+      [
+        record({ id: "stale-newest", status: "ready", repositoriesFingerprint: "fp-stale" }),
+        record({ id: "current-failed", status: "failed" }),
+        record({ id: "current-older", status: "ready" }),
+      ],
+      [unit()]
     );
 
-    expect(build?.id).toBe("current-failed");
+    expect(latest.get(imageBuildScopeKey("environment", "env-1"))?.id).toBe("current-failed");
   });
 
-  it("selects only rows of the requested scope", () => {
-    const build = latestCurrentBuild(
-      feed(
-        [
-          record({ id: "other-scope", scopeKind: "repo", scopeId: "acme/web" }),
-          record({ id: "target" }),
-        ],
-        []
-      ),
-      "environment",
-      "env-1"
+  it("maps each scope to its own newest row", () => {
+    const latest = latestCurrentBuildsByScope(
+      [
+        record({ id: "repo-newest", scopeKind: "repo", scopeId: "acme/web" }),
+        record({ id: "env-newest" }),
+        record({ id: "env-older" }),
+      ],
+      []
     );
 
-    expect(build?.id).toBe("target");
+    expect(latest.get(imageBuildScopeKey("repo", "acme/web"))?.id).toBe("repo-newest");
+    expect(latest.get(imageBuildScopeKey("environment", "env-1"))?.id).toBe("env-newest");
   });
 
-  it("returns undefined without a feed or matching row", () => {
-    expect(latestCurrentBuild(undefined, "environment", "env-1")).toBeUndefined();
-    expect(latestCurrentBuild(feed([], []), "environment", "env-1")).toBeUndefined();
+  it("has no entry for a scope without countable rows", () => {
+    const latest = latestCurrentBuildsByScope(
+      [record({ id: "stale-only", repositoriesFingerprint: "fp-stale" })],
+      [unit()]
+    );
+
+    expect(latest.get(imageBuildScopeKey("environment", "env-1"))).toBeUndefined();
+  });
+});
+
+describe("activeBuildScopeKeys", () => {
+  it("includes scopes with a building row under any fingerprint", () => {
+    // The control plane's trigger guard is not fingerprint-scoped, so a
+    // stale-fingerprint building row still blocks a new trigger.
+    const active = activeBuildScopeKeys([
+      record({ id: "stale-building", status: "building", repositoriesFingerprint: "fp-stale" }),
+      record({ id: "repo-ready", scopeKind: "repo", scopeId: "acme/web", status: "ready" }),
+    ]);
+
+    expect(active.has(imageBuildScopeKey("environment", "env-1"))).toBe(true);
+    expect(active.has(imageBuildScopeKey("repo", "acme/web"))).toBe(false);
   });
 });

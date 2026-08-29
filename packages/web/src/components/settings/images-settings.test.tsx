@@ -146,6 +146,34 @@ describe("ImagesSettings", () => {
     expect(screen.queryByText(/^Ready/)).not.toBeInTheDocument();
   });
 
+  it("keeps rebuild disabled while a stale-fingerprint build is still running", () => {
+    // The display hides the stale row, but the control plane's trigger guard
+    // is not fingerprint-scoped: while the stale build runs, a new trigger
+    // only returns alreadyBuilding — so the control must stay disabled.
+    renderWithFeed({
+      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp-current" }],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
+      images: [
+        {
+          id: "stale-building",
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          provider: "modal",
+          status: "building",
+          repositoriesFingerprint: "fp-stale",
+          repositoryShas: [],
+          runtimeVersion: "60",
+          buildDurationSeconds: null,
+          errorMessage: null,
+          createdAt: Date.now(),
+        },
+      ],
+    });
+
+    expect(screen.getByText("No image")).toBeInTheDocument();
+    expect(screen.getByTitle("Rebuild image")).toBeDisabled();
+  });
+
   it("keeps the toggle enabled when unit resolution transiently dropped the repo", () => {
     // Enabled per the persisted flag but absent from `units` — toggle state
     // must come from the flag, not the resolution-dependent units feed.

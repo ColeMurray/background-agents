@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { mutate } from "swr";
 import { toast } from "sonner";
 import type { Environment } from "@open-inspect/shared/types/environments";
@@ -10,7 +10,12 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { IMAGE_BUILDS_KEY, latestCurrentBuild } from "@/lib/image-builds";
+import {
+  IMAGE_BUILDS_KEY,
+  activeBuildScopeKeys,
+  imageBuildScopeKey,
+  latestCurrentBuildsByScope,
+} from "@/lib/image-builds";
 import { useImageBuilds } from "@/hooks/use-image-builds";
 import { usePendingKeys } from "@/hooks/use-pending-keys";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
@@ -39,6 +44,14 @@ export function EnvironmentsSettings() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const toggling = usePendingKeys();
   const triggering = usePendingKeys();
+  const latestBuilds = useMemo(
+    () => latestCurrentBuildsByScope(imageBuildsFeed?.images ?? [], imageBuildsFeed?.units ?? []),
+    [imageBuildsFeed]
+  );
+  const activeBuildScopes = useMemo(
+    () => activeBuildScopeKeys(imageBuildsFeed?.images ?? []),
+    [imageBuildsFeed]
+  );
 
   const prebuildsSupported = supportsRepoImages();
 
@@ -315,7 +328,9 @@ export function EnvironmentsSettings() {
                       <>
                         <EnvironmentImageStatus
                           environment={environment}
-                          image={latestCurrentBuild(imageBuildsFeed, "environment", environment.id)}
+                          image={latestBuilds.get(
+                            imageBuildScopeKey("environment", environment.id)
+                          )}
                           feedUnavailable={Boolean(imageBuildsError) && !imageBuildsFeed}
                         />
                         <Tooltip>
@@ -337,7 +352,11 @@ export function EnvironmentsSettings() {
                           variant="ghost"
                           size="icon"
                           onClick={() => handleRebuild(environment)}
-                          disabled={!environment.prebuildEnabled || isTriggering}
+                          disabled={
+                            !environment.prebuildEnabled ||
+                            isTriggering ||
+                            activeBuildScopes.has(imageBuildScopeKey("environment", environment.id))
+                          }
                           title="Rebuild image"
                         >
                           <RefreshIcon

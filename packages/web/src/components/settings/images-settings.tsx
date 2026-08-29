@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { mutate } from "swr";
 import { useImageBuilds } from "@/hooks/use-image-builds";
 import { usePendingKeys } from "@/hooks/use-pending-keys";
@@ -12,8 +12,10 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
 import {
   IMAGE_BUILDS_KEY,
+  activeBuildScopeKeys,
   foldEnabledRepoScopeIds,
-  latestCurrentBuild,
+  imageBuildScopeKey,
+  latestCurrentBuildsByScope,
   repoImageBuildScopeId,
 } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -27,6 +29,11 @@ export function ImagesSettings() {
   const toggling = usePendingKeys();
   const triggering = usePendingKeys();
   const [error, setError] = useState("");
+  const latestBuilds = useMemo(
+    () => latestCurrentBuildsByScope(data?.images ?? [], data?.units ?? []),
+    [data]
+  );
+  const activeBuildScopes = useMemo(() => activeBuildScopeKeys(data?.images ?? []), [data]);
 
   if (!repoImagesSupported) {
     return (
@@ -126,10 +133,11 @@ export function ImagesSettings() {
         <div className="space-y-2">
           {repos.map((repo) => {
             const repoKey = repoImageBuildScopeId(repo.owner, repo.name);
+            const buildScopeKey = imageBuildScopeKey("repo", repoKey);
             const isEnabled = enabledRepos.has(repoKey);
             const isToggling = toggling.pending.has(repoKey);
             const isTriggering = triggering.pending.has(repoKey);
-            const image = latestCurrentBuild(data, "repo", repoKey);
+            const image = latestBuilds.get(buildScopeKey);
 
             return (
               <div
@@ -154,7 +162,7 @@ export function ImagesSettings() {
                     variant="ghost"
                     size="icon"
                     onClick={() => handleTrigger(repo.owner, repo.name)}
-                    disabled={!isEnabled || isTriggering || image?.status === "building"}
+                    disabled={!isEnabled || isTriggering || activeBuildScopes.has(buildScopeKey)}
                     title="Rebuild image"
                   >
                     <RefreshIcon className={`w-4 h-4 ${isTriggering ? "animate-spin" : ""}`} />

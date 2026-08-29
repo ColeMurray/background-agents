@@ -170,21 +170,42 @@ export function foldImageBuildStatusByScope(
 }
 
 /**
- * The newest countable build row for one scope (the feed is createdAt DESC).
- * Answers the settings surfaces' question — "what did the latest build
- * attempt do?" — which the rebuild/toggle controls act on. This can
- * legitimately show `failed` while the picker's fold reports `ready` for the
- * same scope (an older ready image still serves); the two must only ever
- * disagree on precedence, never on which rows count.
+ * One fold of the feed into each scope's newest countable row (the feed is
+ * createdAt DESC, so a scope's first row wins). Answers the settings
+ * surfaces' question — "what did the latest build attempt do?" — which the
+ * rebuild/toggle controls act on. This can legitimately hold `failed` while
+ * the picker's fold reports `ready` for the same scope (an older ready image
+ * still serves); the two must only ever disagree on precedence, never on
+ * which rows count. Memo once per feed change and look rows up by
+ * imageBuildScopeKey.
  */
-export function latestCurrentBuild(
-  feed: ImageBuildsFeed | undefined,
-  scopeKind: ImageBuildScopeKind,
-  scopeId: string
-): ImageBuildRecordView | undefined {
-  if (!feed) return undefined;
-  return currentFingerprintBuilds(feed.images, feed.units).find(
-    (image) => image.scopeKind === scopeKind && image.scopeId === scopeId
+export function latestCurrentBuildsByScope(
+  images: ImageBuildRecordView[],
+  units: ImageBuildUnitView[]
+): Map<string, ImageBuildRecordView> {
+  const latestByScope = new Map<string, ImageBuildRecordView>();
+  for (const image of currentFingerprintBuilds(images, units)) {
+    const key = imageBuildScopeKey(image.scopeKind, image.scopeId);
+    if (!latestByScope.has(key)) {
+      latestByScope.set(key, image);
+    }
+  }
+  return latestByScope;
+}
+
+/**
+ * Scope keys with a build in progress under ANY fingerprint. The control
+ * plane's trigger guard is not fingerprint-scoped — one active build per
+ * scope, and a trigger against it returns `alreadyBuilding` in a 200 the
+ * handlers don't read — so rebuild controls must disable on this set even
+ * when the display row (latestCurrentBuildsByScope) hides a stale in-flight
+ * build.
+ */
+export function activeBuildScopeKeys(images: ImageBuildRecordView[]): Set<string> {
+  return new Set(
+    images
+      .filter((image) => image.status === "building")
+      .map((image) => imageBuildScopeKey(image.scopeKind, image.scopeId))
   );
 }
 
