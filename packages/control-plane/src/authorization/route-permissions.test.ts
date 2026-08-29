@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { sessionUserOperation, staticUserPermission } from "./route-permissions";
+import {
+  serviceAllowsPermission,
+  sessionUserOperation,
+  staticUserPermission,
+} from "./route-permissions";
+
+describe("serviceAllowsPermission", () => {
+  it("allows launch capabilities but denies management capabilities", () => {
+    expect(serviceAllowsPermission("slack-bot", "sessions.create")).toBe(true);
+    expect(serviceAllowsPermission("slack-bot", "global_secrets.manage")).toBe(false);
+    expect(serviceAllowsPermission("github-bot", "sessions.sandbox_access.own")).toBe(false);
+  });
+});
 
 describe("staticUserPermission", () => {
   it.each([

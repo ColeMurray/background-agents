@@ -32,18 +32,13 @@ const SESSION_INBOX_LIMIT = 20;
 
 function parseCreatedByFilters(
   values: readonly string[],
-  principal: RequestContext["principal"]
+  currentUserId: string | null
 ): string[] | Response {
   const userIds: string[] = [];
   const seen = new Set<string>();
 
   for (const value of values) {
-    const userId =
-      value === SESSION_LIST_CURRENT_USER
-        ? principal?.kind === "user"
-          ? principal.userId
-          : null
-        : value;
+    const userId = value === SESSION_LIST_CURRENT_USER ? currentUserId : value;
 
     if (!isCanonicalUserId(userId)) {
       return error("Invalid createdBy", 400);
@@ -70,33 +65,40 @@ async function handleListSessions(
 
   const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
     parsedQuery.data;
-  const createdByUserIds = parseCreatedByFilters(createdBy, ctx.principal);
+  const viewerUserId =
+    ctx.principal?.kind === "user"
+      ? ctx.principal.userId
+      : ctx.principal?.kind === "service"
+        ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
+        : undefined;
+  const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
   let accessUserId: string | undefined;
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
   }
-  if (ctx.principal?.kind === "user") {
+  if (viewerUserId) {
     const authorization = ctx.authorization;
     if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-    if (!authorization.permissions.includes("sessions.read.any")) {
-      if (!authorization.permissions.includes("sessions.read.own")) {
-        return json(
-          {
-            error: "Forbidden",
-            code: "permission_required",
-            permission: "sessions.read.own",
-          },
-          403
-        );
-      }
-      accessUserId = ctx.principal.userId;
+    const canReadAny = authorization.permissions.includes("sessions.read.any");
+    const canReadOwn = authorization.permissions.includes("sessions.read.own");
+    if (!canReadAny && !canReadOwn) {
+      return json(
+        {
+          error: "Forbidden",
+          code: "permission_required",
+          permission: "sessions.read.own",
+        },
+        403
+      );
+    }
+    if (ctx.principal?.kind === "service" || !canReadAny) {
+      accessUserId = viewerUserId;
     }
   }
 
   const store = new SessionIndexStore(ctx.db);
   const listStartedAt = Date.now();
-  const viewerUserId = ctx.principal?.kind === "user" ? ctx.principal.userId : undefined;
   const result = await store.list({
     status,
     excludeStatus,

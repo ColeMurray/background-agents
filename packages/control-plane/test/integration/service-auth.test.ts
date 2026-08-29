@@ -46,7 +46,7 @@ async function signedFetch(p: {
 describe("sig1 service-credential authentication", () => {
   beforeEach(cleanD1Tables);
 
-  it("accepts a signed GET from every non-web service", async () => {
+  it("rejects actorless service requests on broad routes", async () => {
     for (const service of Object.keys(SERVICE_SECRET).filter(
       (candidate): candidate is Exclude<ServiceName, "web"> => candidate !== "web"
     )) {
@@ -55,9 +55,8 @@ describe("sig1 service-credential authentication", () => {
         method: "GET",
         url: "https://test.local/sessions",
       });
-      expect(response.status, service).toBe(200);
-      const body = await response.json<{ sessions: unknown[] }>();
-      expect(body.sessions).toEqual([]);
+      expect(response.status, service).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
     }
   });
 
@@ -78,6 +77,7 @@ describe("sig1 service-credential authentication", () => {
       secret: SERVICE_SECRET["linear-bot"],
       method: "GET",
       url: signedUrl,
+      actor: "linear:query-order",
     });
     const response = await SELF.fetch(
       `https://test.local/sessions?createdBy=${createdBy}&limit=5`,
@@ -88,20 +88,20 @@ describe("sig1 service-credential authentication", () => {
     expect(response.status).toBe(200);
   });
 
-  it("delivers the signed body intact to the handler (D1 write lands)", async () => {
+  it("does not let an actorless service mutate global secrets", async () => {
     const response = await signedFetch({
       service: "linear-bot",
       method: "PUT",
       url: "https://test.local/secrets",
       body: JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } }),
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(403);
 
     const secrets = await new GlobalSecretsStore(
       env.DB,
       env.REPO_SECRETS_ENCRYPTION_KEY!
     ).getDecryptedSecrets();
-    expect(secrets.SIGNED_BODY_TEST).toBe("intact");
+    expect(secrets.SIGNED_BODY_TEST).toBeUndefined();
   });
 
   it("rejects a body tampered after signing", async () => {
@@ -113,13 +113,14 @@ describe("sig1 service-credential authentication", () => {
       method: "PUT",
       url,
       body: intactBody,
+      actor: "linear:tamper-test",
     });
     const intact = await SELF.fetch(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...headers },
       body: intactBody,
     });
-    expect(intact.status).toBe(200);
+    expect(intact.status).toBe(403);
 
     const tampered = await SELF.fetch(url, {
       method: "PUT",
@@ -202,6 +203,7 @@ describe("sig1 service-credential authentication", () => {
       }),
     });
     expect(created.status).toBe(201);
+    const createdBody = await created.json<{ sessionId: string }>();
 
     const identity = await new UserStore(env.DB).getIdentity("slack", "U0001");
     expect(identity).not.toBeNull();
@@ -221,9 +223,19 @@ describe("sig1 service-credential authentication", () => {
         spawnSource: "slack-bot",
       })
     );
+
+    const unrelated = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: `https://test.local/sessions/${createdBody.sessionId}/prompt`,
+      actor: "slack:U0002",
+      body: JSON.stringify({ prompt: "Cross-session prompt" }),
+    });
+    expect(unrelated.status).toBe(403);
+    await expect(unrelated.json()).resolves.toMatchObject({ code: "session_access_required" });
   });
 
-  it("denies a suspended canonical bot actor but permits actorless service requests", async () => {
+  it("denies suspended canonical bot actors and actorless broad requests", async () => {
     await signedFetch({
       service: "slack-bot",
       method: "POST",
@@ -250,7 +262,35 @@ describe("sig1 service-credential authentication", () => {
 
     expect(attributed.status).toBe(403);
     await expect(attributed.json()).resolves.toMatchObject({ code: "active_user_required" });
-    expect(actorless.status).toBe(200);
+    expect(actorless.status).toBe(403);
+    await expect(actorless.json()).resolves.toMatchObject({ code: "service_actor_required" });
+  });
+
+  it("intersects an actor role with the service ceiling", async () => {
+    await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: "https://test.local/sessions",
+      actor: "slack:U-VIEWER",
+    });
+    const identity = await new UserStore(env.DB).getIdentity("slack", "U-VIEWER");
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind("role_builtin_viewer", identity!.userId)
+      .run();
+
+    const response = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-VIEWER",
+      body: JSON.stringify({ title: "Viewer session", model: "anthropic/claude-haiku-4-5" }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "sessions.create",
+    });
   });
 
   it("requires a user or signed actor before any service can create a session", async () => {

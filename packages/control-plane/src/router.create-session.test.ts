@@ -132,7 +132,38 @@ describe("handleCreateSession D1 ordering", () => {
       // the env must carry valid key material (the db stub answers "no rows").
       TOKEN_ENCRYPTION_KEY: generateEncryptionKey(),
       DB: {
-        prepare: vi.fn(() => statement),
+        prepare: vi.fn((sql: string) => {
+          if (sql.includes("FROM users u") && sql.includes("user_role_assignments")) {
+            const authorizationStatement = {
+              bind: vi.fn(() => authorizationStatement),
+              first: vi.fn(async () => ({
+                user_id: "user-1",
+                access_status: "active",
+                authorization_version: 1,
+                role_id: "role-1",
+                role_key: "member",
+                role_name: "Member",
+              })),
+              all: vi.fn(async () => ({ results: [] })),
+            };
+            return authorizationStatement;
+          }
+          if (sql.includes("FROM role_permissions")) {
+            const permissionStatement = {
+              bind: vi.fn(() => permissionStatement),
+              first: vi.fn(async () => null),
+              all: vi.fn(async () => ({
+                results: [
+                  { permission_id: "sessions.create" },
+                  { permission_id: "repositories.use" },
+                  { permission_id: "environments.use" },
+                ],
+              })),
+            };
+            return permissionStatement;
+          }
+          return statement;
+        }),
         batch: vi.fn(),
         exec: vi.fn(),
         dump: vi.fn(),
@@ -450,9 +481,10 @@ describe("handleCreateSession D1 ordering", () => {
       model: "anthropic/claude-haiku-4-5",
     });
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
-      error: "Failed to resolve session identity",
+      error: "Authorization unavailable",
+      code: "authorization_unavailable",
     });
     expect(create).not.toHaveBeenCalled();
     expect(initFetch).not.toHaveBeenCalled();
@@ -518,6 +550,13 @@ describe("handleCreateSession D1 ordering", () => {
             canonicalUserId: "user-1",
             participantUserId: "linear:linear-user-1",
           },
+        },
+        authorization: {
+          userId: "user-1",
+          accessStatus: "active",
+          role: { id: "role-1", key: "member", name: "Member" },
+          permissions: ["sessions.create", "repositories.use", "environments.use"],
+          authorizationVersion: 1,
         },
         db: testEnv["DB"] as never,
         executionCtx: TEST_BACKGROUND_TASK_CONTEXT,

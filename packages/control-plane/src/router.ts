@@ -16,8 +16,13 @@ import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { normalizeEmail } from "./db/email";
+import { UserStore } from "./db/user-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
-import { sessionUserOperation, staticUserPermission } from "./authorization/route-permissions";
+import {
+  serviceAllowsPermission,
+  sessionUserOperation,
+  staticUserPermission,
+} from "./authorization/route-permissions";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -300,11 +305,27 @@ export function enforceRoutePrincipal(
 }
 
 async function enforceActiveUser(path: string, ctx: RequestContext): Promise<Response | null> {
+  let resolvedServiceUserId: string | null = null;
+  if (
+    ctx.principal?.kind === "service" &&
+    ctx.principal.actor &&
+    !ctx.principal.actor.canonicalUserId
+  ) {
+    try {
+      const user = await new UserStore(ctx.db).resolveOrCreateUser({
+        provider: ctx.principal.actor.provider,
+        providerUserId: ctx.principal.actor.providerUserId,
+      });
+      resolvedServiceUserId = user.id;
+    } catch {
+      return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+    }
+  }
   const userId =
     ctx.principal?.kind === "user"
       ? ctx.principal.userId
       : ctx.principal?.kind === "service"
-        ? ctx.principal.actor?.canonicalUserId
+        ? (ctx.principal.actor?.canonicalUserId ?? resolvedServiceUserId)
         : null;
   if (!userId || (ctx.principal?.kind === "user" && path === "/me/authorization")) return null;
   try {
@@ -322,14 +343,60 @@ async function enforceActiveUser(path: string, ctx: RequestContext): Promise<Res
   }
 }
 
+function authorizationUserId(ctx: RequestContext): string | null {
+  if (ctx.principal?.kind === "user") return ctx.principal.userId;
+  if (ctx.principal?.kind === "service") {
+    return ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId ?? null;
+  }
+  return null;
+}
+
+function enforceServiceRouteAuthorization(
+  method: string,
+  path: string,
+  route: Route,
+  ctx: RequestContext
+): Response | null {
+  const principal = ctx.principal;
+  if (principal?.kind !== "service") return null;
+  if (route.authentication.kind === "web-service" && principal.service === "web") return null;
+
+  if (!principal.actor) {
+    const allowedService =
+      method === "POST" && path === "/internal/github-event"
+        ? "github-bot"
+        : method === "POST" && path === "/internal/slack-event"
+          ? "slack-bot"
+          : null;
+    return principal.service === allowedService
+      ? null
+      : json({ error: "Forbidden", code: "service_actor_required" }, 403);
+  }
+
+  const classified = staticUserPermission(method, path) || sessionUserOperation(method, path);
+  const allowedUnclassified =
+    method === "GET" &&
+    (path === "/sessions" || path === "/sessions/inbox" || path === "/model-preferences");
+  return classified || allowedUnclassified
+    ? null
+    : json({ error: "Forbidden", code: "service_capability_required" }, 403);
+}
+
 async function enforceStaticUserPermission(
   method: string,
   path: string,
   ctx: RequestContext
 ): Promise<Response | null> {
-  if (ctx.principal?.kind !== "user") return null;
+  const userId = authorizationUserId(ctx);
+  if (!userId) return null;
   const permission = staticUserPermission(method, path);
   if (!permission) return null;
+  if (
+    ctx.principal?.kind === "service" &&
+    !serviceAllowsPermission(ctx.principal.service, permission)
+  ) {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  }
   if (ctx.authorization?.permissions.includes(permission)) return null;
   return json({ error: "Forbidden", code: "permission_required", permission }, 403);
 }
@@ -339,7 +406,8 @@ async function enforceSessionUserPermission(
   path: string,
   ctx: RequestContext
 ): Promise<Response | null> {
-  if (ctx.principal?.kind !== "user") return null;
+  const userId = authorizationUserId(ctx);
+  if (!userId) return null;
   const requirement = sessionUserOperation(method, path);
   if (!requirement) return null;
 
@@ -349,8 +417,15 @@ async function enforceSessionUserPermission(
     const permissionStem = `sessions.${requirement.operation}` as const;
     const anyPermission = `${permissionStem}.any` as const;
     const ownPermission = `${permissionStem}.own` as const;
-    if (authorization.permissions.includes(anyPermission)) return null;
-    if (!authorization.permissions.includes(ownPermission)) {
+    if (
+      ctx.principal?.kind === "service" &&
+      !serviceAllowsPermission(ctx.principal.service, ownPermission)
+    ) {
+      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    }
+    const hasAnyPermission = authorization.permissions.includes(anyPermission);
+    if (ctx.principal?.kind === "user" && hasAnyPermission) return null;
+    if (!hasAnyPermission && !authorization.permissions.includes(ownPermission)) {
       return json(
         { error: "Forbidden", code: "permission_required", permission: ownPermission },
         403
@@ -366,12 +441,7 @@ async function enforceSessionUserPermission(
          WHERE id = ? AND user_id = ?
          LIMIT 1`
       )
-      .bind(
-        requirement.sessionId,
-        ctx.principal.userId,
-        requirement.sessionId,
-        ctx.principal.userId
-      )
+      .bind(requirement.sessionId, userId, requirement.sessionId, userId)
       .first<{ relation: "creator" | "participant" }>();
     const creatorRequired =
       requirement.operation === "delete" || requirement.operation === "participants.manage";
@@ -610,6 +680,20 @@ export async function handleRequest(
     if (ctx.principal) {
       logPrincipal(ctx.principal, ctx, path);
     }
+  }
+
+  const serviceAccessError = enforceServiceRouteAuthorization(
+    method,
+    path,
+    matchedRoute.route,
+    ctx
+  );
+  if (serviceAccessError) {
+    logRequest(serviceAccessError, ctx, method, path, startTime);
+    return withCorsAndTraceHeaders(
+      withRouteCachePolicy(serviceAccessError, matchedRoute.route),
+      ctx
+    );
   }
 
   const userAccessError = await enforceActiveUser(path, ctx);

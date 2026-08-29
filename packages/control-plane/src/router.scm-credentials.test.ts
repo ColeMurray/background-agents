@@ -128,7 +128,7 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(fetch.mock.calls[1][0].url).pathname).toBe("/internal/scm-credentials");
   });
 
-  it("allows GitLab deployments to reach the tunnel URLs endpoint", async () => {
+  it("requires an actor for service access to tunnel URLs", async () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
@@ -139,10 +139,9 @@ describe("SCM credentials router provider gate", () => {
       TEST_BACKGROUND_TASK_CONTEXT
     );
 
-    expect(response.status).toBe(202);
-    expect(fetch).toHaveBeenCalledOnce();
-    const request = fetch.mock.calls[0][0];
-    expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("treats provider-neutral SCM settings routes as SCM-agnostic", () => {
@@ -218,7 +217,7 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
   });
 
-  it("continues blocking unrelated GitLab session routes", async () => {
+  it("rejects actorless services before unrelated GitLab session routes", async () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
@@ -230,10 +229,8 @@ describe("SCM credentials router provider gate", () => {
       TEST_BACKGROUND_TASK_CONTEXT
     );
 
-    expect(response.status).toBe(501);
-    await expect(response.json()).resolves.toEqual({
-      error: "SCM provider 'gitlab' is not implemented in this deployment.",
-    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
     expect(fetch).not.toHaveBeenCalled();
   });
 
