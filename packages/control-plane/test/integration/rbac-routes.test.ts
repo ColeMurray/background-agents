@@ -128,6 +128,44 @@ describe("RBAC routes", () => {
     }
   });
 
+  it("requires sessions.create in addition to parent collaboration when spawning a child", async () => {
+    await serviceFetch("https://cp.test/me/authorization");
+    const user = await env.DB.prepare(
+      "SELECT id FROM users WHERE email = 'browser@test.local'"
+    ).first<{ id: string }>();
+    const roleId = "role_child_collaborator";
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system, revision,
+           created_by, updated_by, created_at, updated_at)
+         VALUES (?, NULL, 'Child Collaborator', 'child collaborator', NULL, 0, 1, ?, ?, 1, 1)`
+      ).bind(roleId, user!.id, user!.id),
+      env.DB.prepare(
+        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate.any')"
+      ).bind(roleId),
+      env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`).bind(
+        roleId,
+        user!.id
+      ),
+      env.DB.prepare(
+        "UPDATE users SET authorization_version = authorization_version + 1 WHERE id = ?"
+      ).bind(user!.id),
+    ]);
+
+    const response = await serviceFetch("https://cp.test/sessions/parent/children", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "Investigate" }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "sessions.create",
+    });
+  });
+
   it("rolls back a command admitted with a stale authorization snapshot", async () => {
     const ownerId = await seedOwner();
     const db = sqlDatabase(env.DB);

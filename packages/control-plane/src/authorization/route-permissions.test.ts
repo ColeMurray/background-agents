@@ -14,6 +14,7 @@ describe("staticUserPermission", () => {
     ["POST", "/skills/import", "skills.manage"],
     ["GET", "/mcp-servers", "mcp_servers.read"],
     ["POST", "/sessions", "sessions.create"],
+    ["POST", "/sessions/parent/children", "sessions.create"],
   ] as const)("maps %s %s to %s", (method, path, permission) => {
     expect(staticUserPermission(method, path)).toBe(permission);
   });
@@ -34,6 +35,7 @@ describe("sessionUserOperation", () => {
     ["POST", "/sessions/session-1/prompt", "collaborate"],
     ["POST", "/sessions/session-1/archive", "lifecycle"],
     ["POST", "/sessions/session-1/participants", "participants.manage"],
+    ["POST", "/sessions/session-1/children", "collaborate"],
     ["GET", "/sessions/session-1/sandbox-access", "sandbox_access"],
     ["DELETE", "/sessions/session-1", "delete"],
     ["POST", "/sessions/parent/children/child/cancel", "lifecycle"],

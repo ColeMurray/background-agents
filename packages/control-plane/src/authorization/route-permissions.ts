@@ -124,6 +124,9 @@ export function staticUserPermission(method: string, path: string): PermissionId
   if (path === "/automations" && method === "POST") return "automations.create";
   if (path.startsWith("/automations") && method === "GET") return "automations.read";
   if (path === "/sessions" && method === "POST") return "sessions.create";
+  if (method === "POST" && /^\/sessions\/[^/]+\/children$/.test(path)) {
+    return "sessions.create";
+  }
 
   return null;
 }
