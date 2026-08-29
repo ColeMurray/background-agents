@@ -193,6 +193,16 @@ SELECT 'role_builtin_viewer', permission_id FROM permissions WHERE viewer = 1;
 INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
 SELECT id, 'role_builtin_administrator', NULL, unixepoch() * 1000 FROM users;
 
+UPDATE automations
+SET user_id = (
+  SELECT identity.user_id
+  FROM user_identities identity
+  WHERE identity.provider = 'github'
+    AND identity.provider_user_id = automations.created_by
+)
+WHERE user_id IS NULL
+  AND created_by <> 'anonymous';
+
 INSERT INTO session_access (session_id, user_id, relation, state, generation, created_at)
 SELECT id, user_id, 'creator', 'active', 1, created_at
 FROM sessions

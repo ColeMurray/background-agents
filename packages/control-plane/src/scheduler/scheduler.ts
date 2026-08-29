@@ -316,7 +316,18 @@ export class Scheduler {
     store: AutomationStore,
     params: StartInvocationParams
   ): Promise<StartInvocationResult> {
-    const { automation, source } = params;
+    const { source } = params;
+    let automation = params.automation;
+    if (!automation.user_id && automation.created_by && automation.created_by !== "anonymous") {
+      const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
+      if (identity) {
+        await this.db
+          .prepare(`UPDATE automations SET user_id = ? WHERE id = ? AND user_id IS NULL`)
+          .bind(identity.userId, automation.id)
+          .run();
+        automation = { ...automation, user_id: identity.userId };
+      }
+    }
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
 
@@ -1308,26 +1319,6 @@ export class Scheduler {
     providerAuth: SessionModelProviderAuthInput[],
     sessionId: string
   ): Promise<void> {
-    // Resolve the canonical user_id for the session index.
-    // Automations created through the web UI populate user_id at creation time
-    // (handleCreateAutomation resolves it for both GitHub and Google users), so this
-    // lookup is skipped for them. The fallback below only covers legacy rows with
-    // user_id = NULL: those predate Google login and store the GitHub numeric user ID
-    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
-    // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
-    let userId = automation.user_id;
-    if (!userId && automation.created_by && automation.created_by !== "anonymous") {
-      try {
-        const userStore = new UserStore(this.db);
-        const identity = await userStore.getIdentity("github", automation.created_by);
-        if (identity) {
-          userId = identity.userId;
-        }
-      } catch {
-        // Best-effort — proceed without user_id
-      }
-    }
-
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
       request_id: run.id,
@@ -1364,7 +1355,7 @@ export class Scheduler {
         environmentId: target.environmentId,
       },
       { mode: "all" },
-      userId
+      automation.user_id
     );
 
     const sessionInput: SessionInitInput = {
@@ -1374,7 +1365,7 @@ export class Scheduler {
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
       participantUserId: automation.created_by,
-      platformUserId: userId,
+      platformUserId: automation.user_id,
       scmTokenEncrypted: null,
       scmRefreshTokenEncrypted: null,
       codeServerEnabled,

@@ -56,7 +56,19 @@ describe("migration 0071: RBAC foundation", () => {
          VALUES
           ('existing-session', 'acme', 'repo', 'completed', 300, 300,
            '11111111111111111111111111111111'),
-          ('anonymous-session', 'acme', 'repo', 'completed', 400, 400, NULL)`
+           ('anonymous-session', 'acme', 'repo', 'completed', 400, 400, NULL)`
+      ),
+      env.DB.prepare(
+        `INSERT INTO user_identities
+          (id, user_id, provider, provider_user_id, provider_issuer, created_at, updated_at)
+         VALUES ('existing-identity', '11111111111111111111111111111111',
+           'github', 'legacy-github-id', 'https://github.com', 100, 100)`
+      ),
+      env.DB.prepare(
+        `INSERT INTO automations
+          (id, name, instructions, model, created_by, user_id, created_at, updated_at)
+         VALUES ('existing-automation', 'Existing', 'Run', 'anthropic/claude-sonnet-4-6',
+           'legacy-github-id', NULL, 100, 100)`
       ),
     ]);
 
@@ -98,6 +110,11 @@ describe("migration 0071: RBAC foundation", () => {
         },
       ],
     });
+    expect(
+      await env.DB.prepare(
+        "SELECT user_id FROM automations WHERE id = 'existing-automation'"
+      ).first()
+    ).toEqual({ user_id: "11111111111111111111111111111111" });
 
     await env.DB.prepare(
       `INSERT INTO users

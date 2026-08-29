@@ -202,6 +202,7 @@ function createEmptyDbMock(): D1Database {
     prepare: vi.fn(() => ({
       bind: vi.fn(() => ({
         first: vi.fn(async () => null),
+        run: vi.fn(async () => undefined),
       })),
     })),
   } as unknown as D1Database;
@@ -1329,7 +1330,7 @@ describe("Scheduler", () => {
       );
     });
 
-    it("falls back to identity lookup for legacy automations without user_id", async () => {
+    it("repairs legacy automation identity before invocation admission", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockUserStoreGetIdentity.mockResolvedValue({ userId: "looked-up-user" });

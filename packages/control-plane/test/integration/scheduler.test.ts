@@ -654,9 +654,17 @@ describe("Scheduler (integration)", () => {
       );
     });
 
-    it("creates a run record when triggered", async () => {
+    it("repairs a legacy owner before creating a triggered run", async () => {
       const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-trig2" }));
+      await env.DB.prepare(
+        `INSERT INTO user_identities
+          (id, user_id, provider, provider_user_id, provider_issuer, created_at, updated_at)
+         VALUES ('legacy-identity', 'user-1', 'github', 'legacy-github-id',
+           'https://github.com', 1, 1)`
+      ).run();
+      await store.create(
+        makeAutomation({ id: "auto-trig2", created_by: "legacy-github-id", user_id: null })
+      );
 
       const sessionFetch = vi.fn(async (input: RequestInfo | URL) => {
         const path = new URL(
@@ -685,6 +693,7 @@ describe("Scheduler (integration)", () => {
       const runs = await fetchRuns("auto-trig2");
       expect(runs).toHaveLength(1);
       expect(runs[0]!.invocation_id).not.toBeNull();
+      expect((await store.getById("auto-trig2"))!.user_id).toBe("user-1");
     });
   });
 
