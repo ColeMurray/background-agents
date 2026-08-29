@@ -28,6 +28,24 @@ export class IdentityClaimStore {
     return row?.user_id ?? null;
   }
 
+  async recordBrowserSignInEvidence(
+    provider: "github" | "google",
+    providerUserId: string,
+    email: string,
+    observedAt: number
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO browser_sign_in_evidence (provider, provider_user_id, email, observed_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(provider, provider_user_id) DO UPDATE SET
+           email = excluded.email,
+           observed_at = excluded.observed_at`
+      )
+      .bind(provider, providerUserId, email, observedAt)
+      .run();
+  }
+
   async getEmailState(userId: string): Promise<UserEmailState | null> {
     const row = await this.db
       .prepare(`SELECT email, email_verified FROM users WHERE id = ?`)

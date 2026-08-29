@@ -20,6 +20,7 @@ locals {
   )
   admission_allowlist_enabled = local.provider_neutral_admission_enabled || local.github_admission_enabled
   unsafe_allow_all_effective  = var.unsafe_allow_all_users && !local.admission_allowlist_enabled
+  rbac_bootstrap_owner_email  = lower(trimspace(var.rbac_bootstrap_owner_email))
 
   # URLs for cross-service configuration
   control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"

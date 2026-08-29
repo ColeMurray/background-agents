@@ -66,8 +66,30 @@ import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { AuthorizationService } from "../authorization/service";
 
 const logger = createLogger("router:automations");
+
+async function authorizeAutomationMutation(
+  ctx: RequestContext,
+  automation: AutomationRow,
+  operation: "manage" | "trigger"
+): Promise<Response | null> {
+  if (ctx.principal?.kind !== "user") return null;
+  const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+    ctx.principal.userId
+  );
+  const anyPermission = `automations.${operation}.any` as const;
+  const ownPermission = `automations.${operation}.own` as const;
+  if (
+    authorization.permissions.includes(anyPermission) ||
+    (authorization.permissions.includes(ownPermission) &&
+      automation.user_id === ctx.principal.userId)
+  ) {
+    return null;
+  }
+  return json({ error: "Forbidden", code: "permission_required", permission: ownPermission }, 403);
+}
 
 /** Minimum cron interval in minutes. */
 const MIN_CRON_INTERVAL_MINUTES = 15;
@@ -566,6 +588,29 @@ async function handleCreateAutomation(
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
+  if (ctx.principal?.kind === "user") {
+    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+      ctx.principal.userId
+    );
+    if (
+      requestedRepositories.length > 0 &&
+      !authorization.permissions.includes("repositories.use")
+    ) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: "repositories.use" },
+        403
+      );
+    }
+    if (
+      requestedEnvironmentIds.length > 0 &&
+      !authorization.permissions.includes("environments.use")
+    ) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: "environments.use" },
+        403
+      );
+    }
+  }
 
   const isSchedule = triggerType === "schedule";
 
@@ -776,6 +821,8 @@ async function handleUpdateAutomation(
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
+  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (authorizationError) return authorizationError;
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
@@ -1061,6 +1108,10 @@ async function handleDeleteAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
+  const existing = await store.getById(id);
+  if (!existing) return error("Automation not found", 404);
+  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (authorizationError) return authorizationError;
   const deleted = await store.softDelete(id);
   if (!deleted) return error("Automation not found", 404);
 
@@ -1084,6 +1135,10 @@ async function handlePauseAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
+  const existing = await store.getById(id);
+  if (!existing) return error("Automation not found", 404);
+  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (authorizationError) return authorizationError;
   const paused = await store.pause(id);
   if (!paused) return error("Automation not found", 404);
 
@@ -1112,6 +1167,8 @@ async function handleResumeAutomation(
   const store = new AutomationStore(ctx.db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
+  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (authorizationError) return authorizationError;
 
   // For schedule automations, compute the next run time.
   // For event-driven automations, resume with null next_run_at.
@@ -1154,6 +1211,8 @@ async function handleTriggerAutomation(
   const store = new AutomationStore(ctx.db);
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
+  const authorizationError = await authorizeAutomationMutation(ctx, automation, "trigger");
+  if (authorizationError) return authorizationError;
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
@@ -1242,6 +1301,8 @@ async function handleRegenerateKey(
   const store = new AutomationStore(ctx.db);
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
+  const authorizationError = await authorizeAutomationMutation(ctx, automation, "manage");
+  if (authorizationError) return authorizationError;
 
   const workerUrl = env.WORKER_URL || "";
 

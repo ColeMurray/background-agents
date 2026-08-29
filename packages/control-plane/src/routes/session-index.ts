@@ -26,6 +26,7 @@ import {
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
+import { AuthorizationService } from "../authorization/service";
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
@@ -71,9 +72,28 @@ async function handleListSessions(
   const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
     parsedQuery.data;
   const createdByUserIds = parseCreatedByFilters(createdBy, ctx.principal);
+  let accessUserId: string | undefined;
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
+  }
+  if (ctx.principal?.kind === "user") {
+    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+      ctx.principal.userId
+    );
+    if (!authorization.permissions.includes("sessions.read.any")) {
+      if (!authorization.permissions.includes("sessions.read.own")) {
+        return json(
+          {
+            error: "Forbidden",
+            code: "permission_required",
+            permission: "sessions.read.own",
+          },
+          403
+        );
+      }
+      accessUserId = ctx.principal.userId;
+    }
   }
 
   const store = new SessionIndexStore(ctx.db);
@@ -87,6 +107,7 @@ async function handleListSessions(
     limit,
     offset,
     viewerUserId,
+    accessUserId,
   });
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
@@ -129,9 +150,23 @@ async function handleListSessionInbox(
 
   const startedAt = Date.now();
   const store = new SessionIndexStore(ctx.db);
+  const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+    ctx.principal.userId
+  );
+  if (
+    !authorization.permissions.includes("sessions.read.any") &&
+    !authorization.permissions.includes("sessions.read.own")
+  ) {
+    return json(
+      { error: "Forbidden", code: "permission_required", permission: "sessions.read.own" },
+      403
+    );
+  }
+  const ownOnly = !authorization.permissions.includes("sessions.read.any");
   const commonOptions = {
     limit: SESSION_INBOX_LIMIT,
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
+    accessUserId: ownOnly ? ctx.principal.userId : undefined,
     excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
   };
@@ -233,6 +268,22 @@ async function handleDeleteSession(
   if (!sessionId) return error("Session ID required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
+  if (ctx.principal?.kind === "user") {
+    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+      ctx.principal.userId
+    );
+    const session = await sessionStore.get(sessionId);
+    const canDelete =
+      authorization.permissions.includes("sessions.delete.any") ||
+      (authorization.permissions.includes("sessions.delete.own") &&
+        session?.userId === ctx.principal.userId);
+    if (!canDelete) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: "sessions.delete.own" },
+        403
+      );
+    }
+  }
   await sessionStore.delete(sessionId);
 
   return json({ status: "deleted", sessionId });

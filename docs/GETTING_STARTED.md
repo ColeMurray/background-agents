@@ -614,6 +614,7 @@ enable_service_bindings        = false
 
 # Access Control (set at least one allowlist for production). A user is admitted
 # if they match ANY allowlist below.
+rbac_bootstrap_owner_email = "you@example.com"     # Verified browser email for initial Owner
 allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
 allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
 allowed_emails        = ""                      # Exact addresses (e.g., "pm@gmail.com") — for users on shared domains
@@ -649,12 +650,15 @@ configurations because they authorize repository operations; they do not enable 
 > until session expiry. The `read:org` OAuth scope is requested only when org access is configured,
 > and GitHub Apps using org access need Organization permissions: Members read-only.
 
+`rbac_bootstrap_owner_email` must match the verified email returned by an enabled browser sign-in
+provider. That user receives Owner on their first matching sign-in. The value is bootstrap-only;
+changing Terraform later does not transfer ownership.
+
 ### Enable Google Login (Optional)
 
-Google login lets non-developer users (PMs, support agents) sign in without a GitHub account. They
-get the same flat access as everyone else; git operations still use the shared GitHub App, and their
-PRs fall back to the App bot (no personal GitHub attribution unless the same verified email is also
-a linked GitHub identity).
+Google login lets non-developer users (PMs, support agents) sign in without a GitHub account. Git
+operations still use the shared GitHub App, and their PRs fall back to the App bot (no personal
+GitHub attribution unless the same verified email is also a linked GitHub identity).
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an
    **OAuth client ID** of type **Web application**.
@@ -1028,6 +1032,10 @@ Secrets and variables → Actions → _Variables_ to point the Slack/Linear clas
 model (for example `gpt-5.4-mini`). Leave it unset to keep the Terraform default. An OpenAI value
 also requires the `CLASSIFICATION_OPENAI_API_KEY` secret; an Anthropic value is served by
 `ANTHROPIC_API_KEY`.
+
+`RBAC_BOOTSTRAP_OWNER_EMAIL` is a required Actions **variable**. Set it to the verified browser
+email that will claim the initial Owner role before running the RBAC migration. It is bootstrap-only
+and is not an ownership-transfer mechanism.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

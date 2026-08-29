@@ -26,6 +26,7 @@ import {
   type Route,
   type RoutePolicy,
 } from "./shared";
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const participantsResponseSchema = z.object({
@@ -122,12 +123,44 @@ async function handleAddParticipant(
 
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("userId" in body) ||
+    !isCanonicalUserId(body.userId)
+  ) {
+    return error("A canonical participant userId is required", 400);
+  }
 
-  return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.participants, {
+  const pending = await ctx.db
+    .prepare(
+      `INSERT INTO session_access
+        (session_id, user_id, relation, state, generation, created_at)
+       VALUES (?, ?, 'participant', 'pending_add', 1, ?)
+       ON CONFLICT(session_id, user_id) DO UPDATE SET
+         state = 'pending_add', generation = session_access.generation + 1
+       WHERE session_access.relation = 'participant'
+       RETURNING generation`
+    )
+    .bind(sessionId, body.userId, Date.now())
+    .first<{ generation: number }>();
+
+  const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.participants, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (!response.ok || !pending) return response;
+
+  await ctx.db
+    .prepare(
+      `UPDATE session_access SET state = 'active'
+       WHERE session_id = ? AND user_id = ? AND relation = 'participant'
+         AND state = 'pending_add' AND generation = ?`
+    )
+    .bind(sessionId, body.userId, pending.generation)
+    .run();
+  return response;
 }
 
 async function handleSandboxError(

@@ -144,6 +144,19 @@ describe("mergeUsers", () => {
     ).toEqual({ last_read_message_id: "msg-survivor" });
     expect(await getUserRow(LOSER)).toBeNull();
     expect(await countTableRows("users")).toBe(1);
+    expect(
+      await env.DB.prepare(
+        `SELECT principal_kind, actor_user_id_snapshot, actor_service_snapshot,
+                resource_id, target_user_id_snapshot
+         FROM authorization_audit_events WHERE action = 'workspace.user_merged'`
+      ).first()
+    ).toEqual({
+      principal_kind: "service",
+      actor_user_id_snapshot: null,
+      actor_service_snapshot: "control-plane",
+      resource_id: SURVIVOR,
+      target_user_id_snapshot: LOSER,
+    });
   });
 
   it("backfills the loser's email onto an email-less survivor, carrying verification as-was", async () => {
@@ -217,6 +230,70 @@ describe("mergeUsers", () => {
         `SELECT created_by, user_id FROM automations WHERE id = 'auto-legacy'`
       ).first<{ created_by: string; user_id: string }>()
     ).toEqual({ created_by: "583231", user_id: SURVIVOR });
+  });
+
+  it("preserves creator access when both users have access to the same session", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await insertSession("shared-session", LOSER);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO session_access
+          (session_id, user_id, relation, state, generation, created_at)
+         VALUES ('shared-session', ?, 'participant', 'pending_add', 7, ?)`
+      ).bind(SURVIVOR, SEED_NOW_MS + 1),
+      env.DB.prepare(
+        `INSERT INTO session_access
+          (session_id, user_id, relation, state, generation, created_at)
+         VALUES ('shared-session', ?, 'creator', 'active', 1, ?)`
+      ).bind(LOSER, SEED_NOW_MS),
+    ]);
+
+    await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(
+      await env.DB.prepare(
+        `SELECT user_id, relation, state, generation FROM session_access
+         WHERE session_id = 'shared-session'`
+      ).first()
+    ).toEqual({
+      user_id: SURVIVOR,
+      relation: "creator",
+      state: "active",
+      generation: 1,
+    });
+  });
+
+  it("preserves the newest participant generation during an access collision", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await insertSession("participant-session", SURVIVOR);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO session_access
+          (session_id, user_id, relation, state, generation, created_at)
+         VALUES ('participant-session', ?, 'participant', 'active', 2, ?)`
+      ).bind(SURVIVOR, SEED_NOW_MS),
+      env.DB.prepare(
+        `INSERT INTO session_access
+          (session_id, user_id, relation, state, generation, created_at)
+         VALUES ('participant-session', ?, 'participant', 'revoking', 3, ?)`
+      ).bind(LOSER, SEED_NOW_MS + 1),
+    ]);
+
+    await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(
+      await env.DB.prepare(
+        `SELECT user_id, relation, state, generation FROM session_access
+         WHERE session_id = 'participant-session'`
+      ).first()
+    ).toEqual({
+      user_id: SURVIVOR,
+      relation: "participant",
+      state: "revoking",
+      generation: 3,
+    });
   });
 
   it("is idempotent: re-running after a completed merge is a zero-count no-op", async () => {

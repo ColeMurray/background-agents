@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
-import type { Principal } from "./auth/principal";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
 import { handleRequest } from "./router";
@@ -44,11 +43,6 @@ vi.mock("./routes/shared", async (importOriginal) => {
     resolveRepoOrError: vi.fn(),
   };
 });
-
-const USER_PRINCIPAL: Principal = {
-  kind: "user",
-  userId: "user-1",
-};
 
 describe("handleCreateSession D1 ordering", () => {
   beforeEach(() => {
@@ -122,7 +116,11 @@ describe("handleCreateSession D1 ordering", () => {
   function createEnv(initFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
     const statement = {
       bind: vi.fn(() => statement),
-      first: vi.fn(async () => null),
+      first: vi
+        .fn()
+        .mockResolvedValueOnce({ access_status: "active", assigned: 1 })
+        .mockResolvedValueOnce({ active: 1 })
+        .mockResolvedValue(null),
       all: vi.fn(async () => ({ results: [] })),
       run: vi.fn(async () => ({ meta: { changes: 0 } })),
     };
@@ -511,7 +509,16 @@ describe("handleCreateSession D1 ordering", () => {
       {
         request_id: "test-request",
         trace_id: "test-trace",
-        principal: USER_PRINCIPAL,
+        principal: {
+          kind: "service",
+          service: "linear-bot",
+          actor: {
+            provider: "linear",
+            providerUserId: "linear-user-1",
+            canonicalUserId: "user-1",
+            participantUserId: "linear:linear-user-1",
+          },
+        },
         db: testEnv["DB"] as never,
         executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
         metrics: {

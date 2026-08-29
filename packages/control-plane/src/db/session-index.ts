@@ -149,6 +149,7 @@ export interface ListSessionsOptions {
   repoOwner?: string;
   repoName?: string;
   createdByUserIds?: readonly string[];
+  accessUserId?: string;
   limit?: number;
   offset?: number;
   viewerUserId?: string;
@@ -515,6 +516,7 @@ export class SessionIndexStore {
       repoOwner,
       repoName,
       createdByUserIds,
+      accessUserId,
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
@@ -569,6 +571,15 @@ export class SessionIndexStore {
     if (createdByUserIds?.length) {
       conditions.push(`user_id IN (${createdByUserIds.map(() => "?").join(", ")})`);
       params.push(...createdByUserIds);
+    }
+    if (accessUserId) {
+      conditions.push(
+        `(sessions.user_id = ? OR EXISTS (
+          SELECT 1 FROM session_access access
+          WHERE access.session_id = sessions.id AND access.user_id = ? AND access.state = 'active'
+        ))`
+      );
+      params.push(accessUserId, accessUserId);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";

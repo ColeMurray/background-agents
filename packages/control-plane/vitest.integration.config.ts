@@ -130,6 +130,7 @@ export default defineConfig({
             GOOGLE_CLIENT_ID: "google-client-id",
             GOOGLE_CLIENT_SECRET: "google-client-secret",
             UNSAFE_ALLOW_ALL_USERS: "true",
+            RBAC_BOOTSTRAP_OWNER_EMAIL: "octocat@example.com",
             // Must be valid base64 for 32 bytes — the exchange route's SCM
             // capture encrypts with it inline (fail-closed) rather than
             // inside a swallowed waitUntil.

@@ -26,6 +26,7 @@ variables {
   provider_accounts_encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
   nextauth_secret                  = "test-browser-auth-secret-with-32-characters"
   deployment_name                  = "auth-provider-test"
+  rbac_bootstrap_owner_email       = "owner@example.com"
 
   modal_token_id     = "test-modal-token-id"
   modal_token_secret = "test-modal-token-secret"
@@ -54,6 +55,7 @@ run "github_only" {
   assert {
     condition = (
       contains(module.control_plane_worker.plain_text_binding_names, "GITHUB_CLIENT_ID") &&
+      contains(module.control_plane_worker.plain_text_binding_names, "RBAC_BOOTSTRAP_OWNER_EMAIL") &&
       !contains(module.control_plane_worker.plain_text_binding_names, "GOOGLE_CLIENT_ID") &&
       contains(module.control_plane_worker.secret_binding_names, "GITHUB_CLIENT_SECRET") &&
       !contains(module.control_plane_worker.secret_binding_names, "GOOGLE_CLIENT_SECRET")

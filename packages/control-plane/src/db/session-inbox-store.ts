@@ -12,6 +12,7 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
+  accessUserId?: string;
   excludeAutomatedSessions?: boolean;
   viewerUserId: string;
   limit: number;
@@ -243,7 +244,10 @@ export class SessionInboxStore {
   }
 
   private eligibility(
-    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomatedSessions">
+    options: Pick<
+      ListSessionInboxOptions,
+      "createdByUserIds" | "excludeAutomatedSessions" | "accessUserId"
+    >
   ): { conditions: string[]; params: unknown[] } {
     const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
     const params: unknown[] = [];
@@ -255,6 +259,15 @@ export class SessionInboxStore {
         `sessions.user_id IN (${options.createdByUserIds.map(() => "?").join(", ")})`
       );
       params.push(...options.createdByUserIds);
+    }
+    if (options.accessUserId) {
+      conditions.push(
+        `(sessions.user_id = ? OR EXISTS (
+          SELECT 1 FROM session_access access
+          WHERE access.session_id = sessions.id AND access.user_id = ? AND access.state = 'active'
+        ))`
+      );
+      params.push(options.accessUserId, options.accessUserId);
     }
     return { conditions, params };
   }

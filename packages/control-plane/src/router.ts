@@ -15,6 +15,9 @@ import { SessionInternalPaths } from "./session/contracts";
 import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
+import { normalizeEmail } from "./db/email";
+import { AuthorizationError, AuthorizationService } from "./authorization/service";
+import { sessionUserOperation, staticUserPermission } from "./authorization/route-permissions";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -45,6 +48,7 @@ import { analyticsRoutes } from "./routes/analytics";
 import { autofixRoutes } from "./routes/autofix";
 import { skillRoutes } from "./routes/skills";
 import { keyboardShortcutRoutes } from "./routes/keyboard-shortcuts";
+import { rbacRoutes } from "./routes/rbac";
 import { sessionRoutes } from "./routes/sessions";
 import { modelProviderAccountRoutes } from "./routes/model-provider-accounts";
 import { handleSlackNotify } from "./routes/slack-notify";
@@ -295,9 +299,121 @@ export function enforceRoutePrincipal(
   return null;
 }
 
+async function enforceActiveUser(path: string, ctx: RequestContext): Promise<Response | null> {
+  const userId =
+    ctx.principal?.kind === "user"
+      ? ctx.principal.userId
+      : ctx.principal?.kind === "service"
+        ? ctx.principal.actor?.canonicalUserId
+        : null;
+  if (!userId || (ctx.principal?.kind === "user" && path === "/me/authorization")) return null;
+  try {
+    const user = await ctx.db
+      .prepare(
+        `SELECT access_status,
+                EXISTS (SELECT 1 FROM user_role_assignments WHERE user_id = users.id) AS assigned
+         FROM users WHERE id = ?`
+      )
+      .bind(userId)
+      .first<{ access_status: string; assigned: number }>();
+    if (user?.access_status !== "active") {
+      return json({ error: "Forbidden", code: "active_user_required" }, 403);
+    }
+    return user.assigned === 1
+      ? null
+      : json({ error: "Forbidden", code: "assignment_required" }, 403);
+  } catch {
+    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  }
+}
+
+async function enforceStaticUserPermission(
+  method: string,
+  path: string,
+  ctx: RequestContext
+): Promise<Response | null> {
+  if (ctx.principal?.kind !== "user") return null;
+  const permission = staticUserPermission(method, path);
+  if (!permission) return null;
+  try {
+    await new AuthorizationService(ctx.db).requirePermission(ctx.principal.userId, permission);
+    return null;
+  } catch (cause) {
+    if (cause instanceof AuthorizationError) {
+      return json(
+        {
+          error: "Forbidden",
+          code: cause.code,
+          ...(cause.permission ? { permission: cause.permission } : {}),
+        },
+        cause.status
+      );
+    }
+    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  }
+}
+
+async function enforceSessionUserPermission(
+  method: string,
+  path: string,
+  ctx: RequestContext
+): Promise<Response | null> {
+  if (ctx.principal?.kind !== "user") return null;
+  const requirement = sessionUserOperation(method, path);
+  if (!requirement) return null;
+
+  try {
+    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+      ctx.principal.userId
+    );
+    const permissionStem = `sessions.${requirement.operation}` as const;
+    const anyPermission = `${permissionStem}.any` as const;
+    const ownPermission = `${permissionStem}.own` as const;
+    if (authorization.permissions.includes(anyPermission)) return null;
+    if (!authorization.permissions.includes(ownPermission)) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: ownPermission },
+        403
+      );
+    }
+
+    const relationship = await ctx.db
+      .prepare(
+        `SELECT relation FROM session_access
+         WHERE session_id = ? AND user_id = ? AND state = 'active'
+         UNION ALL
+         SELECT 'creator' AS relation FROM sessions
+         WHERE id = ? AND user_id = ?
+         LIMIT 1`
+      )
+      .bind(
+        requirement.sessionId,
+        ctx.principal.userId,
+        requirement.sessionId,
+        ctx.principal.userId
+      )
+      .first<{ relation: "creator" | "participant" }>();
+    const creatorRequired =
+      requirement.operation === "delete" || requirement.operation === "participants.manage";
+    if (relationship && (!creatorRequired || relationship.relation === "creator")) return null;
+    return json({ error: "Forbidden", code: "session_access_required" }, 403);
+  } catch (cause) {
+    if (cause instanceof AuthorizationError) {
+      return json({ error: "Forbidden", code: cause.code }, cause.status);
+    }
+    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  }
+}
+
 /**
  * Routes definition.
  */
+function redactEmail(email: string | undefined): string | null {
+  const [local, domain] = email?.split("@") ?? [];
+  if (!local || !domain) return null;
+  return `${local.slice(0, 1)}***@${domain}`;
+}
+
 export const routes: Route[] = [
   // Health check
   {
@@ -305,7 +421,25 @@ export const routes: Route[] = [
     supportedScmProviders: "all",
     method: "GET",
     pattern: parsePattern("/health"),
-    handler: async () => json({ status: "healthy", service: "open-inspect-control-plane" }),
+    handler: async (_request, env, _match, ctx) => {
+      const bootstrap = await ctx.db
+        .prepare(
+          `SELECT u.email FROM workspace_bootstrap wb
+           JOIN users u ON u.id = wb.owner_user_id
+           WHERE wb.singleton = 1 AND wb.assignment_completed_at IS NOT NULL`
+        )
+        .first<{ email: string | null }>();
+      const configuredOwnerEmail = normalizeEmail(env.RBAC_BOOTSTRAP_OWNER_EMAIL);
+      return json({
+        status: "healthy",
+        service: "open-inspect-control-plane",
+        rbac: {
+          ownerBootstrap: bootstrap ? "complete" : "owner_bootstrap_pending",
+          configuredOwnerEmail: redactEmail(env.RBAC_BOOTSTRAP_OWNER_EMAIL),
+          configurationMismatch: bootstrap !== null && bootstrap.email !== configuredOwnerEmail,
+        },
+      });
+    },
   },
 
   ...browserAuthRoutes,
@@ -365,6 +499,9 @@ export const routes: Route[] = [
 
   // Personal keyboard shortcuts
   ...keyboardShortcutRoutes,
+
+  // Workspace roles, members, and current-user authorization
+  ...rbacRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
@@ -493,6 +630,27 @@ export async function handleRequest(
     if (ctx.principal) {
       logPrincipal(ctx.principal, ctx, path);
     }
+  }
+
+  const userAccessError = await enforceActiveUser(path, ctx);
+  if (userAccessError) {
+    logRequest(userAccessError, ctx, method, path, startTime);
+    return withCorsAndTraceHeaders(withRouteCachePolicy(userAccessError, matchedRoute.route), ctx);
+  }
+
+  const permissionError = await enforceStaticUserPermission(method, path, ctx);
+  if (permissionError) {
+    logRequest(permissionError, ctx, method, path, startTime);
+    return withCorsAndTraceHeaders(withRouteCachePolicy(permissionError, matchedRoute.route), ctx);
+  }
+
+  const sessionPermissionError = await enforceSessionUserPermission(method, path, ctx);
+  if (sessionPermissionError) {
+    logRequest(sessionPermissionError, ctx, method, path, startTime);
+    return withCorsAndTraceHeaders(
+      withRouteCachePolicy(sessionPermissionError, matchedRoute.route),
+      ctx
+    );
   }
 
   const providerCheck = enforceImplementedScmProvider(matchedRoute.route, path, env, ctx);

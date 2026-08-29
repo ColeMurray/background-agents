@@ -29,6 +29,9 @@ const EXPECTED_COLUMNS: Record<string, [string, string, number, number][]> = {
     ["created_at", "INTEGER", 1, 0],
     ["updated_at", "INTEGER", 1, 0],
     ["email_verified", "INTEGER", 1, 0],
+    ["access_status", "TEXT", 1, 0],
+    ["authorization_version", "INTEGER", 1, 0],
+    ["last_authorization_mutation_id", "TEXT", 0, 0],
   ],
   user_identities: [
     ["id", "TEXT", 0, 1],

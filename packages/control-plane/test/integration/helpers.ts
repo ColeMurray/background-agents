@@ -69,13 +69,16 @@ async function signCookieValue(value: string, secret: string): Promise<string> {
  * web request must carry the same compound credential as production. Direct
  * service-auth tests intentionally build their own bare sig1 requests.
  */
-async function testBrowserSessionCookie(): Promise<string> {
+async function testBrowserSessionCookie(initialRole: "administrator" | "member"): Promise<string> {
   const secret = env.BROWSER_AUTH_SECRET;
   if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const applicationTimestamp = now.getTime();
+  const existingUser = await env.DB.prepare("SELECT 1 FROM users WHERE id = ?")
+    .bind(TEST_BROWSER_USER_ID)
+    .first();
   await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO users
@@ -101,7 +104,7 @@ async function testBrowserSessionCookie(): Promise<string> {
       "github",
       TEST_BROWSER_PROVIDER_SUBJECT,
       null,
-      null,
+      "browser@test.local",
       "https://github.com",
       applicationTimestamp,
       applicationTimestamp
@@ -121,6 +124,14 @@ async function testBrowserSessionCookie(): Promise<string> {
       TEST_BROWSER_USER_ID
     ),
   ]);
+  if (initialRole === "administrator" && !existingUser) {
+    await env.DB.prepare(
+      `UPDATE user_role_assignments SET role_id = 'role_builtin_administrator'
+       WHERE user_id = ?`
+    )
+      .bind(TEST_BROWSER_USER_ID)
+      .run();
+  }
 
   const signedToken = await signCookieValue(TEST_BROWSER_SESSION_TOKEN, secret);
   return `${TEST_BROWSER_SESSION_COOKIE}=${signedToken}`;
@@ -140,6 +151,7 @@ export async function serviceFetch(
     headers?: Record<string, string>;
     service?: ServiceName;
     actor?: string;
+    initialUserRole?: "administrator" | "member";
   }
 ): Promise<Response> {
   const method = init?.method ?? "GET";
@@ -152,7 +164,10 @@ export async function serviceFetch(
     body: init?.body,
     actor: init?.actor,
   });
-  const browserCookie = service === "web" ? await testBrowserSessionCookie() : undefined;
+  const browserCookie =
+    service === "web"
+      ? await testBrowserSessionCookie(init?.initialUserRole ?? "administrator")
+      : undefined;
   return SELF.fetch(url, {
     method,
     headers: {

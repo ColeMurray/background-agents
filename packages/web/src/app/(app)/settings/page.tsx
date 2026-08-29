@@ -24,9 +24,11 @@ import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
 import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
 import { SkillsSettings } from "@/components/settings/skills-settings";
+import { WorkspaceSettings } from "@/components/settings/workspace-settings";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 const SETTINGS_PANELS: Record<SettingsCategory, ComponentType> = {
+  workspace: WorkspaceSettings,
   appearance: AppearanceSettings,
   "keyboard-shortcuts": KeyboardShortcutsSettings,
   models: ModelsSettings,
@@ -41,7 +43,6 @@ const SETTINGS_PANELS: Record<SettingsCategory, ComponentType> = {
   "mcp-servers": McpServersSettings,
   "data-controls": DataControlsSettings,
 };
-
 function SettingsPageContent() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");

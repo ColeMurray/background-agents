@@ -5,6 +5,7 @@ import { useState } from "react";
 import { BackIcon, ChevronRightIcon, SearchIcon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useSettingsIsMobile } from "./settings-viewport-context";
 import { getSettingsGroups, type SettingsCategory } from "./settings-registry";
 
@@ -41,7 +42,37 @@ function SettingsSearch({ value, onChange }: { value: string; onChange: (value: 
 export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
   const isMobile = useSettingsIsMobile();
   const [query, setQuery] = useState("");
-  const groups = getSettingsGroups({ query });
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canView = (category: SettingsCategory) => {
+    switch (category) {
+      case "workspace":
+        return hasPermission("workspace.members.read") || hasPermission("workspace.roles.read");
+      case "secrets":
+        return hasPermission("global_secrets.manage");
+      case "environments":
+        return hasPermission("environments.read");
+      case "models":
+        return hasPermission("models.preferences.manage");
+      case "provider-accounts":
+        return hasPermission("provider_accounts.read");
+      case "images":
+        return hasPermission("image_builds.read");
+      case "sandbox":
+        return hasPermission("environments.manage");
+      case "scm":
+      case "integrations":
+        return hasPermission("integrations.read");
+      case "skills":
+        return hasPermission("skills.read");
+      case "mcp-servers":
+        return hasPermission("mcp_servers.read");
+      default:
+        return true;
+    }
+  };
+  const groups = getSettingsGroups({ query })
+    .map((group) => ({ ...group, items: group.items.filter((item) => canView(item.id)) }))
+    .filter((group) => group.items.length > 0);
 
   const navigation = (
     <div className="space-y-6">

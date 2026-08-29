@@ -223,6 +223,36 @@ describe("sig1 service-credential authentication", () => {
     );
   });
 
+  it("denies a suspended canonical bot actor but permits actorless service requests", async () => {
+    await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-SUSPENDED",
+      body: JSON.stringify({ title: "Actor session", model: "anthropic/claude-haiku-4-5" }),
+    });
+    const identity = await new UserStore(env.DB).getIdentity("slack", "U-SUSPENDED");
+    await env.DB.prepare("UPDATE users SET access_status = 'suspended' WHERE id = ?")
+      .bind(identity!.userId)
+      .run();
+
+    const attributed = await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: "https://test.local/sessions",
+      actor: "slack:U-SUSPENDED",
+    });
+    const actorless = await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: "https://test.local/sessions",
+    });
+
+    expect(attributed.status).toBe(403);
+    await expect(attributed.json()).resolves.toMatchObject({ code: "active_user_required" });
+    expect(actorless.status).toBe(200);
+  });
+
   it("requires a user or signed actor before any service can create a session", async () => {
     for (const service of Object.keys(SERVICE_SECRET) as ServiceName[]) {
       const response = await signedFetch({

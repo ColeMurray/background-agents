@@ -20,10 +20,22 @@ vi.mock("../db/session-index", () => ({
 }));
 
 function createCtx(principal?: Principal): RequestContext {
+  const statement = {
+    bind: vi.fn(() => statement),
+    first: vi.fn(async () => ({
+      user_id: "user-1",
+      access_status: "active",
+      authorization_version: 1,
+      role_id: "role_builtin_owner",
+      role_key: "owner",
+      role_name: "Owner",
+    })),
+    all: vi.fn(async () => ({ results: [] })),
+  };
   return {
     trace_id: "trace-1",
     request_id: "req-1",
-    db: {} as SqlDatabase,
+    db: { prepare: vi.fn(() => statement) } as unknown as SqlDatabase,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],

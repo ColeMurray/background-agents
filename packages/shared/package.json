@@ -50,6 +50,10 @@
       "import": "./dist/user-id.js",
       "types": "./dist/user-id.d.ts"
     },
+    "./rbac": {
+      "import": "./dist/rbac.js",
+      "types": "./dist/rbac.d.ts"
+    },
     "./browser-auth-routes": {
       "import": "./dist/browser-auth-routes.js",
       "types": "./dist/browser-auth-routes.d.ts"

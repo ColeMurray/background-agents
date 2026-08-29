@@ -683,6 +683,19 @@ variable "r2_media_bucket_name" {
 # Four allowlists gate sign-in; a user is admitted if they match ANY configured
 # allowlist. Leave them all empty only with unsafe_allow_all_users = true.
 
+variable "rbac_bootstrap_owner_email" {
+  description = "Verified browser email allowed to claim the initial Owner role. Bootstrap-only; changing it later does not transfer ownership."
+  type        = string
+
+  validation {
+    condition = can(regex(
+      "^[^@[:space:],]+@[^@[:space:],]+\\.[^@[:space:],]+$",
+      trimspace(var.rbac_bootstrap_owner_email)
+    ))
+    error_message = "rbac_bootstrap_owner_email must contain exactly one valid email address."
+  }
+}
+
 variable "allowed_users" {
   description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when another allowlist (allowed_email_domains, allowed_emails, allowed_github_orgs) is set or unsafe_allow_all_users is true."
   type        = string

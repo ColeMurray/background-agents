@@ -457,6 +457,44 @@ describe("session runtime proxy routes", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("projects successful canonical participant additions into D1 access", async () => {
+    const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+    const statement = {
+      bind: vi.fn(() => statement),
+      first: vi.fn(async () => ({ generation: 1 })),
+      run,
+    };
+    const db = { prepare: vi.fn(() => statement) } as unknown as SqlDatabase;
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { handler, match } = getHandler("POST", "/sessions/session-1/participants");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "11111111111111111111111111111111" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(200);
+    expect(statement.bind).toHaveBeenNthCalledWith(
+      1,
+      "session-1",
+      "11111111111111111111111111111111",
+      expect.any(Number)
+    );
+    expect(statement.bind).toHaveBeenNthCalledWith(
+      2,
+      "session-1",
+      "11111111111111111111111111111111",
+      1
+    );
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("forwards the draft flag through the create-PR contract", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {

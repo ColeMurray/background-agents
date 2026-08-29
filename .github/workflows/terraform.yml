@@ -239,6 +239,7 @@ jobs:
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
           TF_VAR_allowed_emails: ${{ secrets.ALLOWED_EMAILS }}
           TF_VAR_allowed_github_orgs: ${{ secrets.ALLOWED_GITHUB_ORGS }}
+          TF_VAR_rbac_bootstrap_owner_email: ${{ vars.RBAC_BOOTSTRAP_OWNER_EMAIL }}
           TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
@@ -412,6 +413,7 @@ jobs:
           TF_VAR_allowed_email_domains: ${{ secrets.ALLOWED_EMAIL_DOMAINS }}
           TF_VAR_allowed_emails: ${{ secrets.ALLOWED_EMAILS }}
           TF_VAR_allowed_github_orgs: ${{ secrets.ALLOWED_GITHUB_ORGS }}
+          TF_VAR_rbac_bootstrap_owner_email: ${{ vars.RBAC_BOOTSTRAP_OWNER_EMAIL }}
           TF_VAR_deployment_name: ${{ secrets.DEPLOYMENT_NAME }}
           TF_VAR_enable_github_bot: "${{ secrets.ENABLE_GITHUB_BOT || 'false' }}"
           TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}

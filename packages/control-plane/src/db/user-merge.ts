@@ -87,21 +87,62 @@ export async function mergeUsers(
     throw new UserMergeError("Survivor and loser must be different users");
   }
   const survivor = await db
-    .prepare(`SELECT id, email FROM users WHERE id = ?`)
+    .prepare(`SELECT id, email, access_status, authorization_version FROM users WHERE id = ?`)
     .bind(survivorId)
-    .first<{ id: string; email: string | null }>();
+    .first<{
+      id: string;
+      email: string | null;
+      access_status: string;
+      authorization_version: number;
+    }>();
   if (!survivor) {
     throw new UserMergeError(`Survivor user ${survivorId} not found`);
   }
   // A missing loser row is not an error: re-running a completed merge must
   // be a no-op, and a partially-applied merge must be resumable.
   const loser = await db
-    .prepare(`SELECT id, email, email_verified FROM users WHERE id = ?`)
+    .prepare(`SELECT id, email, email_verified, authorization_version FROM users WHERE id = ?`)
     .bind(loserId)
-    .first<{ id: string; email: string | null; email_verified: number }>();
+    .first<{
+      id: string;
+      email: string | null;
+      email_verified: number;
+      authorization_version: number;
+    }>();
+  if (!loser) {
+    return { survivorId, loserId, dryRun: options.dryRun === true, counts: emptyCounts() };
+  }
 
   const survivorEmail = normalizeEmail(survivor.email);
   const loserEmail = normalizeEmail(loser?.email);
+  const [survivorAssignment, loserAssignment] = await db.batch<{
+    role_id: string;
+    role_key: string | null;
+  }>([
+    db
+      .prepare(
+        `SELECT ura.role_id, r.key AS role_key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+      .bind(survivorId),
+    db
+      .prepare(
+        `SELECT ura.role_id, r.key AS role_key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+      .bind(loserId),
+  ]);
+  const survivorRole = survivorAssignment.results[0];
+  const loserRole = loserAssignment.results[0];
+  if (!survivorRole || !loserRole) {
+    throw new UserMergeError("Both users must have explicit role assignments before merging");
+  }
+  if (survivorRole && loserRole && survivorRole.role_id !== loserRole.role_id) {
+    throw new UserMergeError("Resolve conflicting user roles before merging");
+  }
+  if (loserRole?.role_key === "owner" && survivor.access_status !== "active") {
+    throw new UserMergeError("The surviving Owner must be active before merging");
+  }
   // The loser's email backfills an email-less survivor after the loser row's
   // deletion frees the unique slot; its verification state carries with it.
   const backfillEmail = !survivorEmail && loserEmail ? loserEmail : null;
@@ -117,6 +158,36 @@ export async function mergeUsers(
   }
 
   const statements: SqlStatement[] = [];
+  // Force the whole batch to roll back if role/status state changed after the
+  // preflight. abs(MIN_INT64) is a deterministic SQLite error used only on the
+  // false branch because RAISE() is unavailable outside triggers.
+  statements.push(
+    db
+      .prepare(
+        `SELECT CASE WHEN
+           EXISTS (
+             SELECT 1 FROM users u
+             JOIN user_role_assignments ura ON ura.user_id = u.id
+             WHERE u.id = ? AND u.authorization_version = ? AND u.access_status = ?
+               AND ura.role_id = ?
+           )
+           AND EXISTS (
+             SELECT 1 FROM users u
+             JOIN user_role_assignments ura ON ura.user_id = u.id
+             WHERE u.id = ? AND u.authorization_version = ? AND ura.role_id = ?
+           )
+         THEN 1 ELSE abs(-9223372036854775808) END AS merge_guard`
+      )
+      .bind(
+        survivorId,
+        survivor.authorization_version,
+        survivor.access_status,
+        survivorRole.role_id,
+        loserId,
+        loser.authorization_version,
+        loserRole.role_id
+      )
+  );
   const track: Partial<Record<keyof UserMergeCounts, number>> = {};
   const add = (key: keyof UserMergeCounts, statement: SqlStatement) => {
     track[key] = statements.length;
@@ -190,6 +261,102 @@ export async function mergeUsers(
   add(
     "scmTokensRepointed",
     db.prepare(`UPDATE user_scm_tokens SET user_id = ? WHERE user_id = ?`).bind(survivorId, loserId)
+  );
+
+  // Preserve RBAC and session-access invariants before deleting the loser.
+  statements.push(
+    db
+      .prepare(
+        `INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
+         SELECT ?, role_id, assigned_by, assigned_at
+         FROM user_role_assignments WHERE user_id = ?
+         ON CONFLICT(user_id) DO NOTHING`
+      )
+      .bind(survivorId, loserId),
+    db
+      .prepare(
+        `UPDATE users
+         SET authorization_version = authorization_version + 1,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(Date.now(), survivorId),
+    db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId),
+    db
+      .prepare("UPDATE workspace_bootstrap SET owner_user_id = ? WHERE owner_user_id = ?")
+      .bind(survivorId, loserId),
+    db
+      .prepare(
+        `UPDATE session_access AS survivor_access
+         SET (relation, state, generation, created_at) = (
+           SELECT loser_access.relation, loser_access.state,
+                  loser_access.generation, loser_access.created_at
+           FROM session_access AS loser_access
+           WHERE loser_access.user_id = ?
+             AND loser_access.session_id = survivor_access.session_id
+         )
+         WHERE survivor_access.user_id = ?
+           AND EXISTS (
+             SELECT 1 FROM session_access AS loser_access
+             WHERE loser_access.user_id = ?
+               AND loser_access.session_id = survivor_access.session_id
+               AND (
+                 (loser_access.relation = 'creator' AND survivor_access.relation <> 'creator')
+                 OR (
+                   loser_access.relation = 'participant'
+                   AND survivor_access.relation = 'participant'
+                   AND (
+                     loser_access.generation > survivor_access.generation
+                     OR (
+                       loser_access.generation = survivor_access.generation
+                       AND loser_access.state = 'active'
+                       AND survivor_access.state <> 'active'
+                     )
+                   )
+                 )
+               )
+           )`
+      )
+      .bind(loserId, survivorId, loserId),
+    db
+      .prepare(
+        `DELETE FROM session_access WHERE user_id = ?
+         AND EXISTS (
+           SELECT 1 FROM session_access survivor_access
+           WHERE survivor_access.user_id = ?
+             AND survivor_access.session_id = session_access.session_id
+         )`
+      )
+      .bind(loserId, survivorId),
+    db.prepare("UPDATE session_access SET user_id = ? WHERE user_id = ?").bind(survivorId, loserId),
+    db
+      .prepare(`UPDATE model_provider_account_authorizations SET user_id = ? WHERE user_id = ?`)
+      .bind(survivorId, loserId),
+    db
+      .prepare(
+        `UPDATE model_provider_account_authorization_attempts SET user_id = ? WHERE user_id = ?`
+      )
+      .bind(survivorId, loserId),
+    db
+      .prepare(
+        `DELETE FROM keyboard_shortcut_preferences WHERE user_id = ?
+         AND EXISTS (SELECT 1 FROM keyboard_shortcut_preferences WHERE user_id = ?)`
+      )
+      .bind(loserId, survivorId),
+    db
+      .prepare("UPDATE keyboard_shortcut_preferences SET user_id = ? WHERE user_id = ?")
+      .bind(survivorId, loserId),
+    db
+      .prepare(
+        `INSERT INTO authorization_audit_events
+           (id, occurred_at, request_id, policy_id, principal_kind,
+            actor_service_snapshot, action, resource_type, resource_id,
+            target_user_id_snapshot, decision_outcome, operation_result, reason_code, metadata_json)
+          VALUES (?, ?, 'user-merge', 'workspace.user_merged', 'service', 'control-plane',
+                  'workspace.user_merged', 'user', ?, ?, 'allowed', 'succeeded',
+                  'operator_merge', '{}')`
+      )
+      .bind(crypto.randomUUID(), Date.now(), survivorId, loserId)
   );
 
   add("usersDeleted", db.prepare(`DELETE FROM users WHERE id = ?`).bind(loserId));

@@ -63,6 +63,13 @@ export const SETTINGS_GROUPS = [
     label: "Workspace",
     items: [
       {
+        id: "workspace",
+        label: "Workspace access",
+        description: "Manage members and roles",
+        keywords: "rbac permissions users access",
+        icon: DataControlsIcon,
+      },
+      {
         id: "environments",
         label: "Environments",
         description: "Configure reusable repository setups",

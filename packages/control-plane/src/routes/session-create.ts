@@ -17,6 +17,7 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { AuthorizationService } from "../authorization/service";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -63,6 +64,27 @@ async function handleCreateSession(
       return error(e.message, 400);
     }
     throw e;
+  }
+
+  if (ctx.principal?.kind === "user") {
+    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
+      ctx.principal.userId
+    );
+    if (body.environmentId && !authorization.permissions.includes("environments.use")) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: "environments.use" },
+        403
+      );
+    }
+    if (
+      (repositoryContext || body.repositories || body.environmentId) &&
+      !authorization.permissions.includes("repositories.use")
+    ) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: "repositories.use" },
+        403
+      );
+    }
   }
 
   // Validate branch names if provided (defense in depth)
