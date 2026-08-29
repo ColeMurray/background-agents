@@ -24,6 +24,9 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/hooks/use-media-query", () => ({ useIsMobile: () => mocks.isMobile }));
 vi.mock("@/lib/sandbox-provider", () => ({ supportsRepoImages: () => true }));
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
 
 beforeEach(() => {
   Object.assign(mocks, SHELL_FIXTURE_DEFAULTS);

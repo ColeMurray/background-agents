@@ -14,16 +14,25 @@ expect.extend(matchers);
 const mocks = vi.hoisted(() => ({
   isMobile: false,
   repoImagesEnabled: true,
+  allowedPermissions: null as Set<string> | null,
 }));
 
 vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.repoImagesEnabled,
 }));
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      mocks.allowedPermissions === null || mocks.allowedPermissions.has(permission),
+  }),
+}));
+
 afterEach(() => {
   cleanup();
   mocks.isMobile = false;
   mocks.repoImagesEnabled = true;
+  mocks.allowedPermissions = null;
 });
 
 function renderSettingsNav(
@@ -85,5 +94,14 @@ describe("SettingsNav", () => {
     renderSettingsNav({ activeCategory: "secrets" });
 
     expect(screen.queryByRole("button", { name: "Images" })).not.toBeInTheDocument();
+  });
+
+  it("hides settings that require unavailable permissions", () => {
+    mocks.allowedPermissions = new Set();
+    renderSettingsNav({ activeCategory: "appearance" });
+
+    expect(screen.getByRole("button", { name: "Appearance" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workspace access" })).not.toBeInTheDocument();
   });
 });
