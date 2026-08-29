@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { sqlDatabase } from "./helpers";
+import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
@@ -30,7 +30,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -44,6 +44,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 describe("Scheduler (integration)", () => {
   beforeEach(async () => {
     await cleanD1Tables();
+    await seedActiveUser("user-1");
     await env.DB.exec(
       "DELETE FROM model_provider_account_defaults; DELETE FROM model_provider_accounts;"
     );

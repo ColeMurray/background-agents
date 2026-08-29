@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import { sqlDatabase } from "./helpers";
+import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -24,7 +24,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: null,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -80,7 +80,10 @@ async function fetchInvocations(store: AutomationStore, automationId: string) {
 }
 
 describe("Scheduler slack event handling (integration)", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await seedActiveUser("user-1");
+  });
 
   it("triggers a matching slack automation and records thread coordinates", async () => {
     const store = new AutomationStore(env.DB);
