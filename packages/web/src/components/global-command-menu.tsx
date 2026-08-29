@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { formatRelativeTime } from "@/lib/time";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
@@ -44,7 +44,11 @@ function buildSessionUrl(session: SessionListItem): string {
   return query ? `/session/${session.id}?${query}` : `/session/${session.id}`;
 }
 
-export function GlobalCommandMenu({
+export function GlobalCommandMenu({ open, ...props }: GlobalCommandMenuProps) {
+  return <GlobalCommandMenuContent key={String(open)} open={open} {...props} />;
+}
+
+function GlobalCommandMenuContent({
   open,
   onOpenChange,
   onNavigate,
@@ -58,10 +62,6 @@ export function GlobalCommandMenu({
     [sessions]
   );
   const settingsGroups = getSettingsGroups({ query, includeGlobalAliases: true });
-
-  useEffect(() => {
-    if (!open) setQuery(DEFAULT_SETTINGS_QUERY);
-  }, [open]);
 
   const handleSelect = (callback: () => void) => {
     onOpenChange(false);
