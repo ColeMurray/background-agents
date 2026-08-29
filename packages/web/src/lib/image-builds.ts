@@ -84,11 +84,26 @@ export interface ImageBuildsFeed {
 
 /**
  * Drop superseded rows. The status endpoints don't emit them, but
- * `ImageBuildStatus` admits them — this is the one defensive filter, applied
+ * `ImageBuildStatus` admits them — applied with excludeOtherProviderBuilds
  * where the web fetches build rows from the control plane.
  */
 export function excludeSupersededBuilds(images: ImageBuildRecordView[]): ImageBuildRecordView[] {
   return images.filter((image) => image.status !== "superseded");
+}
+
+/**
+ * Drop rows from other sandbox providers. The control plane's status query is
+ * not provider-scoped, but everything downstream here is — spawn only uses
+ * the active provider's images and the trigger guard is keyed
+ * (scope, provider) — so rows left behind by a provider switch must not mask
+ * status, pin the rebuild guard, or drive the poll cadence. Applied with
+ * excludeSupersededBuilds where the web fetches build rows.
+ */
+export function excludeOtherProviderBuilds(
+  images: ImageBuildRecordView[],
+  activeProvider: string
+): ImageBuildRecordView[] {
+  return images.filter((image) => image.provider === activeProvider);
 }
 
 /** Map key for one build scope in the folded status map. */

@@ -3,6 +3,7 @@ import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-buil
 import {
   activeBuildScopeKeys,
   currentFingerprintBuilds,
+  excludeOtherProviderBuilds,
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
@@ -56,6 +57,18 @@ describe("excludeSupersededBuilds", () => {
     ];
 
     expect(excludeSupersededBuilds(rows).map((row) => row.id)).toEqual(["a", "c", "d"]);
+  });
+});
+
+describe("excludeOtherProviderBuilds", () => {
+  it("keeps only the active provider's rows", () => {
+    const rows = [
+      record({ id: "a", provider: "modal" }),
+      record({ id: "b", provider: "e2b" }),
+      record({ id: "c", provider: "modal" }),
+    ];
+
+    expect(excludeOtherProviderBuilds(rows, "modal").map((row) => row.id)).toEqual(["a", "c"]);
   });
 });
 
