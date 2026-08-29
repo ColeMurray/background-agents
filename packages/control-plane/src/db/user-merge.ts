@@ -67,6 +67,9 @@ interface UserMergeCounts {
   automationsOwnedRepointed: number;
   automationsCreatedRepointed: number;
   scmTokensRepointed: number;
+  skillProfileItemsMerged: number;
+  skillProfilesDeduped: number;
+  skillProfilesRepointed: number;
   roleAssignmentsRemoved: number;
   survivorAuthorizationVersionsIncremented: number;
   workspaceBootstrapRepointed: number;
@@ -273,6 +276,36 @@ export async function mergeUsers(
     "scmTokensRepointed",
     db.prepare(`UPDATE user_scm_tokens SET user_id = ? WHERE user_id = ?`).bind(survivorId, loserId)
   );
+  add(
+    "skillProfileItemsMerged",
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO skill_profile_items (profile_id, skill_id)
+         SELECT survivor_profile.id, loser_item.skill_id
+         FROM skill_profiles loser_profile
+         JOIN skill_profiles survivor_profile
+           ON survivor_profile.user_id = ? AND survivor_profile.name = loser_profile.name
+         JOIN skill_profile_items loser_item ON loser_item.profile_id = loser_profile.id
+         WHERE loser_profile.user_id = ?`
+      )
+      .bind(survivorId, loserId)
+  );
+  add(
+    "skillProfilesDeduped",
+    db
+      .prepare(
+        `DELETE FROM skill_profiles WHERE user_id = ?
+         AND EXISTS (
+           SELECT 1 FROM skill_profiles survivor_profile
+           WHERE survivor_profile.user_id = ? AND survivor_profile.name = skill_profiles.name
+         )`
+      )
+      .bind(loserId, survivorId)
+  );
+  add(
+    "skillProfilesRepointed",
+    db.prepare(`UPDATE skill_profiles SET user_id = ? WHERE user_id = ?`).bind(survivorId, loserId)
+  );
 
   // Preserve RBAC and session-access invariants before deleting the loser.
   add(
@@ -439,6 +472,9 @@ function emptyCounts(): UserMergeCounts {
     automationsOwnedRepointed: 0,
     automationsCreatedRepointed: 0,
     scmTokensRepointed: 0,
+    skillProfileItemsMerged: 0,
+    skillProfilesDeduped: 0,
+    skillProfilesRepointed: 0,
     roleAssignmentsRemoved: 0,
     survivorAuthorizationVersionsIncremented: 0,
     workspaceBootstrapRepointed: 0,
@@ -471,6 +507,9 @@ async function previewCounts(
     automationsOwned,
     automationsCreated,
     scmTokens,
+    skillProfileItemsMerged,
+    skillProfilesDeduped,
+    skillProfiles,
     roleAssignments,
     workspaceBootstrap,
     sessionAccessCollisionsUpdated,
@@ -512,6 +551,30 @@ async function previewCounts(
     db.prepare(`SELECT COUNT(*) AS count FROM automations WHERE user_id = ?`).bind(loserId),
     db.prepare(`SELECT COUNT(*) AS count FROM automations WHERE created_by = ?`).bind(loserId),
     db.prepare(`SELECT COUNT(*) AS count FROM user_scm_tokens WHERE user_id = ?`).bind(loserId),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM skill_profile_items loser_item
+         JOIN skill_profiles loser_profile ON loser_profile.id = loser_item.profile_id
+         JOIN skill_profiles survivor_profile
+           ON survivor_profile.user_id = ? AND survivor_profile.name = loser_profile.name
+         WHERE loser_profile.user_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM skill_profile_items survivor_item
+             WHERE survivor_item.profile_id = survivor_profile.id
+               AND survivor_item.skill_id = loser_item.skill_id
+           )`
+      )
+      .bind(survivorId, loserId),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM skill_profiles
+         WHERE user_id = ? AND EXISTS (
+           SELECT 1 FROM skill_profiles survivor_profile
+           WHERE survivor_profile.user_id = ? AND survivor_profile.name = skill_profiles.name
+         )`
+      )
+      .bind(loserId, survivorId),
+    db.prepare(`SELECT COUNT(*) AS count FROM skill_profiles WHERE user_id = ?`).bind(loserId),
     db
       .prepare(`SELECT COUNT(*) AS count FROM user_role_assignments WHERE user_id = ?`)
       .bind(loserId),
@@ -601,6 +664,9 @@ async function previewCounts(
     automationsOwnedRepointed: count(automationsOwned),
     automationsCreatedRepointed: count(automationsCreated),
     scmTokensRepointed: count(scmTokens),
+    skillProfileItemsMerged: count(skillProfileItemsMerged),
+    skillProfilesDeduped: count(skillProfilesDeduped),
+    skillProfilesRepointed: count(skillProfiles) - count(skillProfilesDeduped),
     roleAssignmentsRemoved: count(roleAssignments),
     survivorAuthorizationVersionsIncremented: count(users),
     workspaceBootstrapRepointed: count(workspaceBootstrap),

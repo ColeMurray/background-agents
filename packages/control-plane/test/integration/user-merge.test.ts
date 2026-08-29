@@ -61,6 +61,15 @@ async function insertScmToken(providerUserId: string, userId: string) {
     .run();
 }
 
+async function insertSkillProfile(id: string, userId: string, name: string) {
+  await env.DB.prepare(
+    `INSERT INTO skill_profiles (id, user_id, name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+    .bind(id, userId, name, SEED_NOW_MS, SEED_NOW_MS)
+    .run();
+}
+
 beforeEach(async () => {
   await cleanD1Tables();
 });
@@ -79,6 +88,7 @@ describe("mergeUsers", () => {
     await insertSession("session-loser", LOSER);
     await insertAutomation("auto-1", LOSER, LOSER);
     await insertScmToken("583231", LOSER);
+    await insertSkillProfile("profile-loser", LOSER, "Personal profile");
     await insertAuthSession({ id: "authsess-loser", userId: LOSER });
     // Survivor: the email-owning row the user already signs into.
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com", emailVerified: 1 });
@@ -104,6 +114,7 @@ describe("mergeUsers", () => {
       automationsOwnedRepointed: 1,
       automationsCreatedRepointed: 1,
       scmTokensRepointed: 1,
+      skillProfilesRepointed: 1,
       readStatesDeduped: 1,
       readStatesRepointed: 1,
       usersDeleted: 1,
@@ -133,6 +144,9 @@ describe("mergeUsers", () => {
         created_by: string;
       }>()
     ).toEqual({ user_id: SURVIVOR, created_by: SURVIVOR });
+    expect(
+      await env.DB.prepare(`SELECT user_id FROM skill_profiles WHERE id = 'profile-loser'`).first()
+    ).toEqual({ user_id: SURVIVOR });
     // Read-state dedup kept the survivor's row on the shared session.
     expect(
       await env.DB.prepare(

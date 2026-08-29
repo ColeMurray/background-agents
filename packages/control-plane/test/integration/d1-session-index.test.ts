@@ -35,6 +35,40 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.status).toBe("created");
   });
 
+  it("atomically creates the canonical creator access projection", async () => {
+    const userId = "11111111111111111111111111111111";
+    await env.DB.prepare(
+      `INSERT INTO users
+        (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+       VALUES (?, 'Session Creator', NULL, 0, NULL, 1, 1)`
+    )
+      .bind(userId)
+      .run();
+    const store = new SessionIndexStore(env.DB);
+
+    await store.create({
+      id: "session-with-creator",
+      title: "Creator projection",
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      userId,
+      createdAt: 10,
+      updatedAt: 10,
+    });
+
+    expect(
+      await env.DB.prepare(
+        "SELECT relation, state, generation, created_at FROM session_access WHERE session_id = ? AND user_id = ?"
+      )
+        .bind("session-with-creator", userId)
+        .first()
+    ).toEqual({ relation: "creator", state: "active", generation: 1, created_at: 10 });
+  });
+
   it("atomically snapshots provider auth with the session", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();

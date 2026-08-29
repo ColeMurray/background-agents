@@ -5,11 +5,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { SettingsViewportProvider } from "@/components/settings/settings-viewport-context";
-import {
-  DEFAULT_SETTINGS_CATEGORY,
-  isSettingsCategory,
-  SettingsNav,
-} from "@/components/settings/settings-nav";
+import { SettingsNav } from "@/components/settings/settings-nav";
+import { resolveSettingsCategory } from "@/components/settings/settings-registry";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 export function SettingsShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -18,15 +16,24 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const isMobile = useIsMobile();
   const [isHydrated, setIsHydrated] = useState(false);
   const tab = searchParams.get("tab");
-  const activeCategory = pathname.startsWith("/settings/integrations/")
-    ? "integrations"
-    : isSettingsCategory(tab, supportsRepoImages())
-      ? tab
-      : DEFAULT_SETTINGS_CATEGORY;
+  const { authorization, loading } = useCurrentUserAuthorization();
+  const requestedCategory = pathname.startsWith("/settings/integrations/") ? "integrations" : tab;
+  const activeCategory = resolveSettingsCategory(
+    requestedCategory,
+    supportsRepoImages(),
+    (permission) => authorization?.permissions.includes(permission) ?? false
+  );
+  const unauthorizedSubroute =
+    pathname.startsWith("/settings/integrations/") && activeCategory !== "integrations";
 
   useEffect(() => setIsHydrated(true), []);
+  useEffect(() => {
+    if (isHydrated && !loading && unauthorizedSubroute) {
+      router.replace(`/settings?tab=${activeCategory}`);
+    }
+  }, [activeCategory, isHydrated, loading, router, unauthorizedSubroute]);
 
-  if (!isHydrated) {
+  if (!isHydrated || loading || unauthorizedSubroute) {
     return <main className="h-dvh overflow-hidden bg-background" aria-busy="true" />;
   }
 

@@ -8,6 +8,7 @@ import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsNav } from "./settings-nav";
 import { SettingsViewportProvider } from "./settings-viewport-context";
+import { resolveSettingsCategory } from "./settings-registry";
 
 expect.extend(matchers);
 
@@ -48,6 +49,20 @@ function renderSettingsNav(
 }
 
 describe("SettingsNav", () => {
+  it("resolves defaults and deep links to an authorized category", () => {
+    const hasNoWorkspacePermissions = () => false;
+
+    expect(resolveSettingsCategory(null, true, hasNoWorkspacePermissions)).toBe("appearance");
+    expect(resolveSettingsCategory("secrets", true, hasNoWorkspacePermissions)).toBe("appearance");
+    expect(
+      resolveSettingsCategory(
+        "environments",
+        true,
+        (permission) => permission === "environments.read"
+      )
+    ).toBe("environments");
+  });
+
   it("groups settings and filters labels, descriptions, and keywords", async () => {
     const user = userEvent.setup();
     renderSettingsNav({ activeCategory: "appearance" });

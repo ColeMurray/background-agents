@@ -26,6 +26,9 @@ import { ProviderAccountsSettings } from "@/components/settings/provider-account
 import { SkillsSettings } from "@/components/settings/skills-settings";
 import { WorkspaceSettings } from "@/components/settings/workspace-settings";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { resolveSettingsCategory } from "@/components/settings/settings-registry";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 
 const SETTINGS_PANELS: Record<SettingsCategory, ComponentType> = {
   workspace: WorkspaceSettings,
@@ -43,14 +46,27 @@ const SETTINGS_PANELS: Record<SettingsCategory, ComponentType> = {
   "mcp-servers": McpServersSettings,
   "data-controls": DataControlsSettings,
 };
+
+function resolveAuthorizedCategory(
+  requested: string | null,
+  repoImagesEnabled: boolean,
+  permissions: readonly PermissionId[] | undefined
+) {
+  return resolveSettingsCategory(
+    requested,
+    repoImagesEnabled,
+    (permission) => permissions?.includes(permission) ?? false
+  );
+}
+
 function SettingsPageContent() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
   const isMobile = useSettingsIsMobile();
-  const initialCategory = isSettingsCategory(tabParam, repoImagesEnabled)
-    ? tabParam
-    : DEFAULT_SETTINGS_CATEGORY;
+  const { authorization, loading } = useCurrentUserAuthorization();
+  const permissions = authorization?.permissions;
+  const initialCategory = resolveAuthorizedCategory(tabParam, repoImagesEnabled, permissions);
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
   function selectCategory(category: SettingsCategory, trigger: HTMLButtonElement) {
@@ -102,7 +118,7 @@ function SettingsPageContent() {
     const syncFromHistory = () => {
       const requestedCategory = new URLSearchParams(window.location.search).get("tab");
       const nextCategory = isSettingsCategory(requestedCategory, repoImagesEnabled)
-        ? requestedCategory
+        ? resolveAuthorizedCategory(requestedCategory, repoImagesEnabled, permissions)
         : null;
       if (nextCategory) {
         setActiveCategoryRaw(nextCategory);
@@ -122,25 +138,28 @@ function SettingsPageContent() {
 
     window.addEventListener("popstate", syncFromHistory);
     return () => window.removeEventListener("popstate", syncFromHistory);
-  }, [isMobile, repoImagesEnabled]);
+  }, [isMobile, permissions, repoImagesEnabled]);
 
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {
     if (isSettingsCategory(tabParam, repoImagesEnabled)) {
-      setActiveCategoryRaw(tabParam);
+      setActiveCategoryRaw(resolveAuthorizedCategory(tabParam, repoImagesEnabled, permissions));
       setMobileView("detail");
       return;
     }
 
     if (!isMobile || !mobileTriggerRef.current) {
-      setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
+      setActiveCategoryRaw(resolveAuthorizedCategory(null, repoImagesEnabled, permissions));
     }
     setMobileView("list");
-  }, [isMobile, repoImagesEnabled, tabParam]);
+  }, [isMobile, permissions, repoImagesEnabled, tabParam]);
 
-  const renderedCategory = isSettingsCategory(activeCategory, repoImagesEnabled)
-    ? activeCategory
-    : DEFAULT_SETTINGS_CATEGORY;
+  if (loading) return null;
+  const renderedCategory = resolveAuthorizedCategory(
+    activeCategory,
+    repoImagesEnabled,
+    permissions
+  );
   const ActivePanel = SETTINGS_PANELS[renderedCategory];
   const content = <ActivePanel />;
 

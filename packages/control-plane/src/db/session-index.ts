@@ -338,8 +338,18 @@ export class SessionIndexStore {
           session.createdAt
         )
     );
+    const creatorAccessStmt = session.userId
+      ? this.db
+          .prepare(
+            `INSERT INTO session_access
+               (session_id, user_id, relation, state, generation, created_at)
+             SELECT ?, id, 'creator', 'active', 1, ? FROM users WHERE id = ?`
+          )
+          .bind(session.id, session.createdAt, session.userId)
+      : null;
     const results = await this.db.batch([
       sessionStmt,
+      ...(creatorAccessStmt ? [creatorAccessStmt] : []),
       ...repositoryStmts,
       ...manifestStmts,
       ...providerAuthStmts,

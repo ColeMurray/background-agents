@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useSettingsIsMobile } from "./settings-viewport-context";
-import { getSettingsGroups, type SettingsCategory } from "./settings-registry";
+import {
+  canViewSettingsCategory,
+  getSettingsGroups,
+  type SettingsCategory,
+} from "./settings-registry";
 
 export {
   DEFAULT_SETTINGS_CATEGORY,
@@ -43,35 +47,11 @@ export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
   const isMobile = useSettingsIsMobile();
   const [query, setQuery] = useState("");
   const { hasPermission } = useCurrentUserAuthorization();
-  const canView = (category: SettingsCategory) => {
-    switch (category) {
-      case "workspace":
-        return hasPermission("workspace.members.read") || hasPermission("workspace.roles.read");
-      case "secrets":
-        return hasPermission("global_secrets.manage");
-      case "environments":
-        return hasPermission("environments.read");
-      case "models":
-        return hasPermission("models.preferences.manage");
-      case "provider-accounts":
-        return hasPermission("provider_accounts.read");
-      case "images":
-        return hasPermission("image_builds.read");
-      case "sandbox":
-        return hasPermission("environments.manage");
-      case "scm":
-      case "integrations":
-        return hasPermission("integrations.read");
-      case "skills":
-        return hasPermission("skills.read");
-      case "mcp-servers":
-        return hasPermission("mcp_servers.read");
-      default:
-        return true;
-    }
-  };
   const groups = getSettingsGroups({ query })
-    .map((group) => ({ ...group, items: group.items.filter((item) => canView(item.id)) }))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canViewSettingsCategory(item.id, hasPermission)),
+    }))
     .filter((group) => group.items.length > 0);
 
   const navigation = (

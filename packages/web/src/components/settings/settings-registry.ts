@@ -12,6 +12,7 @@ import {
   TerminalIcon,
 } from "@/components/ui/icons";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 
 export const SETTINGS_GROUPS = [
   {
@@ -140,6 +141,64 @@ export type SettingsCategory = SettingsItem["id"];
 export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = "secrets";
 export const DEFAULT_SETTINGS_QUERY = "";
 export const DEFAULT_INCLUDE_GLOBAL_SETTINGS_ALIASES = false;
+
+export function canViewSettingsCategory(
+  category: SettingsCategory,
+  hasPermission: (permission: PermissionId) => boolean
+): boolean {
+  switch (category) {
+    case "workspace":
+      return hasPermission("workspace.members.read") || hasPermission("workspace.roles.read");
+    case "secrets":
+      return hasPermission("global_secrets.manage");
+    case "environments":
+      return hasPermission("environments.read");
+    case "models":
+      return hasPermission("models.preferences.manage");
+    case "provider-accounts":
+      return hasPermission("provider_accounts.read");
+    case "images":
+      return hasPermission("image_builds.read");
+    case "sandbox":
+      return hasPermission("environments.manage");
+    case "scm":
+    case "integrations":
+      return hasPermission("integrations.read");
+    case "skills":
+      return hasPermission("skills.read");
+    case "mcp-servers":
+      return hasPermission("mcp_servers.read");
+    default:
+      return true;
+  }
+}
+
+export function resolveSettingsCategory(
+  requested: string | null,
+  repoImagesEnabled: boolean,
+  hasPermission: (permission: PermissionId) => boolean
+): SettingsCategory {
+  if (
+    isSettingsCategory(requested, repoImagesEnabled) &&
+    canViewSettingsCategory(requested, hasPermission)
+  ) {
+    return requested;
+  }
+  if (canViewSettingsCategory(DEFAULT_SETTINGS_CATEGORY, hasPermission)) {
+    return DEFAULT_SETTINGS_CATEGORY;
+  }
+  for (const group of SETTINGS_GROUPS) {
+    for (const item of group.items) {
+      if (
+        isSettingsItemAvailable(item, repoImagesEnabled) &&
+        canViewSettingsCategory(item.id, hasPermission)
+      ) {
+        return item.id;
+      }
+    }
+  }
+  return "appearance";
+}
 
 function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean): boolean {
   return !("requiresRepoImages" in item) || repoImagesEnabled;
