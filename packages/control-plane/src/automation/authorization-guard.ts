@@ -1,70 +1,71 @@
 import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
+import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 
 export type AutomationAuthorizationOperation = "manage" | "trigger";
 
 export function bindAutomationExecutionGuard(db: SqlDatabase, automationId: string): SqlStatement {
+  const createGuard = rolePermissionPredicate("sessions.create");
+  const repositoryGuard = rolePermissionPredicate("repositories.use");
+  const environmentGuard = rolePermissionPredicate("environments.use");
   return db
     .prepare(
       `SELECT CASE WHEN EXISTS (
          SELECT 1 FROM automations a
          JOIN users u ON u.id = a.user_id
          JOIN user_role_assignments ura ON ura.user_id = u.id
+         JOIN roles r ON r.id = ura.role_id
          WHERE a.id = ? AND a.deleted_at IS NULL AND u.access_status = 'active'
-           AND EXISTS (
-             SELECT 1 FROM role_permissions rp
-             WHERE rp.role_id = ura.role_id AND rp.permission_id = 'sessions.create'
-           )
+           AND ${createGuard.sql}
            AND (
              NOT EXISTS (SELECT 1 FROM automation_repositories ar WHERE ar.automation_id = a.id)
-             OR EXISTS (
-               SELECT 1 FROM role_permissions rp
-               WHERE rp.role_id = ura.role_id AND rp.permission_id = 'repositories.use'
-             )
+             OR ${repositoryGuard.sql}
            )
            AND (
              NOT EXISTS (SELECT 1 FROM automation_environments ae WHERE ae.automation_id = a.id)
-             OR EXISTS (
-               SELECT 1 FROM role_permissions rp
-               WHERE rp.role_id = ura.role_id AND rp.permission_id = 'environments.use'
-             )
+             OR ${environmentGuard.sql}
            )
        ) THEN 1 ELSE abs(-9223372036854775808) END AS execution_authorization_guard`
     )
-    .bind(automationId);
+    .bind(
+      automationId,
+      ...createGuard.values,
+      ...repositoryGuard.values,
+      ...environmentGuard.values
+    );
 }
 
 export async function isAutomationExecutionAuthorized(
   db: SqlDatabase,
   automationId: string
 ): Promise<boolean> {
+  const createGuard = rolePermissionPredicate("sessions.create");
+  const repositoryGuard = rolePermissionPredicate("repositories.use");
+  const environmentGuard = rolePermissionPredicate("environments.use");
   const row = await db
     .prepare(
       `SELECT 1 AS authorized FROM automations a
        JOIN users u ON u.id = a.user_id
        JOIN user_role_assignments ura ON ura.user_id = u.id
+       JOIN roles r ON r.id = ura.role_id
        WHERE a.id = ? AND a.deleted_at IS NULL AND u.access_status = 'active'
-         AND EXISTS (
-           SELECT 1 FROM role_permissions rp
-           WHERE rp.role_id = ura.role_id AND rp.permission_id = 'sessions.create'
-         )
+         AND ${createGuard.sql}
          AND (
            NOT EXISTS (SELECT 1 FROM automation_repositories ar WHERE ar.automation_id = a.id)
-           OR EXISTS (
-             SELECT 1 FROM role_permissions rp
-             WHERE rp.role_id = ura.role_id AND rp.permission_id = 'repositories.use'
-           )
+           OR ${repositoryGuard.sql}
          )
          AND (
            NOT EXISTS (SELECT 1 FROM automation_environments ae WHERE ae.automation_id = a.id)
-           OR EXISTS (
-             SELECT 1 FROM role_permissions rp
-             WHERE rp.role_id = ura.role_id AND rp.permission_id = 'environments.use'
-           )
+           OR ${environmentGuard.sql}
          )
        LIMIT 1`
     )
-    .bind(automationId)
+    .bind(
+      automationId,
+      ...createGuard.values,
+      ...repositoryGuard.values,
+      ...environmentGuard.values
+    )
     .first();
   return row !== null;
 }
@@ -74,22 +75,22 @@ export function bindPermissionSetGuard(
   authorization: EffectiveAuthorization,
   permissions: readonly PermissionId[]
 ): SqlStatement {
-  const permissionGuards = permissions
-    .map(
-      () =>
-        "EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id = ura.role_id AND rp.permission_id = ?)"
-    )
-    .join(" AND ");
+  const permissionGuards = permissions.map(rolePermissionPredicate);
   return db
     .prepare(
       `SELECT CASE WHEN EXISTS (
          SELECT 1 FROM users u
          JOIN user_role_assignments ura ON ura.user_id = u.id
+         JOIN roles r ON r.id = ura.role_id
          WHERE u.id = ? AND u.access_status = 'active' AND u.authorization_version = ?
-           AND ${permissionGuards}
+            AND ${permissionGuards.map((guard) => guard.sql).join(" AND ")}
        ) THEN 1 ELSE abs(-9223372036854775808) END AS authorization_guard`
     )
-    .bind(authorization.userId, authorization.authorizationVersion, ...permissions);
+    .bind(
+      authorization.userId,
+      authorization.authorizationVersion,
+      ...permissionGuards.flatMap((guard) => guard.values)
+    );
 }
 
 export function bindAutomationAuthorizationGuard(
@@ -99,37 +100,32 @@ export function bindAutomationAuthorizationGuard(
   operation: AutomationAuthorizationOperation,
   requiredPermissions: readonly PermissionId[] = []
 ): SqlStatement {
-  const anyPermission = `automations.${operation}.any`;
-  const ownPermission = `automations.${operation}.own`;
-  const requiredPermissionGuards = requiredPermissions
-    .map(
-      () =>
-        "EXISTS (SELECT 1 FROM role_permissions required_rp WHERE required_rp.role_id = ura.role_id AND required_rp.permission_id = ?)"
-    )
-    .join(" AND ");
+  const anyGuard = rolePermissionPredicate(`automations.${operation}.any`);
+  const ownGuard = rolePermissionPredicate(`automations.${operation}.own`);
+  const requiredPermissionGuards = requiredPermissions.map(rolePermissionPredicate);
   return db
     .prepare(
       `SELECT CASE WHEN EXISTS (
          SELECT 1 FROM users u
          JOIN user_role_assignments ura ON ura.user_id = u.id
-         JOIN role_permissions rp ON rp.role_id = ura.role_id
+         JOIN roles r ON r.id = ura.role_id
          WHERE u.id = ? AND u.access_status = 'active' AND u.authorization_version = ?
             AND (
-             rp.permission_id = ?
-             OR (rp.permission_id = ? AND EXISTS (
+              ${anyGuard.sql}
+              OR (${ownGuard.sql} AND EXISTS (
                SELECT 1 FROM automations a WHERE a.id = ? AND a.user_id = u.id
               ))
             )
-            ${requiredPermissionGuards ? `AND ${requiredPermissionGuards}` : ""}
+             ${requiredPermissionGuards.length > 0 ? `AND ${requiredPermissionGuards.map((guard) => guard.sql).join(" AND ")}` : ""}
        ) THEN 1 ELSE abs(-9223372036854775808) END AS authorization_guard`
     )
     .bind(
       authorization.userId,
       authorization.authorizationVersion,
-      anyPermission,
-      ownPermission,
+      ...anyGuard.values,
+      ...ownGuard.values,
       automationId,
-      ...requiredPermissions
+      ...requiredPermissionGuards.flatMap((guard) => guard.values)
     );
 }
 
@@ -140,36 +136,31 @@ export async function isAutomationAuthorizationCurrent(
   operation: AutomationAuthorizationOperation,
   requiredPermissions: readonly PermissionId[] = []
 ): Promise<boolean> {
-  const anyPermission = `automations.${operation}.any`;
-  const ownPermission = `automations.${operation}.own`;
-  const requiredPermissionGuards = requiredPermissions
-    .map(
-      () =>
-        "EXISTS (SELECT 1 FROM role_permissions required_rp WHERE required_rp.role_id = ura.role_id AND required_rp.permission_id = ?)"
-    )
-    .join(" AND ");
+  const anyGuard = rolePermissionPredicate(`automations.${operation}.any`);
+  const ownGuard = rolePermissionPredicate(`automations.${operation}.own`);
+  const requiredPermissionGuards = requiredPermissions.map(rolePermissionPredicate);
   const row = await db
     .prepare(
       `SELECT 1 AS authorized FROM users u
        JOIN user_role_assignments ura ON ura.user_id = u.id
-       JOIN role_permissions rp ON rp.role_id = ura.role_id
+       JOIN roles r ON r.id = ura.role_id
        WHERE u.id = ? AND u.access_status = 'active' AND u.authorization_version = ?
           AND (
-           rp.permission_id = ?
-           OR (rp.permission_id = ? AND EXISTS (
+            ${anyGuard.sql}
+            OR (${ownGuard.sql} AND EXISTS (
              SELECT 1 FROM automations a WHERE a.id = ? AND a.user_id = u.id
             ))
           )
-          ${requiredPermissionGuards ? `AND ${requiredPermissionGuards}` : ""}
+           ${requiredPermissionGuards.length > 0 ? `AND ${requiredPermissionGuards.map((guard) => guard.sql).join(" AND ")}` : ""}
        LIMIT 1`
     )
     .bind(
       authorization.userId,
       authorization.authorizationVersion,
-      anyPermission,
-      ownPermission,
+      ...anyGuard.values,
+      ...ownGuard.values,
       automationId,
-      ...requiredPermissions
+      ...requiredPermissionGuards.flatMap((guard) => guard.values)
     )
     .first();
   return row !== null;

@@ -15,10 +15,12 @@ import {
   error,
   defineRoute,
   GITHUB_USER_OR_SERVICE_ROUTE,
+  handlerAuthorized,
   json,
   parseJsonBody,
   parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  requireSession,
   type RequestContext,
   type Route,
   type UserRouteContext,
@@ -276,21 +278,28 @@ export const sessionIndexRoutes: Route[] = [
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions"),
+    authorization: handlerAuthorized({
+      service: "actor",
+      serviceCeiling: "sessions.read.own",
+    }),
     handler: handleListSessions,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/inbox"),
+    authorization: handlerAuthorized(),
     handler: handleListSessionInbox,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "PATCH",
     pattern: parsePattern("/sessions/:id/read-state"),
+    authorization: requireSession("read"),
     handler: handlePatchReadState,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "DELETE",
     pattern: parsePattern("/sessions/:id"),
+    authorization: requireSession("delete"),
     handler: handleDeleteSession,
   }),
 ];

@@ -11,7 +11,7 @@ import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
 import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
-import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
+import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -55,8 +55,100 @@ export type RequestContext = CorrelationContext & {
 export interface RouteDefinition<Context extends RequestContext = RequestContext> {
   method: string;
   pattern: RegExp;
+  authorization: RouteAuthorization;
   cacheControl?: "no-store" | "private, no-store";
   handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
+}
+
+export type SessionAuthorizationOperation =
+  | "read"
+  | "collaborate"
+  | "lifecycle"
+  | "participants.manage"
+  | "sandbox_access"
+  | "delete";
+
+export type RouteAuthorizationRequirement =
+  | { kind: "permission"; permission: PermissionId }
+  | { kind: "session"; operation: SessionAuthorizationOperation; sessionIdParam: string };
+
+type ServiceAuthorization = { kind: "deny" } | { kind: "actor"; ceiling?: PermissionId };
+
+export type RouteAuthorization =
+  | { kind: "none" }
+  | { kind: "authenticated" }
+  | {
+      kind: "active-user";
+      allOf: readonly RouteAuthorizationRequirement[];
+      service: ServiceAuthorization;
+      additionalHandlerChecks?: boolean;
+    }
+  | {
+      kind: "service";
+      services: readonly ("github-bot" | "slack-bot" | "linear-bot")[];
+      actor: "required" | "optional";
+      additionalHandlerChecks?: boolean;
+    };
+
+export const NO_AUTHORIZATION = { kind: "none" } as const satisfies RouteAuthorization;
+export const AUTHENTICATED_USER = {
+  kind: "authenticated",
+} as const satisfies RouteAuthorization;
+
+export function permissionRequirement(permission: PermissionId): RouteAuthorizationRequirement {
+  return { kind: "permission", permission };
+}
+
+export function sessionRequirement(
+  operation: SessionAuthorizationOperation,
+  sessionIdParam = "id"
+): RouteAuthorizationRequirement {
+  return { kind: "session", operation, sessionIdParam };
+}
+
+export function requirePermission(permission: PermissionId): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [permissionRequirement(permission)],
+    service: { kind: "actor" },
+  };
+}
+
+export function requireSession(
+  operation: SessionAuthorizationOperation,
+  sessionIdParam = "id"
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [sessionRequirement(operation, sessionIdParam)],
+    service: { kind: "actor" },
+  };
+}
+
+export function requireAll(...allOf: readonly RouteAuthorizationRequirement[]): RouteAuthorization {
+  return { kind: "active-user", allOf, service: { kind: "actor" } };
+}
+
+export function handlerAuthorized(options?: {
+  service?: "deny" | "actor";
+  serviceCeiling?: PermissionId;
+}): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [],
+    service:
+      options?.service === "actor"
+        ? { kind: "actor", ceiling: options.serviceCeiling }
+        : { kind: "deny" },
+    additionalHandlerChecks: true,
+  };
+}
+
+export function serviceAuthorized(
+  service: "github-bot" | "slack-bot" | "linear-bot",
+  actor: "required" | "optional" = "optional"
+): RouteAuthorization {
+  return { kind: "service", services: [service], actor, additionalHandlerChecks: true };
 }
 
 type UserPrincipal = Extract<Principal, { kind: "user" }>;

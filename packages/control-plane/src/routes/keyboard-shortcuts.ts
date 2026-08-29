@@ -9,6 +9,7 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   type RequestContext,
   type Route,
+  handlerAuthorized,
 } from "./shared";
 
 function canonicalUserId(ctx: RequestContext): string | null {
@@ -53,6 +54,16 @@ async function updatePreferences(
 }
 
 export const keyboardShortcutRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
-  { method: "GET", pattern: parsePattern("/keyboard-shortcuts"), handler: getPreferences },
-  { method: "PUT", pattern: parsePattern("/keyboard-shortcuts"), handler: updatePreferences },
+  {
+    method: "GET",
+    pattern: parsePattern("/keyboard-shortcuts"),
+    authorization: handlerAuthorized(),
+    handler: getPreferences,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/keyboard-shortcuts"),
+    authorization: handlerAuthorized(),
+    handler: updatePreferences,
+  },
 ]);

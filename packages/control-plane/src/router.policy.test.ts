@@ -13,9 +13,60 @@ describe("route policy table", () => {
       routes.every(
         (route) =>
           route.authentication &&
+          route.authorization &&
           (route.supportedScmProviders === "all" || route.supportedScmProviders.length > 0)
       )
     ).toBe(true);
+  });
+
+  it("has no duplicate method and pattern declarations", () => {
+    const identities = routes.map((route) => `${route.method}:${route.pattern}`);
+    expect(new Set(identities).size).toBe(identities.length);
+  });
+
+  it("declares authorization compatible with authentication", () => {
+    for (const route of routes) {
+      const authentication = route.authentication.kind;
+      const authorization = route.authorization;
+      if (authorization.kind === "none") {
+        expect(["public", "handler-authenticated", "web-service", "sandbox"]).toContain(
+          authentication
+        );
+      } else if (authorization.kind === "authenticated") {
+        expect(authentication).toBe("user");
+      } else if (authorization.kind === "service") {
+        expect(authentication).toBe("user-or-service");
+        expect(authorization.services.length).toBeGreaterThan(0);
+      } else {
+        expect(["user", "user-or-service", "user-or-service-with-sandbox-fallback"]).toContain(
+          authentication
+        );
+        expect(authorization.allOf.length > 0 || authorization.additionalHandlerChecks).toBe(true);
+        for (const requirement of authorization.allOf) {
+          if (requirement.kind === "session") {
+            expect(route.pattern.source).toContain(`?<${requirement.sessionIdParam}>`);
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps contextual route requirements explicit", () => {
+    expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [
+        { kind: "permission", permission: "sessions.create" },
+        { kind: "session", operation: "collaborate", sessionIdParam: "id" },
+      ],
+    });
+    expect(routeFor("GET", "/sessions/parent/children/child")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "session", operation: "read", sessionIdParam: "childId" }],
+    });
+    expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
+      kind: "service",
+      services: ["github-bot"],
+    });
   });
 
   it.each([

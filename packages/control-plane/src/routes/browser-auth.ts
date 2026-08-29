@@ -4,6 +4,7 @@ import { createLogger } from "../logger";
 import {
   defineRoutes,
   error,
+  NO_AUTHORIZATION,
   parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   type Route,
@@ -87,6 +88,7 @@ export const browserAuthRoutes: Route[] = defineRoutes(
   BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
     method,
     pattern: parsePattern(path),
+    authorization: NO_AUTHORIZATION,
     handler: handleBrowserAuth,
   }))
 );

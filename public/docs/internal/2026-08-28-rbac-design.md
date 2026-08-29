@@ -123,10 +123,11 @@ Permissions are exported from `@open-inspect/shared` as a literal registry conta
 - sensitivity classification;
 - validation metadata.
 
-The registry defines valid identifiers and editor metadata. Persisted `role_permissions` rows are
-the runtime authority for built-in and custom roles alike, so built-in policy changes require an
-explicit migration. Unknown identifiers fail role validation and are ignored during
-effective-permission resolution. Permission IDs are never reused for different semantics.
+The registry defines valid identifiers, editor metadata, and the permission sets for protected
+built-in roles. Built-in policy changes deploy with code and do not require a data migration.
+Persisted `role_permissions` rows are the runtime authority only for workspace-defined custom roles.
+Unknown identifiers fail role validation and are ignored during effective-permission resolution.
+Permission IDs are never reused for different semantics.
 
 ### Permission catalog
 
@@ -339,12 +340,12 @@ CREATE INDEX idx_privileged_outbox_due
   ON privileged_operation_outbox(state, next_attempt_at);
 ```
 
-Built-in roles have stable `key` values: `owner`, `administrator`, `member`, and `viewer`. Custom
-roles have `key = NULL`. IDs are opaque and role names are mutable display values. Custom role names
-use ASCII letters, numbers, spaces, underscores, and hyphens, then are trimmed and lowercased into a
-separate normalized value before uniqueness checks; SQLite `NOCASE` is not the product normalization
-rule. Permission rows are normalized so assignments and role edits remain transactional and
-queryable.
+Built-in roles have stable `key` values: `owner`, `administrator`, `member`, and `viewer`; their
+permission sets come from the shared code registry and have no `role_permissions` rows. Custom roles
+have `key = NULL`, and their normalized permission rows keep role edits transactional and queryable.
+IDs are opaque and role names are mutable display values. Custom role names use ASCII letters,
+numbers, spaces, underscores, and hyphens, then are trimmed and lowercased into a separate
+normalized value before uniqueness checks; SQLite `NOCASE` is not the product normalization rule.
 
 `users` gains:
 
@@ -385,9 +386,9 @@ the operator CLI. A post-bootstrap binding mismatch does not mutate authorizatio
 
 ### Storage ownership
 
-- D1 is the source of truth for roles, assignments, status, and audit events.
-- Shared code defines the permission catalog; persisted permission rows are the sole runtime grant
-  authority for built-in and custom roles.
+- D1 is the source of truth for roles, assignments, status, custom-role grants, and audit events.
+- Shared code defines the permission catalog and built-in role grants; persisted permission rows are
+  the runtime grant authority for custom roles.
 - Session creator attribution remains in D1.
 - Canonical session memberships and participant attribution remain in the Session Durable Object; a
   generation-guarded D1 projection supports lists.
@@ -536,38 +537,31 @@ before execution.
 
 ### Route metadata
 
-Authentication policy remains responsible for proving principal kind. Route definitions gain a
-principal-specific authorization matrix rather than one permission shared by every authenticated
-branch:
+Authentication policy remains responsible for proving principal kind. Every route declaration also
+contains required authorization metadata. Static permission routes declare the permission beside the
+method and pattern:
 
 ```ts
-authorization: {
-  user: { permission: "environments.manage" },
-  services: { allow: [] },
-  sandbox: null
-}
+authorization: requirePermission("environments.manage");
 ```
 
-Relationship-aware routes declare a policy key handled by a resource authorizer:
+Relationship-aware routes identify the already-matched path parameter that names the protected
+session. Conjunctive policies list every requirement explicitly:
 
 ```ts
-authorization: {
-  user: { policy: "session.lifecycle", action: "archive" },
-  services: {
-    allow: [
-      { service: "slack-bot", actor: "required", policy: "mapped-session.lifecycle" }
-    ]
-  },
-  sandbox: null
-}
+authorization: requireAll(
+  permissionRequirement("sessions.create"),
+  sessionRequirement("collaborate", "id")
+);
 ```
 
-The router executes unconditional permission checks before handlers. Contextual authorizers resolve
-the resource and relationship once, attach an authorized resource to request context, and prevent
-handlers from repeating authorization logic. `router.policy.test.ts` fails when an authenticated
-route has no explicit authorization declaration or exemption. It also rejects generic
-`user-or-service` access without named services, actor-required/actorless mode, resource policy, and
-sandbox session binding for every admitted branch.
+The router executes declared permission and session-relationship checks before handlers. Contextual
+handlers such as automation mutation retain their transactional resource guards and are marked with
+`handlerAuthorized()`. Public, web-service, handler-authenticated, and sandbox-capability routes use
+an explicit `NO_AUTHORIZATION` declaration; narrow internal callbacks name their exact service.
+`router.policy.test.ts` rejects missing metadata, duplicate method/pattern pairs, incompatible
+authentication/authorization combinations, and session requirements that reference absent match
+groups.
 
 ### Exemptions
 
@@ -800,7 +794,7 @@ count, assignment count by role, authorization latency, and session-access proje
 The migration is additive and preserves current capability for every canonical user:
 
 1. Create role, permission, assignment, audit, and session-access tables.
-2. Insert protected built-in roles and permission rows.
+2. Insert protected built-in role records; their permission sets remain code-owned.
 3. Assign Administrator to every canonical user present in `users`, including identities originally
    created through Slack, GitHub, or Linear.
 4. Write the singleton `rbac_migration_state` marker in the same migration transaction. Identity

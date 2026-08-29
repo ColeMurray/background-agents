@@ -15,8 +15,10 @@ import {
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
+  NO_AUTHORIZATION,
   parseJsonBody,
   parsePattern,
+  requireSession,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
@@ -24,6 +26,7 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   SCM_CREDENTIALS_ROUTE,
   type Route,
+  type RouteAuthorization,
   type RoutePolicy,
 } from "./shared";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
@@ -45,6 +48,7 @@ type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
+  authorization: RouteAuthorization;
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
@@ -65,6 +69,7 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
     sessionRoute({
       method: config.method,
       pattern: parsePattern(config.routePath),
+      authorization: config.authorization,
       handler: async (request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
@@ -96,6 +101,7 @@ function legacyTokenRefreshRoute(
     sessionRoute({
       method: "POST",
       pattern: parsePattern(routePath),
+      authorization: NO_AUTHORIZATION,
       handler: async (_request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
@@ -309,6 +315,7 @@ function lifecycleProxyRoute(
     sessionRoute({
       method,
       pattern: parsePattern(routePath),
+      authorization: requireSession("lifecycle"),
       handler: async (request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
@@ -334,12 +341,14 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/sandbox-access",
     internalPath: SessionInternalPaths.sandboxAccess,
+    authorization: requireSession("sandbox_access"),
   }),
   simpleProxyRoute({
     policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     method: "GET",
     routePath: "/sessions/:id",
     internalPath: SessionInternalPaths.snapshot,
+    authorization: requireSession("read"),
     notFoundMessage: "Session not found",
   }),
   simpleProxyRoute({
@@ -347,6 +356,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "POST",
     routePath: "/sessions/:id/stop",
     internalPath: SessionInternalPaths.stop,
+    authorization: requireSession("lifecycle"),
     runtimeMethod: "POST",
   }),
   defineRoute(
@@ -354,6 +364,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/sandbox-error"),
+      authorization: NO_AUTHORIZATION,
       handler: handleSandboxError,
     })
   ),
@@ -362,6 +373,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/events",
     internalPath: SessionInternalPaths.events,
+    authorization: requireSession("read"),
     forwardSearch: true,
   }),
   simpleProxyRoute({
@@ -369,18 +381,21 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/artifacts",
     internalPath: SessionInternalPaths.artifacts,
+    authorization: requireSession("read"),
   }),
   simpleProxyRoute({
     policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "GET",
     routePath: "/sessions/:id/participants",
     internalPath: SessionInternalPaths.participants,
+    authorization: requireSession("read"),
   }),
   defineRoute(
     SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method: "GET",
       pattern: parsePattern("/sessions/:id/participant-profiles"),
+      authorization: requireSession("read"),
       handler: handleParticipantProfiles,
     })
   ),
@@ -389,6 +404,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/participants"),
+      authorization: requireSession("participants.manage"),
       handler: handleAddParticipant,
     })
   ),
@@ -397,6 +413,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/messages",
     internalPath: SessionInternalPaths.messages,
+    authorization: requireSession("read"),
     forwardSearch: true,
   }),
   defineRoute(
@@ -404,6 +421,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/pr"),
+      authorization: requireSession("collaborate"),
       handler: handleCreatePR,
     })
   ),
@@ -422,6 +440,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "POST",
     routePath: "/sessions/:id/scm-credentials",
     internalPath: SessionInternalPaths.scmCredentials,
+    authorization: NO_AUTHORIZATION,
     runtimeMethod: "POST",
   }),
   simpleProxyRoute({
@@ -429,6 +448,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/tunnel-urls",
     internalPath: SessionInternalPaths.tunnelUrls,
+    authorization: requireSession("sandbox_access"),
     runtimeMethod: "GET",
   }),
   lifecycleProxyRoute("PATCH", "/sessions/:id/title", SessionInternalPaths.updateTitle),

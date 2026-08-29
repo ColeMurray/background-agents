@@ -22,6 +22,7 @@ CREATE TABLE roles (
   )
 );
 
+-- Custom-role grants only; protected built-in grants are code-owned.
 CREATE TABLE role_permissions (
   role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
   permission_id TEXT NOT NULL,
@@ -125,70 +126,6 @@ INSERT INTO roles (
   ('role_builtin_administrator', 'administrator', 'Administrator', 'administrator', 'Operational administration without ownership transfer', 1, 1, unixepoch() * 1000, unixepoch() * 1000),
   ('role_builtin_member', 'member', 'Member', 'member', 'Session and automation collaboration', 1, 1, unixepoch() * 1000, unixepoch() * 1000),
   ('role_builtin_viewer', 'viewer', 'Viewer', 'viewer', 'Read-only workspace visibility', 1, 1, unixepoch() * 1000, unixepoch() * 1000);
-
-WITH permissions(permission_id, administrator, member, viewer) AS (
-  VALUES
-    ('analytics.read', 1, 0, 0),
-    ('audit.read', 1, 0, 0),
-    ('automations.create', 1, 1, 0),
-    ('automations.manage.any', 1, 0, 0),
-    ('automations.manage.own', 1, 1, 0),
-    ('automations.read', 1, 1, 1),
-    ('automations.trigger.any', 1, 0, 0),
-    ('automations.trigger.own', 1, 1, 0),
-    ('commit_signing.manage', 1, 0, 0),
-    ('environments.images.manage', 1, 0, 0),
-    ('environments.manage', 1, 0, 0),
-    ('environments.read', 1, 1, 1),
-    ('environments.secrets.manage', 1, 0, 0),
-    ('environments.settings.manage', 1, 0, 0),
-    ('environments.use', 1, 1, 0),
-    ('global_secrets.manage', 1, 0, 0),
-    ('image_builds.read', 1, 0, 1),
-    ('integrations.manage', 1, 0, 0),
-    ('integrations.read', 1, 0, 0),
-    ('mcp_servers.manage', 1, 0, 0),
-    ('mcp_servers.read', 1, 1, 1),
-    ('models.preferences.manage', 1, 0, 0),
-    ('provider_accounts.manage', 1, 0, 0),
-    ('provider_accounts.read', 1, 1, 0),
-    ('repositories.images.manage', 1, 0, 0),
-    ('repositories.read', 1, 1, 1),
-    ('repositories.secrets.manage', 1, 0, 0),
-    ('repositories.settings.manage', 1, 0, 0),
-    ('repositories.use', 1, 1, 0),
-    ('scm_settings.manage', 1, 0, 0),
-    ('sessions.collaborate.any', 1, 0, 0),
-    ('sessions.collaborate.own', 1, 1, 0),
-    ('sessions.create', 1, 1, 0),
-    ('sessions.delete.any', 1, 0, 0),
-    ('sessions.delete.own', 1, 1, 0),
-    ('sessions.lifecycle.any', 1, 0, 0),
-    ('sessions.lifecycle.own', 1, 1, 0),
-    ('sessions.participants.manage.any', 1, 0, 0),
-    ('sessions.participants.manage.own', 1, 1, 0),
-    ('sessions.read.any', 1, 0, 1),
-    ('sessions.read.own', 1, 1, 0),
-    ('sessions.sandbox_access.any', 1, 0, 0),
-    ('sessions.sandbox_access.own', 1, 1, 0),
-    ('skill_profiles.manage_own', 1, 1, 1),
-    ('skills.manage', 1, 0, 0),
-    ('skills.read', 1, 1, 1),
-    ('workspace.members.manage', 1, 0, 0),
-    ('workspace.members.read', 1, 0, 0),
-    ('workspace.read', 1, 1, 1),
-    ('workspace.roles.manage', 1, 0, 0),
-    ('workspace.roles.read', 1, 0, 0),
-    ('workspace.transfer_ownership', 0, 0, 0)
-)
-INSERT INTO role_permissions (role_id, permission_id)
-SELECT 'role_builtin_owner', permission_id FROM permissions
-UNION ALL
-SELECT 'role_builtin_administrator', permission_id FROM permissions WHERE administrator = 1
-UNION ALL
-SELECT 'role_builtin_member', permission_id FROM permissions WHERE member = 1
-UNION ALL
-SELECT 'role_builtin_viewer', permission_id FROM permissions WHERE viewer = 1;
 
 INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
 SELECT id, 'role_builtin_administrator', NULL, unixepoch() * 1000 FROM users;

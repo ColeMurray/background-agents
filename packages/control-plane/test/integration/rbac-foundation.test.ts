@@ -3,7 +3,7 @@ import { PERMISSION_IDS, permissionsForBuiltInRole } from "@open-inspect/shared/
 import { describe, expect, it } from "vitest";
 
 describe("RBAC foundation migration", () => {
-  it("seeds the built-in roles and exact permission projections", async () => {
+  it("seeds built-in roles without persisting their code-owned permissions", async () => {
     const roles = await env.DB.prepare(
       "SELECT id, key FROM roles WHERE is_system = 1 ORDER BY key"
     ).all<{ id: string; key: "administrator" | "member" | "owner" | "viewer" }>();
@@ -15,17 +15,12 @@ describe("RBAC foundation migration", () => {
       "viewer",
     ]);
 
-    for (const role of roles.results) {
-      const permissions = await env.DB.prepare(
-        "SELECT permission_id FROM role_permissions WHERE role_id = ? ORDER BY permission_id"
-      )
-        .bind(role.id)
-        .all<{ permission_id: string }>();
-      expect(permissions.results.map((row) => row.permission_id)).toEqual(
-        permissionsForBuiltInRole(role.key)
-      );
-    }
-
+    expect(
+      await env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id WHERE r.is_system = 1`
+      ).first()
+    ).toEqual({ count: 0 });
     expect(permissionsForBuiltInRole("owner")).toHaveLength(PERMISSION_IDS.length);
   });
 

@@ -11,7 +11,15 @@ import {
 } from "../authorization/service";
 import { isUniqueConstraintError } from "../db/errors";
 import type { Route } from "./shared";
-import { SCM_AGNOSTIC_HUMAN_USER_ROUTE, defineRoutes, error, json, parseJsonBody } from "./shared";
+import {
+  AUTHENTICATED_USER,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  defineRoutes,
+  error,
+  json,
+  parseJsonBody,
+  requirePermission,
+} from "./shared";
 
 function parseRevision(request: Request): number | null {
   const raw = request.headers.get("If-Match")?.replaceAll('"', "");
@@ -45,6 +53,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "GET",
     pattern: /^\/me\/authorization$/,
+    authorization: AUTHENTICATED_USER,
     cacheControl: "private, no-store",
     handler: async (_request, env, _match, ctx) => {
       const service = new AuthorizationService(ctx.db);
@@ -58,6 +67,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "GET",
     pattern: /^\/roles$/,
+    authorization: requirePermission("workspace.roles.read"),
     cacheControl: "private, no-store",
     handler: async (_request, _env, _match, ctx) => {
       const service = new AuthorizationService(ctx.db);
@@ -72,6 +82,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "POST",
     pattern: /^\/roles$/,
+    authorization: requirePermission("workspace.roles.manage"),
     cacheControl: "private, no-store",
     handler: async (request, _env, _match, ctx) => {
       const body = await parseJsonBody<unknown>(request);
@@ -97,6 +108,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "GET",
     pattern: /^\/roles\/(?<id>[^/]+)$/,
+    authorization: requirePermission("workspace.roles.read"),
     cacheControl: "private, no-store",
     handler: async (_request, _env, match, ctx) => {
       const service = new AuthorizationService(ctx.db);
@@ -112,6 +124,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "PUT",
     pattern: /^\/roles\/(?<id>[^/]+)$/,
+    authorization: requirePermission("workspace.roles.manage"),
     cacheControl: "private, no-store",
     handler: async (request, _env, match, ctx) => {
       const revision = parseRevision(request);
@@ -142,6 +155,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "DELETE",
     pattern: /^\/roles\/(?<id>[^/]+)$/,
+    authorization: requirePermission("workspace.roles.manage"),
     cacheControl: "private, no-store",
     handler: async (_request, _env, match, ctx) => {
       const service = new AuthorizationService(ctx.db);
@@ -165,6 +179,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "GET",
     pattern: /^\/members$/,
+    authorization: requirePermission("workspace.members.read"),
     cacheControl: "private, no-store",
     handler: async (_request, _env, _match, ctx) => {
       const service = new AuthorizationService(ctx.db);
@@ -179,6 +194,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "PUT",
     pattern: /^\/members\/(?<id>[^/]+)\/role$/,
+    authorization: requirePermission("workspace.members.manage"),
     cacheControl: "private, no-store",
     handler: async (request, env, match, ctx) => {
       const targetUserId = decodeURIComponent(match.groups!.id);
@@ -211,6 +227,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "PUT",
     pattern: /^\/members\/(?<id>[^/]+)\/status$/,
+    authorization: requirePermission("workspace.members.manage"),
     cacheControl: "private, no-store",
     handler: async (request, env, match, ctx) => {
       const targetUserId = decodeURIComponent(match.groups!.id);

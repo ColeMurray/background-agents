@@ -40,6 +40,7 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   defineRoutes,
+  requirePermission,
 } from "./shared";
 
 const log = createLogger("router:skills");
@@ -625,63 +626,103 @@ function profileWriteError(value: unknown): Response {
 }
 
 const skillReadRoutes = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
-  { method: "GET", pattern: parsePattern("/skills"), handler: handleListSkills },
+  {
+    method: "GET",
+    pattern: parsePattern("/skills"),
+    authorization: requirePermission("skills.read"),
+    handler: handleListSkills,
+  },
   {
     method: "POST",
     pattern: parsePattern("/skills/preview"),
+    authorization: requirePermission("skills.read"),
     handler: handlePreviewSkill,
   },
   {
     method: "POST",
     pattern: parsePattern("/skills/resolve-preview"),
+    authorization: requirePermission("skills.read"),
     handler: handleResolvePreview,
   },
-  { method: "GET", pattern: parsePattern("/skills/:id"), handler: handleGetSkill },
+  {
+    method: "GET",
+    pattern: parsePattern("/skills/:id"),
+    authorization: requirePermission("skills.read"),
+    handler: handleGetSkill,
+  },
 ]);
 
 const skillAdministrationRoutes = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
-  { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
+  {
+    method: "POST",
+    pattern: parsePattern("/skills"),
+    authorization: requirePermission("skills.manage"),
+    handler: handleCreateSkill,
+  },
   {
     method: "POST",
     pattern: parsePattern("/skills/import/preview"),
+    authorization: requirePermission("skills.manage"),
     handler: handlePreviewSkillImport,
   },
-  { method: "POST", pattern: parsePattern("/skills/import"), handler: handleImportSkill },
+  {
+    method: "POST",
+    pattern: parsePattern("/skills/import"),
+    authorization: requirePermission("skills.manage"),
+    handler: handleImportSkill,
+  },
   {
     method: "POST",
     pattern: parsePattern("/skills/:id/reimport/preview"),
+    authorization: requirePermission("skills.manage"),
     handler: handlePreviewSkillReimport,
   },
   {
     method: "POST",
     pattern: parsePattern("/skills/:id/reimport"),
+    authorization: requirePermission("skills.manage"),
     handler: handleReimportSkill,
   },
   {
     method: "PATCH",
     pattern: parsePattern("/skills/:id"),
+    authorization: requirePermission("skills.manage"),
     handler: handleSetSkillEnabled,
   },
   {
     method: "PUT",
     pattern: parsePattern("/skills/:id"),
+    authorization: requirePermission("skills.manage"),
     handler: handleReplaceSkillContentAndAssignments,
   },
-  { method: "DELETE", pattern: parsePattern("/skills/:id"), handler: handleDeleteSkill },
-  { method: "GET", pattern: parsePattern("/skill-profiles"), handler: handleListProfiles },
+  {
+    method: "DELETE",
+    pattern: parsePattern("/skills/:id"),
+    authorization: requirePermission("skills.manage"),
+    handler: handleDeleteSkill,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/skill-profiles"),
+    authorization: requirePermission("skill_profiles.manage_own"),
+    handler: handleListProfiles,
+  },
   {
     method: "POST",
     pattern: parsePattern("/skill-profiles"),
+    authorization: requirePermission("skill_profiles.manage_own"),
     handler: handleCreateProfile,
   },
   {
     method: "PATCH",
     pattern: parsePattern("/skill-profiles/:id"),
+    authorization: requirePermission("skill_profiles.manage_own"),
     handler: handleUpdateProfile,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/skill-profiles/:id"),
+    authorization: requirePermission("skill_profiles.manage_own"),
     handler: handleDeleteProfile,
   },
 ]);

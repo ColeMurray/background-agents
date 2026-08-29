@@ -27,6 +27,7 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
   parsePattern,
+  requireSession,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -250,6 +251,7 @@ export const sessionMediaUploadRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FAL
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/media"),
+    authorization: requireSession("collaborate"),
     handler: handleMediaUpload,
   }),
 ]);

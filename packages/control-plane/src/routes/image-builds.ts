@@ -49,6 +49,8 @@ import {
   json,
   parseJsonBody,
   parsePattern,
+  NO_AUTHORIZATION,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:image-builds");
@@ -494,41 +496,49 @@ export const imageBuildRoutes: Route[] = [
   defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/build-complete"),
+    authorization: NO_AUTHORIZATION,
     handler: handleBuildComplete,
   }),
   defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/build-failed"),
+    authorization: NO_AUTHORIZATION,
     handler: handleBuildFailed,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/environment/:id"),
+    authorization: requirePermission("environments.images.manage"),
     handler: handleTriggerEnvironmentBuild,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/repo/:owner/:name"),
+    authorization: requirePermission("repositories.images.manage"),
     handler: handleTriggerRepoBuild,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "PUT",
     pattern: parsePattern("/image-builds/toggle/repo/:owner/:name"),
+    authorization: requirePermission("repositories.images.manage"),
     handler: handleToggleRepoImageBuilds,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/status"),
+    authorization: requirePermission("image_builds.read"),
     handler: handleGetStatus,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/enabled"),
+    authorization: requirePermission("image_builds.read"),
     handler: handleGetEnabledUnits,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/image-builds/enabled-repos"),
+    authorization: requirePermission("image_builds.read"),
     handler: handleGetEnabledRepos,
   }),
 ];

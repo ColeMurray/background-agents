@@ -1,5 +1,6 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import { rolePermissionPredicate } from "./permission-sql";
 
 export const ACTOR_GUARD_SQL =
   "EXISTS (SELECT 1 FROM users WHERE id = ? AND last_authorization_mutation_id = ?)";
@@ -11,17 +12,18 @@ export function actorGuardStatement(
   permission: PermissionId,
   mutationId: string
 ): SqlStatement {
+  const permissionGuard = rolePermissionPredicate(permission);
   return db
     .prepare(
       `UPDATE users SET last_authorization_mutation_id = ?
        WHERE id = ? AND access_status = 'active' AND authorization_version = ?
-         AND EXISTS (
-           SELECT 1 FROM user_role_assignments ura
-           JOIN role_permissions rp ON rp.role_id = ura.role_id
-           WHERE ura.user_id = users.id AND rp.permission_id = ?
-         )`
+          AND EXISTS (
+            SELECT 1 FROM user_role_assignments ura
+            JOIN roles r ON r.id = ura.role_id
+            WHERE ura.user_id = users.id AND ${permissionGuard.sql}
+          )`
     )
-    .bind(mutationId, actorUserId, actorAuthorizationVersion, permission);
+    .bind(mutationId, actorUserId, actorAuthorizationVersion, ...permissionGuard.values);
 }
 
 export function auditStatement(

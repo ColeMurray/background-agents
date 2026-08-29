@@ -2,6 +2,7 @@ import {
   createRoleInputSchema,
   isRegisteredPermission,
   normalizeRoleName,
+  permissionsForBuiltInRole,
   replaceRoleInputSchema,
   type BuiltInRoleKey,
   type EffectiveAuthorization,
@@ -83,7 +84,9 @@ export class AuthorizationService {
         ? { id: row.role_id, key: row.role_key, name: row.role_name }
         : null;
     const permissions =
-      row.access_status === "active" && role ? await this.loadRolePermissions(row.role_id) : [];
+      row.access_status === "active" && role
+        ? await this.loadRolePermissions(row.role_id, row.role_key)
+        : [];
 
     return {
       userId: row.user_id,
@@ -817,7 +820,11 @@ export class AuthorizationService {
       .first<EffectiveRow>();
   }
 
-  private async loadRolePermissions(roleId: string): Promise<PermissionId[]> {
+  private async loadRolePermissions(
+    roleId: string,
+    roleKey: BuiltInRoleKey | null
+  ): Promise<PermissionId[]> {
+    if (roleKey) return permissionsForBuiltInRole(roleKey);
     const result = await this.db
       .prepare(
         "SELECT permission_id FROM role_permissions WHERE role_id = ? ORDER BY permission_id"
@@ -837,7 +844,7 @@ export class AuthorizationService {
       description: row.description,
       isSystem: row.is_system === 1,
       revision: row.revision,
-      permissions: await this.loadRolePermissions(row.id),
+      permissions: await this.loadRolePermissions(row.id, row.key),
       assignmentCount: Number(row.assignment_count),
     };
   }

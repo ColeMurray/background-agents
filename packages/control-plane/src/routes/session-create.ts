@@ -30,6 +30,7 @@ import {
   type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -286,6 +287,7 @@ export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_
   {
     method: "POST",
     pattern: parsePattern("/sessions"),
+    authorization: requirePermission("sessions.create"),
     handler: handleCreateSession,
   },
 ]);

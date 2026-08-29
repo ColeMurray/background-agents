@@ -62,6 +62,8 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
+  handlerAuthorized,
+  requirePermission,
 } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
@@ -1553,66 +1555,79 @@ export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROU
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/slack/watched-channels"),
+    authorization: requirePermission("automations.read"),
     handler: handleGetWatchedSlackChannels,
   },
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/slack/channels"),
+    authorization: requirePermission("automations.read"),
     handler: handleGetSlackChannels,
   },
   {
     method: "GET",
     pattern: parsePattern("/automations"),
+    authorization: requirePermission("automations.read"),
     handler: handleListAutomations,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations"),
+    authorization: requirePermission("automations.create"),
     handler: handleCreateAutomation,
   },
   {
     method: "GET",
     pattern: parsePattern("/automations/:id"),
+    authorization: requirePermission("automations.read"),
     handler: handleGetAutomation,
   },
   {
     method: "PUT",
     pattern: parsePattern("/automations/:id"),
+    authorization: handlerAuthorized(),
     handler: handleUpdateAutomation,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/automations/:id"),
+    authorization: handlerAuthorized(),
     handler: handleDeleteAutomation,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/pause"),
+    authorization: handlerAuthorized(),
     handler: handlePauseAutomation,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/resume"),
+    authorization: handlerAuthorized(),
     handler: handleResumeAutomation,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/trigger"),
+    authorization: handlerAuthorized(),
     handler: handleTriggerAutomation,
   },
   {
     method: "GET",
     pattern: parsePattern("/automations/:id/invocations"),
+    authorization: requirePermission("automations.read"),
     handler: handleListInvocations,
   },
   {
     method: "GET",
     pattern: parsePattern("/automations/:id/runs/:runId"),
+    authorization: requirePermission("automations.read"),
     handler: handleGetRun,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/regenerate-key"),
+    authorization: handlerAuthorized(),
     handler: handleRegenerateKey,
   },
 ]);

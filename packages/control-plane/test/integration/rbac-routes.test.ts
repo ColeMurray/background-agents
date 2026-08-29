@@ -177,11 +177,14 @@ describe("RBAC routes", () => {
     ).toBeNull();
   });
 
-  it("uses persisted permissions for built-in role authorization", async () => {
-    const ownerId = await seedOwner();
+  it("uses code-owned permissions for built-in role authorization", async () => {
+    await serviceFetch("https://cp.test/me/authorization", { initialUserRole: "member" });
+    const member = await env.DB.prepare(
+      "SELECT id FROM users WHERE email = 'browser@test.local'"
+    ).first<{ id: string }>();
     const permission = "workspace.roles.read";
     await env.DB.prepare(
-      "DELETE FROM role_permissions WHERE role_id = 'role_builtin_owner' AND permission_id = ?"
+      "INSERT INTO role_permissions (role_id, permission_id) VALUES ('role_builtin_member', ?)"
     )
       .bind(permission)
       .run();
@@ -189,14 +192,12 @@ describe("RBAC routes", () => {
     try {
       const authorization = await new AuthorizationService(
         sqlDatabase(env.DB)
-      ).getEffectiveAuthorization(ownerId);
+      ).getEffectiveAuthorization(member!.id);
       expect(authorization.permissions).not.toContain(permission);
-
-      const response = await serviceFetch("https://cp.test/roles");
-      expect(response.status).toBe(403);
+      expect((await serviceFetch("https://cp.test/roles")).status).toBe(403);
     } finally {
       await env.DB.prepare(
-        "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES ('role_builtin_owner', ?)"
+        "DELETE FROM role_permissions WHERE role_id = 'role_builtin_member' AND permission_id = ?"
       )
         .bind(permission)
         .run();

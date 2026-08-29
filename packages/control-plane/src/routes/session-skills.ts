@@ -8,6 +8,8 @@ import {
   error,
   json,
   parsePattern,
+  NO_AUTHORIZATION,
+  requireSession,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type SandboxRouteContext,
@@ -96,11 +98,13 @@ export const sessionSkillRoutes: Route[] = [
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/skills"),
+    authorization: requireSession("read"),
     handler: handleSessionSkillsView,
   }),
   defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/sandbox-skills"),
+    authorization: NO_AUTHORIZATION,
     handler: handleSandboxInstallation,
   }),
 ];

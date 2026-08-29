@@ -7,6 +7,7 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   parseJsonBody,
   parsePattern,
+  requireSession,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -55,6 +56,7 @@ export const sessionWsTokenRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/ws-token"),
+    authorization: requireSession("collaborate"),
     handler: handleSessionWsToken,
   }),
 ]);

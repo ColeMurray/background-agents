@@ -17,20 +17,19 @@ import { createSessionRuntimeClient } from "./session/runtime-client";
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { UserStore } from "./db/user-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
-import {
-  serviceAllowsPermission,
-  sessionUserOperation,
-  staticUserPermission,
-} from "./authorization/route-permissions";
+import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
   type Route,
   type RouteAuthentication,
+  type RouteAuthorizationRequirement,
   type RequestContext,
   defineRoute,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
+  NO_AUTHORIZATION,
   parsePattern,
+  requireSession,
   json,
   error,
   HttpError,
@@ -303,7 +302,8 @@ export function enforceRoutePrincipal(
   return null;
 }
 
-async function enforceActiveUser(path: string, ctx: RequestContext): Promise<Response | null> {
+async function enforceActiveUser(route: Route, ctx: RequestContext): Promise<Response | null> {
+  if (route.authorization.kind !== "active-user") return null;
   let resolvedServiceUserId: string | null = null;
   if (
     ctx.principal?.kind === "service" &&
@@ -326,7 +326,7 @@ async function enforceActiveUser(path: string, ctx: RequestContext): Promise<Res
       : ctx.principal?.kind === "service"
         ? (ctx.principal.actor?.canonicalUserId ?? resolvedServiceUserId)
         : null;
-  if (!userId || (ctx.principal?.kind === "user" && path === "/me/authorization")) return null;
+  if (!userId) return null;
   try {
     const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
     ctx.authorization = authorization;
@@ -350,65 +350,61 @@ function authorizationUserId(ctx: RequestContext): string | null {
   return null;
 }
 
-function enforceServiceRouteAuthorization(
-  method: string,
-  path: string,
-  route: Route,
-  ctx: RequestContext
-): Response | null {
+function enforceServiceRouteAuthorization(route: Route, ctx: RequestContext): Response | null {
   const principal = ctx.principal;
   if (principal?.kind !== "service") return null;
   if (route.authentication.kind === "web-service" && principal.service === "web") return null;
 
-  if (!principal.actor) {
-    const allowedService =
-      method === "POST" && path === "/internal/github-event"
-        ? "github-bot"
-        : method === "POST" && path === "/internal/slack-event"
-          ? "slack-bot"
-          : null;
-    return principal.service === allowedService
-      ? null
-      : json({ error: "Forbidden", code: "service_actor_required" }, 403);
+  const authorization = route.authorization;
+  if (authorization.kind === "service") {
+    if (!authorization.services.some((service) => service === principal.service)) {
+      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    }
+    if (authorization.actor === "required" && !principal.actor) {
+      return json({ error: "Forbidden", code: "service_actor_required" }, 403);
+    }
+    return null;
   }
-
-  const classified = staticUserPermission(method, path) || sessionUserOperation(method, path);
-  const allowedUnclassified =
-    method === "GET" &&
-    (path === "/sessions" || path === "/sessions/inbox" || path === "/model-preferences");
-  return classified || allowedUnclassified
-    ? null
-    : json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  if (authorization.kind !== "active-user" || authorization.service.kind === "deny") {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  }
+  return principal.actor ? null : json({ error: "Forbidden", code: "service_actor_required" }, 403);
 }
 
-async function enforceStaticUserPermission(
-  method: string,
-  path: string,
+async function enforcePermissionRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "permission" }>,
   ctx: RequestContext
 ): Promise<Response | null> {
   const userId = authorizationUserId(ctx);
   if (!userId) return null;
-  const permission = staticUserPermission(method, path);
-  if (!permission) return null;
   if (
     ctx.principal?.kind === "service" &&
-    !serviceAllowsPermission(ctx.principal.service, permission)
+    !serviceAllowsPermission(ctx.principal.service, requirement.permission)
   ) {
     return json({ error: "Forbidden", code: "service_capability_required" }, 403);
   }
-  if (ctx.authorization?.permissions.includes(permission)) return null;
-  return json({ error: "Forbidden", code: "permission_required", permission }, 403);
+  if (ctx.authorization?.permissions.includes(requirement.permission)) return null;
+  return json(
+    { error: "Forbidden", code: "permission_required", permission: requirement.permission },
+    403
+  );
 }
 
-async function enforceSessionUserPermission(
-  method: string,
-  path: string,
+async function enforceSessionRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "session" }>,
+  match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response | null> {
   const userId = authorizationUserId(ctx);
   if (!userId) return null;
-  const requirement = sessionUserOperation(method, path);
-  if (!requirement) return null;
+  const encodedSessionId = match.groups?.[requirement.sessionIdParam];
+  if (!encodedSessionId) return json({ error: "Invalid session route" }, 400);
+  let sessionId: string;
+  try {
+    sessionId = decodeURIComponent(encodedSessionId);
+  } catch {
+    return json({ error: "Invalid session route" }, 400);
+  }
 
   try {
     const authorization = ctx.authorization;
@@ -440,7 +436,7 @@ async function enforceSessionUserPermission(
          WHERE id = ? AND user_id = ?
          LIMIT 1`
       )
-      .bind(requirement.sessionId, userId, requirement.sessionId, userId)
+      .bind(sessionId, userId, sessionId, userId)
       .first<{ relation: "creator" | "participant" }>();
     const creatorRequired =
       requirement.operation === "delete" || requirement.operation === "participants.manage";
@@ -454,6 +450,31 @@ async function enforceSessionUserPermission(
   }
 }
 
+async function enforceRouteAuthorization(
+  route: Route,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response | null> {
+  if (route.authorization.kind !== "active-user") return null;
+  const servicePolicy = route.authorization.service;
+  if (
+    ctx.principal?.kind === "service" &&
+    servicePolicy.kind === "actor" &&
+    servicePolicy.ceiling &&
+    !serviceAllowsPermission(ctx.principal.service, servicePolicy.ceiling)
+  ) {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  }
+  for (const requirement of route.authorization.allOf) {
+    const authorizationError =
+      requirement.kind === "permission"
+        ? await enforcePermissionRequirement(requirement, ctx)
+        : await enforceSessionRequirement(requirement, match, ctx);
+    if (authorizationError) return authorizationError;
+  }
+  return null;
+}
+
 /**
  * Routes definition.
  */
@@ -464,6 +485,7 @@ export const routes: Route[] = [
     supportedScmProviders: "all",
     method: "GET",
     pattern: parsePattern("/health"),
+    authorization: NO_AUTHORIZATION,
     handler: async (_request, _env, _match, ctx) => {
       let ownerBootstrap: "complete" | "owner_bootstrap_pending" | "unknown";
       try {
@@ -494,6 +516,7 @@ export const routes: Route[] = [
   defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "POST",
     pattern: parsePattern("/sessions/:id/slack-notify"),
+    authorization: requireSession("collaborate"),
     handler: handleSlackNotify,
   }),
 
@@ -675,12 +698,7 @@ export async function handleRequest(
     }
   }
 
-  const serviceAccessError = enforceServiceRouteAuthorization(
-    method,
-    path,
-    matchedRoute.route,
-    ctx
-  );
+  const serviceAccessError = enforceServiceRouteAuthorization(matchedRoute.route, ctx);
   if (serviceAccessError) {
     logRequest(serviceAccessError, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(
@@ -689,23 +707,21 @@ export async function handleRequest(
     );
   }
 
-  const userAccessError = await enforceActiveUser(path, ctx);
+  const userAccessError = await enforceActiveUser(matchedRoute.route, ctx);
   if (userAccessError) {
     logRequest(userAccessError, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(withRouteCachePolicy(userAccessError, matchedRoute.route), ctx);
   }
 
-  const permissionError = await enforceStaticUserPermission(method, path, ctx);
-  if (permissionError) {
-    logRequest(permissionError, ctx, method, path, startTime);
-    return withCorsAndTraceHeaders(withRouteCachePolicy(permissionError, matchedRoute.route), ctx);
-  }
-
-  const sessionPermissionError = await enforceSessionUserPermission(method, path, ctx);
-  if (sessionPermissionError) {
-    logRequest(sessionPermissionError, ctx, method, path, startTime);
+  const authorizationError = await enforceRouteAuthorization(
+    matchedRoute.route,
+    matchedRoute.match,
+    ctx
+  );
+  if (authorizationError) {
+    logRequest(authorizationError, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(
-      withRouteCachePolicy(sessionPermissionError, matchedRoute.route),
+      withRouteCachePolicy(authorizationError, matchedRoute.route),
       ctx
     );
   }
