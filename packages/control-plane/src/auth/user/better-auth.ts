@@ -2,10 +2,27 @@ import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth
 import { betterAuth } from "better-auth";
 import { createCanonicalBetterAuthAdapter } from "../../db/better-auth-adapter";
 import type { SqlDatabase } from "../../db/sql-database";
+import { createLogger } from "../../logger";
 import { generateId } from "../crypto";
 import type { ProviderProfileResolver } from "./provider-profile";
 
 const MS_PER_SECOND = 1000;
+const logger = createLogger("auth:user");
+
+export async function runPostSessionInitialization(
+  initialize: (userId: string) => Promise<void>,
+  userId: string
+): Promise<void> {
+  try {
+    await initialize(userId);
+  } catch (error) {
+    logger.error("Post-sign-in initialization failed; continuing sign-in", {
+      event: "auth.post_sign_in_failed",
+      user_id: userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 export const SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
 export const SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
@@ -22,6 +39,7 @@ export interface UserAuthConfig {
   readonly secret: string;
   readonly github?: SocialProviderAuthConfig;
   readonly google?: SocialProviderAuthConfig;
+  readonly afterSessionCreated?: (userId: string) => Promise<void>;
 }
 
 /**
@@ -103,6 +121,17 @@ export function createUserAuth(config: UserAuthConfig) {
       expiresIn: SESSION_EXPIRES_IN_MS / MS_PER_SECOND,
       updateAge: SESSION_UPDATE_AGE_MS / MS_PER_SECOND,
     },
+    databaseHooks: config.afterSessionCreated
+      ? {
+          session: {
+            create: {
+              after: async (session) => {
+                await runPostSessionInitialization(config.afterSessionCreated!, session.userId);
+              },
+            },
+          },
+        }
+      : undefined,
     account: {
       modelName: "user_identities",
       fields: {

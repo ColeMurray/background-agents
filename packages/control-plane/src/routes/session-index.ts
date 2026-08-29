@@ -26,7 +26,6 @@ import {
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
-import { AuthorizationService } from "../authorization/service";
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
@@ -78,9 +77,8 @@ async function handleListSessions(
     return createdByUserIds;
   }
   if (ctx.principal?.kind === "user") {
-    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
-      ctx.principal.userId
-    );
+    const authorization = ctx.authorization;
+    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
     if (!authorization.permissions.includes("sessions.read.any")) {
       if (!authorization.permissions.includes("sessions.read.own")) {
         return json(
@@ -150,9 +148,8 @@ async function handleListSessionInbox(
 
   const startedAt = Date.now();
   const store = new SessionIndexStore(ctx.db);
-  const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
-    ctx.principal.userId
-  );
+  const authorization = ctx.authorization;
+  if (!authorization) return json({ error: "Authorization unavailable" }, 503);
   if (
     !authorization.permissions.includes("sessions.read.any") &&
     !authorization.permissions.includes("sessions.read.own")
@@ -269,9 +266,8 @@ async function handleDeleteSession(
 
   const sessionStore = new SessionIndexStore(ctx.db);
   if (ctx.principal?.kind === "user") {
-    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
-      ctx.principal.userId
-    );
+    const authorization = ctx.authorization;
+    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
     const session = await sessionStore.get(sessionId);
     const canDelete =
       authorization.permissions.includes("sessions.delete.any") ||

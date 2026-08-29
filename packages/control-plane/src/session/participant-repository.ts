@@ -68,6 +68,27 @@ export class ParticipantRepository {
     );
   }
 
+  updateAddedParticipant(
+    participantId: string,
+    data: Pick<CreateParticipantData, "scmLogin" | "scmName" | "scmEmail"> & {
+      role?: ParticipantRole;
+    }
+  ): void {
+    this.sql.exec(
+      `UPDATE participants SET
+         scm_login = COALESCE(?, scm_login),
+         scm_name = COALESCE(?, scm_name),
+         scm_email = COALESCE(?, scm_email),
+         role = COALESCE(?, role)
+       WHERE id = ?`,
+      data.scmLogin ?? null,
+      data.scmName ?? null,
+      data.scmEmail ?? null,
+      data.role ?? null,
+      participantId
+    );
+  }
+
   updateParticipantCoalesce(participantId: string, data: UpdateParticipantData): void {
     this.sql.exec(
       `UPDATE participants SET

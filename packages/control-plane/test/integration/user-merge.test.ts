@@ -214,7 +214,7 @@ describe("mergeUsers", () => {
     expect(await getUserRow(SURVIVOR)).toMatchObject({ email: null });
 
     const executed = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
-    expect(executed.counts.canonicalEmailBackfilled).toBe(preview.counts.canonicalEmailBackfilled);
+    expect(executed.counts).toEqual(preview.counts);
   });
 
   it("leaves non-canonical created_by values (legacy GitHub numeric ids) untouched", async () => {
@@ -249,7 +249,16 @@ describe("mergeUsers", () => {
       ).bind(LOSER, SEED_NOW_MS),
     ]);
 
-    await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(preview.counts.sessionAccessCollisionsUpdated).toBe(1);
+    expect(preview.counts.sessionAccessDeduped).toBe(1);
+    expect(result.counts).toEqual(preview.counts);
 
     expect(
       await env.DB.prepare(
@@ -281,7 +290,15 @@ describe("mergeUsers", () => {
       ).bind(LOSER, SEED_NOW_MS + 1),
     ]);
 
-    await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(preview.counts.sessionAccessCollisionsUpdated).toBe(1);
+    expect(result.counts).toEqual(preview.counts);
 
     expect(
       await env.DB.prepare(

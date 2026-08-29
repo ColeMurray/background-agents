@@ -14,6 +14,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import { AutomationTriggerBlockedError } from "../scheduler/scheduler";
+import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 
 const mockProviderAdapterGet = vi.hoisted(() => vi.fn());
 
@@ -38,6 +39,9 @@ const mockStore = {
   getEnvironmentsForAutomationIds: vi.fn(),
   bindAutomationInsert: vi.fn(),
   bindAutomationUpdate: vi.fn(),
+  bindSoftDelete: vi.fn(),
+  bindPause: vi.fn(),
+  bindResume: vi.fn(),
   bindRepositoryInserts: vi.fn(),
   bindReplaceRepositories: vi.fn(),
   bindEnvironmentInserts: vi.fn(),
@@ -196,6 +200,17 @@ function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     principal,
+    ...(principal.kind === "user"
+      ? {
+          authorization: {
+            userId: principal.userId,
+            accessStatus: "active" as const,
+            role: { id: "role_builtin_owner", key: "owner" as const, name: "Owner" },
+            permissions: [...PERMISSION_IDS],
+            authorizationVersion: 1,
+          },
+        }
+      : {}),
     db: { batch: mockBatch, prepare: vi.fn(() => statement) } as unknown as SqlDatabase,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
@@ -271,13 +286,16 @@ describe("automation route handlers", () => {
     mockProviderAuthStore.listForAutomationIds.mockResolvedValue(new Map());
     mockStore.bindAutomationInsert.mockReturnValue({ sql: "insert-automation" });
     mockStore.bindAutomationUpdate.mockReturnValue({ sql: "update-automation" });
+    mockStore.bindSoftDelete.mockReturnValue({ sql: "delete-automation" });
+    mockStore.bindPause.mockReturnValue({ sql: "pause-automation" });
+    mockStore.bindResume.mockReturnValue({ sql: "resume-automation" });
     mockStore.bindRepositoryInserts.mockReturnValue([{ sql: "insert-repositories" }]);
     mockStore.bindReplaceRepositories.mockReturnValue([{ sql: "replace-repositories" }]);
     mockStore.bindEnvironmentInserts.mockReturnValue([{ sql: "insert-environments" }]);
     mockStore.bindReplaceEnvironments.mockReturnValue([{ sql: "replace-environments" }]);
     mockProviderAuthStore.bindInserts.mockReturnValue([{ sql: "insert-provider-auth" }]);
     mockProviderAuthStore.bindReplace.mockReturnValue([{ sql: "replace-provider-auth" }]);
-    mockBatch.mockResolvedValue([]);
+    mockBatch.mockResolvedValue([{ meta: { changes: 1 }, results: [] }]);
     mockSchedulerTrigger.mockResolvedValue({
       invocationId: "inv-1",
       runs: [{ id: "run-1" }],
@@ -1564,8 +1582,6 @@ describe("automation route handlers", () => {
 
   describe("DELETE /automations/:id", () => {
     it("soft-deletes automation", async () => {
-      mockStore.softDelete.mockResolvedValue(true);
-
       const res = await callRoute("DELETE", "/automations/auto-1");
       expect(res.status).toBe(200);
 
@@ -1574,7 +1590,7 @@ describe("automation route handlers", () => {
     });
 
     it("returns 404 when not found", async () => {
-      mockStore.softDelete.mockResolvedValue(false);
+      mockBatch.mockResolvedValue([{ meta: { changes: 0 }, results: [] }]);
 
       const res = await callRoute("DELETE", "/automations/missing");
       expect(res.status).toBe(404);
@@ -1583,16 +1599,15 @@ describe("automation route handlers", () => {
 
   describe("POST /automations/:id/pause", () => {
     it("pauses automation", async () => {
-      mockStore.pause.mockResolvedValue(true);
       mockStore.getById.mockResolvedValue({ ...sampleRow, enabled: 0 });
 
       const res = await callRoute("POST", "/automations/auto-1/pause");
       expect(res.status).toBe(200);
-      expect(mockStore.pause).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.bindPause).toHaveBeenCalledWith("auto-1");
     });
 
     it("returns 404 when not found", async () => {
-      mockStore.pause.mockResolvedValue(false);
+      mockBatch.mockResolvedValue([{ meta: { changes: 0 }, results: [] }]);
 
       const res = await callRoute("POST", "/automations/missing/pause");
       expect(res.status).toBe(404);
@@ -1602,11 +1617,10 @@ describe("automation route handlers", () => {
   describe("POST /automations/:id/resume", () => {
     it("resumes automation and recomputes next_run_at", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, enabled: 0 });
-      mockStore.resume.mockResolvedValue(true);
 
       const res = await callRoute("POST", "/automations/auto-1/resume");
       expect(res.status).toBe(200);
-      expect(mockStore.resume).toHaveBeenCalledWith("auto-1", expect.any(Number));
+      expect(mockStore.bindResume).toHaveBeenCalledWith("auto-1", expect.any(Number));
     });
 
     it("returns 404 when not found", async () => {

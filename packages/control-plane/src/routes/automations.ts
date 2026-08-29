@@ -63,10 +63,15 @@ import {
   resolveRepoOrError,
 } from "./shared";
 import type { Env } from "../types";
-import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
-import { AuthorizationService } from "../authorization/service";
+import {
+  bindAutomationAuthorizationGuard,
+  bindPermissionSetGuard,
+  isAutomationAuthorizationCurrent,
+  type AutomationAuthorizationOperation,
+} from "../automation/authorization-guard";
 
 const logger = createLogger("router:automations");
 
@@ -74,11 +79,10 @@ async function authorizeAutomationMutation(
   ctx: RequestContext,
   automation: AutomationRow,
   operation: "manage" | "trigger"
-): Promise<Response | null> {
-  if (ctx.principal?.kind !== "user") return null;
-  const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
-    ctx.principal.userId
-  );
+): Promise<{ authorizationGuard: SqlStatement | null } | Response> {
+  if (ctx.principal?.kind !== "user") return { authorizationGuard: null };
+  const authorization = ctx.authorization;
+  if (!authorization) return json({ error: "Authorization unavailable" }, 503);
   const anyPermission = `automations.${operation}.any` as const;
   const ownPermission = `automations.${operation}.own` as const;
   if (
@@ -86,9 +90,38 @@ async function authorizeAutomationMutation(
     (authorization.permissions.includes(ownPermission) &&
       automation.user_id === ctx.principal.userId)
   ) {
-    return null;
+    return {
+      authorizationGuard: bindAutomationAuthorizationGuard(
+        ctx.db,
+        automation.id,
+        authorization,
+        operation
+      ),
+    };
   }
   return json({ error: "Forbidden", code: "permission_required", permission: ownPermission }, 403);
+}
+
+async function runAuthorizedAutomationBatch(
+  ctx: RequestContext,
+  automation: AutomationRow,
+  operation: AutomationAuthorizationOperation,
+  authorizationGuard: SqlStatement | null,
+  statements: SqlStatement[]
+): Promise<SqlResult[] | Response> {
+  try {
+    return await ctx.db.batch(
+      authorizationGuard ? [authorizationGuard, ...statements] : statements
+    );
+  } catch (cause) {
+    if (
+      ctx.authorization &&
+      !(await isAutomationAuthorizationCurrent(ctx.db, automation.id, ctx.authorization, operation))
+    ) {
+      return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
+    }
+    throw cause;
+  }
 }
 
 /** Minimum cron interval in minutes. */
@@ -588,10 +621,10 @@ async function handleCreateAutomation(
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
+  let createAuthorizationGuard: SqlStatement | null = null;
   if (ctx.principal?.kind === "user") {
-    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
-      ctx.principal.userId
-    );
+    const authorization = ctx.authorization;
+    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
     if (
       requestedRepositories.length > 0 &&
       !authorization.permissions.includes("repositories.use")
@@ -601,6 +634,11 @@ async function handleCreateAutomation(
         403
       );
     }
+    createAuthorizationGuard = bindPermissionSetGuard(ctx.db, authorization, [
+      "automations.create",
+      ...(requestedRepositories.length > 0 ? (["repositories.use"] as const) : []),
+      ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
+    ]);
     if (
       requestedEnvironmentIds.length > 0 &&
       !authorization.permissions.includes("environments.use")
@@ -752,7 +790,9 @@ async function handleCreateAutomation(
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
     );
   }
-  await db.batch(createStatements);
+  await db.batch(
+    createAuthorizationGuard ? [createAuthorizationGuard, ...createStatements] : createStatements
+  );
 
   const automation = await hydrateAutomation(db, (await store.getById(id))!);
 
@@ -821,8 +861,8 @@ async function handleUpdateAutomation(
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
-  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (authorizationError) return authorizationError;
+  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (admission instanceof Response) return admission;
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
@@ -1083,7 +1123,14 @@ async function handleUpdateAutomation(
     );
   }
   if (statements.length > 0) {
-    await db.batch(statements);
+    const result = await runAuthorizedAutomationBatch(
+      ctx,
+      existing,
+      "manage",
+      admission.authorizationGuard,
+      statements
+    );
+    if (result instanceof Response) return result;
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);
@@ -1110,9 +1157,17 @@ async function handleDeleteAutomation(
   const store = new AutomationStore(ctx.db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
-  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (authorizationError) return authorizationError;
-  const deleted = await store.softDelete(id);
+  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (admission instanceof Response) return admission;
+  const result = await runAuthorizedAutomationBatch(
+    ctx,
+    existing,
+    "manage",
+    admission.authorizationGuard,
+    [store.bindSoftDelete(id)]
+  );
+  if (result instanceof Response) return result;
+  const deleted = result.at(-1)?.meta.changes === 1;
   if (!deleted) return error("Automation not found", 404);
 
   logger.info("automation.deleted", {
@@ -1137,9 +1192,17 @@ async function handlePauseAutomation(
   const store = new AutomationStore(ctx.db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
-  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (authorizationError) return authorizationError;
-  const paused = await store.pause(id);
+  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (admission instanceof Response) return admission;
+  const result = await runAuthorizedAutomationBatch(
+    ctx,
+    existing,
+    "manage",
+    admission.authorizationGuard,
+    [store.bindPause(id)]
+  );
+  if (result instanceof Response) return result;
+  const paused = result.at(-1)?.meta.changes === 1;
   if (!paused) return error("Automation not found", 404);
 
   logger.info("automation.paused", {
@@ -1167,8 +1230,8 @@ async function handleResumeAutomation(
   const store = new AutomationStore(ctx.db);
   const existing = await store.getById(id);
   if (!existing) return error("Automation not found", 404);
-  const authorizationError = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (authorizationError) return authorizationError;
+  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
+  if (admission instanceof Response) return admission;
 
   // For schedule automations, compute the next run time.
   // For event-driven automations, resume with null next_run_at.
@@ -1182,7 +1245,15 @@ async function handleResumeAutomation(
     nextRunAt = null;
   }
 
-  const resumed = await store.resume(id, nextRunAt);
+  const result = await runAuthorizedAutomationBatch(
+    ctx,
+    existing,
+    "manage",
+    admission.authorizationGuard,
+    [store.bindResume(id, nextRunAt)]
+  );
+  if (result instanceof Response) return result;
+  const resumed = result.at(-1)?.meta.changes === 1;
   if (!resumed) return error("Automation not found", 404);
 
   logger.info("automation.resumed", {
@@ -1211,13 +1282,16 @@ async function handleTriggerAutomation(
   const store = new AutomationStore(ctx.db);
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
-  const authorizationError = await authorizeAutomationMutation(ctx, automation, "trigger");
-  if (authorizationError) return authorizationError;
+  const admission = await authorizeAutomationMutation(ctx, automation, "trigger");
+  if (admission instanceof Response) return admission;
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
-    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
+    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
+      id,
+      admission.authorizationGuard ?? undefined
+    );
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",
@@ -1228,6 +1302,12 @@ async function handleTriggerAutomation(
     });
     if (triggerError instanceof AutomationTriggerBlockedError) {
       return error("A run is already active for this automation", 409);
+    }
+    if (
+      ctx.authorization &&
+      !(await isAutomationAuthorizationCurrent(ctx.db, id, ctx.authorization, "trigger"))
+    ) {
+      return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
     }
     return error("Failed to trigger automation", 500);
   }
@@ -1301,8 +1381,8 @@ async function handleRegenerateKey(
   const store = new AutomationStore(ctx.db);
   const automation = await store.getById(id);
   if (!automation) return error("Automation not found", 404);
-  const authorizationError = await authorizeAutomationMutation(ctx, automation, "manage");
-  if (authorizationError) return authorizationError;
+  const admission = await authorizeAutomationMutation(ctx, automation, "manage");
+  if (admission instanceof Response) return admission;
 
   const workerUrl = env.WORKER_URL || "";
 
@@ -1321,7 +1401,17 @@ async function handleRegenerateKey(
       parsedBody.data.sentryClientSecret,
       env.REPO_SECRETS_ENCRYPTION_KEY
     );
-    await store.update(id, { trigger_auth_data: encrypted } as Record<string, unknown>);
+    const statement = store.bindAutomationUpdate(id, {
+      trigger_auth_data: encrypted,
+    } as Record<string, unknown>);
+    const result = await runAuthorizedAutomationBatch(
+      ctx,
+      automation,
+      "manage",
+      admission.authorizationGuard,
+      statement ? [statement] : []
+    );
+    if (result instanceof Response) return result;
 
     logger.info("automation.secret_updated", {
       event: "automation.secret_updated",
@@ -1343,7 +1433,17 @@ async function handleRegenerateKey(
   const apiKey = generateWebhookApiKey();
   const hash = await hashApiKey(apiKey);
 
-  await store.update(id, { trigger_auth_data: hash } as Record<string, unknown>);
+  const statement = store.bindAutomationUpdate(id, {
+    trigger_auth_data: hash,
+  } as Record<string, unknown>);
+  const result = await runAuthorizedAutomationBatch(
+    ctx,
+    automation,
+    "manage",
+    admission.authorizationGuard,
+    statement ? [statement] : []
+  );
+  if (result instanceof Response) return result;
 
   logger.info("automation.key_regenerated", {
     event: "automation.key_regenerated",

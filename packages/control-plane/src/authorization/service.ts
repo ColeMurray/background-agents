@@ -2,7 +2,6 @@ import {
   createRoleInputSchema,
   isRegisteredPermission,
   normalizeRoleName,
-  permissionsForBuiltInRole,
   replaceRoleInputSchema,
   type BuiltInRoleKey,
   type EffectiveAuthorization,
@@ -13,6 +12,7 @@ import {
 } from "@open-inspect/shared/rbac";
 import { normalizeEmail } from "../db/email";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import { ACTOR_GUARD_SQL, actorGuardStatement, auditStatement } from "./mutation-statements";
 
 export const BUILT_IN_ROLE_IDS: Record<BuiltInRoleKey, string> = {
   owner: "role_builtin_owner",
@@ -71,87 +71,8 @@ export class RbacConflictError extends Error {
   }
 }
 
-function auditStatement(
-  db: SqlDatabase,
-  input: {
-    requestId: string;
-    actorUserId: string | null;
-    authorizationVersion?: number;
-    action: string;
-    resourceType: string;
-    resourceId?: string | null;
-    targetUserId?: string | null;
-    outcome?: "allowed" | "denied";
-    reasonCode: string;
-    condition?: { sql: string; values: unknown[] };
-  }
-): SqlStatement {
-  return db
-    .prepare(
-      `INSERT INTO authorization_audit_events
-        (id, occurred_at, request_id, policy_id, principal_kind,
-         actor_user_id_snapshot, authorization_version, action, resource_type, resource_id,
-         target_user_id_snapshot, decision_outcome, operation_result, reason_code, metadata_json)
-       SELECT ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?, 'succeeded', ?, '{}'
-       ${input.condition ? `WHERE ${input.condition.sql}` : ""}`
-    )
-    .bind(
-      crypto.randomUUID(),
-      Date.now(),
-      input.requestId,
-      input.action,
-      input.actorUserId,
-      input.authorizationVersion ?? null,
-      input.action,
-      input.resourceType,
-      input.resourceId ?? null,
-      input.targetUserId ?? null,
-      input.outcome ?? "allowed",
-      input.reasonCode,
-      ...(input.condition?.values ?? [])
-    );
-}
-
-function actorGuardStatement(
-  db: SqlDatabase,
-  actorUserId: string,
-  actorAuthorizationVersion: number,
-  permission: PermissionId,
-  mutationId: string
-): SqlStatement {
-  return db
-    .prepare(
-      `UPDATE users SET last_authorization_mutation_id = ?
-       WHERE id = ? AND access_status = 'active' AND authorization_version = ?
-         AND EXISTS (
-           SELECT 1 FROM user_role_assignments ura
-           JOIN role_permissions rp ON rp.role_id = ura.role_id
-           WHERE ura.user_id = users.id AND rp.permission_id = ?
-         )`
-    )
-    .bind(mutationId, actorUserId, actorAuthorizationVersion, permission);
-}
-
-const ACTOR_GUARD_SQL =
-  "EXISTS (SELECT 1 FROM users WHERE id = ? AND last_authorization_mutation_id = ?)";
-
 export class AuthorizationService {
   constructor(private readonly db: SqlDatabase) {}
-
-  defaultAssignmentStatement(userId: string, now = Date.now()): SqlStatement {
-    return this.db
-      .prepare(
-        `INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
-         SELECT ?, ?, NULL, ?
-         WHERE EXISTS (SELECT 1 FROM rbac_migration_state WHERE singleton = 1)
-         ON CONFLICT(user_id) DO NOTHING`
-      )
-      .bind(userId, BUILT_IN_ROLE_IDS.member, now);
-  }
-
-  async ensureDefaultAssignment(userId: string): Promise<void> {
-    await this.defaultAssignmentStatement(userId).run();
-  }
 
   async getEffectiveAuthorization(userId: string): Promise<EffectiveAuthorization> {
     const row = await this.loadEffectiveRow(userId);
@@ -161,12 +82,8 @@ export class AuthorizationService {
       row.role_id && row.role_name
         ? { id: row.role_id, key: row.role_key, name: row.role_name }
         : null;
-    let permissions: PermissionId[] = [];
-    if (row.access_status === "active" && role) {
-      permissions = row.role_key
-        ? permissionsForBuiltInRole(row.role_key)
-        : await this.loadCustomPermissions(row.role_id!);
-    }
+    const permissions =
+      row.access_status === "active" && role ? await this.loadRolePermissions(row.role_id) : [];
 
     return {
       userId: row.user_id,
@@ -884,7 +801,7 @@ export class AuthorizationService {
       .first<EffectiveRow>();
   }
 
-  private async loadCustomPermissions(roleId: string): Promise<PermissionId[]> {
+  private async loadRolePermissions(roleId: string): Promise<PermissionId[]> {
     const result = await this.db
       .prepare(
         "SELECT permission_id FROM role_permissions WHERE role_id = ? ORDER BY permission_id"
@@ -904,9 +821,7 @@ export class AuthorizationService {
       description: row.description,
       isSystem: row.is_system === 1,
       revision: row.revision,
-      permissions: row.key
-        ? permissionsForBuiltInRole(row.key)
-        : await this.loadCustomPermissions(row.id),
+      permissions: await this.loadRolePermissions(row.id),
       assignmentCount: Number(row.assignment_count),
     };
   }

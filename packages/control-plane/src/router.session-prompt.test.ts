@@ -67,7 +67,9 @@ function createEnv(sessionFetch: ReturnType<typeof vi.fn>): Record<string, unkno
       role_key: "administrator",
       role_name: "Administrator",
     })),
-    all: vi.fn(async () => ({ results: [] })),
+    all: vi.fn(async () => ({
+      results: [{ permission_id: "sessions.collaborate.any" }],
+    })),
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
   return {

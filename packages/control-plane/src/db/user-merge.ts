@@ -67,6 +67,17 @@ interface UserMergeCounts {
   automationsOwnedRepointed: number;
   automationsCreatedRepointed: number;
   scmTokensRepointed: number;
+  roleAssignmentsRemoved: number;
+  survivorAuthorizationVersionsIncremented: number;
+  workspaceBootstrapRepointed: number;
+  sessionAccessCollisionsUpdated: number;
+  sessionAccessDeduped: number;
+  sessionAccessRepointed: number;
+  providerAccountAuthorizationsRepointed: number;
+  providerAccountAuthorizationAttemptsRepointed: number;
+  keyboardShortcutPreferencesDeduped: number;
+  keyboardShortcutPreferencesRepointed: number;
+  auditEventsCreated: number;
   canonicalEmailBackfilled: number;
   usersDeleted: number;
 }
@@ -264,15 +275,8 @@ export async function mergeUsers(
   );
 
   // Preserve RBAC and session-access invariants before deleting the loser.
-  statements.push(
-    db
-      .prepare(
-        `INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
-         SELECT ?, role_id, assigned_by, assigned_at
-         FROM user_role_assignments WHERE user_id = ?
-         ON CONFLICT(user_id) DO NOTHING`
-      )
-      .bind(survivorId, loserId),
+  add(
+    "survivorAuthorizationVersionsIncremented",
     db
       .prepare(
         `UPDATE users
@@ -280,11 +284,20 @@ export async function mergeUsers(
              updated_at = ?
          WHERE id = ?`
       )
-      .bind(Date.now(), survivorId),
-    db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId),
+      .bind(Date.now(), survivorId)
+  );
+  add(
+    "roleAssignmentsRemoved",
+    db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId)
+  );
+  add(
+    "workspaceBootstrapRepointed",
     db
       .prepare("UPDATE workspace_bootstrap SET owner_user_id = ? WHERE owner_user_id = ?")
-      .bind(survivorId, loserId),
+      .bind(survivorId, loserId)
+  );
+  add(
+    "sessionAccessCollisionsUpdated",
     db
       .prepare(
         `UPDATE session_access AS survivor_access
@@ -317,7 +330,10 @@ export async function mergeUsers(
                )
            )`
       )
-      .bind(loserId, survivorId, loserId),
+      .bind(loserId, survivorId, loserId)
+  );
+  add(
+    "sessionAccessDeduped",
     db
       .prepare(
         `DELETE FROM session_access WHERE user_id = ?
@@ -327,25 +343,43 @@ export async function mergeUsers(
              AND survivor_access.session_id = session_access.session_id
          )`
       )
-      .bind(loserId, survivorId),
-    db.prepare("UPDATE session_access SET user_id = ? WHERE user_id = ?").bind(survivorId, loserId),
+      .bind(loserId, survivorId)
+  );
+  add(
+    "sessionAccessRepointed",
+    db.prepare("UPDATE session_access SET user_id = ? WHERE user_id = ?").bind(survivorId, loserId)
+  );
+  add(
+    "providerAccountAuthorizationsRepointed",
     db
       .prepare(`UPDATE model_provider_account_authorizations SET user_id = ? WHERE user_id = ?`)
-      .bind(survivorId, loserId),
+      .bind(survivorId, loserId)
+  );
+  add(
+    "providerAccountAuthorizationAttemptsRepointed",
     db
       .prepare(
         `UPDATE model_provider_account_authorization_attempts SET user_id = ? WHERE user_id = ?`
       )
-      .bind(survivorId, loserId),
+      .bind(survivorId, loserId)
+  );
+  add(
+    "keyboardShortcutPreferencesDeduped",
     db
       .prepare(
         `DELETE FROM keyboard_shortcut_preferences WHERE user_id = ?
          AND EXISTS (SELECT 1 FROM keyboard_shortcut_preferences WHERE user_id = ?)`
       )
-      .bind(loserId, survivorId),
+      .bind(loserId, survivorId)
+  );
+  add(
+    "keyboardShortcutPreferencesRepointed",
     db
       .prepare("UPDATE keyboard_shortcut_preferences SET user_id = ? WHERE user_id = ?")
-      .bind(survivorId, loserId),
+      .bind(survivorId, loserId)
+  );
+  add(
+    "auditEventsCreated",
     db
       .prepare(
         `INSERT INTO authorization_audit_events
@@ -405,6 +439,17 @@ function emptyCounts(): UserMergeCounts {
     automationsOwnedRepointed: 0,
     automationsCreatedRepointed: 0,
     scmTokensRepointed: 0,
+    roleAssignmentsRemoved: 0,
+    survivorAuthorizationVersionsIncremented: 0,
+    workspaceBootstrapRepointed: 0,
+    sessionAccessCollisionsUpdated: 0,
+    sessionAccessDeduped: 0,
+    sessionAccessRepointed: 0,
+    providerAccountAuthorizationsRepointed: 0,
+    providerAccountAuthorizationAttemptsRepointed: 0,
+    keyboardShortcutPreferencesDeduped: 0,
+    keyboardShortcutPreferencesRepointed: 0,
+    auditEventsCreated: 0,
     canonicalEmailBackfilled: 0,
     usersDeleted: 0,
   };
@@ -426,6 +471,15 @@ async function previewCounts(
     automationsOwned,
     automationsCreated,
     scmTokens,
+    roleAssignments,
+    workspaceBootstrap,
+    sessionAccessCollisionsUpdated,
+    sessionAccessDeduped,
+    sessionAccess,
+    providerAccountAuthorizations,
+    providerAccountAuthorizationAttempts,
+    keyboardShortcutPreferencesDeduped,
+    keyboardShortcutPreferences,
     users,
   ] = await db.batch<{ count: number }>([
     db
@@ -458,6 +512,65 @@ async function previewCounts(
     db.prepare(`SELECT COUNT(*) AS count FROM automations WHERE user_id = ?`).bind(loserId),
     db.prepare(`SELECT COUNT(*) AS count FROM automations WHERE created_by = ?`).bind(loserId),
     db.prepare(`SELECT COUNT(*) AS count FROM user_scm_tokens WHERE user_id = ?`).bind(loserId),
+    db
+      .prepare(`SELECT COUNT(*) AS count FROM user_role_assignments WHERE user_id = ?`)
+      .bind(loserId),
+    db
+      .prepare(`SELECT COUNT(*) AS count FROM workspace_bootstrap WHERE owner_user_id = ?`)
+      .bind(loserId),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM session_access AS survivor_access
+         WHERE survivor_access.user_id = ?
+           AND EXISTS (
+             SELECT 1 FROM session_access AS loser_access
+             WHERE loser_access.user_id = ?
+               AND loser_access.session_id = survivor_access.session_id
+               AND (
+                 (loser_access.relation = 'creator' AND survivor_access.relation <> 'creator')
+                 OR (
+                   loser_access.relation = 'participant'
+                   AND survivor_access.relation = 'participant'
+                   AND (
+                     loser_access.generation > survivor_access.generation
+                     OR (loser_access.generation = survivor_access.generation
+                       AND loser_access.state = 'active' AND survivor_access.state <> 'active')
+                   )
+                 )
+               )
+           )`
+      )
+      .bind(survivorId, loserId),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM session_access
+         WHERE user_id = ? AND EXISTS (
+           SELECT 1 FROM session_access survivor_access
+           WHERE survivor_access.user_id = ?
+             AND survivor_access.session_id = session_access.session_id
+         )`
+      )
+      .bind(loserId, survivorId),
+    db.prepare(`SELECT COUNT(*) AS count FROM session_access WHERE user_id = ?`).bind(loserId),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM model_provider_account_authorizations WHERE user_id = ?`
+      )
+      .bind(loserId),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM model_provider_account_authorization_attempts WHERE user_id = ?`
+      )
+      .bind(loserId),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM keyboard_shortcut_preferences WHERE user_id = ?
+         AND EXISTS (SELECT 1 FROM keyboard_shortcut_preferences WHERE user_id = ?)`
+      )
+      .bind(loserId, survivorId),
+    db
+      .prepare(`SELECT COUNT(*) AS count FROM keyboard_shortcut_preferences WHERE user_id = ?`)
+      .bind(loserId),
     db.prepare(`SELECT COUNT(*) AS count FROM users WHERE id = ?`).bind(loserId),
   ]);
 
@@ -488,6 +601,18 @@ async function previewCounts(
     automationsOwnedRepointed: count(automationsOwned),
     automationsCreatedRepointed: count(automationsCreated),
     scmTokensRepointed: count(scmTokens),
+    roleAssignmentsRemoved: count(roleAssignments),
+    survivorAuthorizationVersionsIncremented: count(users),
+    workspaceBootstrapRepointed: count(workspaceBootstrap),
+    sessionAccessCollisionsUpdated: count(sessionAccessCollisionsUpdated),
+    sessionAccessDeduped: count(sessionAccessDeduped),
+    sessionAccessRepointed: count(sessionAccess) - count(sessionAccessDeduped),
+    providerAccountAuthorizationsRepointed: count(providerAccountAuthorizations),
+    providerAccountAuthorizationAttemptsRepointed: count(providerAccountAuthorizationAttempts),
+    keyboardShortcutPreferencesDeduped: count(keyboardShortcutPreferencesDeduped),
+    keyboardShortcutPreferencesRepointed:
+      count(keyboardShortcutPreferences) - count(keyboardShortcutPreferencesDeduped),
+    auditEventsCreated: count(users),
     canonicalEmailBackfilled,
     usersDeleted: count(users),
   };

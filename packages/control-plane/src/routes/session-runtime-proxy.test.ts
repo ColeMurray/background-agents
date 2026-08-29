@@ -461,7 +461,6 @@ describe("session runtime proxy routes", () => {
     const run = vi.fn(async () => ({ meta: { changes: 1 } }));
     const statement = {
       bind: vi.fn(() => statement),
-      first: vi.fn(async () => ({ generation: 1 })),
       run,
     };
     const db = { prepare: vi.fn(() => statement) } as unknown as SqlDatabase;
@@ -480,19 +479,32 @@ describe("session runtime proxy routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(statement.bind).toHaveBeenNthCalledWith(
-      1,
+    expect(statement.bind).toHaveBeenCalledWith(
       "session-1",
       "11111111111111111111111111111111",
       expect.any(Number)
     );
-    expect(statement.bind).toHaveBeenNthCalledWith(
-      2,
-      "session-1",
-      "11111111111111111111111111111111",
-      1
-    );
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("does not change D1 access when the runtime rejects a participant", async () => {
+    const db = { prepare: vi.fn() } as unknown as SqlDatabase;
+    const fetch = vi.fn(async () => Response.json({ error: "rejected" }, { status: 409 }));
+    const { handler, match } = getHandler("POST", "/sessions/session-1/participants");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "11111111111111111111111111111111" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(409);
+    expect(db.prepare).not.toHaveBeenCalled();
   });
 
   it("forwards the draft flag through the create-PR contract", async () => {

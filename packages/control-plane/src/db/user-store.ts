@@ -3,7 +3,6 @@ import { generateId } from "../auth/crypto";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
-import { AuthorizationService } from "../authorization/service";
 
 // ── Public types ────────────────────────────────────────────────────
 
@@ -137,11 +136,7 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
 // ── UserStore ───────────────────────────────────────────────────────
 
 export class UserStore {
-  private readonly authorization: AuthorizationService;
-
-  constructor(private readonly db: SqlDatabase) {
-    this.authorization = new AuthorizationService(db);
-  }
+  constructor(private readonly db: SqlDatabase) {}
 
   async getUsersByIds(userIds: readonly string[]): Promise<User[]> {
     const uniqueIds = [...new Set(userIds)];
@@ -168,14 +163,10 @@ export class UserStore {
    */
   async resolveOrCreateUser(identity: ProviderIdentity): Promise<ResolvedUser> {
     try {
-      const user = await this.doResolveOrCreate(identity);
-      await this.authorization.ensureDefaultAssignment(user.id);
-      return user;
+      return await this.doResolveOrCreate(identity);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
-        const user = await this.doResolveOrCreate(identity);
-        await this.authorization.ensureDefaultAssignment(user.id);
-        return user;
+        return this.doResolveOrCreate(identity);
       }
       throw err;
     }
@@ -223,22 +214,20 @@ export class UserStore {
     const email = normalizeEmail(user.email);
     const emailVerified = email !== null && user.emailVerified === true;
 
-    await this.db.batch([
-      this.db
-        .prepare(
-          "INSERT INTO users (id, display_name, email, email_verified, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(
-          id,
-          user.displayName ?? null,
-          email,
-          emailVerified ? 1 : 0,
-          user.avatarUrl ?? null,
-          now,
-          now
-        ),
-      this.authorization.defaultAssignmentStatement(id, now),
-    ]);
+    await this.db
+      .prepare(
+        "INSERT INTO users (id, display_name, email, email_verified, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      )
+      .bind(
+        id,
+        user.displayName ?? null,
+        email,
+        emailVerified ? 1 : 0,
+        user.avatarUrl ?? null,
+        now,
+        now
+      )
+      .run();
 
     return {
       id,
@@ -441,7 +430,6 @@ export class UserStore {
           issuer,
           now
         ),
-      this.authorization.defaultAssignmentStatement(userId, now),
     ]);
 
     return {

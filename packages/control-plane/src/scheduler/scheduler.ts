@@ -59,7 +59,7 @@ import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
+import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
 import type { SessionInitInput } from "../session/initialize";
@@ -203,6 +203,7 @@ interface StartInvocationParams {
   repositories?: AutomationRepositoryInsert[];
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
+  authorizationGuard?: SqlStatement;
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
   instructionsOverride?: string;
   /**
@@ -439,6 +440,7 @@ export class Scheduler {
           params.advanceToNextRunAt !== undefined
             ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
             : undefined,
+        authorizationGuard: params.authorizationGuard,
       }));
     } catch (e) {
       if (isDuplicateKeyError(e)) {
@@ -1020,14 +1022,21 @@ export class Scheduler {
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
-  async trigger(automationId: string): Promise<SchedulerTriggerResult> {
+  async trigger(
+    automationId: string,
+    authorizationGuard?: SqlStatement
+  ): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
       throw new Error("Automation not found");
     }
 
-    const result = await this.startInvocation(store, { automation, source: "manual" });
+    const result = await this.startInvocation(store, {
+      automation,
+      source: "manual",
+      authorizationGuard,
+    });
 
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing.

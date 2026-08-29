@@ -308,21 +308,16 @@ async function enforceActiveUser(path: string, ctx: RequestContext): Promise<Res
         : null;
   if (!userId || (ctx.principal?.kind === "user" && path === "/me/authorization")) return null;
   try {
-    const user = await ctx.db
-      .prepare(
-        `SELECT access_status,
-                EXISTS (SELECT 1 FROM user_role_assignments WHERE user_id = users.id) AS assigned
-         FROM users WHERE id = ?`
-      )
-      .bind(userId)
-      .first<{ access_status: string; assigned: number }>();
-    if (user?.access_status !== "active") {
+    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
+    ctx.authorization = authorization;
+    if (authorization.accessStatus !== "active") {
       return json({ error: "Forbidden", code: "active_user_required" }, 403);
     }
-    return user.assigned === 1
-      ? null
-      : json({ error: "Forbidden", code: "assignment_required" }, 403);
-  } catch {
+    return null;
+  } catch (cause) {
+    if (cause instanceof AuthorizationError) {
+      return json({ error: "Forbidden", code: cause.code }, cause.status);
+    }
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
   }
 }
@@ -335,22 +330,8 @@ async function enforceStaticUserPermission(
   if (ctx.principal?.kind !== "user") return null;
   const permission = staticUserPermission(method, path);
   if (!permission) return null;
-  try {
-    await new AuthorizationService(ctx.db).requirePermission(ctx.principal.userId, permission);
-    return null;
-  } catch (cause) {
-    if (cause instanceof AuthorizationError) {
-      return json(
-        {
-          error: "Forbidden",
-          code: cause.code,
-          ...(cause.permission ? { permission: cause.permission } : {}),
-        },
-        cause.status
-      );
-    }
-    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
-  }
+  if (ctx.authorization?.permissions.includes(permission)) return null;
+  return json({ error: "Forbidden", code: "permission_required", permission }, 403);
 }
 
 async function enforceSessionUserPermission(
@@ -363,9 +344,8 @@ async function enforceSessionUserPermission(
   if (!requirement) return null;
 
   try {
-    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(
-      ctx.principal.userId
-    );
+    const authorization = ctx.authorization;
+    if (!authorization) throw new Error("Missing request authorization");
     const permissionStem = `sessions.${requirement.operation}` as const;
     const anyPermission = `${permissionStem}.any` as const;
     const ownPermission = `${permissionStem}.own` as const;

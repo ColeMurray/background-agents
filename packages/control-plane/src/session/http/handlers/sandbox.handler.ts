@@ -224,6 +224,17 @@ export class SandboxHandler {
 
     const body: AddParticipantRequest = result.data;
 
+    const existing = this.participantRepository.getParticipantByUserId(body.userId);
+    if (existing) {
+      this.participantRepository.updateAddedParticipant(existing.id, {
+        scmLogin: body.scmLogin,
+        scmName: body.scmName,
+        scmEmail: body.scmEmail,
+        role: body.role,
+      });
+      return Response.json({ id: existing.id, status: "added" });
+    }
+
     const id = this.generateId();
     const now = this.now();
 

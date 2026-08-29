@@ -132,33 +132,23 @@ async function handleAddParticipant(
     return error("A canonical participant userId is required", 400);
   }
 
-  const pending = await ctx.db
-    .prepare(
-      `INSERT INTO session_access
-        (session_id, user_id, relation, state, generation, created_at)
-       VALUES (?, ?, 'participant', 'pending_add', 1, ?)
-       ON CONFLICT(session_id, user_id) DO UPDATE SET
-         state = 'pending_add', generation = session_access.generation + 1
-       WHERE session_access.relation = 'participant'
-       RETURNING generation`
-    )
-    .bind(sessionId, body.userId, Date.now())
-    .first<{ generation: number }>();
-
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.participants, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok || !pending) return response;
+  if (!response.ok) return response;
 
   await ctx.db
     .prepare(
-      `UPDATE session_access SET state = 'active'
-       WHERE session_id = ? AND user_id = ? AND relation = 'participant'
-         AND state = 'pending_add' AND generation = ?`
+      `INSERT INTO session_access
+        (session_id, user_id, relation, state, generation, created_at)
+       VALUES (?, ?, 'participant', 'active', 1, ?)
+       ON CONFLICT(session_id, user_id) DO UPDATE SET
+         state = 'active', generation = session_access.generation + 1
+       WHERE session_access.relation = 'participant'`
     )
-    .bind(sessionId, body.userId, pending.generation)
+    .bind(sessionId, body.userId, Date.now())
     .run();
   return response;
 }

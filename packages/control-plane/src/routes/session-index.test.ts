@@ -44,6 +44,17 @@ function createCtx(principal?: Principal): RequestContext {
       summarize: () => ({}),
     },
     principal,
+    ...(principal?.kind === "user"
+      ? {
+          authorization: {
+            userId: principal.userId,
+            accessStatus: "active" as const,
+            role: { id: "role_builtin_owner", key: "owner" as const, name: "Owner" },
+            permissions: ["sessions.read.any", "sessions.delete.any"] as const,
+            authorizationVersion: 1,
+          },
+        }
+      : {}),
   };
 }
 

@@ -512,36 +512,42 @@ export class AutomationStore {
     return this.getById(id);
   }
 
-  async softDelete(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  bindSoftDelete(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET deleted_at = ?, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, now, id)
-      .run();
+      .bind(now, now, id);
+  }
+
+  async softDelete(id: string): Promise<boolean> {
+    const result = await this.bindSoftDelete(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async pause(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  bindPause(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, id)
-      .run();
+      .bind(now, id);
+  }
+
+  async pause(id: string): Promise<boolean> {
+    const result = await this.bindPause(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(nextRunAt, now, id)
-      .run();
+      .bind(nextRunAt, now, id);
+  }
+
+  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
+    const result = await this.bindResume(id, nextRunAt).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
@@ -907,11 +913,14 @@ export class AutomationStore {
     children: AutomationRunRow[];
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
+    authorizationGuard?: SqlStatement;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
     const statements: SqlStatement[] = [];
 
+    if (params.authorizationGuard) statements.push(params.authorizationGuard);
+    const invocationStatementIndex = statements.length;
     statements.push(
       this.db
         .prepare(
@@ -987,7 +996,7 @@ export class AutomationStore {
     }
 
     const results = await this.db.batch(statements);
-    return { inserted: (results[0]?.meta?.changes ?? 0) > 0 };
+    return { inserted: (results[invocationStatementIndex]?.meta?.changes ?? 0) > 0 };
   }
 
   /**

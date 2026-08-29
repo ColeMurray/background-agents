@@ -5,6 +5,7 @@ import { UserStore } from "../../src/db/user-store";
 import { mergeUsers } from "../../src/db/user-merge";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
+import { bindPermissionSetGuard } from "../../src/automation/authorization-guard";
 
 describe("RBAC routes", () => {
   beforeEach(cleanD1Tables);
@@ -99,6 +100,54 @@ describe("RBAC routes", () => {
         .bind(user!.id)
         .first()
     ).toBeNull();
+  });
+
+  it("uses persisted permissions for built-in role authorization", async () => {
+    const ownerId = await seedOwner();
+    const permission = "workspace.roles.read";
+    await env.DB.prepare(
+      "DELETE FROM role_permissions WHERE role_id = 'role_builtin_owner' AND permission_id = ?"
+    )
+      .bind(permission)
+      .run();
+
+    try {
+      const authorization = await new AuthorizationService(
+        sqlDatabase(env.DB)
+      ).getEffectiveAuthorization(ownerId);
+      expect(authorization.permissions).not.toContain(permission);
+
+      const response = await serviceFetch("https://cp.test/roles");
+      expect(response.status).toBe(403);
+    } finally {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES ('role_builtin_owner', ?)"
+      )
+        .bind(permission)
+        .run();
+    }
+  });
+
+  it("rolls back a command admitted with a stale authorization snapshot", async () => {
+    const ownerId = await seedOwner();
+    const db = sqlDatabase(env.DB);
+    const authorization = await new AuthorizationService(db).getEffectiveAuthorization(ownerId);
+    await env.DB.prepare(
+      "UPDATE users SET authorization_version = authorization_version + 1 WHERE id = ?"
+    )
+      .bind(ownerId)
+      .run();
+
+    await expect(
+      db.batch([
+        bindPermissionSetGuard(db, authorization, ["automations.create"]),
+        db.prepare("UPDATE users SET display_name = 'stale-write' WHERE id = ?").bind(ownerId),
+      ])
+    ).rejects.toThrow();
+
+    expect(
+      await env.DB.prepare("SELECT display_name FROM users WHERE id = ?").bind(ownerId).first()
+    ).not.toEqual({ display_name: "stale-write" });
   });
 
   it("protects the configured Owner candidate until bootstrap completes", async () => {

@@ -11,6 +11,7 @@ import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
 import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
+import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -44,6 +45,8 @@ export type RequestContext = CorrelationContext & {
   principal?: Principal;
   /** Authentication provenance, separate from the principal being authorized. */
   authentication?: AuthenticationContext;
+  /** Effective human authorization loaded once by the router for this request. */
+  authorization?: EffectiveAuthorization;
 };
 
 /**

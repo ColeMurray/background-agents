@@ -19,6 +19,8 @@ import type { SessionSandboxEventProcessor } from "../../sandbox-events/processo
 function createHandler({ managedSecretsConfigured = true } = {}) {
   const repository = {
     createParticipant: vi.fn(),
+    getParticipantByUserId: vi.fn(),
+    updateAddedParticipant: vi.fn(),
     createEvent: vi.fn(),
     getProcessingMessage: vi.fn(),
   };
@@ -310,6 +312,29 @@ describe("SandboxHandler", () => {
     expect(repository.createParticipant).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1", role: "owner" })
     );
+  });
+
+  it("updates an existing participant idempotently", async () => {
+    const { handler, repository, generateId } = createHandler();
+    repository.getParticipantByUserId.mockReturnValue({ id: "participant-existing" });
+
+    const response = await handler.addParticipant(
+      new Request("http://internal/internal/participants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", scmLogin: "octocat", role: "owner" }),
+      })
+    );
+
+    expect(await response.json()).toEqual({ id: "participant-existing", status: "added" });
+    expect(repository.updateAddedParticipant).toHaveBeenCalledWith("participant-existing", {
+      scmLogin: "octocat",
+      scmName: undefined,
+      scmEmail: undefined,
+      role: "owner",
+    });
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(generateId).not.toHaveBeenCalled();
   });
 
   it("rejects malformed participant bodies", async () => {

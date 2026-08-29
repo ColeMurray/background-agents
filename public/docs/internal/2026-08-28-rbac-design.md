@@ -121,11 +121,12 @@ Permissions are exported from `@open-inspect/shared` as a literal registry conta
 - display label and description;
 - category used by the role editor;
 - sensitivity classification;
-- built-in role membership.
+- validation metadata.
 
-The database stores identifiers, but the registry is authoritative. Unknown identifiers fail role
-validation and are ignored during effective-permission resolution with an error log. Permission IDs
-are never reused for different semantics.
+The registry defines valid identifiers and editor metadata. Persisted `role_permissions` rows are
+the runtime authority for built-in and custom roles alike, so built-in policy changes require an
+explicit migration. Unknown identifiers fail role validation and are ignored during
+effective-permission resolution. Permission IDs are never reused for different semantics.
 
 ### Permission catalog
 
@@ -365,8 +366,8 @@ one syntactically valid email address, and is not a secret.
 The RBAC migration assigns Administrator to every canonical user present at the migration boundary
 and then writes `rbac_migration_state`. Every identity created after that marker receives Member,
 including identities first observed through a bot. Identity creation and default role assignment are
-one idempotent workflow; authorization denies a missing assignment and retries assignment repair
-rather than treating it as a separate user state.
+one database-triggered workflow. Authorization denies a missing assignment; ordinary sign-in and
+identity resolution never repair authorization corruption implicitly.
 
 During a successful GitHub or Google OAuth callback, while the authenticating provider and its
 verified email evidence are available, the control plane compares the normalized email with
@@ -385,8 +386,8 @@ not mutate authorization state.
 ### Storage ownership
 
 - D1 is the source of truth for roles, assignments, status, and audit events.
-- Built-in permission definitions and resolution live in shared code. Their database permission rows
-  are inspectable projections reconciled before enforcement, never the authorization source.
+- Shared code defines the permission catalog; persisted permission rows are the sole runtime grant
+  authority for built-in and custom roles.
 - Session creator attribution remains in D1.
 - Canonical session memberships and participant attribution remain in the Session Durable Object; a
   generation-guarded D1 projection supports lists.
@@ -618,21 +619,11 @@ CREATE INDEX idx_session_access_user
   ON session_access(user_id, state, session_id);
 ```
 
-Creator access is inserted with the D1 session index. Participant changes use a generation-guarded
-saga because D1 and DO SQLite cannot share a transaction:
-
-1. Add writes/increments D1 `pending_add` using compare-and-set generation.
-2. The DO creates the canonical membership and records the same generation.
-3. D1 changes that generation to `active`.
-4. Removal changes the active D1 row to `revoking`, removes the DO membership aliases for
-   authorization, then deletes the matching D1 generation.
-
-Only `active` entries appear in coarse D1 lists. Participant-based detail or mutation access
-requires both an active D1 row and a DO canonical membership with the same generation; either side
-missing or mismatched denies. `pending_add` and `revoking` deny. Retries and a reconciler compare
-generations so stale work cannot activate a removed membership or delete a newer addition. D1 is
-authoritative for coarse list visibility; the matched D1/DO generation pair is authoritative for
-participant access; the DO remains authoritative for live attribution aliases.
+Creator access is inserted with the D1 session index. Participant addition calls the DO's idempotent
+canonical-user upsert first, then upserts the D1 row to `active`. If D1 activation fails after the
+DO write, authorization remains fail-closed and retry repeats the idempotent DO operation before
+activating D1. A rejected DO operation never downgrades existing D1 access. D1 is authoritative for
+coarse list and participant access; the DO remains authoritative for live attribution aliases.
 
 Creator rows are separate from the participant saga despite sharing the primary key. A creator row
 always keeps `relation = 'creator'`, `state = 'active'`, and generation 1. Adding that creator as a
