@@ -79,6 +79,81 @@ describe("RBAC routes", () => {
     ).toEqual({ key: "member" });
   });
 
+  it("promotes a matching custom-role user during Owner bootstrap", async () => {
+    const user = await new UserStore(sqlDatabase(env.DB)).resolveOrCreateUser({
+      provider: "github",
+      providerUserId: "custom-owner",
+      providerEmail: "custom.owner@example.com",
+      displayName: "Custom Owner",
+    });
+    const roleId = "role_custom_bootstrap";
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system, revision,
+           created_by, updated_by, created_at, updated_at)
+         VALUES (?, NULL, 'Bootstrap Custom', 'bootstrap custom', NULL, 0, 1, ?, ?, 1, 1)`
+      ).bind(roleId, user.id, user.id),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        roleId,
+        user.id
+      ),
+      env.DB.prepare(
+        `INSERT INTO browser_sign_in_evidence (provider, provider_user_id, email, observed_at)
+         VALUES ('github', 'custom-owner', 'custom.owner@example.com', 10)`
+      ),
+    ]);
+
+    const bootstrapped = await new AuthorizationService(sqlDatabase(env.DB)).tryBootstrapOwner({
+      userId: user.id,
+      provider: "github",
+      providerUserId: "custom-owner",
+      verifiedEmail: "custom.owner@example.com",
+      evidenceObservedAt: 10,
+      configuredEmail: "custom.owner@example.com",
+      requestId: "custom-owner-bootstrap",
+    });
+
+    expect(bootstrapped).toBe(true);
+    await expect(
+      env.DB.prepare(
+        `SELECT r.key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+        .bind(user.id)
+        .first()
+    ).resolves.toEqual({ key: "owner" });
+  });
+
+  it("suspends an emailed member when no bootstrap email or claim exists", async () => {
+    await serviceFetch("https://cp.test/me/authorization");
+    const actor = await env.DB.prepare(
+      "SELECT id FROM users WHERE email = 'browser@test.local'"
+    ).first<{ id: string }>();
+    const member = await new UserStore(sqlDatabase(env.DB)).createUser({
+      displayName: "Suspendable Member",
+      email: "member@example.com",
+      emailVerified: true,
+    });
+    const service = new AuthorizationService(sqlDatabase(env.DB));
+    const actorAuthorization = await service.getEffectiveAuthorization(actor!.id);
+
+    await service.replaceMemberStatus({
+      targetUserId: member.id,
+      accessStatus: "suspended",
+      expectedVersion: 1,
+      actorUserId: actor!.id,
+      actorAuthorizationVersion: actorAuthorization.authorizationVersion,
+      actorCanTransferOwnership: false,
+      bootstrapOwnerEmail: undefined,
+      requestId: "suspend-without-bootstrap",
+    });
+
+    await expect(service.getEffectiveAuthorization(member.id)).resolves.toMatchObject({
+      accessStatus: "suspended",
+    });
+  });
+
   it("fails closed when an existing user has no role assignment", async () => {
     await serviceFetch("https://cp.test/me/authorization");
     const user = await env.DB.prepare(

@@ -33,6 +33,7 @@ export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
+const DEFAULT_INITIAL_USER_ROLE = "administrator" as const;
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
 const TEST_BROWSER_SESSION_COOKIE = "__Secure-openinspect.session_token";
@@ -166,7 +167,7 @@ export async function serviceFetch(
   });
   const browserCookie =
     service === "web"
-      ? await testBrowserSessionCookie(init?.initialUserRole ?? "administrator")
+      ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE)
       : undefined;
   return SELF.fetch(url, {
     method,

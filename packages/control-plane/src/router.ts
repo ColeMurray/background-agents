@@ -15,7 +15,6 @@ import { SessionInternalPaths } from "./session/contracts";
 import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
-import { normalizeEmail } from "./db/email";
 import { UserStore } from "./db/user-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import {
@@ -458,12 +457,6 @@ async function enforceSessionUserPermission(
 /**
  * Routes definition.
  */
-function redactEmail(email: string | undefined): string | null {
-  const [local, domain] = email?.split("@") ?? [];
-  if (!local || !domain) return null;
-  return `${local.slice(0, 1)}***@${domain}`;
-}
-
 export const routes: Route[] = [
   // Health check
   {
@@ -471,23 +464,23 @@ export const routes: Route[] = [
     supportedScmProviders: "all",
     method: "GET",
     pattern: parsePattern("/health"),
-    handler: async (_request, env, _match, ctx) => {
-      const bootstrap = await ctx.db
-        .prepare(
-          `SELECT u.email FROM workspace_bootstrap wb
-           JOIN users u ON u.id = wb.owner_user_id
-           WHERE wb.singleton = 1 AND wb.assignment_completed_at IS NOT NULL`
-        )
-        .first<{ email: string | null }>();
-      const configuredOwnerEmail = normalizeEmail(env.RBAC_BOOTSTRAP_OWNER_EMAIL);
+    handler: async (_request, _env, _match, ctx) => {
+      let ownerBootstrap: "complete" | "owner_bootstrap_pending" | "unknown";
+      try {
+        const bootstrap = await ctx.db
+          .prepare(
+            `SELECT 1 AS complete FROM workspace_bootstrap
+             WHERE singleton = 1 AND assignment_completed_at IS NOT NULL`
+          )
+          .first();
+        ownerBootstrap = bootstrap ? "complete" : "owner_bootstrap_pending";
+      } catch {
+        ownerBootstrap = "unknown";
+      }
       return json({
         status: "healthy",
         service: "open-inspect-control-plane",
-        rbac: {
-          ownerBootstrap: bootstrap ? "complete" : "owner_bootstrap_pending",
-          configuredOwnerEmail: redactEmail(env.RBAC_BOOTSTRAP_OWNER_EMAIL),
-          configurationMismatch: bootstrap !== null && bootstrap.email !== configuredOwnerEmail,
-        },
+        rbac: { ownerBootstrap },
       });
     },
   },

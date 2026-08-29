@@ -134,11 +134,7 @@ export class AuthorizationService {
         authorization_version: number;
         role_key: BuiltInRoleKey | null;
       }>();
-    if (
-      !user ||
-      user.access_status !== "active" ||
-      (user.role_key !== "administrator" && user.role_key !== "member")
-    ) {
+    if (!user || user.access_status !== "active" || user.role_key === "owner") {
       return false;
     }
 
@@ -150,11 +146,11 @@ export class AuthorizationService {
             (singleton, owner_user_id, claimed_at, assignment_completed_at)
            SELECT 1, ?, ?, NULL
             WHERE EXISTS (
-             SELECT 1 FROM users u
-             JOIN user_role_assignments ura ON ura.user_id = u.id
-             JOIN roles r ON r.id = ura.role_id
-             WHERE u.id = ? AND u.access_status = 'active'
-                AND r.key IN ('administrator', 'member')
+              SELECT 1 FROM users u
+              JOIN user_role_assignments ura ON ura.user_id = u.id
+              JOIN roles r ON r.id = ura.role_id
+              WHERE u.id = ? AND u.access_status = 'active'
+                AND (r.key IS NULL OR r.key <> 'owner')
             )
               AND ? = ?
               AND EXISTS (
@@ -192,7 +188,7 @@ export class AuthorizationService {
              AND EXISTS (SELECT 1 FROM users WHERE id = ? AND access_status = 'active')
              AND EXISTS (
                SELECT 1 FROM roles WHERE id = user_role_assignments.role_id
-                 AND key IN ('administrator', 'member')
+                 AND (key IS NULL OR key <> 'owner')
              )`
         )
         .bind(BUILT_IN_ROLE_IDS.owner, input.userId, now, input.userId, input.userId, input.userId),
@@ -255,6 +251,24 @@ export class AuthorizationService {
              )`
         )
         .bind(now, input.userId, input.userId),
+      this.db
+        .prepare(
+          `SELECT CASE WHEN
+             EXISTS (
+               SELECT 1 FROM workspace_bootstrap wb
+               JOIN users u ON u.id = wb.owner_user_id
+               JOIN user_role_assignments ura ON ura.user_id = u.id
+               JOIN roles r ON r.id = ura.role_id
+               WHERE wb.singleton = 1 AND wb.assignment_completed_at IS NOT NULL
+                 AND r.key = 'owner' AND u.access_status = 'active'
+             )
+             OR NOT EXISTS (
+               SELECT 1 FROM workspace_bootstrap
+               WHERE singleton = 1 AND owner_user_id = ?
+             )
+           THEN 1 ELSE abs(-9223372036854775808) END AS bootstrap_guard`
+        )
+        .bind(input.userId),
     ]);
 
     return results[4]?.meta.changes === 1;
@@ -729,6 +743,7 @@ export class AuthorizationService {
               AND (
                 ? <> 'suspended'
                 OR EXISTS (SELECT 1 FROM workspace_bootstrap WHERE singleton = 1)
+                OR ? IS NULL
                 OR lower(trim(email)) <> ?
                 OR email IS NULL
               )
@@ -742,6 +757,7 @@ export class AuthorizationService {
           input.expectedVersion,
           input.accessStatus,
           input.accessStatus,
+          bootstrapOwnerEmail,
           bootstrapOwnerEmail,
           input.actorUserId,
           actorMutationId

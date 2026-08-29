@@ -372,16 +372,16 @@ identity resolution never repair authorization corruption implicitly.
 During a successful GitHub or Google OAuth callback, while the authenticating provider and its
 verified email evidence are available, the control plane compares the normalized email with
 `RBAC_BOOTSTRAP_OWNER_EMAIL`. On a match, one D1 batch attempts `INSERT ... ON CONFLICT DO NOTHING`
-on singleton bootstrap row 1 and replaces that user's existing Administrator or Member assignment
-with Owner only when this user owns the bootstrap row. The result is read back before returning
-authorization state. A non-matching user keeps their migrated Administrator or default Member role.
+on singleton bootstrap row 1 and replaces any eligible non-Owner assignment, including a custom
+role, with Owner only when this user owns the bootstrap row. A final guard rolls the batch back if
+the claim belongs to this user but the active Owner assignment was not established. The result is
+read back before returning authorization state. A non-matching user keeps their existing role.
 Bot-created identities can never claim Owner because bootstrap requires live browser authentication.
 
 The Terraform binding is bootstrap-only. Once `workspace_bootstrap` exists, D1 role assignments are
 the source of truth. Changing `rbac_bootstrap_owner_email` does not transfer, add, remove, or
 recover an Owner. Ownership changes use the authenticated member API, and exceptional recovery uses
-the operator CLI. A post-bootstrap binding mismatch is reported in operator health metadata but does
-not mutate authorization state.
+the operator CLI. A post-bootstrap binding mismatch does not mutate authorization state.
 
 ### Storage ownership
 

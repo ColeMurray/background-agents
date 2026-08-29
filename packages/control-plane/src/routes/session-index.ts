@@ -267,21 +267,6 @@ async function handleDeleteSession(
   if (!sessionId) return error("Session ID required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
-  if (ctx.principal?.kind === "user") {
-    const authorization = ctx.authorization;
-    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-    const session = await sessionStore.get(sessionId);
-    const canDelete =
-      authorization.permissions.includes("sessions.delete.any") ||
-      (authorization.permissions.includes("sessions.delete.own") &&
-        session?.userId === ctx.principal.userId);
-    if (!canDelete) {
-      return json(
-        { error: "Forbidden", code: "permission_required", permission: "sessions.delete.own" },
-        403
-      );
-    }
-  }
   await sessionStore.delete(sessionId);
 
   return json({ status: "deleted", sessionId });

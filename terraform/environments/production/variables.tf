@@ -688,10 +688,13 @@ variable "rbac_bootstrap_owner_email" {
   type        = string
 
   validation {
-    condition = can(regex(
-      "^[^@[:space:],]+@[^@[:space:],]+\\.[^@[:space:],]+$",
-      trimspace(var.rbac_bootstrap_owner_email)
-    ))
+    condition = (
+      can(regex(
+        "^[^@[:space:],.]([^@[:space:],]*[^@[:space:],.])?@[^@[:space:],.]+(\\.[^@[:space:],.]+)+$",
+        trimspace(var.rbac_bootstrap_owner_email)
+      )) &&
+      !strcontains(trimspace(var.rbac_bootstrap_owner_email), "..")
+    )
     error_message = "rbac_bootstrap_owner_email must contain exactly one valid email address."
   }
 }

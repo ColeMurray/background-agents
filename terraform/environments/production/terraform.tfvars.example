@@ -360,7 +360,7 @@ enable_service_bindings = false
 
 # Verified browser email that may claim the initial Owner role. This remains
 # bootstrap-only configuration; later ownership changes happen inside the app.
-rbac_bootstrap_owner_email = "owner@example.com"
+rbac_bootstrap_owner_email = ""
 
 # Comma-separated list of GitHub usernames allowed to sign in
 allowed_users = ""

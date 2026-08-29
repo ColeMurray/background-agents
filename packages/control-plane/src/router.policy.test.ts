@@ -199,6 +199,26 @@ describe("route policy dispatch ordering", () => {
     });
   });
 
+  it("keeps health live and private when the RBAC lookup fails", async () => {
+    const testEnv = env("github");
+    testEnv.DB.prepare = vi.fn(() => {
+      throw new Error("D1 unavailable");
+    });
+
+    const response = await handleRequest(
+      new Request("https://test.local/health"),
+      testEnv as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "healthy",
+      service: "open-inspect-control-plane",
+      rbac: { ownerBootstrap: "unknown" },
+    });
+  });
+
   it("applies broker cache policy when sandbox authentication is unavailable", async () => {
     const testEnv = env("github") as ReturnType<typeof env> & {
       SESSION: {
