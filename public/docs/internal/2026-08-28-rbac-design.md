@@ -224,33 +224,34 @@ They do not need role permissions because they cannot affect another user or sha
 
 The table groups permissions for readability; the registry stores individual identifiers.
 
-| Capability group                                         | Owner | Administrator |  Member  |  Viewer   |
-| -------------------------------------------------------- | :---: | :-----------: | :------: | :-------: |
-| Workspace, member, role, and audit read                  |  Yes  |      Yes      |    No    |    No     |
-| Manage members and custom roles                          |  Yes  |      Yes      |    No    |    No     |
-| Transfer Owner role                                      |  Yes  |      No       |    No    |    No     |
-| Read repositories and environments                       |  Yes  |      Yes      |   Yes    |    Yes    |
-| Use repositories and environments                        |  Yes  |      Yes      |   Yes    |    No     |
-| Manage environments/settings/images                      |  Yes  |      Yes      |    No    |    No     |
-| Manage global/repository/environment secrets             |  Yes  |      Yes      |    No    |    No     |
-| Create sessions                                          |  Yes  |      Yes      |   Yes    |    No     |
-| Read/collaborate/lifecycle own sessions                  |  Yes  |      Yes      |   Yes    | Read only |
-| Read/collaborate/lifecycle any session                   |  Yes  |      Yes      |    No    | Read only |
-| Delete own/any sessions                                  |  Yes  |      Yes      | Own only |    No     |
-| Manage session participants                              |  Yes  |      Yes      | Own only |    No     |
-| Obtain sandbox access                                    |  Yes  |      Yes      | Own only |    No     |
-| Read automations                                         |  Yes  |      Yes      |   Yes    |    Yes    |
-| Create/manage/trigger automations                        |  Yes  |      Yes      | Own only |    No     |
-| Read analytics                                           |  Yes  |      Yes      |    No    |    No     |
-| Manage models/provider accounts/integrations/SCM/signing |  Yes  |      Yes      |    No    |    No     |
-| Read shared skills and MCP servers                       |  Yes  |      Yes      |   Yes    |    Yes    |
-| Manage shared skills and MCP servers                     |  Yes  |      Yes      |    No    |    No     |
-| Manage own skill profiles and personal preferences       |  Yes  |      Yes      |   Yes    |    Yes    |
+| Capability group                                         | Owner | Administrator |  Member  | Viewer |
+| -------------------------------------------------------- | :---: | :-----------: | :------: | :----: |
+| Workspace, member, role, and audit read                  |  Yes  |      Yes      |    No    |   No   |
+| Manage members and custom roles                          |  Yes  |      Yes      |    No    |   No   |
+| Transfer Owner role                                      |  Yes  |      No       |    No    |   No   |
+| Read repositories and environments                       |  Yes  |      Yes      |   Yes    |  Yes   |
+| Use repositories and environments                        |  Yes  |      Yes      |   Yes    |   No   |
+| Manage environments/settings/images                      |  Yes  |      Yes      |    No    |   No   |
+| Manage global/repository/environment secrets             |  Yes  |      Yes      |    No    |   No   |
+| Create sessions                                          |  Yes  |      Yes      |   Yes    |   No   |
+| Read any session                                         |  Yes  |      Yes      |   Yes    |  Yes   |
+| Collaborate in any session                               |  Yes  |      Yes      |   Yes    |   No   |
+| Perform session lifecycle operations                     |  Yes  |      Yes      | Own only |   No   |
+| Delete own/any sessions                                  |  Yes  |      Yes      | Own only |   No   |
+| Manage session participants                              |  Yes  |      Yes      | Own only |   No   |
+| Obtain sandbox access                                    |  Yes  |      Yes      | Own only |   No   |
+| Read automations                                         |  Yes  |      Yes      |   Yes    |  Yes   |
+| Create/manage/trigger automations                        |  Yes  |      Yes      | Own only |   No   |
+| Read analytics                                           |  Yes  |      Yes      |    No    |   No   |
+| Manage models/provider accounts/integrations/SCM/signing |  Yes  |      Yes      |    No    |   No   |
+| Read shared skills and MCP servers                       |  Yes  |      Yes      |   Yes    |  Yes   |
+| Manage shared skills and MCP servers                     |  Yes  |      Yes      |    No    |   No   |
+| Manage own skill profiles and personal preferences       |  Yes  |      Yes      |   Yes    |  Yes   |
 
 Viewer receives `sessions.read.any` but no collaborate or lifecycle permission. Member receives
-`sessions.read.own`, not `sessions.read.any`; shared session discovery therefore only returns
-sessions the member created or joined. Administrator preserves the existing broad operational
-behavior.
+`sessions.read.any` and `sessions.collaborate.any` to preserve open discovery and collaboration,
+while delete, participant management, lifecycle, and sandbox access remain relationship-scoped.
+Administrator preserves the existing broad operational behavior.
 
 ## Data Model
 
@@ -485,13 +486,15 @@ rows with a canonical ID, collapses duplicate provider aliases into one membersh
 unlinked historical participants attribution-only. Message history keeps original participant IDs.
 Membership has no local owner role; the immutable D1 creator remains the only creator relationship.
 
-Creating a WebSocket token or sending a prompt no longer auto-grants membership before
-authorization. The caller first needs an applicable collaborate permission. Explicit participant
-addition requires `sessions.participants.manage.own` or `.any`; after membership is added, `own`
-permissions apply to that user. Removing a canonical membership revokes every provider alias for
-authorization while retaining historical message attribution. Session-local `owner/member` is
-retired as an authorization concept; D1 creator attribution is immutable and creator-only
-permissions do not transfer through participant management.
+Creating a WebSocket token or sending a prompt first requires an applicable collaborate permission.
+Built-in Members can collaborate across the workspace; a successful WebSocket-token request records
+the caller as an active participant so relationship-scoped lifecycle and sandbox permissions apply
+after joining. Custom roles can use `sessions.collaborate.own` when explicit invitation semantics
+are desired. Explicit participant addition requires `sessions.participants.manage.own` or `.any`.
+Removing a canonical membership revokes every provider alias for authorization while retaining
+historical message attribution. Session-local `owner/member` is retired as an authorization concept;
+D1 creator attribution is immutable and creator-only permissions do not transfer through participant
+management.
 
 Participant APIs accept only canonical target user IDs:
 

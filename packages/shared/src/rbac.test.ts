@@ -26,6 +26,14 @@ describe("RBAC registry", () => {
     }
   });
 
+  it("preserves open read and collaboration for built-in Members", () => {
+    const permissions = permissionsForBuiltInRole("member");
+    expect(permissions).toContain("sessions.read.any");
+    expect(permissions).toContain("sessions.collaborate.any");
+    expect(permissions).not.toContain("sessions.delete.any");
+    expect(permissions).not.toContain("sessions.participants.manage.any");
+  });
+
   it("rejects ownership transfer in custom roles", () => {
     expect(() =>
       createRoleInputSchema.parse({

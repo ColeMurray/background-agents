@@ -7,6 +7,7 @@ import type {
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
+import { activateSessionParticipantAccess } from "../db/session-access";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -145,17 +146,7 @@ async function handleAddParticipant(
   });
   if (!response.ok) return response;
 
-  await ctx.db
-    .prepare(
-      `INSERT INTO session_access
-        (session_id, user_id, relation, state, generation, created_at)
-       VALUES (?, ?, 'participant', 'active', 1, ?)
-       ON CONFLICT(session_id, user_id) DO UPDATE SET
-         state = 'active', generation = session_access.generation + 1
-       WHERE session_access.relation = 'participant'`
-    )
-    .bind(sessionId, body.userId, Date.now())
-    .run();
+  await activateSessionParticipantAccess(ctx.db, sessionId, body.userId);
   return response;
 }
 

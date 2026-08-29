@@ -322,7 +322,7 @@ describe("RBAC routes", () => {
     });
   });
 
-  it("scopes Member session lists to active relationships and deletion to creators", async () => {
+  it("keeps Member session discovery open while deletion remains creator-only", async () => {
     await serviceFetch("https://cp.test/me/authorization", { initialUserRole: "member" });
     const member = await env.DB.prepare(
       "SELECT id FROM users WHERE email = 'browser@test.local'"
@@ -336,6 +336,10 @@ describe("RBAC routes", () => {
       env.DB.prepare(
         `INSERT INTO sessions (id, repo_owner, repo_name, status, created_at, updated_at, user_id)
          VALUES ('other-session', 'acme', 'app', 'completed', 2, 2, ?)`
+      ).bind(other.id),
+      env.DB.prepare(
+        `INSERT INTO sessions (id, repo_owner, repo_name, status, created_at, updated_at, user_id)
+         VALUES ('unjoined-session', 'acme', 'app', 'completed', 3, 3, ?)`
       ).bind(other.id),
       env.DB.prepare(
         `INSERT INTO session_access
@@ -354,7 +358,7 @@ describe("RBAC routes", () => {
 
     expect(listed.status).toBe(200);
     await expect(listed.json()).resolves.toMatchObject({
-      sessions: [{ id: "other-session" }, { id: "member-session" }],
+      sessions: [{ id: "unjoined-session" }, { id: "other-session" }, { id: "member-session" }],
     });
     expect(deniedDelete.status).toBe(403);
     expect(ownDelete.status).toBe(200);
