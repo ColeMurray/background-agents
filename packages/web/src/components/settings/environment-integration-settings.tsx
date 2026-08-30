@@ -38,9 +38,11 @@ const ENABLEMENT_CHOICES: Array<{ value: EnablementChoice; label: string }> = [
 export function EnvironmentIntegrationSettings({
   environmentId,
   repositories,
+  canManage,
 }: {
   environmentId: string;
   repositories: EnvironmentRepository[];
+  canManage: boolean;
 }) {
   const primary = repositories[0];
   const primaryLabel = primary
@@ -54,36 +56,38 @@ export function EnvironmentIntegrationSettings({
         left unset inherits from {primaryLabel}&apos;s settings.
       </p>
 
-      <EnvironmentEnablementOverride
-        environmentId={environmentId}
-        integrationId="code-server"
-        title="Code Editor"
-        description="Whether sessions from this environment get the browser-based editor."
-        ariaLabel="Code editor override"
-        successMessage="Code editor setting saved"
-      />
-      <EnvironmentEnablementOverride
-        environmentId={environmentId}
-        integrationId="vnc"
-        title="VNC Desktop"
-        description="Whether sessions from this environment get a remote desktop."
-        ariaLabel="VNC desktop override"
-        successMessage="VNC desktop setting saved"
-      />
-
-      <div>
-        <h3 className="text-sm font-medium text-foreground mb-1">Sandbox</h3>
-        <p className="text-xs text-muted-foreground mb-3">
-          Inherited values are shown as the current settings; saving only pins the fields you
-          change.
-        </p>
-        <SandboxSettingsEditor
-          scope="environment"
+      <fieldset disabled={!canManage} className="min-w-0 contents">
+        <EnvironmentEnablementOverride
           environmentId={environmentId}
-          owner={primary?.repoOwner}
-          name={primary?.repoName}
+          integrationId="code-server"
+          title="Code Editor"
+          description="Whether sessions from this environment get the browser-based editor."
+          ariaLabel="Code editor override"
+          successMessage="Code editor setting saved"
         />
-      </div>
+        <EnvironmentEnablementOverride
+          environmentId={environmentId}
+          integrationId="vnc"
+          title="VNC Desktop"
+          description="Whether sessions from this environment get a remote desktop."
+          ariaLabel="VNC desktop override"
+          successMessage="VNC desktop setting saved"
+        />
+
+        <div>
+          <h3 className="text-sm font-medium text-foreground mb-1">Sandbox</h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            Inherited values are shown as the current settings; saving only pins the fields you
+            change.
+          </p>
+          <SandboxSettingsEditor
+            scope="environment"
+            environmentId={environmentId}
+            owner={primary?.repoOwner}
+            name={primary?.repoName}
+          />
+        </div>
+      </fieldset>
     </div>
   );
 }

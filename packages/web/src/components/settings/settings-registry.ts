@@ -160,7 +160,7 @@ export function canViewSettingsCategory(
     case "images":
       return hasPermission("image_builds.read");
     case "sandbox":
-      return hasPermission("environments.manage");
+      return hasPermission("integrations.read");
     case "scm":
     case "integrations":
       return hasPermission("integrations.read");
@@ -168,6 +168,8 @@ export function canViewSettingsCategory(
       return hasPermission("skills.read");
     case "mcp-servers":
       return hasPermission("mcp_servers.read");
+    case "data-controls":
+      return hasPermission("sessions.read.any") || hasPermission("sessions.read.own");
     default:
       return true;
   }

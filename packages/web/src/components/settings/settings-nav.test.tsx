@@ -119,4 +119,13 @@ describe("SettingsNav", () => {
     expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Workspace access" })).not.toBeInTheDocument();
   });
+
+  it("keeps read-level sandbox and environment panels visible", () => {
+    mocks.allowedPermissions = new Set(["environments.read", "integrations.read"]);
+    renderSettingsNav({ activeCategory: "environments" });
+
+    expect(screen.getByRole("button", { name: "Environments" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sandbox" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Integrations" })).toBeInTheDocument();
+  });
 });

@@ -12,6 +12,7 @@ import { CommitSigningSettings } from "./commit-signing-settings";
 import { GlobalSettingsSection } from "./github-global-settings-section";
 import { RepoOverridesSection, type RepoSettingsEntry } from "./github-repo-overrides-section";
 import { IntegrationSettingsSection } from "./integration-settings-section";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
@@ -29,6 +30,9 @@ interface ReposResponse {
 }
 
 export function GitHubIntegrationSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageGlobal = hasPermission("integrations.manage");
+  const canManageRepos = hasPermission("repositories.settings.manage");
   const { data: globalData, isLoading: globalLoading } =
     useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
@@ -74,23 +78,27 @@ export function GitHubIntegrationSettings() {
 
       <CommitSigningSettings />
 
-      <GlobalSettingsSection
-        settings={settings}
-        availableRepos={availableRepos}
-        enabledModelOptions={enabledModelOptions}
-      />
+      <fieldset disabled={!canManageGlobal} className="min-w-0">
+        <GlobalSettingsSection
+          settings={settings}
+          availableRepos={availableRepos}
+          enabledModelOptions={enabledModelOptions}
+        />
+      </fieldset>
 
       <IntegrationSettingsSection
         title="Repository Overrides"
         description="Set model, reasoning, and custom instruction overrides for specific repositories."
       >
-        <RepoOverridesSection
-          overrides={repoOverrides}
-          availableRepos={availableRepos}
-          enabledModelOptions={enabledModelOptions}
-          defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
-          defaultAutofix={defaultAutofix}
-        />
+        <fieldset disabled={!canManageRepos} className="min-w-0">
+          <RepoOverridesSection
+            overrides={repoOverrides}
+            availableRepos={availableRepos}
+            enabledModelOptions={enabledModelOptions}
+            defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
+            defaultAutofix={defaultAutofix}
+          />
+        </fieldset>
       </IntegrationSettingsSection>
     </div>
   );

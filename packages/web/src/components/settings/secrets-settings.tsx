@@ -5,10 +5,12 @@ import { useRepos } from "@/hooks/use-repos";
 import { useState } from "react";
 import { ChevronDownIcon, CheckIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SCOPE = "__global__";
 
 export function SecretsSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
   const { repos, loading: loadingRepos } = useRepos();
   const [selectedRepo, setSelectedRepo] = useState(GLOBAL_SCOPE);
 
@@ -92,7 +94,7 @@ export function SecretsSettings() {
           scope="repo"
           owner={selectedRepoObj?.owner}
           name={selectedRepoObj?.name}
-          disabled={loadingRepos}
+          disabled={loadingRepos || !hasPermission("repositories.secrets.manage")}
         />
       )}
     </div>

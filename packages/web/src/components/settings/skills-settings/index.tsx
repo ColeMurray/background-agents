@@ -3,10 +3,12 @@
 import { useState } from "react";
 import { Profiles } from "./profiles";
 import { SkillsCatalog } from "./skills-catalog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 type View = "skills" | "profiles";
 
 export function SkillsSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
   const [view, setView] = useState<View>("skills");
   return (
     <div className="max-w-3xl">
@@ -28,7 +30,11 @@ export function SkillsSettings() {
           </button>
         ))}
       </div>
-      {view === "skills" ? <SkillsCatalog /> : <Profiles />}
+      {view === "skills" ? (
+        <SkillsCatalog canManage={hasPermission("skills.manage")} />
+      ) : (
+        <Profiles canManage={hasPermission("skill_profiles.manage_own")} />
+      )}
     </div>
   );
 }

@@ -14,6 +14,10 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { SlackIntegrationSettings } from "./slack-integration-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {

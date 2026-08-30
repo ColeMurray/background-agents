@@ -70,7 +70,7 @@ afterEach(cleanup);
 describe("SkillsCatalog", () => {
   it("loads catalog pages on demand and navigates back with cursor history", async () => {
     const user = userEvent.setup();
-    render(<SkillsCatalog />);
+    render(<SkillsCatalog canManage />);
 
     expect(screen.getByText("first-skill")).toBeInTheDocument();
     expect(screen.getByText("Page 1")).toBeInTheDocument();
@@ -105,7 +105,7 @@ describe("SkillsCatalog", () => {
       error: undefined,
     });
 
-    render(<SkillsCatalog />);
+    render(<SkillsCatalog canManage />);
 
     expect(screen.getByText("· Created by User One")).toBeInTheDocument();
     expect(screen.getByText("· Created by user-2")).toBeInTheDocument();
@@ -147,7 +147,7 @@ describe("SkillsCatalog", () => {
           }
     );
     const user = userEvent.setup();
-    render(<SkillsCatalog />);
+    render(<SkillsCatalog canManage />);
 
     await user.click(screen.getByRole("button", { name: "Next" }));
 

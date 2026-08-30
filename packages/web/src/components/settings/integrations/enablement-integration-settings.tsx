@@ -30,6 +30,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 interface EnablementSettings {
   enabled?: boolean;
@@ -70,6 +71,9 @@ interface ReposResponse {
 }
 
 export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegrationCopy }) {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageGlobal = hasPermission("integrations.manage");
+  const canManageRepos = hasPermission("repositories.settings.manage");
   const globalSettingsKey = `/api/integration-settings/${copy.id}` as const;
   const repoSettingsKey = `/api/integration-settings/${copy.id}/repos` as const;
   const { data: globalData, isLoading: globalLoading } = useSWR<GlobalResponse>(globalSettingsKey);
@@ -90,20 +94,24 @@ export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegr
       <h2 className="text-lg font-semibold text-foreground mb-1">{copy.title}</h2>
       <p className="text-sm text-muted-foreground mb-6">{copy.intro}</p>
 
-      <GlobalSettingsSection
-        settings={settings}
-        availableRepos={availableRepos}
-        settingsKey={globalSettingsKey}
-        copy={copy}
-      />
-
-      <Section title="Repository Overrides" description={copy.overrideDescription}>
-        <RepoOverridesSection
-          overrides={repoOverrides}
+      <fieldset disabled={!canManageGlobal} className="min-w-0">
+        <GlobalSettingsSection
+          settings={settings}
           availableRepos={availableRepos}
-          settingsKey={repoSettingsKey}
+          settingsKey={globalSettingsKey}
           copy={copy}
         />
+      </fieldset>
+
+      <Section title="Repository Overrides" description={copy.overrideDescription}>
+        <fieldset disabled={!canManageRepos} className="min-w-0">
+          <RepoOverridesSection
+            overrides={repoOverrides}
+            availableRepos={availableRepos}
+            settingsKey={repoSettingsKey}
+            copy={copy}
+          />
+        </fieldset>
       </Section>
     </div>
   );

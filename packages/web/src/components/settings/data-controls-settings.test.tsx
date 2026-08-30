@@ -9,6 +9,10 @@ import useSWR, { SWRConfig, mutate as globalMutate } from "swr";
 import { DataControlsSettings } from "./data-controls-settings";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 const { toastMock } = vi.hoisted(() => ({
