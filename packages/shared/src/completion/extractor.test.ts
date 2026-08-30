@@ -17,6 +17,12 @@ describe("completion artifact type narrowing", () => {
       null
     );
   });
+
+  it("ignores malformed metadata while preserving artifact labels", () => {
+    expect(
+      toEventArtifactInfo({ artifactType: "branch", metadata: ["main"], url: "/branches/main" })
+    ).toEqual({ type: "branch", url: "/branches/main", label: "Branch: branch" });
+  });
 });
 
 describe("buildAgentResponseFromEvents", () => {
