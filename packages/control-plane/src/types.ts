@@ -29,10 +29,6 @@ export interface Env {
   // R2 buckets
   MEDIA_BUCKET: R2Bucket;
 
-  // Automation behaviour
-  /** "false" restores context-first automation prompts. Default: instructions first. */
-  AUTOMATION_INSTRUCTIONS_FIRST?: string;
-
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

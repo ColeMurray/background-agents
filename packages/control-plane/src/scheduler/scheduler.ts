@@ -248,28 +248,10 @@ export async function resolveAutomationProviderAuth(
 }
 
 /**
- * Compose an event-triggered automation's prompt.
- *
- * An automation's instructions are identical on every run; the event context
- * block differs each time. Provider prompt caches key on byte-identical leading
- * spans, so leading with the event context keeps the instructions off the cache
- * boundary and every run pays full price for them. Instruction-first ordering
- * holds the static portion at the head of each request for a given automation.
- *
- * This is the single composition point for both the plain event path and the
- * Slack path that enriches the context block with thread history. New call
- * sites belong here rather than in an inline template.
- *
- * Set AUTOMATION_INSTRUCTIONS_FIRST="false" to restore context-first ordering.
+ * Put stable automation instructions first so provider prompt caches can reuse
+ * them when the event-specific context changes.
  */
-export function composeAutomationPrompt(
-  env: Env,
-  contextBlock: string,
-  instructions: string
-): string {
-  if (env.AUTOMATION_INSTRUCTIONS_FIRST === "false") {
-    return `${contextBlock}\n---\n\n${instructions}`;
-  }
+export function composeAutomationPrompt(contextBlock: string, instructions: string): string {
   return `${instructions}\n---\n\n${contextBlock}`;
 }
 
@@ -880,14 +862,7 @@ export class Scheduler {
 
   // ─── Event handler ───────────────────────────────────────────────────────
 
-  /**
-   * Handle an inbound automation event: route Slack follow-ups into an
-   * already-active thread session when one exists, then match the event
-   * against enabled automations, apply concurrency and cooldown gates, and
-   * start an invocation for each automation that clears them. Prompts for
-   * those invocations are assembled by composeAutomationPrompt, so the
-   * ordering contract lives there rather than at the call sites.
-   */
+  /** Match an inbound event to automations and start or steer their invocations. */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
 
@@ -992,7 +967,7 @@ export class Scheduler {
       // a reply racing the initial trigger gets the "already active" notice
       // instead of a second session.
       const instructionsOverride = appendSlackSessionInstructions(
-        composeAutomationPrompt(this.env, event.contextBlock, automation.instructions),
+        composeAutomationPrompt(event.contextBlock, automation.instructions),
         slackSessionInstructions
       );
       const result = await this.startInvocation(store, {
@@ -1006,11 +981,7 @@ export class Scheduler {
           ? {
               instructionsOverrideFactory: async () =>
                 appendSlackSessionInstructions(
-                  composeAutomationPrompt(
-                    this.env,
-                    await slackContextBlock(event),
-                    automation.instructions
-                  ),
+                  composeAutomationPrompt(await slackContextBlock(event), automation.instructions),
                   slackSessionInstructions
                 ),
             }

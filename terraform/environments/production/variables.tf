@@ -707,12 +707,6 @@ variable "allowed_github_orgs" {
   default     = ""
 }
 
-variable "automation_instructions_first" {
-  description = "Compose event-triggered automation prompts with the automation's instructions before the event context block. Instruction-first ordering keeps the static half of the prompt at a stable offset so provider prompt caches can match it. Set to false to restore context-first ordering."
-  type        = bool
-  default     = true
-}
-
 variable "unsafe_allow_all_users" {
   description = "Bypass Terraform's access-control safety check and allow any authenticated user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
   type        = bool
