@@ -2491,8 +2491,8 @@ describe("Scheduler", () => {
       expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
-        `${sampleSlackContextBlock}\n---\n\nRun tests\n\n` +
-          "## Additional Instructions\n\nAlways run tests."
+        "Run tests\n\n## Additional Instructions\n\nAlways run tests.\n---\n\n" +
+          sampleSlackContextBlock
       );
     });
 
@@ -2512,7 +2512,7 @@ describe("Scheduler", () => {
       });
 
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
-      expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
+      expect(prompt.content).toBe(`Run tests\n---\n\n${sampleSlackContextBlock}`);
     });
 
     it("launches without workspace instructions when the settings read fails", async () => {
@@ -2528,7 +2528,7 @@ describe("Scheduler", () => {
 
       expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
-      expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
+      expect(prompt.content).toBe(`Run tests\n---\n\n${sampleSlackContextBlock}`);
     });
 
     it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {

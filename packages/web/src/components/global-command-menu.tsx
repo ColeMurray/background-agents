@@ -1,13 +1,15 @@
 "use client";
 
 import { useMemo } from "react";
+import { useCommandState } from "cmdk";
 import { formatRelativeTime } from "@/lib/time";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
 import { matchesSearchTerms } from "@/lib/search";
-import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
+import { BranchIcon, PlusIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
+import { APP_DESTINATIONS } from "@/components/app-destinations";
 import { getSettingsGroups } from "@/components/settings/settings-registry";
 import {
   Command,
@@ -49,6 +51,27 @@ function filterCommandItem(value: string, search: string, keywords?: string[]): 
   return matchesSearchTerms(`${value} ${keywords?.join(" ") ?? ""}`, search) ? 1 : 0;
 }
 
+function CommandMenuFooter() {
+  const count = useCommandState((state) => state.filtered.count);
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-[11px] text-muted-foreground">
+      <span role="status" aria-live="polite" className="mr-auto">
+        {count} {count === 1 ? "result" : "results"}
+      </span>
+      <span>
+        <kbd className="font-sans text-foreground">↑↓</kbd> Navigate
+      </span>
+      <span>
+        <kbd className="font-sans text-foreground">Enter</kbd> Select
+      </span>
+      <span>
+        <kbd className="font-sans text-foreground">Esc</kbd> Close
+      </span>
+    </div>
+  );
+}
+
 export function GlobalCommandMenu({
   open,
   onOpenChange,
@@ -68,35 +91,59 @@ export function GlobalCommandMenu({
     callback();
   };
 
+  const navigationItems = [
+    {
+      label: "New session",
+      description: "Start a coding session",
+      Icon: PlusIcon,
+      onSelect: onNewSession,
+      shortcut: labels["new-session"],
+    },
+    {
+      label: "Home",
+      description: "Ask a question or describe what you want to build",
+      Icon: AppIcon,
+      onSelect: () => onNavigate("/"),
+      shortcut: undefined,
+    },
+    ...APP_DESTINATIONS.map(({ label, description, href, icon: Icon }) => ({
+      label,
+      description,
+      Icon,
+      onSelect: () => onNavigate(href),
+      shortcut: undefined,
+    })),
+  ];
+
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
       <DialogTitle className="sr-only">Command menu</DialogTitle>
       <DialogDescription className="sr-only">
         Search and jump to sessions, settings, automations, and other destinations.
       </DialogDescription>
-      <Command filter={filterCommandItem}>
+      <Command filter={filterCommandItem} label="Search commands, settings, and sessions">
         <CommandInput placeholder="Search sessions, settings, and commands..." />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
 
           <CommandGroup heading="Navigation">
-            <CommandItem onSelect={() => handleSelect(onNewSession)}>
-              <PlusIcon className="h-4 w-4" />
-              <span>New session</span>
-              <CommandShortcut>{labels["new-session"]}</CommandShortcut>
-            </CommandItem>
-            <CommandItem onSelect={() => handleSelect(() => onNavigate("/"))}>
-              <AppIcon className="h-4 w-4" />
-              <span>Home</span>
-            </CommandItem>
-            <CommandItem onSelect={() => handleSelect(() => onNavigate("/settings"))}>
-              <SettingsIcon className="h-4 w-4" />
-              <span>Settings</span>
-            </CommandItem>
-            <CommandItem onSelect={() => handleSelect(() => onNavigate("/automations"))}>
-              <AutomationsIcon className="h-4 w-4" />
-              <span>Automations</span>
-            </CommandItem>
+            {navigationItems.map(({ label, description, Icon, onSelect, shortcut }) => (
+              <CommandItem
+                key={label}
+                value={`${label} ${description}`}
+                onSelect={() => handleSelect(onSelect)}
+                className="items-start"
+              >
+                <span aria-hidden="true" className="mt-0.5 shrink-0">
+                  <Icon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{label}</div>
+                  <div className="truncate text-xs text-muted-foreground">{description}</div>
+                </div>
+                {shortcut && <CommandShortcut>{shortcut}</CommandShortcut>}
+              </CommandItem>
+            ))}
           </CommandGroup>
 
           <CommandSeparator />
@@ -154,6 +201,7 @@ export function GlobalCommandMenu({
             </>
           )}
         </CommandList>
+        <CommandMenuFooter />
       </Command>
     </CommandDialog>
   );
