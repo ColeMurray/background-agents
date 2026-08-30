@@ -1,4 +1,8 @@
-import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
+import {
+  SCOPED_PERMISSION_PAIRS,
+  type EffectiveAuthorization,
+  type PermissionId,
+} from "@open-inspect/shared/rbac";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 
@@ -40,8 +44,9 @@ function authPredicate(
   operation: AutomationAuthorizationOperation,
   requiredPermissions: readonly PermissionId[]
 ): { sql: string; values: (string | number)[] } {
-  const anyGuard = rolePermissionPredicate(`automations.${operation}.any`);
-  const ownGuard = rolePermissionPredicate(`automations.${operation}.own`);
+  const permissionPair = SCOPED_PERMISSION_PAIRS[`automations.${operation}`];
+  const anyGuard = rolePermissionPredicate(permissionPair.any);
+  const ownGuard = rolePermissionPredicate(permissionPair.own);
   const requiredPermissionGuards = requiredPermissions.map(rolePermissionPredicate);
   return {
     sql: `u.id = ? AND u.suspended_at IS NULL

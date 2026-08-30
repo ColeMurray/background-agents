@@ -11,7 +11,11 @@ import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
 import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
-import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
+import type {
+  EffectiveAuthorization,
+  PermissionId,
+  ScopedPermissionStem,
+} from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { AutomationRow } from "../db/automation-store";
 import type { SqlStatement } from "../db/sql-database";
@@ -80,6 +84,7 @@ export type SessionAuthorizationOperation =
 
 export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
+  | { kind: "scoped-permission"; stem: ScopedPermissionStem }
   | { kind: "session"; operation: SessionAuthorizationOperation; sessionIdParam: string }
   | {
       kind: "automation";
@@ -142,6 +147,17 @@ export function requirePermission(
     kind: "active-user",
     allOf: [permissionRequirement(permission)],
     service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
+  };
+}
+
+export function requireScopedPermission(
+  stem: ScopedPermissionStem,
+  options?: { service?: "actor" }
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [{ kind: "scoped-permission", stem }],
+    service: options?.service === "actor" ? { kind: "actor" } : { kind: "deny" },
   };
 }
 

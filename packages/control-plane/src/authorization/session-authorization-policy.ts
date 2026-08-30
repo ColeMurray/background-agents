@@ -1,14 +1,19 @@
-import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
+import {
+  resolveScopedPermission,
+  type EffectiveAuthorization,
+  type PermissionScope,
+  type ScopedPermissionStem,
+} from "@open-inspect/shared/rbac";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionAuthorizationOperation } from "../routes/shared";
 
 export type SessionRelation = "creator" | "participant";
-export type SessionPermissionScope = "any" | "own";
+export type SessionPermissionScope = PermissionScope;
 export type SessionRelationshipError = "creator_required" | "session_access_required";
 
 const OPERATION_DEFINITIONS: Record<
   SessionAuthorizationOperation,
-  { permissionStem: `sessions.${string}`; requiredRelation: "access" | "creator" }
+  { permissionStem: ScopedPermissionStem; requiredRelation: "access" | "creator" }
 > = {
   read: { permissionStem: "sessions.read", requiredRelation: "access" },
   collaborate: { permissionStem: "sessions.collaborate", requiredRelation: "access" },
@@ -26,9 +31,13 @@ export function sessionPermissionScope(
   operation: SessionAuthorizationOperation
 ): SessionPermissionScope | null {
   const { permissionStem } = OPERATION_DEFINITIONS[operation];
-  if (authorization.permissions.includes(`${permissionStem}.any` as PermissionId)) return "any";
-  if (authorization.permissions.includes(`${permissionStem}.own` as PermissionId)) return "own";
-  return null;
+  return resolveScopedPermission(permissionStem, authorization.permissions);
+}
+
+export function sessionPermissionStem(
+  operation: SessionAuthorizationOperation
+): ScopedPermissionStem {
+  return OPERATION_DEFINITIONS[operation].permissionStem;
 }
 
 export function sessionRelationshipDecision(

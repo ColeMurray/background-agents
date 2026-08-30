@@ -20,9 +20,10 @@ import { AutomationStore } from "./db/automation-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { bindAutomationAuthorizationGuard } from "./automation/authorization-guard";
+import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
 import {
   getSessionRelation,
-  sessionPermissionScope,
+  sessionPermissionStem,
   sessionRelationshipDecision,
 } from "./authorization/session-authorization-policy";
 import { createLogger } from "./logger";
@@ -423,6 +424,28 @@ async function enforcePermissionRequirement(
   );
 }
 
+async function enforceScopedPermissionRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "scoped-permission" }>,
+  ctx: RequestContext
+): Promise<Response | null> {
+  const userId = authorizationUserId(ctx);
+  if (!userId) return null;
+  const pair = SCOPED_PERMISSION_PAIRS[requirement.stem];
+  if (
+    ctx.principal?.kind === "service" &&
+    !serviceAllowsPermission(ctx.principal.service, pair.own)
+  ) {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  }
+  if (
+    ctx.authorization &&
+    resolveScopedPermission(requirement.stem, ctx.authorization.permissions)
+  ) {
+    return null;
+  }
+  return json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403);
+}
+
 async function enforceSessionRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "session" }>,
   match: RegExpMatchArray,
@@ -442,14 +465,15 @@ async function enforceSessionRequirement(
   try {
     const authorization = ctx.authorization;
     if (!authorization) throw new Error("Missing request authorization");
-    const ownPermission = `sessions.${requirement.operation}.own` as const;
+    const permissionStem = sessionPermissionStem(requirement.operation);
+    const ownPermission = SCOPED_PERMISSION_PAIRS[permissionStem].own;
     if (
       ctx.principal?.kind === "service" &&
       !serviceAllowsPermission(ctx.principal.service, ownPermission)
     ) {
       return json({ error: "Forbidden", code: "service_capability_required" }, 403);
     }
-    const resolvedScope = sessionPermissionScope(authorization, requirement.operation);
+    const resolvedScope = resolveScopedPermission(permissionStem, authorization.permissions);
     if (!resolvedScope) {
       return json(
         { error: "Forbidden", code: "permission_required", permission: ownPermission },
@@ -487,12 +511,12 @@ async function enforceAutomationRequirement(
     const automation = await new AutomationStore(ctx.db).getById(automationId);
     if (!automation) return error("Automation not found", 404);
 
-    const anyPermission = `automations.${requirement.operation}.any` as const;
-    const ownPermission = `automations.${requirement.operation}.own` as const;
+    const permissionStem = `automations.${requirement.operation}` as const;
+    const permissionScope = resolveScopedPermission(permissionStem, authorization.permissions);
+    const ownPermission = SCOPED_PERMISSION_PAIRS[permissionStem].own;
     if (
-      !authorization.permissions.includes(anyPermission) &&
-      (!authorization.permissions.includes(ownPermission) ||
-        automation.user_id !== ctx.principal.userId)
+      !permissionScope ||
+      (permissionScope === "own" && automation.user_id !== ctx.principal.userId)
     ) {
       return json(
         { error: "Forbidden", code: "permission_required", permission: ownPermission },
@@ -531,12 +555,21 @@ async function enforceRouteAuthorization(
     return json({ error: "Forbidden", code: "service_capability_required" }, 403);
   }
   for (const requirement of route.authorization.allOf) {
-    const authorizationError =
-      requirement.kind === "permission"
-        ? await enforcePermissionRequirement(requirement, ctx)
-        : requirement.kind === "session"
-          ? await enforceSessionRequirement(requirement, match, ctx)
-          : await enforceAutomationRequirement(requirement, match, ctx);
+    let authorizationError: Response | null;
+    switch (requirement.kind) {
+      case "permission":
+        authorizationError = await enforcePermissionRequirement(requirement, ctx);
+        break;
+      case "scoped-permission":
+        authorizationError = await enforceScopedPermissionRequirement(requirement, ctx);
+        break;
+      case "session":
+        authorizationError = await enforceSessionRequirement(requirement, match, ctx);
+        break;
+      case "automation":
+        authorizationError = await enforceAutomationRequirement(requirement, match, ctx);
+        break;
+    }
     if (authorizationError) return authorizationError;
   }
   return null;

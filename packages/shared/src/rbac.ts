@@ -77,6 +77,55 @@ export const PERMISSION_IDS = [
 ] as const;
 
 export type PermissionId = (typeof PERMISSION_IDS)[number];
+
+export const SCOPED_PERMISSION_PAIRS = {
+  "automations.manage": {
+    any: "automations.manage.any",
+    own: "automations.manage.own",
+  },
+  "automations.trigger": {
+    any: "automations.trigger.any",
+    own: "automations.trigger.own",
+  },
+  "sessions.collaborate": {
+    any: "sessions.collaborate.any",
+    own: "sessions.collaborate.own",
+  },
+  "sessions.delete": {
+    any: "sessions.delete.any",
+    own: "sessions.delete.own",
+  },
+  "sessions.lifecycle": {
+    any: "sessions.lifecycle.any",
+    own: "sessions.lifecycle.own",
+  },
+  "sessions.participants.manage": {
+    any: "sessions.participants.manage.any",
+    own: "sessions.participants.manage.own",
+  },
+  "sessions.read": {
+    any: "sessions.read.any",
+    own: "sessions.read.own",
+  },
+  "sessions.sandbox_access": {
+    any: "sessions.sandbox_access.any",
+    own: "sessions.sandbox_access.own",
+  },
+} as const satisfies Record<string, { any: PermissionId; own: PermissionId }>;
+
+export type ScopedPermissionStem = keyof typeof SCOPED_PERMISSION_PAIRS;
+export type PermissionScope = "any" | "own";
+
+export function resolveScopedPermission(
+  stem: ScopedPermissionStem,
+  permissions: readonly PermissionId[]
+): PermissionScope | null {
+  const pair = SCOPED_PERMISSION_PAIRS[stem];
+  if (permissions.includes(pair.any)) return "any";
+  if (permissions.includes(pair.own)) return "own";
+  return null;
+}
+
 const MEMBER_PERMISSIONS = new Set<PermissionId>([
   "automations.create",
   "automations.manage.own",

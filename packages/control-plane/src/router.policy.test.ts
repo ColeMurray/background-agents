@@ -109,6 +109,16 @@ describe("route policy table", () => {
   });
 
   it("keeps contextual route requirements explicit", () => {
+    expect(routeFor("GET", "/sessions")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "scoped-permission", stem: "sessions.read" }],
+      service: { kind: "actor" },
+    });
+    expect(routeFor("GET", "/sessions/inbox")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "scoped-permission", stem: "sessions.read" }],
+      service: { kind: "deny" },
+    });
     expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [

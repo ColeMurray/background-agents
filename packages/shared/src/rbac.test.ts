@@ -3,10 +3,12 @@ import {
   BUILT_IN_ROLE_KEYS,
   BUILT_IN_ROLE_REGISTRY,
   PERMISSION_IDS,
+  SCOPED_PERMISSION_PAIRS,
   createRoleInputSchema,
   effectiveAuthorizationSchema,
   normalizeRoleName,
   permissionsForBuiltInRole,
+  resolveScopedPermission,
   replaceMemberRoleInputSchema,
   replaceMemberStatusInputSchema,
 } from "./rbac";
@@ -43,6 +45,21 @@ describe("RBAC registry", () => {
     expect(PERMISSION_IDS).toHaveLength(50);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
+  });
+
+  it("owns every any/own permission pair and resolves any before own", () => {
+    const scopedPermissions = Object.values(SCOPED_PERMISSION_PAIRS).flatMap(({ any, own }) => [
+      any,
+      own,
+    ]);
+    expect(new Set(scopedPermissions)).toEqual(
+      new Set(PERMISSION_IDS.filter((permission) => /\.(any|own)$/.test(permission)))
+    );
+    expect(
+      resolveScopedPermission("sessions.read", ["sessions.read.own", "sessions.read.any"])
+    ).toBe("any");
+    expect(resolveScopedPermission("sessions.read", ["sessions.read.own"])).toBe("own");
+    expect(resolveScopedPermission("sessions.read", [])).toBeNull();
   });
 
   it("assigns every permission explicitly to Owner", () => {

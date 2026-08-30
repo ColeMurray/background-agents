@@ -27,6 +27,7 @@ import type {
   SlackCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
@@ -956,10 +957,11 @@ export class Scheduler {
         if (steerable?.session_id) {
           let ownerAuthorized: boolean;
           try {
-            ownerAuthorized = await isAutomationExecutionAuthorized(this.db, automation.id, [
-              "sessions.collaborate.any",
-              "sessions.collaborate.own",
-            ]);
+            ownerAuthorized = await isAutomationExecutionAuthorized(
+              this.db,
+              automation.id,
+              Object.values(SCOPED_PERMISSION_PAIRS["sessions.collaborate"])
+            );
           } catch (error) {
             this.log.warn("Failed to authorize automation owner for slack steering", {
               event: "scheduler.slack_steer_authorization_failed",
