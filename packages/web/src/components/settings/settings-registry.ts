@@ -12,6 +12,7 @@ import {
   TerminalIcon,
 } from "@/components/ui/icons";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
+import { matchesSearchTerms } from "@/lib/search";
 
 export const SETTINGS_GROUPS = [
   {
@@ -132,7 +133,6 @@ type SettingsItem = (typeof SETTINGS_GROUPS)[number]["items"][number];
 export type SettingsCategory = SettingsItem["id"];
 export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = "secrets";
 export const DEFAULT_SETTINGS_QUERY = "";
-export const DEFAULT_INCLUDE_GLOBAL_SETTINGS_ALIASES = false;
 
 function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean): boolean {
   return !("requiresRepoImages" in item) || repoImagesEnabled;
@@ -141,21 +141,15 @@ function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean)
 export function getSettingsGroups({
   query = DEFAULT_SETTINGS_QUERY,
   repoImagesEnabled = supportsRepoImages(),
-  includeGlobalAliases = DEFAULT_INCLUDE_GLOBAL_SETTINGS_ALIASES,
 }: {
   query?: string;
   repoImagesEnabled?: boolean;
-  includeGlobalAliases?: boolean;
 } = {}) {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return SETTINGS_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
       if (!isSettingsItemAvailable(item, repoImagesEnabled)) return false;
-      const aliases = includeGlobalAliases ? `settings ${group.label}` : "";
-      const searchText =
-        `${aliases} ${item.label} ${item.description} ${item.keywords}`.toLowerCase();
-      return terms.every((term) => searchText.includes(term));
+      return matchesSearchTerms(`${item.label} ${item.description} ${item.keywords}`, query);
     }),
   })).filter((group) => group.items.length > 0);
 }

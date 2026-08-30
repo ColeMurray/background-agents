@@ -5,6 +5,7 @@ import { formatRelativeTime } from "@/lib/time";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
+import { matchesSearchTerms } from "@/lib/search";
 import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
 import { getSettingsGroups } from "@/components/settings/settings-registry";
@@ -45,9 +46,7 @@ function buildSessionUrl(session: SessionListItem): string {
 }
 
 function filterCommandItem(value: string, search: string, keywords?: string[]): number {
-  const searchText = `${value} ${keywords?.join(" ") ?? ""}`.toLowerCase();
-  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  return terms.every((term) => searchText.includes(term)) ? 1 : 0;
+  return matchesSearchTerms(`${value} ${keywords?.join(" ") ?? ""}`, search) ? 1 : 0;
 }
 
 export function GlobalCommandMenu({
@@ -62,7 +61,7 @@ export function GlobalCommandMenu({
     () => sessions.filter((session) => session.status !== "archived"),
     [sessions]
   );
-  const settingsGroups = getSettingsGroups({ includeGlobalAliases: true });
+  const settingsGroups = getSettingsGroups();
 
   const handleSelect = (callback: () => void) => {
     onOpenChange(false);
