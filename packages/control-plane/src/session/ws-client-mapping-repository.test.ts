@@ -35,13 +35,27 @@ describe("WsClientMappingRepository", () => {
   });
 
   it("restores a mapping with joined participant data", () => {
-    mock.setRows([{ participant_id: "p-1", client_id: "client-1", user_id: "user-1" }]);
-    expect(repository.getWsClientMapping("ws-1")).toMatchObject({
+    mock.setRows([
+      {
+        participant_id: "p-1",
+        client_id: null,
+        user_id: "user-1",
+        canonical_user_id: null,
+        scm_name: "Test User",
+        scm_login: "test-user",
+      },
+    ]);
+    expect(repository.getWsClientMapping("ws-1")).toEqual({
       participant_id: "p-1",
-      client_id: "client-1",
+      client_id: null,
       user_id: "user-1",
+      canonical_user_id: null,
+      scm_name: "Test User",
+      scm_login: "test-user",
     });
     expect(mock.calls[0].query).toContain("JOIN participants");
+    expect(mock.calls[0].query).toContain("p.canonical_user_id");
+    expect(mock.calls[0].query).not.toContain("auth_name");
   });
 
   it("returns null for an unknown mapping", () => {
