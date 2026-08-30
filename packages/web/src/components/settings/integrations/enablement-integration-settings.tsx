@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -10,6 +10,7 @@ import {
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { IntegrationId, IntegrationEntry } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
+import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { RadioCard } from "@/components/ui/form-controls";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -97,14 +98,14 @@ export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegr
         copy={copy}
       />
 
-      <Section title="Repository Overrides" description={copy.overrideDescription}>
+      <SettingsCardSection title="Repository Overrides" description={copy.overrideDescription}>
         <RepoOverridesSection
           overrides={repoOverrides}
           availableRepos={availableRepos}
           settingsKey={repoSettingsKey}
           copy={copy}
         />
-      </Section>
+      </SettingsCardSection>
     </div>
   );
 }
@@ -207,7 +208,7 @@ function GlobalSettingsSection({
   };
 
   return (
-    <Section title="Defaults & Scope" description={copy.scopeDescription}>
+    <SettingsCardSection title="Defaults & Scope" description={copy.scopeDescription}>
       <div className="mb-4">
         <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
           <div>
@@ -312,7 +313,7 @@ function GlobalSettingsSection({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </SettingsCardSection>
   );
 }
 
@@ -492,25 +493,5 @@ function RepoOverrideRow({
         </Button>
       </div>
     </div>
-  );
-}
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="border border-border-muted rounded-md p-5 mb-5">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
-        {title}
-      </h3>
-      <p className="text-sm text-muted-foreground mb-4">{description}</p>
-      {children}
-    </section>
   );
 }

@@ -56,6 +56,52 @@ function renderMenu(sessions: SessionListItem[] = []) {
 }
 
 describe("GlobalCommandMenu", () => {
+  it("shows complete navigation with descriptions", () => {
+    renderMenu();
+
+    expect(screen.getByText("Start a coding session")).toBeInTheDocument();
+    expect(
+      screen.getByText("Ask a question or describe what you want to build")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Configure Open Inspect")).toBeInTheDocument();
+    expect(screen.getByText("Manage scheduled and event-triggered work")).toBeInTheDocument();
+    expect(
+      screen.getByText("View usage across sessions, repositories, and users")
+    ).toBeInTheDocument();
+  });
+
+  it("selects Analytics from the keyboard", async () => {
+    const user = userEvent.setup();
+    const { onNavigate, onOpenChange } = renderMenu();
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+
+    await user.type(input, "analytics{Enter}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onNavigate).toHaveBeenCalledWith("/analytics");
+  });
+
+  it("shows keyboard guidance and updates the result count", async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+    const count = screen.getByRole("status");
+
+    expect(count).toHaveTextContent(`${screen.getAllByRole("option").length} results`);
+    expect(screen.getByText("Navigate")).toBeInTheDocument();
+    expect(screen.getByText("Select")).toBeInTheDocument();
+    expect(screen.getByText("Close")).toBeInTheDocument();
+
+    await user.type(input, "no matching command destination");
+
+    await waitFor(() => expect(count).toHaveTextContent("0 results"));
+    expect(screen.getByText("No results found.")).toBeInTheDocument();
+  });
+
   it("navigates directly to a settings destination", async () => {
     const user = userEvent.setup();
     const { onNavigate, onOpenChange } = renderMenu();

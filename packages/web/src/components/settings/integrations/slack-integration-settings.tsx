@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
@@ -28,6 +28,7 @@ import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ENVIRONMENTS_KEY } from "@/hooks/use-environments";
 import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/session-target";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
+import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
 import { RadioCard } from "@/components/ui/form-controls";
@@ -142,7 +143,7 @@ export function SlackIntegrationSettings() {
         the control plane — the Slack token never enters the sandbox.
       </p>
 
-      <Section
+      <SettingsCardSection
         title="Channel access"
         description={`${APP_NAME} does not maintain its own channel allowlist.`}
       >
@@ -151,7 +152,7 @@ export function SlackIntegrationSettings() {
           Slack. The bot can post only to channels it&apos;s a member of; remove access by kicking
           the bot from the channel.
         </p>
-      </Section>
+      </SettingsCardSection>
 
       <GlobalSettingsSection settings={settings} />
 
@@ -163,12 +164,12 @@ export function SlackIntegrationSettings() {
         environmentsLoaded={environmentsLoaded}
       />
 
-      <Section
+      <SettingsCardSection
         title="Repository overrides"
         description="Override the master switch for specific repositories. Mentions policy is workspace-wide and is not overridable per repo."
       >
         <RepoOverridesSection overrides={repoOverrides} availableRepos={availableRepos} />
-      </Section>
+      </SettingsCardSection>
     </div>
   );
 }
@@ -278,7 +279,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   };
 
   return (
-    <Section
+    <SettingsCardSection
       title="Defaults"
       description="Workspace-wide settings for agent-initiated Slack posts."
     >
@@ -428,7 +429,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </SettingsCardSection>
   );
 }
 
@@ -743,7 +744,7 @@ function RoutingRulesSection({
   ));
 
   return (
-    <Section
+    <SettingsCardSection
       title="Routing rules"
       description="Map keywords to repositories or environments. When a Slack message contains a keyword, the agent is routed to that target before falling back to channel association or automatic detection."
     >
@@ -870,26 +871,6 @@ function RoutingRulesSection({
         Keywords match whole words, case-insensitively. Point each keyword at one repository or
         environment; the same keyword on two targets will prompt for a choice instead of guessing.
       </p>
-    </Section>
-  );
-}
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="border border-border-muted rounded-md p-5 mb-5">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
-        {title}
-      </h3>
-      <p className="text-sm text-muted-foreground mb-4">{description}</p>
-      {children}
-    </section>
+    </SettingsCardSection>
   );
 }
