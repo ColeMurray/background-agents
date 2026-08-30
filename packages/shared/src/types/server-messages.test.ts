@@ -202,4 +202,50 @@ describe("session view contracts", () => {
       })
     ).toMatchObject({ clientRequestId: "request-1" });
   });
+
+  it("parses budget state in snapshots and subscriptions", () => {
+    const parsed = serverMessageSchema.parse({
+      type: "subscribed",
+      session: {
+        ...snapshotState,
+        totalCost: 8.25,
+        maxSessionCostUsd: 10,
+        budgetExhausted: false,
+        costTrackingUnavailable: true,
+      },
+      artifacts: [],
+      promptQueue: [],
+      participantId: "participant-1",
+      canManageBudget: true,
+      timeline: { events: [], hasMore: false, cursor: null },
+    });
+
+    expect(parsed).toMatchObject({
+      canManageBudget: true,
+      session: {
+        totalCost: 8.25,
+        maxSessionCostUsd: 10,
+        budgetExhausted: false,
+        costTrackingUnavailable: true,
+      },
+    });
+  });
+
+  it("parses authoritative budget status updates", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "budget_status",
+        totalCost: 10.25,
+        maxSessionCostUsd: 10,
+        budgetExhausted: true,
+        costTrackingUnavailable: false,
+      })
+    ).toEqual({
+      type: "budget_status",
+      totalCost: 10.25,
+      maxSessionCostUsd: 10,
+      budgetExhausted: true,
+      costTrackingUnavailable: false,
+    });
+  });
 });

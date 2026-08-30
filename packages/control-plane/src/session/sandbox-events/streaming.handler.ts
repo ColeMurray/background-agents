@@ -5,6 +5,7 @@ import type { CallbackNotificationService } from "../callback-notification-servi
 import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
 import type { SessionCoreRepository } from "../session-core-repository";
+import type { SessionBudgetService } from "../budget-service";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
 /**
@@ -22,7 +23,8 @@ export class SandboxStreamingEventHandler {
     private readonly eventRepository: EventRepository,
     private readonly callbackService: CallbackNotificationService,
     private readonly messenger: SessionMessenger,
-    private readonly updateLastActivity: (timestamp: number) => void
+    private readonly updateLastActivity: (timestamp: number) => void,
+    private readonly budgetService: SessionBudgetService
   ) {}
 
   handleToken(event: Extract<SandboxEvent, { type: "token" }>, context: SandboxEventContext): void {
@@ -47,20 +49,30 @@ export class SandboxStreamingEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
   }
 
-  handleStep(
+  async handleStep(
     event: Extract<SandboxEvent, { type: "step_start" | "step_finish" }>,
     context: SandboxEventContext
-  ): void {
+  ): Promise<void> {
     this.updateLastActivity(context.now);
+    let totalCost: number | null = null;
     if (
       event.type === "step_finish" &&
       typeof event.cost === "number" &&
       Number.isFinite(event.cost) &&
       event.cost > 0
     ) {
-      this.repository.addSessionCost(event.cost, context.now);
+      totalCost = this.repository.addSessionCost(event.cost, context.now);
     }
     this.messenger.broadcast({ type: "sandbox_event", event });
+    if (totalCost !== null) {
+      await this.budgetService.evaluateObservedCost(totalCost, context.messageId, context.now);
+    } else if (event.type === "step_finish" && event.cost === undefined) {
+      this.budgetService.recordCostTrackingUnavailable(
+        event.tokens,
+        context.messageId,
+        context.now
+      );
+    }
   }
 
   handleToolCall(

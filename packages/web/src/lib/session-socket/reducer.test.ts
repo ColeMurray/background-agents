@@ -240,6 +240,28 @@ describe("sessionSocketReducer", () => {
   });
 
   describe("subscribed", () => {
+    it("hydrates budget management capability and applies authoritative budget updates", () => {
+      const subscribed = subscribedState({ canManageBudget: true });
+      const state = reduce(
+        subscribed,
+        serverMessage({
+          type: "budget_status",
+          totalCost: 10.5,
+          maxSessionCostUsd: 10,
+          budgetExhausted: true,
+          costTrackingUnavailable: false,
+        })
+      );
+
+      expect(state.canManageBudget).toBe(true);
+      expect(state.sessionState).toMatchObject({
+        totalCost: 10.5,
+        maxSessionCostUsd: 10,
+        budgetExhausted: true,
+        costTrackingUnavailable: false,
+      });
+    });
+
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({
         session: createSessionState({

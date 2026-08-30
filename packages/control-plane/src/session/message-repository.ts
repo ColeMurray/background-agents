@@ -11,7 +11,7 @@ type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete"
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
 
-interface RecordedMessageCompletion {
+export interface RecordedMessageCompletion {
   messageId: string;
   messageCreatedAt: number;
   messageStartedAt: number | null;
@@ -39,7 +39,7 @@ export interface CreateMessageData {
 }
 
 export interface AdmitAutofixMessageData {
-  message: CreateMessageData;
+  message: Omit<CreateMessageData, "authorId"> & { authorId: string | (() => string) };
   feedbackKey: string;
   pullRequestKey: string;
   originContext: string;
@@ -51,7 +51,10 @@ export interface AdmitAutofixMessageData {
 export type AutofixMessageAdmission =
   | { kind: "enqueued"; messageId: string }
   | { kind: "duplicate"; messageId: string }
-  | { kind: "rejected"; reason: "session_closed" | "queue_full" | "attempt_limit" };
+  | {
+      kind: "rejected";
+      reason: "session_closed" | "budget_exhausted" | "queue_full" | "attempt_limit";
+    };
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {
@@ -172,6 +175,14 @@ export class MessageRepository {
       if (existingMessageId) {
         return { kind: "duplicate", messageId: existingMessageId };
       }
+      const budget = (
+        this.sql.exec(`SELECT budget_exhausted FROM session LIMIT 1`).toArray() as Array<{
+          budget_exhausted: number;
+        }>
+      )[0];
+      if (budget?.budget_exhausted === 1) {
+        return { kind: "rejected", reason: "budget_exhausted" };
+      }
       if (data.sessionClosed) {
         return { kind: "rejected", reason: "session_closed" };
       }
@@ -195,6 +206,10 @@ export class MessageRepository {
 
       this.createMessage({
         ...data.message,
+        authorId:
+          typeof data.message.authorId === "function"
+            ? data.message.authorId()
+            : data.message.authorId,
         autofixFeedbackKey: data.feedbackKey,
         autofixPrKey: data.pullRequestKey,
         originContext: data.originContext,

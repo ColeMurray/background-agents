@@ -25,6 +25,7 @@ import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
+import { BudgetSection } from "./sidebar/budget-section";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -41,6 +42,7 @@ interface SessionRightSidebarProps {
   diffLoading?: boolean;
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
+  canManageBudget?: boolean;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
@@ -59,6 +61,7 @@ export function SessionRightSidebarContent({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = false,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
@@ -123,7 +126,13 @@ export function SessionRightSidebarContent({
           environmentName={sessionState.environmentName}
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
-          totalCost={sessionState.totalCost}
+        />
+        <BudgetSection
+          sessionId={sessionId}
+          totalCost={sessionState.totalCost ?? 0}
+          maxSessionCostUsd={sessionState.maxSessionCostUsd}
+          costTrackingUnavailable={sessionState.costTrackingUnavailable}
+          canManageBudget={canManageBudget}
         />
       </div>
 

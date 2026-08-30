@@ -210,7 +210,31 @@ describe("MessageRepository", () => {
         sessionClosed: true,
       })
     ).toEqual({ kind: "rejected", reason: "session_closed" });
-    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  it("rejects new Autofix feedback when the session budget is exhausted", () => {
+    mock.setData(`SELECT budget_exhausted FROM session LIMIT 1`, [{ budget_exhausted: 1 }]);
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "budget_exhausted" });
+    expect(mock.calls).toHaveLength(2);
   });
 
   it("rejects Autofix admission when the rolling PR cap is reached", () => {
@@ -234,7 +258,7 @@ describe("MessageRepository", () => {
         sessionClosed: false,
       })
     ).toEqual({ kind: "rejected", reason: "attempt_limit" });
-    expect(mock.calls).toHaveLength(3);
+    expect(mock.calls).toHaveLength(4);
   });
 
   it("admits Autofix feedback without checking the rolling count when there is no limit", () => {
@@ -282,7 +306,7 @@ describe("MessageRepository", () => {
         sessionClosed: false,
       })
     ).toEqual({ kind: "rejected", reason: "queue_full" });
-    expect(mock.calls).toHaveLength(2);
+    expect(mock.calls).toHaveLength(3);
   });
 
   it("admits Autofix metadata without creating an admission-time event", () => {

@@ -38,6 +38,7 @@ function ComposerHarness({
   status = "active",
   submitError = null,
   withSkill = false,
+  blockedReason,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
@@ -46,6 +47,7 @@ function ComposerHarness({
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
   withSkill?: boolean;
+  blockedReason?: string;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -64,6 +66,7 @@ function ComposerHarness({
         isProcessing,
         draftLocked: isUploading,
         sendBlocked: connecting,
+        blockedReason,
         submitError,
         inputRef,
         onSubmit: vi.fn(),
@@ -176,6 +179,19 @@ describe("SessionPromptComposer", () => {
     render(<ComposerHarness initialValue="Keep me" submitError="The prompt queue is full" />);
     expect(screen.getByRole("alert")).toHaveTextContent("The prompt queue is full");
     expect(screen.getByDisplayValue("Keep me")).toBeInTheDocument();
+  });
+
+  it("shows a persistent budget pause reason while preserving the draft", () => {
+    render(
+      <ComposerHarness
+        initialValue="Continue later"
+        connecting
+        blockedReason="Session cost limit reached. Raise or remove the limit to continue."
+      />
+    );
+    expect(screen.getByText(/Session cost limit reached/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Send/)).toBeDisabled();
+    expect(screen.getByDisplayValue("Continue later")).toBeEnabled();
   });
 
   it("offers pinned skills in the follow-up textarea", async () => {

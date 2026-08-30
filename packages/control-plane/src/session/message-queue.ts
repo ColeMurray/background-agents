@@ -1,10 +1,7 @@
 import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
-import type {
-  SessionAttachmentReference,
-  ResolvedSessionAttachment,
-} from "@open-inspect/shared/types/session-attachments";
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
   GitHubAutofixOrigin,
   GitHubAutofixSessionCommand,
@@ -18,7 +15,6 @@ import {
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
-import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
@@ -40,6 +36,7 @@ import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
+import type { AlarmDeadlineStore } from "./alarm/scheduler";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -47,35 +44,16 @@ import {
   SessionAttachmentError,
   resolveSessionAttachments,
 } from "./session-attachment-resolver";
+import type {
+  BudgetStopPreparation,
+  EnqueuedPrompt,
+  EnqueuePromptCoreData,
+  PromptMessageData,
+  RecordedMessageFailure,
+  StopExecutionOptions,
+} from "./message-queue-types";
 
-interface PromptMessageData {
-  clientRequestId?: string;
-  content: string;
-  model?: string;
-  reasoningEffort?: string;
-  attachments?: SessionAttachmentReference[];
-}
-
-interface StopExecutionOptions {
-  suppressStatusReconcile?: boolean;
-}
-
-interface EnqueuePromptCoreData {
-  participant: ParticipantRow;
-  userId: string;
-  content: string;
-  source: MessageSource;
-  model?: string;
-  reasoningEffort?: string;
-  attachments?: SessionAttachmentReference[];
-  callbackContext?: Record<string, unknown>;
-  clientRequestId?: string;
-}
-
-interface EnqueuedPrompt {
-  messageId: string;
-  position: number | null;
-}
+export type { BudgetStopPreparation } from "./message-queue-types";
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
@@ -94,6 +72,15 @@ export class SessionNotPromptableError extends Error {
   constructor(readonly sessionStatus: SessionRow["status"]) {
     super(`Cannot prompt a ${sessionStatus} session`);
     this.name = "SessionNotPromptableError";
+  }
+}
+
+export class BudgetExhaustedError extends Error {
+  constructor() {
+    super(
+      "Session cost limit reached. The session owner must raise or remove the limit to continue."
+    );
+    this.name = "BudgetExhaustedError";
   }
 }
 
@@ -168,6 +155,7 @@ export class SessionMessageQueue {
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
+    private readonly alarmDeadlines: AlarmDeadlineStore,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number
   ) {}
@@ -177,21 +165,22 @@ export class SessionMessageQueue {
   ): Promise<EnqueueAutofixResponse> {
     const session = this.repository.getSession();
     const userId = `github:${command.author.id}`;
-    let participant = this.participantService.getByUserId(userId);
-    if (!participant) {
-      participant = this.participantService.create(userId, command.author.login);
-    }
-    this.participantRepository.updateParticipantCoalesce(participant.id, {
-      scmUserId: command.author.id,
-      scmLogin: command.author.login,
-      scmName: command.author.login,
-    });
-
     const now = Date.now();
     const admission = this.messageRepository.admitAutofixMessage({
       message: {
         id: generateId(),
-        authorId: participant.id,
+        authorId: () => {
+          let participant = this.participantService.getByUserId(userId);
+          if (!participant) {
+            participant = this.participantService.create(userId, command.author.login);
+          }
+          this.participantRepository.updateParticipantCoalesce(participant.id, {
+            scmUserId: command.author.id,
+            scmLogin: command.author.login,
+            scmName: command.author.login,
+          });
+          return participant.id;
+        },
         content: command.prompt,
         source: "github",
         status: "pending",
@@ -249,7 +238,7 @@ export class SessionMessageQueue {
       let participant = this.participantRepository.getParticipantById(client.participantId);
       participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
-        this.assertQueueCapacity();
+        this.assertBudgetAvailable();
         participant = this.participantService.create(client.userId, client.name);
       }
       enqueued = await this.enqueuePromptCore({
@@ -294,6 +283,15 @@ export class SessionMessageQueue {
         this.wsManager.send(ws, {
           type: "error",
           code: "PROMPT_REQUEST_CONFLICT",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
+      if (error instanceof BudgetExhaustedError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "BUDGET_EXHAUSTED",
           message: error.message,
           clientRequestId: data.clientRequestId,
         });
@@ -354,7 +352,11 @@ export class SessionMessageQueue {
 
   async processMessageQueue(): Promise<void> {
     const currentSession = this.repository.getSession();
-    if (!currentSession || !isSessionPromptable(currentSession.status)) {
+    if (
+      !currentSession ||
+      !isSessionPromptable(currentSession.status) ||
+      currentSession.budget_exhausted === 1
+    ) {
       return;
     }
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
@@ -380,6 +382,7 @@ export class SessionMessageQueue {
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     const authenticationError = await this.getProviderAuthenticationError(resolvedModel);
+    if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
         event: "provider_auth.unavailable",
@@ -392,7 +395,6 @@ export class SessionMessageQueue {
       }
       return;
     }
-
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (!sandboxWs) {
       this.log.info("prompt.dispatch", {
@@ -523,10 +525,18 @@ export class SessionMessageQueue {
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     let stoppedMessageId: string | null = null;
 
-    if (
-      processingMessage &&
-      this.failMessage(processingMessage, "Execution was stopped", now, "processing")
-    ) {
+    if (processingMessage) {
+      const failure = this.recordMessageFailure(
+        processingMessage,
+        options.reason ?? "Execution was stopped",
+        now,
+        "processing"
+      );
+      if (!failure) {
+        this.messenger.broadcast({ type: "processing_status", isProcessing: false });
+        return;
+      }
+      this.projectMessageFailure(failure);
       stoppedMessageId = processingMessage.id;
       const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
       this.messageRepository.markMessageAwaitingStopConfirmation(
@@ -550,6 +560,76 @@ export class SessionMessageQueue {
     if (stoppedMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
       await this.resumeAfterSandboxTermination();
+    }
+  }
+
+  prepareBudgetStop(reason: string, now: number): BudgetStopPreparation {
+    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
+    const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
+    let failure: RecordedMessageFailure | null = null;
+
+    if (processingMessage) {
+      failure = this.recordMessageFailure(processingMessage, reason, now, "processing");
+      if (failure) {
+        this.messageRepository.markMessageAwaitingStopConfirmation(
+          processingMessage.id,
+          stopConfirmationDeadline
+        );
+        this.alarmDeadlines.setPendingEarliest(stopConfirmationDeadline);
+      }
+    }
+
+    return {
+      stopped: failure !== null,
+      processingMessageId: failure ? (processingMessage?.id ?? null) : null,
+      stopConfirmationDeadline: failure ? stopConfirmationDeadline : null,
+      failure,
+    };
+  }
+
+  async deliverBudgetStop(preparation: BudgetStopPreparation): Promise<void> {
+    if (
+      !preparation.failure ||
+      !preparation.processingMessageId ||
+      preparation.stopConfirmationDeadline === null
+    ) {
+      return;
+    }
+    this.projectMessageFailure(preparation.failure);
+    this.broadcastPromptQueue();
+    this.log.info("prompt.stopped", {
+      event: "prompt.stopped",
+      message_id: preparation.processingMessageId,
+      reason: "budget_exhausted",
+    });
+    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
+
+    const sandboxWs = this.wsManager.getSandboxSocket();
+    const stopSent = sandboxWs !== null && this.wsManager.send(sandboxWs, { type: "stop" });
+    await Promise.all([
+      this.runBudgetStopEffect("alarm_schedule", () =>
+        this.alarmScheduler.schedule(preparation.stopConfirmationDeadline!)
+      ),
+      this.runBudgetStopEffect("status_reconcile", () =>
+        this.sessionStatus.reconcileAfterExecution(false)
+      ),
+      this.runBudgetStopEffect("sandbox_stop", async () => {
+        if (stopSent) return;
+        await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
+        await this.resumeAfterSandboxTermination();
+      }),
+    ]);
+  }
+
+  private async runBudgetStopEffect(name: string, effect: () => Promise<void>): Promise<void> {
+    try {
+      await effect();
+    } catch (error) {
+      this.log.error("Budget stop effect failed", {
+        event: "prompt.budget_stop_effect_failed",
+        effect: name,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -622,6 +702,18 @@ export class SessionMessageQueue {
     completedAt: number,
     expectedStatus: "pending" | "processing"
   ): boolean {
+    const failure = this.recordMessageFailure(message, error, completedAt, expectedStatus);
+    if (!failure) return false;
+    this.projectMessageFailure(failure);
+    return true;
+  }
+
+  private recordMessageFailure(
+    message: { id: string; created_at: number },
+    error: string,
+    completedAt: number,
+    expectedStatus: "pending" | "processing"
+  ): RecordedMessageFailure | null {
     const event: Extract<SandboxEvent, { type: "execution_complete" }> = {
       type: "execution_complete",
       messageId: message.id,
@@ -635,8 +727,10 @@ export class SessionMessageQueue {
       completedAt,
       expectedStatus
     );
-    if (!completion) return false;
+    return completion ? { event, completion } : null;
+  }
 
+  private projectMessageFailure({ event, completion }: RecordedMessageFailure): void {
     this.backgroundTasks.submit(
       () =>
         this.projectTerminalMessage(
@@ -646,24 +740,23 @@ export class SessionMessageQueue {
         )
           .catch((projectionError) => {
             this.log.error("terminal_message.projection_failed", {
-              message_id: message.id,
+              message_id: completion.messageId,
               error: projectionError,
             });
           })
           .then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
       {
         name: "terminal_message.project",
-        context: { message_id: message.id },
+        context: { message_id: completion.messageId },
       }
     );
     this.backgroundTasks.submit(
-      () => this.callbackService.notifyComplete(message.id, false, error),
+      () => this.callbackService.notifyComplete(completion.messageId, false, event.error),
       {
         name: "callback.notify_complete",
-        context: { message_id: message.id },
+        context: { message_id: completion.messageId },
       }
     );
-    return true;
   }
 
   private createUserMessageEvent(
@@ -702,7 +795,7 @@ export class SessionMessageQueue {
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
     this.assertPromptableSession();
-    this.assertQueueCapacity();
+    this.assertBudgetAvailable();
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
       const name = data.scmEnrichment?.name || data.authorId;
@@ -758,8 +851,6 @@ export class SessionMessageQueue {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
     }
 
-    // Keep the idempotency lookup, capacity check, and insert in one synchronous
-    // turn so concurrent WebSocket requests cannot race between them.
     const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
     if (data.clientRequestId) {
       const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
@@ -790,6 +881,7 @@ export class SessionMessageQueue {
         };
       }
     }
+    this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);
     const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
@@ -865,6 +957,12 @@ export class SessionMessageQueue {
     });
 
     return { messageId, position };
+  }
+
+  private assertBudgetAvailable(): void {
+    if (this.repository.getSession()?.budget_exhausted === 1) {
+      throw new BudgetExhaustedError();
+    }
   }
 
   private assertPromptableSession(): void {

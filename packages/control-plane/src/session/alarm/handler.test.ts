@@ -99,6 +99,7 @@ describe("createAlarmHandler", () => {
       earliest: vi.fn(() => null),
       cancelled: vi.fn(() => false),
       setPending: vi.fn(),
+      setPendingEarliest: vi.fn(),
       activate: vi.fn(),
       clear: vi.fn(),
       beginDelivery: vi.fn(() => null),

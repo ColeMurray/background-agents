@@ -62,6 +62,10 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    cost_warning_sent: 0,
+    budget_exhausted: 0,
+    cost_tracking_unavailable: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1000,
@@ -140,14 +144,15 @@ function buildQueue() {
     child: vi.fn(),
   };
   const repository = {
+    transaction: vi.fn((closure: () => unknown) => closure()),
     createMessageWithAttachments: vi.fn(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getMessageByClientRequestId: vi.fn(() => null as MessageRow | null),
-    admitAutofixMessage: vi.fn<MessageRepository["admitAutofixMessage"]>(() => ({
-      kind: "enqueued",
-      messageId: "msg-autofix",
-    })),
+    admitAutofixMessage: vi.fn<MessageRepository["admitAutofixMessage"]>((data) => {
+      if (typeof data.message.authorId === "function") data.message.authorId();
+      return { kind: "enqueued", messageId: "msg-autofix" };
+    }),
     getAutofixMessageId: vi.fn(() => null as string | null),
     getMessageStatus: vi.fn(() => "pending" as const),
     cancelPendingMessage: vi.fn(() => false),
@@ -216,6 +221,17 @@ function buildQueue() {
   const backgroundTasks = createTestBackgroundTasks();
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
+  const alarmDeadlines = {
+    pending: vi.fn(() => null as number | null),
+    earliest: vi.fn(() => null as number | null),
+    cancelled: vi.fn(() => false),
+    setPending: vi.fn(),
+    setPendingEarliest: vi.fn(),
+    activate: vi.fn(),
+    clear: vi.fn(),
+    beginDelivery: vi.fn(() => null as number | "cancelled" | null),
+    completeDelivery: vi.fn(),
+  };
   const projectTerminalMessage = vi.fn(async () => {});
   const getProviderAuthenticationError = vi.fn(async (_model: string) => null as string | null);
 
@@ -238,17 +254,9 @@ function buildQueue() {
     "github",
     createEarliestAlarmScheduler(
       { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
-      {
-        pending: vi.fn(() => null),
-        earliest: vi.fn(() => null),
-        cancelled: vi.fn(() => false),
-        setPending: vi.fn(),
-        activate: vi.fn(),
-        clear: vi.fn(),
-        beginDelivery: vi.fn(() => null),
-        completeDelivery: vi.fn(),
-      }
+      alarmDeadlines
     ),
+    alarmDeadlines,
     () => executionTimeoutMs
   );
 
@@ -264,6 +272,7 @@ function buildQueue() {
     backgroundTasks,
     getAlarm,
     setAlarm,
+    alarmDeadlines,
     callbackService,
     getProviderAuthenticationError,
     projectTerminalMessage,
@@ -303,7 +312,7 @@ describe("SessionMessageQueue", () => {
     });
     expect(h.repository.admitAutofixMessage).toHaveBeenCalledWith({
       message: expect.objectContaining({
-        authorId: "part-1",
+        authorId: expect.any(Function),
         content: command.prompt,
         source: "github",
         status: "pending",
@@ -375,6 +384,8 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ sessionClosed: true })
     );
     expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    expect(h.participantService.getByUserId).not.toHaveBeenCalled();
+    expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
   });
 
   it("returns a duplicate without re-driving it in a closed session", async () => {
@@ -478,6 +489,37 @@ describe("SessionMessageQueue", () => {
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
   });
 
+  it("does not spawn or dispatch while the session budget is exhausted", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+  });
+
+  it.each([null, "Provider authentication expired"])(
+    "rechecks budget exhaustion before handling provider auth result %s",
+    async (authenticationError) => {
+      const h = buildQueue();
+      const ready = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(ready);
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+      h.getProviderAuthenticationError.mockImplementationOnce(async () => {
+        h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+        return authenticationError;
+      });
+
+      await h.queue.processMessageQueue();
+
+      expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    }
+  );
+
   it.each(["cancelled", "archived"] as const)(
     "does not dispatch queued work for a %s session",
     async (status) => {
@@ -580,6 +622,26 @@ describe("SessionMessageQueue", () => {
         messageId: "msg-existing",
       })
     );
+  });
+
+  it("rejects a new websocket prompt when the session budget is exhausted", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      clientRequestId: "request-budget",
+      content: "continue",
+    });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        type: "error",
+        code: "BUDGET_EXHAUSTED",
+        clientRequestId: "request-budget",
+      })
+    );
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
   });
 
   it("returns a null position when retrying a completed correlated prompt", async () => {
@@ -1217,6 +1279,52 @@ describe("SessionMessageQueue", () => {
     });
   });
 
+  it("atomically establishes budget stop intent before delivery", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-budget",
+      created_at: 900,
+    });
+    const preparation = h.queue.prepareBudgetStop("Session cost limit reached", 1000);
+    await h.queue.deliverBudgetStop(preparation);
+
+    expect(preparation.stopped).toBe(true);
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "Session cost limit reached" }),
+      expect.any(Number),
+      "processing"
+    );
+    expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
+      "msg-budget",
+      expect.any(Number)
+    );
+    expect(h.alarmDeadlines.setPendingEarliest).toHaveBeenCalledWith(expect.any(Number));
+    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+  });
+
+  it("continues budget stop delivery when alarm scheduling fails", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-budget",
+      created_at: 900,
+    });
+    h.setAlarm.mockRejectedValue(new Error("alarm unavailable"));
+
+    const preparation = h.queue.prepareBudgetStop("Session cost limit reached", 1000);
+    await expect(h.queue.deliverBudgetStop(preparation)).resolves.toBeUndefined();
+
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.log.error).toHaveBeenCalledWith(
+      "Budget stop effect failed",
+      expect.objectContaining({ effect: "alarm_schedule" })
+    );
+  });
+
   it("delegates stop finalization before broadcasting idle and stopping the sandbox", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
@@ -1501,6 +1609,24 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
+    it("rejects exhaustion before capacity checks or participant mutations", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+      h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content: "Continue",
+          authorId: "new-user",
+          source: "agent",
+        })
+      ).rejects.toMatchObject({ name: "BudgetExhaustedError" });
+
+      expect(h.repository.getPendingOrProcessingCount).not.toHaveBeenCalled();
+      expect(h.participantService.create).not.toHaveBeenCalled();
+    });
+
     it.each(["cancelled", "archived"] as const)(
       "rejects prompts for a %s session before inserting a message",
       async (status) => {

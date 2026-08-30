@@ -150,6 +150,28 @@ export function normalizeSandboxSettings(
     result.buildTimeoutSeconds = buildTimeoutSeconds;
   }
 
+  const maxSessionCostUsd = normalizePositiveNumberSetting(
+    settings.maxSessionCostUsd,
+    "maxSessionCostUsd",
+    reject
+  );
+  if (maxSessionCostUsd !== undefined) {
+    result.maxSessionCostUsd = maxSessionCostUsd;
+  }
+
+  const costWarningThresholdPct = normalizePositiveIntegerSetting(
+    settings.costWarningThresholdPct,
+    "costWarningThresholdPct",
+    reject
+  );
+  if (costWarningThresholdPct !== undefined) {
+    if (costWarningThresholdPct > 99) {
+      reject("costWarningThresholdPct must be an integer between 1 and 99");
+    } else {
+      result.costWarningThresholdPct = costWarningThresholdPct;
+    }
+  }
+
   checkPortCollisions(result, reject);
 
   return result;
@@ -267,6 +289,19 @@ function normalizePositiveIntegerSetting(
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
     reject(`${name} must be a positive integer`);
+    return undefined;
+  }
+  return value;
+}
+
+function normalizePositiveNumberSetting(
+  value: unknown,
+  name: string,
+  reject: (message: string) => false
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    reject(`${name} must be a positive finite number`);
     return undefined;
   }
   return value;

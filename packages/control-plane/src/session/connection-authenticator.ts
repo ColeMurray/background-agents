@@ -294,7 +294,9 @@ export class SessionConnectionAuthenticator {
       };
 
       const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
-      if (!this.completeClientSubscription(ws, clientInfo, enrichment)) {
+      if (
+        !this.completeClientSubscription(ws, clientInfo, participant.role === "owner", enrichment)
+      ) {
         wsManager.close(ws, 4009, "Session synchronization failed");
         return;
       }
@@ -315,6 +317,7 @@ export class SessionConnectionAuthenticator {
   private completeClientSubscription(
     ws: WebSocket,
     client: ClientInfo,
+    canManageBudget: boolean,
     enrichment: Parameters<SessionSnapshotReader["readSessionSnapshot"]>[0]
   ): boolean {
     const { wsManager, snapshotReader, log } = this.deps;
@@ -332,6 +335,7 @@ export class SessionConnectionAuthenticator {
           name: client.name,
           avatar: client.avatar,
         },
+        canManageBudget,
       } satisfies ServerMessage)
     ) {
       return false;

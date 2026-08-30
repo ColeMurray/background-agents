@@ -44,6 +44,32 @@ function getHandler(method: string, path: string) {
 }
 
 describe("session runtime proxy routes", () => {
+  it("forwards budget updates with verified user identity", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ maxSessionCostUsd: 20 });
+    });
+    const path = "/sessions/session-1/budget";
+    const { handler, match, route } = getHandler("PATCH", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ maxCostUsd: 20 }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(route.authentication.kind).toBe("user");
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.budget);
+    await expect(requests[0].json()).resolves.toEqual({ maxCostUsd: 20, userId: "user-1" });
+  });
+
   it.each([
     ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
     ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],

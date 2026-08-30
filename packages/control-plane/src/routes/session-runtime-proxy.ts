@@ -4,6 +4,7 @@ import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
 } from "@open-inspect/shared/types/sessions";
+import { sessionBudgetUpdateSchema } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
@@ -305,7 +306,38 @@ function lifecycleProxyRoute(
   );
 }
 
+const budgetProxyRoute = defineRoute(
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  sessionRoute({
+    method: "PATCH",
+    pattern: parsePattern("/sessions/:id/budget"),
+    handler: async (request, _env, match, ctx) => {
+      const sessionId = getSessionId(match);
+      if (sessionId instanceof Response) return sessionId;
+
+      const rawBody = await parseJsonBody<unknown>(request);
+      if (rawBody instanceof Response) return rawBody;
+      if (!isObjectBody(rawBody)) return error("Invalid budget request", 400);
+
+      const enforcement = applyIdentityEnforcement(ctx, "session-lifecycle", rawBody);
+      if (enforcement.rejection) return enforcement.rejection;
+      const parsed = sessionBudgetUpdateSchema.safeParse(rawBody);
+      if (!parsed.success) return error("Invalid budget request", 400);
+
+      return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.budget, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...parsed.data,
+          userId: enforcement.enforced.participantUserId,
+        }),
+      });
+    },
+  })
+);
+
 export const sessionRuntimeProxyRoutes: Route[] = [
+  budgetProxyRoute,
   simpleProxyRoute({
     policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     method: "GET",

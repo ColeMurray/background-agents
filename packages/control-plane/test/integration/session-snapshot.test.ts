@@ -81,6 +81,7 @@ describe("session snapshot synchronization", () => {
     expect(messages![0].session).not.toHaveProperty("codeServerPassword");
     expect(messages![0].session).not.toHaveProperty("vncPassword");
     expect(messages![0].session).not.toHaveProperty("ttydToken");
+    expect(messages![0].canManageBudget).toBe(true);
     expect(messages![0].timeline).toHaveProperty("events");
     expect(JSON.stringify(messages![0])).not.toContain("code-secret");
     expect(JSON.stringify(messages![0])).not.toContain("vnc-secret");

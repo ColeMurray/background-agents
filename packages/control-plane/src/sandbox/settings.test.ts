@@ -126,6 +126,36 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({ terminalEnabled: true });
   });
 
+  it("accepts valid session cost settings", () => {
+    expect(
+      normalizeSandboxSettings({ maxSessionCostUsd: 12.5, costWarningThresholdPct: 99 })
+    ).toEqual({ maxSessionCostUsd: 12.5, costWarningThresholdPct: 99 });
+  });
+
+  it.each([
+    { maxSessionCostUsd: 0 },
+    { maxSessionCostUsd: -1 },
+    { maxSessionCostUsd: Number.NaN },
+    { costWarningThresholdPct: 0 },
+    { costWarningThresholdPct: 99.5 },
+    { costWarningThresholdPct: 100 },
+  ])("rejects invalid session cost settings %#", (settings) => {
+    expect(() => normalizeSandboxSettings(settings)).toThrow(SandboxSettingsValidationError);
+  });
+
+  it("omits invalid session cost settings while preserving valid siblings", () => {
+    expect(
+      normalizeSandboxSettings(
+        {
+          maxSessionCostUsd: -1,
+          costWarningThresholdPct: 100,
+          terminalEnabled: true,
+        },
+        { invalid: "omit" }
+      )
+    ).toEqual({ terminalEnabled: true });
+  });
+
   it("accepts valid service ports", () => {
     expect(
       normalizeSandboxSettings({ codeServerPort: 8081, vncPort: 6081, terminalPort: 7000 })

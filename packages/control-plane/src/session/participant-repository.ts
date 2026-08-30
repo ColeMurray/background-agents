@@ -39,6 +39,18 @@ export class ParticipantRepository {
     return (result.toArray() as ParticipantRow[])[0] ?? null;
   }
 
+  getParticipantByCanonicalOrUserId(userId: string): ParticipantRow | null {
+    const result = this.sql.exec(
+      `SELECT * FROM participants
+       WHERE canonical_user_id = ? OR user_id = ?
+       ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END
+       LIMIT 1`,
+      userId,
+      userId
+    );
+    return (result.toArray() as ParticipantRow[])[0] ?? null;
+  }
+
   getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null {
     const result = this.sql.exec(`SELECT * FROM participants WHERE ws_auth_token = ?`, tokenHash);
     return (result.toArray() as ParticipantRow[])[0] ?? null;

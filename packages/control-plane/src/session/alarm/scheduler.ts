@@ -13,6 +13,7 @@ export interface AlarmDeadlineStore {
   earliest(): number | null;
   cancelled(): boolean;
   setPending(deadline: number): void;
+  setPendingEarliest(deadline: number): void;
   activate(): void;
   clear(): void;
   beginDelivery(): number | "cancelled" | null;
@@ -49,6 +50,18 @@ export class PersistedAlarmDeadlineStore implements AlarmDeadlineStore {
     this.sql.exec(
       `INSERT INTO session_alarm_state (singleton, pending_deadline) VALUES (1, ?)
        ON CONFLICT(singleton) DO UPDATE SET pending_deadline = excluded.pending_deadline`,
+      deadline
+    );
+  }
+
+  setPendingEarliest(deadline: number): void {
+    this.sql.exec(
+      `INSERT INTO session_alarm_state (singleton, pending_deadline) VALUES (1, ?)
+       ON CONFLICT(singleton) DO UPDATE SET pending_deadline =
+         CASE
+           WHEN session_alarm_state.pending_deadline IS NULL THEN excluded.pending_deadline
+           ELSE MIN(session_alarm_state.pending_deadline, excluded.pending_deadline)
+         END`,
       deadline
     );
   }

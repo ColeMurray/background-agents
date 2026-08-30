@@ -83,6 +83,7 @@ import { Scheduler } from "../scheduler/scheduler";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
+import { SessionBudgetService } from "./budget-service";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
@@ -100,6 +101,7 @@ import { SandboxHandler } from "./http/handlers/sandbox.handler";
 import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
+import { SessionBudgetHandler } from "./http/handlers/session-budget.handler";
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
@@ -410,6 +412,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionIndexStore,
     scmProviderName,
     alarmScheduler,
+    alarmDeadlines,
     getExecutionTimeoutMs
   );
 
@@ -433,6 +436,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
   });
   const autofixHandler = new AutofixHandler(messageQueue);
+  const budgetService = new SessionBudgetService(
+    sessionCoreRepository,
+    eventRepository,
+    messenger,
+    (reason, now) => messageQueue.prepareBudgetStop(reason, now),
+    (preparation) => messageQueue.deliverBudgetStop(preparation),
+    () => messageQueue.processMessageQueue(),
+    generateId
+  );
 
   const updateLastActivity = (timestamp: number) => lifecycleManager.updateLastActivity(timestamp);
   const streamingEventHandler = new SandboxStreamingEventHandler(
@@ -441,7 +453,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     eventRepository,
     callbackService,
     messenger,
-    updateLastActivity
+    updateLastActivity,
+    budgetService
   );
   const artifactEventHandler = new SandboxArtifactEventHandler(
     artifactRepository,
@@ -616,6 +629,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       await statusService.cancel(() => messageQueue.cancelExecution());
     }
   );
+  const sessionBudgetHandler = new SessionBudgetHandler(
+    sessionCoreRepository,
+    participantRepository,
+    budgetService,
+    () => Date.now()
+  );
 
   const prCreationClaims = new PullRequestCreationClaims();
   const pullRequestHandler = new PullRequestHandler(
@@ -718,6 +737,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     pullRequestsRefresh: () => pullRequestHandler.refreshPullRequests(),
     wsToken: (request, _url, requestLog) => wsTokenHandler.generateWsToken(request, requestLog),
     updateTitle: (request) => sessionLifecycleHandler.updateTitle(request),
+    budget: (request) => sessionBudgetHandler.update(request),
     archive: (request) => sessionLifecycleHandler.archive(request),
     unarchive: (request) => sessionLifecycleHandler.unarchive(request),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),

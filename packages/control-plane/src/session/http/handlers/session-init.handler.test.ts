@@ -150,6 +150,7 @@ describe("SessionInitHandler", () => {
       codeServerEnabled: false,
       vncEnabled: true,
       sandboxSettings: null,
+      maxCostUsd: null,
       environmentId: null,
       createdAt: 1234,
       updatedAt: 1234,
@@ -268,7 +269,12 @@ describe("SessionInitHandler", () => {
           scmTokenExpiresAt: null,
           scmUserId: null,
           parentSessionId: null,
-          sandboxSettings: { cpuCores: null, memoryMib: null, tunnelPorts: [3000] },
+          sandboxSettings: {
+            cpuCores: null,
+            memoryMib: null,
+            tunnelPorts: [3000],
+            maxSessionCostUsd: 12.5,
+          },
           userId: "user-1",
         }),
       })
@@ -282,6 +288,7 @@ describe("SessionInitHandler", () => {
         repoId: null,
         environmentId: null,
         parentSessionId: null,
+        maxCostUsd: 12.5,
       })
     );
     expect(repository.createParticipant).toHaveBeenCalledWith(
@@ -297,6 +304,7 @@ describe("SessionInitHandler", () => {
       cpuCores: null,
       memoryMib: null,
       tunnelPorts: [3000],
+      maxSessionCostUsd: 12.5,
     });
   });
 

@@ -71,6 +71,10 @@ CREATE TABLE IF NOT EXISTS session (
   vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
+  cost_warning_sent INTEGER NOT NULL DEFAULT 0,     -- One-time warning latch for the current limit
+  budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
+  cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0, -- At least one positive-token step omitted cost
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -617,6 +621,25 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         ON messages(autofix_feedback_key) WHERE autofix_feedback_key IS NOT NULL`);
       sql.exec(`CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
         ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL`);
+    },
+  },
+  {
+    id: 46,
+    description: "Add session budget state",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN cost_warning_sent INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN budget_exhausted INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0`
+      );
     },
   },
 ];

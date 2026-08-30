@@ -283,6 +283,26 @@ describe("integration settings schemas", () => {
       integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
     ).toBe(true);
   });
+
+  it("parses valid session cost limits", () => {
+    expect(
+      integrationSettingsSchemas.sandbox.repo.safeParse({
+        maxSessionCostUsd: 12.5,
+        costWarningThresholdPct: 80,
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    { maxSessionCostUsd: 0 },
+    { maxSessionCostUsd: -1 },
+    { maxSessionCostUsd: Number.POSITIVE_INFINITY },
+    { costWarningThresholdPct: 0 },
+    { costWarningThresholdPct: 99.5 },
+    { costWarningThresholdPct: 100 },
+  ])("rejects invalid session cost settings %#", (settings) => {
+    expect(integrationSettingsSchemas.sandbox.repo.safeParse(settings).success).toBe(false);
+  });
 });
 
 describe("matchRoutingRules", () => {

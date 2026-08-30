@@ -29,6 +29,7 @@ export interface SessionSocketState {
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
+  canManageBudget: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
   cursor: HistoryCursor | null;
@@ -51,6 +52,7 @@ export const initialSessionSocketState: SessionSocketState = {
   participants: [],
   artifacts: [],
   currentParticipantId: null,
+  canManageBudget: false,
   hasMoreHistory: false,
   loadingHistory: false,
   cursor: null,
@@ -190,6 +192,7 @@ function reduceServerMessage(
         },
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
+        canManageBudget: message.canManageBudget ?? false,
         events: renderTimelineEvents(timelineEvents),
         hasMoreHistory: message.timeline.hasMore,
         cursor: message.timeline.cursor,
@@ -300,6 +303,15 @@ function reduceServerMessage(
       return updateSessionState(state, (prev) => ({
         ...prev,
         isProcessing: message.isProcessing,
+      }));
+
+    case "budget_status":
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        totalCost: message.totalCost,
+        maxSessionCostUsd: message.maxSessionCostUsd,
+        budgetExhausted: message.budgetExhausted,
+        costTrackingUnavailable: message.costTrackingUnavailable,
       }));
 
     case "prompt_queue_updated":

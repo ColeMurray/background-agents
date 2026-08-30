@@ -467,6 +467,35 @@ describe("applyMigrations", () => {
     );
   });
 
+  it("adds session budget fields for fresh and migrated sessions", () => {
+    const sessionTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS session")[1]?.split(");")[0];
+    expect(sessionTable).toContain("max_cost_usd REAL");
+    expect(sessionTable).toContain("cost_warning_sent INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).toContain("cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 46);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+      expect(db.prepare("PRAGMA table_info(session)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "max_cost_usd", type: "REAL" }),
+          expect.objectContaining({ name: "cost_warning_sent", type: "INTEGER" }),
+          expect.objectContaining({ name: "budget_exhausted", type: "INTEGER" }),
+          expect.objectContaining({ name: "cost_tracking_unavailable", type: "INTEGER" }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it("adds Autofix admission metadata and indexes for fresh and migrated sessions", () => {
     const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
       ");"
