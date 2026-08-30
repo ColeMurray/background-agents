@@ -90,6 +90,17 @@ afterEach(() => {
 });
 
 describe("SessionSidebar", () => {
+  it("renders the shared application destinations", () => {
+    render(<SessionSidebar />);
+
+    expect(screen.getByTitle("Settings")).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("link", { name: "Automations" })).toHaveAttribute(
+      "href",
+      "/automations"
+    );
+    expect(screen.getByRole("link", { name: "Analytics" })).toHaveAttribute("href", "/analytics");
+  });
+
   it("renders server-classified sections and nested descendants", () => {
     render(<SessionSidebar />);
 

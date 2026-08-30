@@ -7,14 +7,9 @@ import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
 import { matchesSearchTerms } from "@/lib/search";
-import {
-  AutomationsIcon,
-  BranchIcon,
-  DataControlsIcon,
-  PlusIcon,
-  SettingsIcon,
-} from "@/components/ui/icons";
+import { BranchIcon, PlusIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
+import { APP_DESTINATIONS } from "@/components/app-destinations";
 import { getSettingsGroups } from "@/components/settings/settings-registry";
 import {
   Command,
@@ -111,27 +106,13 @@ export function GlobalCommandMenu({
       onSelect: () => onNavigate("/"),
       shortcut: undefined,
     },
-    {
-      label: "Settings",
-      description: "Configure Open Inspect",
-      Icon: SettingsIcon,
-      onSelect: () => onNavigate("/settings"),
+    ...APP_DESTINATIONS.map(({ label, description, href, icon: Icon }) => ({
+      label,
+      description,
+      Icon,
+      onSelect: () => onNavigate(href),
       shortcut: undefined,
-    },
-    {
-      label: "Automations",
-      description: "Manage scheduled and event-triggered work",
-      Icon: AutomationsIcon,
-      onSelect: () => onNavigate("/automations"),
-      shortcut: undefined,
-    },
-    {
-      label: "Analytics",
-      description: "View usage across sessions, repositories, and users",
-      Icon: DataControlsIcon,
-      onSelect: () => onNavigate("/analytics"),
-      shortcut: undefined,
-    },
+    })),
   ];
 
   return (
