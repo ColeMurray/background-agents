@@ -125,7 +125,11 @@ describe("SessionDO eviction and hibernation restore", () => {
     const tokenResponse = await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-1" }),
+      body: JSON.stringify({
+        userId: "user-1",
+        canonicalUserId: "user-1",
+        authorizationVersion: 1,
+      }),
     });
     const { participantId } = await tokenResponse.json<{ participantId: string }>();
 

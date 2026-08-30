@@ -8,6 +8,7 @@ import {
   queryDO,
   seedMessage,
   waitForSandboxStatus,
+  issueClientWsToken,
 } from "./helpers";
 import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
@@ -190,7 +191,11 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const tokenRes = await doStub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-1" }),
+      body: JSON.stringify({
+        userId: "user-1",
+        canonicalUserId: "user-1",
+        authorizationVersion: 1,
+      }),
     });
     const { token } = await tokenRes.json<{ token: string }>();
 
@@ -221,6 +226,83 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const { code, reason } = await closed;
     expect(code).toBe(4001);
     expect(reason).toBe("Token expired");
+  });
+
+  it("rejects a token whose authorization version is stale", async () => {
+    const name = `ws-client-stale-authorization-${Date.now()}`;
+    const userId = `stale-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.prepare(
+      "UPDATE users SET authorization_version = authorization_version + 1 WHERE id = ?"
+    )
+      .bind(userId)
+      .run();
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "stale-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("rejects a token for a suspended user", async () => {
+    const name = `ws-client-suspended-authorization-${Date.now()}`;
+    const userId = `suspended-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.prepare(
+      `UPDATE users SET access_status = 'suspended',
+         authorization_version = authorization_version + 1 WHERE id = ?`
+    )
+      .bind(userId)
+      .run();
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "suspended-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("rejects a token after its canonical user is removed", async () => {
+    const name = `ws-client-missing-user-${Date.now()}`;
+    const userId = `missing-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM session_access WHERE user_id = ?").bind(userId),
+      env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(userId),
+      env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId),
+    ]);
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "missing-user-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("rejects a token after the user's role assignment is removed", async () => {
+    const name = `ws-client-missing-assignment-${Date.now()}`;
+    const userId = `unassigned-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(userId).run();
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "unassigned-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
   });
 
   it("subscribe includes batched replay with hasMore=false for empty session", async () => {

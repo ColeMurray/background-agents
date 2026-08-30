@@ -17,6 +17,12 @@ import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import type { AlarmScheduler } from "../platform-ports";
+import {
+  WS_AUTHORIZATION_LEASE_MS,
+  WS_AUTHORIZATION_REVOKED_REASON,
+  WS_CLOSE_AUTHORIZATION_REVOKED,
+} from "./authorization-lease";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -38,6 +44,11 @@ export interface SessionConnectionAuthenticatorDeps {
   snapshotReader: SessionSnapshotReader;
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
+  alarmScheduler: AlarmScheduler;
+  verifyAuthorization: (input: {
+    userId: string;
+    authorizationVersion: number;
+  }) => Promise<"valid" | "rejected" | "unavailable">;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
 }
@@ -255,6 +266,31 @@ export class SessionConnectionAuthenticator {
         return;
       }
 
+      if (!participant.canonical_user_id || participant.ws_authorization_version == null) {
+        wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
+        return;
+      }
+
+      const authorization = await this.deps.verifyAuthorization({
+        userId: participant.canonical_user_id,
+        authorizationVersion: participant.ws_authorization_version,
+      });
+      if (authorization !== "valid") {
+        log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "client",
+          outcome: "auth_failed",
+          reject_reason:
+            authorization === "unavailable" ? "authorization_unavailable" : "authorization_stale",
+          participant_id: participant.id,
+          user_id: participant.canonical_user_id,
+        });
+        wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
+        return;
+      }
+
+      const authorizationExpiresAt = Date.now() + WS_AUTHORIZATION_LEASE_MS;
+
       // Reject tokens older than the TTL
       if (
         participant.ws_token_created_at === null ||
@@ -290,15 +326,18 @@ export class SessionConnectionAuthenticator {
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
+        authorizationVersion: participant.ws_authorization_version,
+        authorizationExpiresAt,
         ws,
       };
+
+      await this.deps.alarmScheduler.schedule(authorizationExpiresAt);
 
       const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
       if (!this.completeClientSubscription(ws, clientInfo, enrichment)) {
         wsManager.close(ws, 4009, "Session synchronization failed");
         return;
       }
-
       presenceService.sendPresence(ws);
       presenceService.broadcastPresence();
       this.deps.schedulePullRequestRefresh("open");
@@ -340,7 +379,13 @@ export class SessionConnectionAuthenticator {
     wsManager.setClient(ws, client);
     const parsed = wsManager.classify(ws);
     if (parsed.kind === "client" && parsed.wsId) {
-      wsManager.persistClientMapping(parsed.wsId, client.participantId, client.clientId);
+      wsManager.persistClientMapping(
+        parsed.wsId,
+        client.participantId,
+        client.clientId,
+        client.authorizationVersion,
+        client.authorizationExpiresAt
+      );
       log.debug("Stored ws_client_mapping", {
         ws_id: parsed.wsId,
         participant_id: client.participantId,
@@ -365,6 +410,13 @@ export class SessionConnectionAuthenticator {
       wsManager.close(ws, 4002, "Session expired, please reconnect");
       return null;
     }
+    if (
+      typeof mapping.authorization_version !== "number" ||
+      typeof mapping.authorization_expires_at !== "number"
+    ) {
+      wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
+      return null;
+    }
 
     // 3. Build ClientInfo
     log.info("Recovered client info from DB", { user_id: mapping.user_id });
@@ -376,6 +428,8 @@ export class SessionConnectionAuthenticator {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
+      authorizationVersion: mapping.authorization_version,
+      authorizationExpiresAt: mapping.authorization_expires_at,
       ws,
     };
 

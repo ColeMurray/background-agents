@@ -127,6 +127,7 @@ import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
+import { AuthorizationStore } from "../db/authorization-store";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -260,6 +261,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
   );
   const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
+  const expireAuthorizationLeases = async () => {
+    const nextExpiry = wsManager.expireAuthorizationLeases(Date.now());
+    if (nextExpiry !== null) await alarmScheduler.schedule(nextExpiry);
+  };
   // Hibernation-level ping/pong: the runtime answers keepalives without
   // waking the Durable Object. Platform-global wiring, so it lives here.
   ctx.setWebSocketAutoResponse(
@@ -685,6 +690,24 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshotReader,
     schedulePullRequestRefresh,
     scmProviderName,
+    alarmScheduler,
+    verifyAuthorization: async ({ userId, authorizationVersion }) => {
+      if (!db) return "unavailable";
+      try {
+        const current = await new AuthorizationStore(db).getEffectiveAuthorization(userId);
+        return current?.accessStatus === "active" &&
+          current.role !== null &&
+          current.authorizationVersion === authorizationVersion
+          ? "valid"
+          : "rejected";
+      } catch (error) {
+        log.error("WebSocket authorization verification failed", {
+          user_id: userId,
+          error: error instanceof Error ? error : String(error),
+        });
+        return "unavailable";
+      }
+    },
     log,
   });
 
@@ -796,7 +819,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     handleScheduledDeadline: () =>
       handleAlarmDelivery(
         alarmDeadlines,
-        () => alarmHandler.handle(),
+        async () => {
+          await expireAuthorizationLeases();
+          await alarmHandler.handle();
+        },
         () => alarmScheduler.rearmPending()
       ),
   });
@@ -825,9 +851,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     server,
     alarms: {
       rehydrate: () =>
-        backgroundTasks.submit(() => alarmScheduler.rehydrate(), {
-          name: "alarm.rehydrate",
-        }),
+        backgroundTasks.submit(
+          async () => {
+            await expireAuthorizationLeases();
+            await alarmScheduler.rehydrate();
+          },
+          {
+            name: "alarm.rehydrate",
+          }
+        ),
     },
     internals: components,
   };

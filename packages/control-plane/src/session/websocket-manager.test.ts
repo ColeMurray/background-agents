@@ -102,6 +102,8 @@ function createMockRepository() {
     participantId: string;
     clientId: string;
     createdAt: number;
+    authorizationVersion: number;
+    authorizationExpiresAt: number;
   }> = [];
 
   const repo = {
@@ -113,6 +115,8 @@ function createMockRepository() {
       participantId: string;
       clientId: string;
       createdAt: number;
+      authorizationVersion: number;
+      authorizationExpiresAt: number;
     }) => {
       upsertCalls.push(data);
       mappings.set(data.wsId, {
@@ -122,7 +126,21 @@ function createMockRepository() {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_version: data.authorizationVersion,
+        authorization_expires_at: data.authorizationExpiresAt,
       });
+    },
+    deleteWsClientMapping: (wsId: string) => mappings.delete(wsId),
+    deleteExpiredMappings: (now: number) => {
+      for (const [wsId, mapping] of mappings) {
+        if ((mapping.authorization_expires_at ?? 0) <= now) mappings.delete(wsId);
+      }
+    },
+    getNextAuthorizationExpiry: () => {
+      const expiries = Array.from(mappings.values())
+        .map((mapping) => mapping.authorization_expires_at)
+        .filter((expiry): expiry is number => typeof expiry === "number");
+      return expiries.length > 0 ? Math.min(...expiries) : null;
     },
   } as unknown as SandboxRepository;
 
@@ -133,8 +151,16 @@ function createMockRepository() {
     setSandbox: (row: SandboxRow | null) => {
       sandboxRow = row;
     },
-    addMapping: (wsId: string, mapping: WsClientMappingResult) => {
-      mappings.set(wsId, mapping);
+    addMapping: (
+      wsId: string,
+      mapping: Omit<WsClientMappingResult, "authorization_version" | "authorization_expires_at"> &
+        Partial<Pick<WsClientMappingResult, "authorization_version" | "authorization_expires_at">>
+    ) => {
+      mappings.set(wsId, {
+        authorization_version: 1,
+        authorization_expires_at: Date.now() + 300_000,
+        ...mapping,
+      });
     },
   };
 }
@@ -148,6 +174,8 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: Date.now(),
     clientId: "client-1",
+    authorizationVersion: 1,
+    authorizationExpiresAt: Date.now() + 300_000,
     ws: createFakeWebSocket(),
     ...overrides,
   };
@@ -510,6 +538,16 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.getClient(ws)).toBeNull();
     });
 
+    it("rejects an expired live client on inbound lookup", () => {
+      const { manager, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+
+      expect(manager.getClient(ws)).toBeNull();
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
     it("removeClient returns and removes the client", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
@@ -543,10 +581,12 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: "Test",
         auth_name: null,
         scm_login: "testuser",
+        authorization_version: 1,
+        authorization_expires_at: Date.now() + 300_000,
       };
       mockRepo.addMapping("ws-42", mapping);
 
-      expect(manager.recoverClientMapping(ws)).toEqual(mapping);
+      expect(manager.recoverClientMapping(ws)).toMatchObject(mapping);
     });
 
     it("returns null for sandbox-tagged sockets", () => {
@@ -575,19 +615,38 @@ describe("SessionWebSocketManagerImpl", () => {
 
       expect(manager.recoverClientMapping(ws)).toBeNull();
     });
+
+    it("rejects an expired mapping during hibernation recovery", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      mockRepo.addMapping("ws-expired", {
+        participant_id: "p-1",
+        client_id: "c-1",
+        user_id: "u-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: Date.now() - 1,
+      });
+
+      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
   });
 
   describe("persistClientMapping", () => {
     it("calls repository.upsertWsClientMapping", () => {
       const { manager, mockRepo } = createManager();
 
-      manager.persistClientMapping("ws-1", "part-1", "client-1");
+      manager.persistClientMapping("ws-1", "part-1", "client-1", 7, 123_000);
 
       expect(mockRepo.upsertCalls).toHaveLength(1);
       expect(mockRepo.upsertCalls[0]).toMatchObject({
         wsId: "ws-1",
         participantId: "part-1",
         clientId: "client-1",
+        authorizationVersion: 7,
+        authorizationExpiresAt: 123_000,
       });
     });
   });
@@ -743,6 +802,39 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(called).toHaveLength(0);
     });
 
+    it("rejects an expired live client instead of broadcasting", () => {
+      const { manager, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+
+      const called: WebSocket[] = [];
+      manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
+
+      expect(called).toEqual([]);
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
+    it("rejects an expired hibernated mapping instead of broadcasting", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      mockRepo.addMapping("ws-expired", {
+        participant_id: "p-1",
+        client_id: "c-1",
+        user_id: "u-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: Date.now() - 1,
+      });
+
+      const called: WebSocket[] = [];
+      manager.forEachClientSocket("authenticated_only", (client) => called.push(client));
+
+      expect(called).toEqual([]);
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
     it("broadcast pattern delivers to authenticated clients and skips unauthenticated", () => {
       const { manager, sockets, mockRepo } = createManager();
 
@@ -796,6 +888,51 @@ describe("SessionWebSocketManagerImpl", () => {
       const authOnlyCalled: WebSocket[] = [];
       manager.forEachClientSocket("authenticated_only", (ws) => authOnlyCalled.push(ws));
       expect(authOnlyCalled).toHaveLength(0);
+    });
+  });
+
+  describe("expireAuthorizationLeases", () => {
+    it("closes expired live mappings and returns the next deadline", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const expired = createFakeWebSocket();
+      sockets.set(expired, ["wsid:expired"]);
+      mockRepo.addMapping("expired", {
+        participant_id: "p-1",
+        client_id: "c-1",
+        user_id: "u-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: 1_000,
+      });
+      mockRepo.addMapping("future", {
+        participant_id: "p-2",
+        client_id: "c-2",
+        user_id: "u-2",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: 3_000,
+      });
+
+      expect(manager.expireAuthorizationLeases(2_000)).toBe(3_000);
+      expect(expired.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
+    it("closes a legacy mapping without authorization lease state", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const legacy = createFakeWebSocket();
+      sockets.set(legacy, ["wsid:legacy"]);
+      mockRepo.addMapping("legacy", {
+        participant_id: "p-1",
+        client_id: "c-1",
+        user_id: "u-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_version: null,
+        authorization_expires_at: null,
+      });
+
+      expect(manager.expireAuthorizationLeases(2_000)).toBeNull();
+      expect(legacy.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
     });
   });
 

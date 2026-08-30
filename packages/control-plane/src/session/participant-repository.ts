@@ -134,11 +134,19 @@ export class ParticipantRepository {
     );
   }
 
-  updateParticipantWsToken(participantId: string, tokenHash: string, createdAt: number): void {
+  updateParticipantWsToken(
+    participantId: string,
+    tokenHash: string,
+    createdAt: number,
+    authorizationVersion: number
+  ): void {
     this.sql.exec(
-      `UPDATE participants SET ws_auth_token = ?, ws_token_created_at = ? WHERE id = ?`,
+      `UPDATE participants
+       SET ws_auth_token = ?, ws_token_created_at = ?, ws_authorization_version = ?
+       WHERE id = ?`,
       tokenHash,
       createdAt,
+      authorizationVersion,
       participantId
     );
   }

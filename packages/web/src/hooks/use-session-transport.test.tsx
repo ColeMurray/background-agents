@@ -195,6 +195,26 @@ describe("useSessionTransport", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
+  it("clears the token and reconnects after authorization lease expiry", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(4010, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    rendered.unmount();
+  });
+
   it("reconnects with backoff after an unclean close and reuses the cached token", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();

@@ -35,8 +35,10 @@ async function handleSessionWsToken(
   if (!parsedBody.success) return error("Invalid websocket token body", 400);
   const body = parsedBody.data;
 
+  const authorization = ctx.authorization;
+  if (!authorization) return error("Authorization unavailable", 503);
   const userId = enforcement.enforced.participantUserId;
-  const canonicalUserId = enforcement.enforced.canonicalUserId;
+  const canonicalUserId = authorization.userId;
 
   const response = await ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
@@ -45,13 +47,14 @@ async function handleSessionWsToken(
       body: JSON.stringify({
         userId,
         canonicalUserId,
+        authorizationVersion: authorization.authorizationVersion,
         scmLogin: body.scmLogin,
         scmName: body.scmName,
         scmEmail: body.scmEmail,
       }),
     })
   );
-  if (response.ok && canonicalUserId) {
+  if (response.ok) {
     await activateSessionParticipantAccess(ctx.db, sessionId, canonicalUserId);
   }
   return response;

@@ -7,7 +7,8 @@ const nullableOptionalString = z.string().nullable().optional();
 
 const generateWsTokenRequestSchema = sessionScmDisplayFieldsSchema.extend({
   userId: z.string().optional(),
-  canonicalUserId: nullableOptionalString,
+  canonicalUserId: z.string().min(1),
+  authorizationVersion: z.number().int().positive(),
   scmUserId: nullableOptionalString,
   scmTokenEncrypted: nullableOptionalString,
   scmRefreshTokenEncrypted: nullableOptionalString,
@@ -71,7 +72,7 @@ export class WsTokenHandler {
         (participant.scm_refresh_token_encrypted == null || shouldUpdateTokens);
 
       this.repository.updateParticipantCoalesce(participant.id, {
-        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
+        canonicalUserId: body.canonicalUserId,
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
@@ -87,7 +88,7 @@ export class WsTokenHandler {
       this.repository.createParticipant({
         id,
         userId: body.userId,
-        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
+        canonicalUserId: body.canonicalUserId,
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
@@ -104,7 +105,12 @@ export class WsTokenHandler {
     const plainToken = this.generateId(32);
     const tokenHash = await this.hashToken(plainToken);
 
-    this.repository.updateParticipantWsToken(participant.id, tokenHash, now);
+    this.repository.updateParticipantWsToken(
+      participant.id,
+      tokenHash,
+      now,
+      body.authorizationVersion
+    );
     log.info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
 
     return Response.json({

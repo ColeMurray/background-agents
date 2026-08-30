@@ -91,6 +91,7 @@ export interface ParticipantRow {
   scm_token_expires_at: number | null;
   ws_auth_token: string | null; // SHA-256 hash of WebSocket auth token
   ws_token_created_at: number | null; // When the token was generated
+  ws_authorization_version: number | null; // D1 authorization version bound at issuance
   joined_at: number;
 }
 

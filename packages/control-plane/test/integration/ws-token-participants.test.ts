@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { initSession, queryDO } from "./helpers";
 
+function wsTokenBody(body: Record<string, unknown>): string {
+  return JSON.stringify({ canonicalUserId: "user-1", authorizationVersion: 1, ...body });
+}
+
 describe("POST /internal/ws-token", () => {
   it("generates WS token for existing owner", async () => {
     const { stub } = await initSession({ userId: "user-1", scmLogin: "testuser" });
@@ -8,7 +12,7 @@ describe("POST /internal/ws-token", () => {
     const res = await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-1" }),
+      body: wsTokenBody({ userId: "user-1" }),
     });
 
     expect(res.status).toBe(200);
@@ -24,7 +28,11 @@ describe("POST /internal/ws-token", () => {
     const res = await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-new", scmLogin: "newuser" }),
+      body: wsTokenBody({
+        userId: "user-new",
+        canonicalUserId: "user-new",
+        scmLogin: "newuser",
+      }),
     });
 
     expect(res.status).toBe(200);
@@ -46,21 +54,24 @@ describe("POST /internal/ws-token", () => {
     await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-1" }),
+      body: wsTokenBody({ userId: "user-1" }),
     });
 
     const participants = await queryDO<{
       ws_auth_token: string | null;
       ws_token_created_at: number | null;
+      ws_authorization_version: number | null;
     }>(
       stub,
-      "SELECT ws_auth_token, ws_token_created_at FROM participants WHERE user_id = 'user-1'"
+      `SELECT ws_auth_token, ws_token_created_at, ws_authorization_version
+       FROM participants WHERE user_id = 'user-1'`
     );
 
     expect(participants[0].ws_auth_token).not.toBeNull();
     // SHA-256 hash is 64 hex characters
     expect(participants[0].ws_auth_token!.length).toBe(64);
     expect(participants[0].ws_token_created_at).toEqual(expect.any(Number));
+    expect(participants[0].ws_authorization_version).toBe(1);
   });
 
   it("rejects ws-token without userId", async () => {
@@ -69,7 +80,7 @@ describe("POST /internal/ws-token", () => {
     const res = await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: wsTokenBody({}),
     });
 
     expect(res.status).toBe(400);
@@ -83,7 +94,7 @@ describe("POST /internal/ws-token", () => {
     await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: wsTokenBody({
         userId: "user-1",
         scmLogin: "updated-login",
         scmName: "Updated Name",

@@ -777,12 +777,13 @@ count, assignment count by role, authorization latency, and session-access proje
 - HTTP requests load current assignment/status and apply changes immediately.
 - Role permission edits increment `authorization_version` for assigned users in the same
   transaction.
-- Browser WebSocket tokens become single-use, per-connection five-minute authorization leases
-  containing user ID, session ID, authorization version, nonce, and expiry. Multiple tabs receive
-  independent leases rather than rotating one participant hash.
-- A successful HTTP renewal returns a signed lease that the client sends over an authenticated
-  WebSocket renewal message. The DO persists lease version/expiry in `ws_client_mapping`, verifies
-  renewal against connection identity, and schedules the earliest expiry in its unified alarm.
+- Browser WebSocket credentials are bound to the canonical user and current `authorization_version`.
+  Subscribe verifies both against D1 and rejects missing or suspended users, missing role
+  assignments, stale versions, and unavailable authorization storage.
+- A successful subscribe creates a five-minute wall-clock authorization lease. The DO persists its
+  version and expiry in `ws_client_mapping` and schedules the earliest expiry in its unified alarm.
+  On expiry the browser clears its credential and reconnects through the authorized HTTP token
+  route.
 - Alarm and hibernation restoration close every expired connection even when it is idle. Every
   inbound event and outbound broadcast also rejects expired leases as defense in depth. A role
   change therefore revokes live browser access within the five-minute wall-clock lease bound.

@@ -14,6 +14,10 @@ import type {
   WsClientMappingRepository,
   WsClientMappingResult,
 } from "./ws-client-mapping-repository";
+import {
+  WS_AUTHORIZATION_REVOKED_REASON,
+  WS_CLOSE_AUTHORIZATION_REVOKED,
+} from "./authorization-lease";
 
 /** Configuration for the WebSocket manager. */
 export interface WebSocketManagerConfig {
@@ -63,7 +67,16 @@ export interface SessionWebSocketManager {
   recoverClientMapping(ws: WebSocket): WsClientMappingResult | null;
 
   /** Persist ws-to-participant mapping for hibernation survival. */
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    authorizationVersion: number,
+    authorizationExpiresAt: number
+  ): void;
+
+  /** Close expired sockets, delete expired mappings, and return the next lease deadline. */
+  expireAuthorizationLeases(now: number): number | null;
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
   isClientSynchronizing(ws: WebSocket): boolean;
@@ -235,7 +248,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   getClient(ws: WebSocket): ClientInfo | null {
-    return this.clients.get(ws) ?? null;
+    const client = this.clients.get(ws) ?? null;
+    if (client && client.authorizationExpiresAt <= Date.now()) {
+      this.rejectExpiredAuthorization(ws, this.classify(ws));
+      return null;
+    }
+    return client;
   }
 
   removeClient(ws: WebSocket): ClientInfo | null {
@@ -251,16 +269,47 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   recoverClientMapping(ws: WebSocket): WsClientMappingResult | null {
     const parsed = this.classify(ws);
     if (parsed.kind !== "client" || !parsed.wsId) return null;
-    return this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
+    const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
+    if (
+      !mapping ||
+      typeof mapping.authorization_expires_at !== "number" ||
+      typeof mapping.authorization_version !== "number" ||
+      mapping.authorization_expires_at <= Date.now()
+    ) {
+      if (mapping) this.rejectExpiredAuthorization(ws, parsed);
+      return null;
+    }
+    return mapping;
   }
 
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void {
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    authorizationVersion: number,
+    authorizationExpiresAt: number
+  ): void {
     this.wsClientMappingRepository.upsertWsClientMapping({
       wsId,
       participantId,
       clientId,
       createdAt: Date.now(),
+      authorizationVersion,
+      authorizationExpiresAt,
     });
+  }
+
+  expireAuthorizationLeases(now: number): number | null {
+    for (const ws of this.ctx.getWebSockets()) {
+      const parsed = this.classify(ws);
+      if (parsed.kind !== "client") continue;
+      const expiresAt = this.authorizationExpiry(ws, parsed);
+      if (expiresAt === "invalid" || (typeof expiresAt === "number" && expiresAt <= now)) {
+        this.rejectExpiredAuthorization(ws, parsed);
+      }
+    }
+    this.wsClientMappingRepository.deleteExpiredMappings(now);
+    return this.wsClientMappingRepository.getNextAuthorizationExpiry();
   }
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {
@@ -332,11 +381,37 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
    * either in-memory or via persisted DB mapping (post-hibernation).
    */
   private isAuthenticated(ws: WebSocket, parsed: ConnectionClassification): boolean {
-    if (this.clients.has(ws)) return true;
-    if (parsed.kind === "client" && parsed.wsId) {
-      return this.wsClientMappingRepository.hasWsClientMapping(parsed.wsId);
+    const expiresAt = this.authorizationExpiry(ws, parsed);
+    if (expiresAt === null) return false;
+    if (expiresAt === "invalid") {
+      this.rejectExpiredAuthorization(ws, parsed);
+      return false;
     }
+    if (expiresAt > Date.now()) return true;
+    this.rejectExpiredAuthorization(ws, parsed);
     return false;
+  }
+
+  private authorizationExpiry(
+    ws: WebSocket,
+    parsed: ConnectionClassification
+  ): number | "invalid" | null {
+    const client = this.clients.get(ws);
+    if (client) return client.authorizationExpiresAt;
+    if (parsed.kind !== "client" || !parsed.wsId) return null;
+    const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
+    if (!mapping) return null;
+    return typeof mapping.authorization_expires_at === "number" &&
+      typeof mapping.authorization_version === "number"
+      ? mapping.authorization_expires_at
+      : "invalid";
+  }
+
+  private rejectExpiredAuthorization(ws: WebSocket, parsed: ConnectionClassification): void {
+    if (parsed.kind === "client" && parsed.wsId) {
+      this.wsClientMappingRepository.deleteWsClientMapping(parsed.wsId);
+    }
+    this.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
   }
 
   // -------------------------------------------------------------------------

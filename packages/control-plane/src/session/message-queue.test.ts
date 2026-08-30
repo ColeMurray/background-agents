@@ -35,6 +35,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_token_expires_at: null,
     ws_auth_token: null,
     ws_token_created_at: null,
+    ws_authorization_version: null,
     joined_at: 1000,
     ...overrides,
   };
@@ -103,6 +104,8 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: 1000,
     clientId: "client-1",
+    authorizationVersion: 1,
+    authorizationExpiresAt: Date.now() + 300_000,
     ws: {} as WebSocket,
     ...overrides,
   };

@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS participants (
   -- WebSocket authentication
   ws_auth_token TEXT,                               -- SHA-256 hash of WebSocket auth token
   ws_token_created_at INTEGER,                      -- When the token was generated
+  ws_authorization_version INTEGER,                 -- D1 authorization version bound at issuance
   joined_at INTEGER NOT NULL
 );
 
@@ -203,6 +204,8 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   participant_id TEXT NOT NULL,
   client_id TEXT,
   created_at INTEGER NOT NULL,
+  authorization_version INTEGER NOT NULL,
+  authorization_expires_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
 `;
@@ -617,6 +620,18 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         ON messages(autofix_feedback_key) WHERE autofix_feedback_key IS NOT NULL`);
       sql.exec(`CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
         ON messages(autofix_pr_key, created_at) WHERE autofix_pr_key IS NOT NULL`);
+    },
+  },
+  {
+    id: 46,
+    description: "Bind WebSocket credentials and mappings to authorization leases",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE participants ADD COLUMN ws_authorization_version INTEGER`);
+      runMigration(sql, `ALTER TABLE ws_client_mapping ADD COLUMN authorization_version INTEGER`);
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER`
+      );
     },
   },
 ];

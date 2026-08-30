@@ -33,6 +33,13 @@ function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
     db,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     principal: { kind: "user", userId: "user-1" },
+    authorization: {
+      userId: "user-1",
+      accessStatus: "active",
+      role: { id: "role-1", key: "member", name: "Member" },
+      permissions: ["sessions.collaborate.any"],
+      authorizationVersion: 7,
+    },
     metrics: {
       d1Queries: [],
       spans: {},
@@ -79,6 +86,7 @@ describe("session ws-token route", () => {
     await expect(forwarded[0].json()).resolves.toMatchObject({
       userId: "user-1",
       canonicalUserId: "user-1",
+      authorizationVersion: 7,
       scmLogin: "octocat",
       scmName: "Octo Cat",
       scmEmail: "octo@example.com",
