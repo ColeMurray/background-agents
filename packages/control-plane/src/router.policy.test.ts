@@ -32,16 +32,18 @@ describe("route policy table", () => {
         expect(["public", "handler-authenticated", "web-service", "sandbox"]).toContain(
           authentication
         );
-      } else if (authorization.kind === "authenticated") {
+      } else if (authorization.kind === "authenticated" || authorization.kind === "active-self") {
         expect(authentication).toBe("user");
       } else if (authorization.kind === "service") {
         expect(authentication).toBe("user-or-service");
         expect(authorization.services.length).toBeGreaterThan(0);
+      } else if (authorization.kind === "active-global") {
+        expect(["user", "user-or-service"]).toContain(authentication);
       } else {
         expect(["user", "user-or-service", "user-or-service-with-sandbox-fallback"]).toContain(
           authentication
         );
-        expect(authorization.allOf.length > 0 || authorization.additionalHandlerChecks).toBe(true);
+        expect(authorization.allOf.length).toBeGreaterThan(0);
         for (const requirement of authorization.allOf) {
           if (requirement.kind === "session") {
             expect(route.pattern.source).toContain(`?<${requirement.sessionIdParam}>`);
@@ -78,8 +80,8 @@ describe("route policy table", () => {
     ["GET", "/model-preferences", [{ service: "slack-bot" }]],
   ])("declares the exact actorless grants for %s %s", (method, path, expected) => {
     const authorization = routeFor(method, path)?.authorization;
-    expect(authorization?.kind).toBe("active-user");
-    if (authorization?.kind === "active-user") {
+    expect(["active-user", "active-global"]).toContain(authorization?.kind);
+    if (authorization?.kind === "active-user" || authorization?.kind === "active-global") {
       expect(authorization.service.kind).toBe("actor");
       if (authorization.service.kind === "actor") {
         expect(authorization.service.actorlessGrants).toEqual(expected);
@@ -100,7 +102,8 @@ describe("route policy table", () => {
     ]);
     const granted = routes.filter(
       (route) =>
-        route.authorization.kind === "active-user" &&
+        (route.authorization.kind === "active-user" ||
+          route.authorization.kind === "active-global") &&
         route.authorization.service.kind === "actor" &&
         (route.authorization.service.actorlessGrants?.length ?? 0) > 0
     );
@@ -109,6 +112,13 @@ describe("route policy table", () => {
   });
 
   it("keeps contextual route requirements explicit", () => {
+    expect(routeFor("GET", "/keyboard-shortcuts")?.authorization).toEqual({
+      kind: "active-self",
+    });
+    expect(routeFor("GET", "/model-preferences")?.authorization).toMatchObject({
+      kind: "active-global",
+      service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
+    });
     expect(routeFor("GET", "/sessions")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [{ kind: "scoped-permission", stem: "sessions.read" }],
@@ -194,6 +204,7 @@ describe("route policy table", () => {
     if (route?.authentication.kind === "user-or-service-with-sandbox-fallback") {
       expect(route.authentication.getSessionId(match)).toBe("session-1");
     }
+    expect(route?.authorization.kind).toBe("active-user");
   });
 
   it.each([

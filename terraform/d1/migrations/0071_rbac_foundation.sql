@@ -7,7 +7,6 @@ CREATE TABLE roles (
   normalized_name TEXT NOT NULL UNIQUE,
   description TEXT,
   is_system INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
-  revision INTEGER NOT NULL DEFAULT 1,
   CHECK (
     (is_system = 1 AND key IN ('owner', 'administrator', 'member', 'viewer'))
     OR (is_system = 0 AND key IS NULL)
@@ -52,12 +51,12 @@ CREATE INDEX idx_session_access_user
   ON session_access(user_id, session_id);
 
 INSERT INTO roles (
-  id, key, name, normalized_name, description, is_system, revision
+  id, key, name, normalized_name, description, is_system
 ) VALUES
-  ('role_builtin_owner', 'owner', 'Owner', 'owner', 'Full workspace control', 1, 1),
-  ('role_builtin_administrator', 'administrator', 'Administrator', 'administrator', 'Operational administration without ownership transfer', 1, 1),
-  ('role_builtin_member', 'member', 'Member', 'member', 'Session and automation collaboration', 1, 1),
-  ('role_builtin_viewer', 'viewer', 'Viewer', 'viewer', 'Read-only workspace visibility', 1, 1);
+  ('role_builtin_owner', 'owner', 'Owner', 'owner', 'Full workspace control', 1),
+  ('role_builtin_administrator', 'administrator', 'Administrator', 'administrator', 'Operational administration without ownership transfer', 1),
+  ('role_builtin_member', 'member', 'Member', 'member', 'Session and automation collaboration', 1),
+  ('role_builtin_viewer', 'viewer', 'Viewer', 'viewer', 'Read-only workspace visibility', 1);
 
 INSERT INTO user_role_assignments (user_id, role_id)
 SELECT id, 'role_builtin_administrator' FROM users;

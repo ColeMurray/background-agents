@@ -1,3 +1,3 @@
 import { settingsProxy } from "@/lib/settings-proxy";
 
-export const { GET, POST } = settingsProxy(() => "/roles", "roles");
+export const { GET } = settingsProxy(() => "/roles", "roles");

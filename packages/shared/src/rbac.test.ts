@@ -4,9 +4,7 @@ import {
   BUILT_IN_ROLE_REGISTRY,
   PERMISSION_IDS,
   SCOPED_PERMISSION_PAIRS,
-  createRoleInputSchema,
   effectiveAuthorizationSchema,
-  normalizeRoleName,
   permissionsForBuiltInRole,
   resolveScopedPermission,
   replaceMemberRoleInputSchema,
@@ -42,7 +40,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(50);
+    expect(PERMISSION_IDS).toHaveLength(49);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -80,26 +78,6 @@ describe("RBAC registry", () => {
     expect(permissions).toContain("sessions.collaborate.any");
     expect(permissions).not.toContain("sessions.delete.any");
     expect(permissions).not.toContain("sessions.participants.manage.any");
-  });
-
-  it("rejects ownership transfer in custom roles", () => {
-    expect(() =>
-      createRoleInputSchema.parse({
-        name: "Operators",
-        permissions: ["workspace.transfer_ownership"],
-      })
-    ).toThrow();
-  });
-
-  it("normalizes role names consistently", () => {
-    expect(normalizeRoleName("  Release Managers  ")).toBe("release managers");
-    expect(normalizeRoleName("OPERATORS")).toBe(normalizeRoleName("operators"));
-  });
-
-  it("rejects role names outside the deterministic normalization set", () => {
-    expect(() =>
-      createRoleInputSchema.parse({ name: "Release Managers!", permissions: [] })
-    ).toThrow();
   });
 
   it("requires an assigned role and uses suspension timestamps in public contracts", () => {

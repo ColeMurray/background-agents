@@ -127,9 +127,7 @@ import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
-import { AuthorizationError, AuthorizationService } from "../authorization/service";
-import { sessionPermissionScope } from "../authorization/session-authorization-policy";
-import { requireSessionAccess, SessionAccessError } from "../db/session-access";
+import { verifySessionAuthorization } from "../authorization/session-authorization-policy";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -255,18 +253,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
 
   // Tier 2 — sockets and alarm scheduling.
+  const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
     ctx,
     sandboxRepository,
     wsClientMappingRepository,
+    alarmScheduler,
     log,
     { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
   );
-  const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
-  const expireAuthorizationLeases = async () => {
-    const nextExpiry = wsManager.expireAuthorizationLeases(Date.now());
-    if (nextExpiry !== null) await alarmScheduler.schedule(nextExpiry);
-  };
   // Hibernation-level ping/pong: the runtime answers keepalives without
   // waking the Durable Object. Platform-global wiring, so it lives here.
   ctx.setWebSocketAutoResponse(
@@ -692,24 +687,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshotReader,
     schedulePullRequestRefresh,
     scmProviderName,
-    alarmScheduler,
     verifyAuthorization: async (userId) => {
       if (!db) return "unavailable";
       try {
-        const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
-        if (authorization.suspendedAt !== null) return "rejected";
-        const scope = sessionPermissionScope(authorization, "collaborate");
-        if (!scope) return "rejected";
-
         const session = sessionCoreRepository.getSession();
         if (!session) return "rejected";
         const sessionId = resolvePublicSessionId(session, durableObjectId);
-        if (scope === "own") await requireSessionAccess(db, sessionId, userId, "access");
-        return "valid";
+        return verifySessionAuthorization(db, userId, sessionId, "collaborate");
       } catch (error) {
-        if (error instanceof AuthorizationError || error instanceof SessionAccessError) {
-          return "rejected";
-        }
         log.error("WebSocket authorization verification failed", {
           user_id: userId,
           error: error instanceof Error ? error : String(error),
@@ -829,7 +814,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       handleAlarmDelivery(
         alarmDeadlines,
         async () => {
-          await expireAuthorizationLeases();
+          await wsManager.expireAuthorizationLeases(Date.now());
           await alarmHandler.handle();
         },
         () => alarmScheduler.rearmPending()
@@ -862,7 +847,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       rehydrate: () =>
         backgroundTasks.submit(
           async () => {
-            await expireAuthorizationLeases();
+            await wsManager.expireAuthorizationLeases(Date.now());
             await alarmScheduler.rehydrate();
           },
           {

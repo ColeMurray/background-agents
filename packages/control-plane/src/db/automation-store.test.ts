@@ -497,7 +497,9 @@ describe("AutomationStore", () => {
         advanceSchedule: { fromSlot: now, nextRunAt: now + 60_000 },
       });
 
-      const advance = statements.at(-1)!;
+      const advance = statements.find((statement) =>
+        statement.sql.includes("SET next_run_at = ?")
+      )!;
       // Compare-and-set on the claimed slot, not a monotonic timestamp guard:
       // "any later value wins" lets a loser advance again from the winner's
       // successor and skip a slot entirely.

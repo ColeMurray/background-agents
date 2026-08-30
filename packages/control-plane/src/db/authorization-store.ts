@@ -22,8 +22,6 @@ interface RoleRow {
   key: BuiltInRoleKey | null;
   name: string;
   description: string | null;
-  is_system: number;
-  revision: number;
   assignment_count: number;
 }
 
@@ -48,8 +46,6 @@ export interface AuthorizationRoleRecord {
   key: BuiltInRoleKey | null;
   name: string;
   description: string | null;
-  isSystem: boolean;
-  revision: number;
   assignmentCount: number;
 }
 
@@ -69,14 +65,13 @@ interface SqlCondition {
   values: unknown[];
 }
 
-function userHasBuiltInRole(userId: string, role: BuiltInRoleKey): SqlCondition {
+function userIsOwner(userId: string): SqlCondition {
   return {
     sql: `EXISTS (
       SELECT 1 FROM user_role_assignments assignment
-      JOIN roles assigned_role ON assigned_role.id = assignment.role_id
-      WHERE assignment.user_id = ? AND assigned_role.key = ?
+      WHERE assignment.user_id = ? AND assignment.role_id = ?
     )`,
-    values: [userId, role],
+    values: [userId, OWNER_ROLE_ID],
   };
 }
 
@@ -85,11 +80,10 @@ function anotherUnsuspendedOwner(targetUserId: string): SqlCondition {
     sql: `EXISTS (
       SELECT 1 FROM users other_user
       JOIN user_role_assignments other_assignment ON other_assignment.user_id = other_user.id
-      JOIN roles other_role ON other_role.id = other_assignment.role_id
-      WHERE other_role.key = 'owner' AND other_user.suspended_at IS NULL
+      WHERE other_assignment.role_id = ? AND other_user.suspended_at IS NULL
         AND other_user.id <> ?
     )`,
-    values: [targetUserId],
+    values: [OWNER_ROLE_ID, targetUserId],
   };
 }
 
@@ -116,8 +110,6 @@ function toRoleRecord(row: RoleRow): AuthorizationRoleRecord {
     key: row.key,
     name: row.name,
     description: row.description,
-    isSystem: row.is_system === 1,
-    revision: row.revision,
     assignmentCount: Number(row.assignment_count),
   };
 }
@@ -163,7 +155,7 @@ export class AuthorizationStore {
   async listRoles(): Promise<AuthorizationRoleRecord[]> {
     const result = await this.db
       .prepare(
-        `SELECT r.id, r.key, r.name, r.description, r.is_system, r.revision,
+        `SELECT r.id, r.key, r.name, r.description,
                 COUNT(ura.user_id) AS assignment_count
          FROM roles r
          LEFT JOIN user_role_assignments ura ON ura.role_id = r.id
@@ -177,7 +169,7 @@ export class AuthorizationStore {
   async getRole(roleId: string): Promise<AuthorizationRoleRecord | null> {
     const row = await this.db
       .prepare(
-        `SELECT r.id, r.key, r.name, r.description, r.is_system, r.revision,
+        `SELECT r.id, r.key, r.name, r.description,
                 COUNT(ura.user_id) AS assignment_count
          FROM roles r
          LEFT JOIN user_role_assignments ura ON ura.role_id = r.id
@@ -186,164 +178,6 @@ export class AuthorizationStore {
       .bind(roleId)
       .first<RoleRow>();
     return row ? toRoleRecord(row) : null;
-  }
-
-  async createRole(input: {
-    roleId: string;
-    name: string;
-    normalizedName: string;
-    description: string | null;
-    permissions: PermissionId[];
-    actorUserId: string;
-    requestId: string;
-    now: number;
-  }): Promise<AuthorizationMutationOutcome> {
-    const mutation = this.mutationConditions(input.actorUserId, ["workspace.roles.manage"], {
-      sql: "NOT EXISTS (SELECT 1 FROM roles WHERE normalized_name = ? AND id <> ?)",
-      values: [input.normalizedName, input.roleId],
-    });
-    const results = await this.db.batch([
-      mutation.outcome,
-      this.auditStatement(
-        {
-          requestId: input.requestId,
-          actorUserId: input.actorUserId,
-          action: "workspace.role_created",
-          resourceType: "role",
-          resourceId: input.roleId,
-          reasonCode: "role_created",
-          occurredAt: input.now,
-        },
-        mutation.applied,
-        mutation.auditId
-      ),
-      this.db
-        .prepare(
-          `INSERT INTO roles
-             (id, key, name, normalized_name, description, is_system, revision)
-           SELECT ?, NULL, ?, ?, ?, 0, 1 WHERE ${mutation.writes.sql}`
-        )
-        .bind(
-          input.roleId,
-          input.name,
-          input.normalizedName,
-          input.description,
-          ...mutation.writes.values
-        ),
-      ...input.permissions.map((permission) =>
-        this.db
-          .prepare(
-            `INSERT INTO role_permissions (role_id, permission_id)
-             SELECT ?, ? WHERE ${mutation.writes.sql}`
-          )
-          .bind(input.roleId, permission, ...mutation.writes.values)
-      ),
-    ]);
-    return this.readMutationOutcome(results[0]);
-  }
-
-  async replaceRole(input: {
-    roleId: string;
-    expectedRevision: number;
-    name: string;
-    normalizedName: string;
-    description: string | null;
-    permissions: PermissionId[];
-    actorUserId: string;
-    requestId: string;
-    now: number;
-  }): Promise<AuthorizationMutationOutcome> {
-    const mutation = this.mutationConditions(
-      input.actorUserId,
-      ["workspace.roles.manage"],
-      {
-        sql: `EXISTS (SELECT 1 FROM roles WHERE id = ? AND revision = ? AND is_system = 0)
-            AND NOT EXISTS (SELECT 1 FROM roles WHERE normalized_name = ? AND id <> ?)`,
-        values: [input.roleId, input.expectedRevision, input.normalizedName, input.roleId],
-      },
-      {
-        notFound: {
-          sql: "NOT EXISTS (SELECT 1 FROM roles WHERE id = ?)",
-          values: [input.roleId],
-        },
-      }
-    );
-    const results = await this.db.batch([
-      mutation.outcome,
-      this.auditStatement(
-        {
-          requestId: input.requestId,
-          actorUserId: input.actorUserId,
-          action: "workspace.role_updated",
-          resourceType: "role",
-          resourceId: input.roleId,
-          reasonCode: "role_updated",
-          occurredAt: input.now,
-        },
-        mutation.applied,
-        mutation.auditId
-      ),
-      this.db
-        .prepare(`DELETE FROM role_permissions WHERE role_id = ? AND ${mutation.writes.sql}`)
-        .bind(input.roleId, ...mutation.writes.values),
-      ...input.permissions.map((permission) =>
-        this.db
-          .prepare(
-            `INSERT INTO role_permissions (role_id, permission_id)
-             SELECT ?, ? WHERE ${mutation.writes.sql}`
-          )
-          .bind(input.roleId, permission, ...mutation.writes.values)
-      ),
-      this.db
-        .prepare(
-          `UPDATE roles SET name = ?, normalized_name = ?, description = ?,
-              revision = revision + 1
-           WHERE id = ? AND ${mutation.writes.sql}`
-        )
-        .bind(
-          input.name,
-          input.normalizedName,
-          input.description,
-          input.roleId,
-          ...mutation.writes.values
-        ),
-    ]);
-    return this.readMutationOutcome(results[0]);
-  }
-
-  async deleteRole(input: {
-    roleId: string;
-    actorUserId: string;
-    requestId: string;
-    now: number;
-  }): Promise<AuthorizationMutationOutcome> {
-    const mutation = this.mutationConditions(input.actorUserId, ["workspace.roles.manage"], {
-      sql: `EXISTS (
-          SELECT 1 FROM roles WHERE id = ? AND is_system = 0
-            AND NOT EXISTS (SELECT 1 FROM user_role_assignments WHERE role_id = ?)
-        )`,
-      values: [input.roleId, input.roleId],
-    });
-    const results = await this.db.batch([
-      mutation.outcome,
-      this.auditStatement(
-        {
-          requestId: input.requestId,
-          actorUserId: input.actorUserId,
-          action: "workspace.role_deleted",
-          resourceType: "role",
-          resourceId: input.roleId,
-          reasonCode: "role_deleted",
-          occurredAt: input.now,
-        },
-        mutation.applied,
-        mutation.auditId
-      ),
-      this.db
-        .prepare(`DELETE FROM roles WHERE id = ? AND ${mutation.writes.sql}`)
-        .bind(input.roleId, ...mutation.writes.values),
-    ]);
-    return this.readMutationOutcome(results[0]);
   }
 
   async listMembers(): Promise<WorkspaceMember[]> {
@@ -368,7 +202,7 @@ export class AuthorizationStore {
     now: number;
   }): Promise<AuthorizationMutationOutcome> {
     const transferGuard = rolePermissionPredicate("workspace.transfer_ownership");
-    const targetIsOwner = userHasBuiltInRole(input.targetUserId, "owner");
+    const targetIsOwner = userIsOwner(input.targetUserId);
     const otherOwnerExists = anotherUnsuspendedOwner(input.targetUserId);
     const mutation = this.mutationConditions(
       input.actorUserId,
@@ -392,11 +226,8 @@ export class AuthorizationStore {
       },
       {
         actor: {
-          sql: `(
-            NOT EXISTS (SELECT 1 FROM roles WHERE id = ? AND key = 'owner')
-            AND NOT (${targetIsOwner.sql})
-          ) OR ${transferGuard.sql}`,
-          values: [input.roleId, ...targetIsOwner.values, ...transferGuard.values],
+          sql: `(? <> ? AND NOT (${targetIsOwner.sql})) OR ${transferGuard.sql}`,
+          values: [input.roleId, OWNER_ROLE_ID, ...targetIsOwner.values, ...transferGuard.values],
         },
       }
     );
@@ -437,7 +268,7 @@ export class AuthorizationStore {
     now: number;
   }): Promise<AuthorizationMutationOutcome> {
     const transferGuard = rolePermissionPredicate("workspace.transfer_ownership");
-    const targetIsOwner = userHasBuiltInRole(input.targetUserId, "owner");
+    const targetIsOwner = userIsOwner(input.targetUserId);
     const otherOwnerExists = anotherUnsuspendedOwner(input.targetUserId);
     const mutation = this.mutationConditions(
       input.actorUserId,

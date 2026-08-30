@@ -16,12 +16,12 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const isMobile = useIsMobile();
   const [isHydrated, setIsHydrated] = useState(false);
   const tab = searchParams.get("tab");
-  const { authorization, loading } = useCurrentUserAuthorization();
+  const { hasPermission, loading } = useCurrentUserAuthorization();
   const requestedCategory = pathname.startsWith("/settings/integrations/") ? "integrations" : tab;
   const activeCategory = resolveSettingsCategory(
     requestedCategory,
     supportsRepoImages(),
-    (permission) => authorization?.permissions.includes(permission) ?? false
+    hasPermission
   );
   const unauthorizedSubroute =
     pathname.startsWith("/settings/integrations/") && activeCategory !== "integrations";

@@ -18,8 +18,8 @@ async function grantOwnCollaboration(userId: string): Promise<void> {
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO roles
-        (id, key, name, normalized_name, is_system, revision)
-       VALUES (?, NULL, ?, ?, 0, 1)`
+        (id, key, name, normalized_name, is_system)
+       VALUES (?, NULL, ?, ?, 0)`
     ).bind(roleId, roleId, roleId),
     env.DB.prepare(
       "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate.own')"

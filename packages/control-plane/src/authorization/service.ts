@@ -1,9 +1,7 @@
 import {
-  createRoleInputSchema,
   isRegisteredPermission,
-  normalizeRoleName,
+  isCustomRolePermission,
   permissionsForBuiltInRole,
-  replaceRoleInputSchema,
   type BuiltInRoleKey,
   type EffectiveAuthorization,
   type PermissionId,
@@ -83,57 +81,6 @@ export class AuthorizationService {
     return role ? this.toRoleSummary(role) : null;
   }
 
-  async createRole(input: unknown, actorUserId: string, requestId: string): Promise<RoleSummary> {
-    const parsed = createRoleInputSchema.parse(input);
-    const roleId = `role_${crypto.randomUUID()}`;
-    this.requireApplied(
-      await this.store.createRole({
-        roleId,
-        name: parsed.name,
-        normalizedName: normalizeRoleName(parsed.name),
-        description: parsed.description ?? null,
-        permissions: parsed.permissions,
-        actorUserId,
-        requestId,
-        now: Date.now(),
-      }),
-      "Role name already exists"
-    );
-    return (await this.getRole(roleId))!;
-  }
-
-  async replaceRole(
-    roleId: string,
-    expectedRevision: number,
-    input: unknown,
-    actorUserId: string,
-    requestId: string
-  ): Promise<RoleSummary> {
-    const parsed = replaceRoleInputSchema.parse(input);
-    this.requireApplied(
-      await this.store.replaceRole({
-        roleId,
-        expectedRevision,
-        name: parsed.name,
-        normalizedName: normalizeRoleName(parsed.name),
-        description: parsed.description ?? null,
-        permissions: parsed.permissions,
-        actorUserId,
-        requestId,
-        now: Date.now(),
-      }),
-      "Role revision, name, or editability conflict"
-    );
-    return (await this.getRole(roleId))!;
-  }
-
-  async deleteRole(roleId: string, actorUserId: string, requestId: string): Promise<void> {
-    this.requireApplied(
-      await this.store.deleteRole({ roleId, actorUserId, requestId, now: Date.now() }),
-      "Role is built-in, assigned, or missing"
-    );
-  }
-
   async listMembers(): Promise<WorkspaceMember[]> {
     return this.store.listMembers();
   }
@@ -180,8 +127,9 @@ export class AuthorizationService {
   ): Promise<PermissionId[]> {
     if (roleKey) return permissionsForBuiltInRole(roleKey);
     return (await this.store.getCustomRolePermissions(roleId)).filter(
-      isRegisteredPermission
-    ) as PermissionId[];
+      (permission): permission is PermissionId =>
+        isRegisteredPermission(permission) && isCustomRolePermission(permission)
+    );
   }
 
   private async toRoleSummary(role: AuthorizationRoleRecord): Promise<RoleSummary> {

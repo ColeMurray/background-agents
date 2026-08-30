@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared/rbac";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCallback } from "react";
 
 export const CURRENT_USER_AUTHORIZATION_KEY = "/api/me/authorization" as const;
 
@@ -33,11 +34,15 @@ export function useCurrentUserAuthorization(): {
     status === "authenticated" && userId ? currentUserAuthorizationKey(userId) : null,
     fetchAuthorization
   );
+  const hasPermission = useCallback(
+    (permission: PermissionId) => data?.permissions.includes(permission) ?? false,
+    [data?.permissions]
+  );
 
   return {
     authorization: data ?? null,
     loading: status === "authenticated" && isLoading,
     error,
-    hasPermission: (permission) => data?.permissions.includes(permission) ?? false,
+    hasPermission,
   };
 }

@@ -17,9 +17,7 @@ import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import type { AlarmScheduler } from "../platform-ports";
 import {
-  WS_AUTHORIZATION_LEASE_MS,
   WS_AUTHORIZATION_REVOKED_REASON,
   WS_CLOSE_AUTHORIZATION_REVOKED,
 } from "./authorization-lease";
@@ -44,7 +42,6 @@ export interface SessionConnectionAuthenticatorDeps {
   snapshotReader: SessionSnapshotReader;
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
-  alarmScheduler: AlarmScheduler;
   verifyAuthorization: (userId: string) => Promise<"valid" | "rejected" | "unavailable">;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
@@ -283,8 +280,6 @@ export class SessionConnectionAuthenticator {
         return;
       }
 
-      const authorizationExpiresAt = Date.now() + WS_AUTHORIZATION_LEASE_MS;
-
       // Reject tokens older than the TTL
       if (
         participant.ws_token_created_at === null ||
@@ -302,16 +297,8 @@ export class SessionConnectionAuthenticator {
         return;
       }
 
-      log.info("ws.connect", {
-        event: "ws.connect",
-        ws_type: "client",
-        outcome: "success",
-        participant_id: participant.id,
-        user_id: participant.user_id,
-        client_id: data.clientId,
-      });
-
-      // Build client info from participant data
+      const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
+      const authorizationExpiresAt = await wsManager.grantLease(ws, participant.id, data.clientId);
       const clientInfo: ClientInfo = {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
@@ -324,13 +311,18 @@ export class SessionConnectionAuthenticator {
         ws,
       };
 
-      await this.deps.alarmScheduler.schedule(authorizationExpiresAt);
-
-      const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
       if (!this.completeClientSubscription(ws, clientInfo, enrichment)) {
         wsManager.close(ws, 4009, "Session synchronization failed");
         return;
       }
+      log.info("ws.connect", {
+        event: "ws.connect",
+        ws_type: "client",
+        outcome: "success",
+        participant_id: participant.id,
+        user_id: participant.user_id,
+        client_id: data.clientId,
+      });
       presenceService.sendPresence(ws);
       presenceService.broadcastPresence();
       this.deps.schedulePullRequestRefresh("open");
@@ -349,7 +341,7 @@ export class SessionConnectionAuthenticator {
     client: ClientInfo,
     enrichment: Parameters<SessionSnapshotReader["readSessionSnapshot"]>[0]
   ): boolean {
-    const { wsManager, snapshotReader, log } = this.deps;
+    const { wsManager, snapshotReader } = this.deps;
     const snapshot = snapshotReader.readSessionSnapshot(enrichment);
     if (!snapshot) return false;
 
@@ -370,19 +362,6 @@ export class SessionConnectionAuthenticator {
     }
 
     wsManager.setClient(ws, client);
-    const parsed = wsManager.classify(ws);
-    if (parsed.kind === "client" && parsed.wsId) {
-      wsManager.persistClientMapping(
-        parsed.wsId,
-        client.participantId,
-        client.clientId,
-        client.authorizationExpiresAt
-      );
-      log.debug("Stored ws_client_mapping", {
-        ws_id: parsed.wsId,
-        participant_id: client.participantId,
-      });
-    }
     return true;
   }
 
@@ -391,18 +370,15 @@ export class SessionConnectionAuthenticator {
    */
   getClientInfo(ws: WebSocket): ClientInfo | null {
     const { wsManager, log } = this.deps;
-    // 1. In-memory cache (manager)
-    const cached = wsManager.getClient(ws);
-    if (cached) return cached;
-
-    // 2. DB recovery (manager handles tag parsing + DB lookup)
-    const mapping = wsManager.recoverClientMapping(ws);
-    if (!mapping) {
+    const lookup = wsManager.lookupClient(ws);
+    if (lookup.kind === "cached") return lookup.client;
+    if (lookup.kind === "authorization_rejected") return null;
+    if (lookup.kind === "missing") {
       log.warn("No client mapping found after hibernation, closing WebSocket");
       wsManager.close(ws, 4002, "Session expired, please reconnect");
       return null;
     }
-    // 3. Build ClientInfo
+    const { mapping } = lookup;
     log.info("Recovered client info from DB", { user_id: mapping.user_id });
     const clientInfo: ClientInfo = {
       participantId: mapping.participant_id,
@@ -416,7 +392,6 @@ export class SessionConnectionAuthenticator {
       ws,
     };
 
-    // 4. Re-cache
     wsManager.setClient(ws, clientInfo);
     return clientInfo;
   }

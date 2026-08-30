@@ -71,7 +71,6 @@ export const PERMISSION_IDS = [
   "skills.read",
   "workspace.members.manage",
   "workspace.members.read",
-  "workspace.roles.manage",
   "workspace.roles.read",
   "workspace.transfer_ownership",
 ] as const;
@@ -175,18 +174,9 @@ export function isRegisteredPermission(value: string): value is PermissionId {
   return (PERMISSION_IDS as readonly string[]).includes(value);
 }
 
-export function normalizeRoleName(value: string): string {
-  return value.normalize("NFKC").trim().toLowerCase();
+export function isCustomRolePermission(permission: PermissionId): boolean {
+  return permission !== "workspace.transfer_ownership";
 }
-
-const customPermissionsSchema = z
-  .array(permissionIdSchema)
-  .max(PERMISSION_IDS.length)
-  .refine((values) => new Set(values).size === values.length, "Permissions must be unique")
-  .refine(
-    (values) => !values.includes("workspace.transfer_ownership"),
-    "Ownership transfer is reserved for the Owner role"
-  );
 
 export const roleReferenceSchema = z
   .object({
@@ -198,8 +188,6 @@ export const roleReferenceSchema = z
 
 export const roleSummarySchema = roleReferenceSchema.extend({
   description: z.string().nullable(),
-  isSystem: z.boolean(),
-  revision: z.number().int().positive(),
   permissions: z.array(permissionIdSchema),
   assignmentCount: z.number().int().nonnegative(),
 });
@@ -225,20 +213,6 @@ export const workspaceMemberSchema = z
 
 export const roleListResponseSchema = z.array(roleSummarySchema);
 export const workspaceMemberListResponseSchema = z.array(workspaceMemberSchema);
-
-const roleMutationFields = {
-  name: z
-    .string()
-    .trim()
-    .min(1)
-    .max(100)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9 _-]*$/, "Role names use letters, numbers, spaces, _ or -"),
-  description: z.string().trim().max(500).nullable().optional(),
-  permissions: customPermissionsSchema,
-} as const;
-
-export const createRoleInputSchema = z.object(roleMutationFields).strict();
-export const replaceRoleInputSchema = z.object(roleMutationFields).strict();
 
 export const replaceMemberRoleInputSchema = z
   .object({

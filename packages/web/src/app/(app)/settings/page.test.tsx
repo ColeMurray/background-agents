@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   repoImagesEnabled: true,
   allowedPermissions: new Set<string>(),
   authorization: { permissions: [] as string[] },
+  hasPermission: (permission: string) => mocks.allowedPermissions.has(permission),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -30,7 +31,7 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     authorization: mocks.authorization,
     loading: false,
-    hasPermission: (permission: string) => mocks.allowedPermissions.has(permission),
+    hasPermission: mocks.hasPermission,
   }),
 }));
 

@@ -124,8 +124,8 @@ describe("automation router authorization", () => {
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO roles
-          (id, key, name, normalized_name, description, is_system, revision)
-         VALUES ('role_manage_only', NULL, 'Manage Only', 'manage only', NULL, 0, 1)`
+          (id, key, name, normalized_name, description, is_system)
+         VALUES ('role_manage_only', NULL, 'Manage Only', 'manage only', NULL, 0)`
       ),
       env.DB.prepare(
         `INSERT INTO role_permissions (role_id, permission_id)
@@ -232,8 +232,8 @@ describe("automation transactional authorization", () => {
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO roles
-          (id, key, name, normalized_name, description, is_system, revision)
-         VALUES ('role_manage_own', NULL, 'Manage Own', 'manage own', NULL, 0, 1)`
+          (id, key, name, normalized_name, description, is_system)
+         VALUES ('role_manage_own', NULL, 'Manage Own', 'manage own', NULL, 0)`
       ),
       env.DB.prepare(
         `INSERT INTO role_permissions (role_id, permission_id)

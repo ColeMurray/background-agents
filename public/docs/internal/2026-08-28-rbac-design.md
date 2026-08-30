@@ -10,8 +10,9 @@
 
 Open-Inspect will add workspace-level RBAC to its existing single-installation identity model. Each
 canonical human user is assigned exactly one role. A role contains a set of permissions selected
-from a code-owned registry. Four protected built-in roles provide safe defaults, and workspace
-owners may create custom roles and assign them to users.
+from a code-owned registry. Four protected built-in roles provide safe defaults. The storage and
+resolution model also supports existing custom roles, but custom-role creation and editing are
+deferred beyond this foundation.
 
 Authorization will be enforced in the control plane after authentication and before business logic.
 The web will receive effective permissions for navigation and control affordances, but client checks
@@ -27,7 +28,7 @@ RBAC determines which application actions a user may perform within that univers
 
 - Assign different capability sets to individual canonical users.
 - Provide protected Owner, Administrator, Member, and Viewer roles.
-- Allow owners to create and edit custom roles from a fixed permission registry.
+- Resolve and assign persisted custom roles from a fixed permission registry.
 - Enforce permissions consistently across HTTP routes, session WebSockets, bots, and settings.
 - Distinguish authentication, admission, attribution, resource relationships, and authorization.
 - Preserve existing installation access during migration without leaving the workspace ownerless.
@@ -101,13 +102,11 @@ custom permission strings from becoming executable.
 
 ### Custom roles
 
-- Custom roles have a workspace-unique case-insensitive name and optional description.
-- Their permissions must be members of the registry.
-- A custom role cannot include `workspace.transfer_ownership`.
-- Custom roles can be edited while assigned; changes affect all assigned users.
-- A role cannot be deleted while assigned to any user.
-- Role updates replace the complete permission set atomically.
-- Roles are allow-only. There are no explicit deny entries or role inheritance.
+The data model and permission resolver retain support for persisted custom roles so assignments and
+effective authorization do not depend on built-in role keys. This foundation exposes custom roles
+through read and assignment APIs only; creating, editing, and deleting them is deferred until there
+is a concrete administration workflow. Persisted custom permissions must be registry members, cannot
+include `workspace.transfer_ownership`, and remain allow-only without inheritance or deny entries.
 
 One role per user avoids ambiguous permission union, ordering, and deny precedence. A later group or
 multi-role system can expand assignment cardinality without changing permission identifiers or route
@@ -130,7 +129,6 @@ IDs are never reused for different semantics.
 | `workspace.members.read`       | List users, identities, roles, and assignment state.                  |
 | `workspace.members.manage`     | Assign roles other than Owner; suspend or restore application access. |
 | `workspace.roles.read`         | List role definitions and permission catalog.                         |
-| `workspace.roles.manage`       | Create, update, and delete custom roles.                              |
 | `workspace.transfer_ownership` | Assign/remove Owner while preserving at least one Owner.              |
 
 #### Repositories and environments
@@ -217,7 +215,7 @@ The table groups permissions for readability; the registry stores individual ide
 | Capability group                                         | Owner | Administrator |  Member  | Viewer |
 | -------------------------------------------------------- | :---: | :-----------: | :------: | :----: |
 | Workspace, member, role, and audit read                  |  Yes  |      Yes      |    No    |   No   |
-| Manage members and custom roles                          |  Yes  |      Yes      |    No    |   No   |
+| Manage members                                           |  Yes  |      Yes      |    No    |   No   |
 | Transfer Owner role                                      |  Yes  |      No       |    No    |   No   |
 | Read repositories and environments                       |  Yes  |      Yes      |   Yes    |  Yes   |
 | Use repositories and environments                        |  Yes  |      Yes      |   Yes    |   No   |
@@ -255,7 +253,6 @@ CREATE TABLE roles (
   normalized_name TEXT NOT NULL UNIQUE,
   description  TEXT,
   is_system    INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
-  revision     INTEGER NOT NULL DEFAULT 1,
   CHECK ((is_system = 1 AND key IN ('owner', 'administrator', 'member', 'viewer'))
       OR (is_system = 0 AND key IS NULL))
 );
@@ -290,10 +287,8 @@ CREATE INDEX idx_role_assignments_role ON user_role_assignments(role_id, user_id
 
 Built-in roles have stable `key` values: `owner`, `administrator`, `member`, and `viewer`; their
 permission sets come from the shared code registry and have no `role_permissions` rows. Custom roles
-have `key = NULL`, and their normalized permission rows keep role edits transactional and queryable.
-IDs are opaque and role names are mutable display values. Custom role names use ASCII letters,
-numbers, spaces, underscores, and hyphens, then are trimmed and lowercased into a separate
-normalized value before uniqueness checks; SQLite `NOCASE` is not the product normalization rule.
+have `key = NULL`, and their permission rows are the runtime authority. IDs are opaque; role names
+are display values. This foundation does not expose custom-role mutations.
 
 `users` gains:
 
@@ -490,13 +485,13 @@ authorization: requireAll(
 );
 ```
 
-The router executes declared permission and session-relationship checks before handlers. Contextual
-handlers such as automation mutation retain their transactional resource guards and are marked with
-`handlerAuthorized()`. Public, web-service, handler-authenticated, and sandbox-capability routes use
-an explicit `NO_AUTHORIZATION` declaration; narrow internal callbacks name their exact service.
-`router.policy.test.ts` rejects missing metadata, duplicate method/pattern pairs, incompatible
-authentication/authorization combinations, and session requirements that reference absent match
-groups.
+The router executes declared permission, scoped-permission, session-relationship, and automation
+checks before handlers. Contextual mutations retain transactional resource guards to close stale
+authorization windows, while route metadata remains the structural policy authority. Personal
+active-user routes, active global routes, public routes, and service-only callbacks each use an
+explicit policy kind; narrow internal callbacks name their exact service. `router.policy.test.ts`
+rejects missing metadata, duplicate method/pattern pairs, incompatible authentication/authorization
+combinations, and session requirements that reference absent match groups.
 
 ### Exemptions
 
@@ -573,13 +568,10 @@ This endpoint is available only to the current browser user. Responses are priva
 
 ### Role administration
 
-| Method   | Path         | Permission               | Purpose                                                     |
-| -------- | ------------ | ------------------------ | ----------------------------------------------------------- |
-| `GET`    | `/roles`     | `workspace.roles.read`   | List roles, counts, and permissions.                        |
-| `POST`   | `/roles`     | `workspace.roles.manage` | Create a custom role.                                       |
-| `GET`    | `/roles/:id` | `workspace.roles.read`   | Read one role and permissions.                              |
-| `PUT`    | `/roles/:id` | `workspace.roles.manage` | Conditionally replace custom role metadata and permissions. |
-| `DELETE` | `/roles/:id` | `workspace.roles.manage` | Delete an unassigned custom role.                           |
+| Method | Path         | Permission             | Purpose                              |
+| ------ | ------------ | ---------------------- | ------------------------------------ |
+| `GET`  | `/roles`     | `workspace.roles.read` | List roles, counts, and permissions. |
+| `GET`  | `/roles/:id` | `workspace.roles.read` | Read one role and permissions.       |
 
 ### Member administration
 
@@ -597,7 +589,6 @@ unsuspended Owner remains in the same D1 batch. User deletion is blocked by assi
 User merge requires an explicit surviving assignment, merges canonical session memberships, and
 preserves both immutable audit snapshots.
 
-Role `PUT` requires the current `revision` through `If-Match` and increments it atomically.
 Assignment and status updates use guarded SQL that rechecks authorization and Owner invariants in
 the same D1 batch as the mutation.
 
@@ -628,22 +619,21 @@ The app shell loads current authorization with the browser session. It distingui
 - authenticated and authorized;
 - authorization service unavailable.
 
-Permission checks use a shared `Can` component or `usePermission()` helper. They hide navigation
-that has no readable content and disable contextual controls when explaining the missing capability
-is useful. Server-rendered session pages authorize before fetching snapshots.
+Permission checks consume the stable `hasPermission` predicate from the current-user authorization
+hook. They hide navigation that has no readable content and disable contextual controls when
+explaining the missing capability is useful. Server-rendered session pages authorize before fetching
+snapshots.
 
 ### Members and roles
 
 A Workspace settings section contains:
 
 - Members: identity, provider links, status, role, last activity, and assignment actions.
-- Roles: built-in/custom roles, assignment count, categorized permission checklist, and role
-  actions.
+- Roles: built-in/custom roles, assignment count, and categorized permission details.
 - Audit log: actor, action, target, outcome, reason, and timestamp.
 
-The UI prevents deleting assigned roles, editing built-ins, removing the last unsuspended Owner,
-assigning Owner without transfer permission, and selecting unsupported permission IDs. The API
-repeats every invariant.
+The UI prevents removing the last unsuspended Owner and assigning Owner without transfer permission.
+The API repeats every invariant.
 
 ### Existing navigation
 
@@ -661,13 +651,12 @@ The browser never treats hidden controls or downloaded permissions as security e
 
 Durable audit events are required for:
 
-- role creation, update, and deletion;
 - user role assignment;
 - access suspension/restoration;
 - Owner assignment/removal;
 - secret, provider-account, commit-signing, integration, SCM, MCP, and shared-skill mutations;
 - session participant changes and cross-user session deletion;
-- allowed and denied role-management operations.
+- allowed and denied member-management operations.
 
 Pure D1 mutations write the audit event in the same D1 batch.
 
@@ -676,8 +665,8 @@ than D1 audit storage. Every authorization denial logs principal kind, actor use
 permission, policy, resource type, opaque resource ID, reason code, request ID, and service name.
 Secret values, OAuth credentials, prompt content, and signed tokens never enter audit metadata.
 
-Metrics include denial count by permission/reason/principal, unassigned active users, custom role
-count, assignment count by role, authorization latency, and session-access projection drift.
+Metrics include denial count by permission/reason/principal, unassigned active users, assignment
+count by role, authorization latency, and session-access projection drift.
 
 ## Role Changes and Revocation
 
@@ -686,9 +675,10 @@ count, assignment count by role, authorization latency, and session-access proje
 - Browser WebSocket credentials are bound to the canonical user. Subscribe verifies current D1
   authorization and rejects missing or suspended users, missing role assignments, and unavailable
   authorization storage.
-- A successful subscribe creates a five-minute wall-clock authorization lease. The DO persists its
-  expiry in `ws_client_mapping` and schedules the earliest expiry in its unified alarm. On expiry
-  the browser clears its credential and reconnects through the authorized HTTP token route.
+- A successful subscribe asks the WebSocket manager to grant a five-minute wall-clock authorization
+  lease. The manager persists its expiry in `ws_client_mapping` and owns earliest-expiry scheduling
+  in the unified alarm. On expiry the browser clears its credential and reconnects through the
+  authorized HTTP token route.
 - Alarm and hibernation restoration close every expired connection even when it is idle. Every
   inbound event and outbound broadcast also rejects expired leases as defense in depth. A role
   change therefore revokes live browser access within the five-minute wall-clock lease bound.
@@ -769,8 +759,8 @@ but no one can exercise Owner-only actions.
 ### Shared
 
 - Permission registry uniqueness and stable serialization.
-- Built-in role snapshots and custom-role validation.
-- API schema rejection of unknown permissions and malformed roles.
+- Built-in role snapshots and persisted custom-role resolution.
+- API schema rejection of malformed role responses and assignments.
 
 ### Control-plane unit
 
@@ -779,8 +769,8 @@ but no one can exercise Owner-only actions.
 - Session creator/participant/any relationship combinations.
 - Service ceiling and actor intersection for every bot.
 - Actorless exact-endpoint service permissions.
-- Last-Owner, built-in-role, assigned-role deletion, and transaction invariants.
-- Concurrent role revision, Owner demotion/suspension/delete, and user-merge conflicts.
+- Last-Owner, built-in-role, assignment, and transaction invariants.
+- Concurrent Owner demotion/suspension/delete and user-merge conflicts.
 - Stable `401`, `403`, `404`, and `503` behavior.
 - Route policy completeness requiring authorization metadata or named exemption.
 
@@ -879,7 +869,7 @@ enforcement:
 1. Member session visibility is own/participating only; Viewer session visibility is workspace-wide.
 2. New canonical users default to Member after the RBAC migration boundary.
 3. Administrator receives all operational permissions except ownership transfer.
-4. Custom roles cannot receive ownership transfer.
+4. Persisted custom roles cannot receive ownership transfer.
 5. Repository and environment access remains installation-wide rather than user-granted.
 6. Existing users are promoted to Administrator to preserve current access.
 7. Executing sandboxes continue after their creator is suspended or demoted.

@@ -204,17 +204,30 @@ const TEST_CONFIG: WebSocketManagerConfig = { authTimeoutMs: 100 };
 function createManager() {
   const fakeCtx = createFakeCtx();
   const mockRepo = createMockRepository();
+  const alarmScheduler = {
+    schedule: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {}),
+    current: vi.fn(async () => null),
+  };
   const log = createMockLogger();
 
   const manager = new SessionWebSocketManagerImpl(
     fakeCtx.state,
     mockRepo.repo,
     mockRepo.repo as unknown as WsClientMappingRepository,
+    alarmScheduler,
     log,
     TEST_CONFIG
   );
 
-  return { manager, sockets: fakeCtx.sockets, state: fakeCtx.state, mockRepo, log };
+  return {
+    manager,
+    sockets: fakeCtx.sockets,
+    state: fakeCtx.state,
+    mockRepo,
+    alarmScheduler,
+    log,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -509,21 +522,21 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("client registry", () => {
-    it("setClient / getClient round-trips", () => {
+    it("returns a cached live client", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
       const info = createClientInfo({ ws });
 
       manager.setClient(ws, info);
 
-      expect(manager.getClient(ws)).toBe(info);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "cached", client: info });
     });
 
-    it("getClient returns null for unknown socket", () => {
+    it("returns missing for an unknown socket", () => {
       const { manager } = createManager();
       const ws = createFakeWebSocket();
 
-      expect(manager.getClient(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
     it("rejects an expired live client on inbound lookup", () => {
@@ -532,7 +545,7 @@ describe("SessionWebSocketManagerImpl", () => {
       sockets.set(ws, ["wsid:ws-expired"]);
       manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
 
-      expect(manager.getClient(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
       expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
     });
 
@@ -545,7 +558,7 @@ describe("SessionWebSocketManagerImpl", () => {
       const removed = manager.removeClient(ws);
 
       expect(removed).toBe(info);
-      expect(manager.getClient(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
     it("removeClient returns null for unknown socket", () => {
@@ -556,7 +569,7 @@ describe("SessionWebSocketManagerImpl", () => {
     });
   });
 
-  describe("recoverClientMapping", () => {
+  describe("lookupClient", () => {
     it("returns mapping when wsId tag and DB mapping exist", () => {
       const { manager, sockets, mockRepo } = createManager();
       const ws = createFakeWebSocket();
@@ -573,7 +586,7 @@ describe("SessionWebSocketManagerImpl", () => {
       };
       mockRepo.addMapping("ws-42", mapping);
 
-      expect(manager.recoverClientMapping(ws)).toMatchObject(mapping);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "recovered", mapping });
     });
 
     it("returns null for sandbox-tagged sockets", () => {
@@ -582,7 +595,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, ["sandbox"]);
 
-      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
     it("returns null when no wsId tag", () => {
@@ -591,7 +604,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, []);
 
-      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
     it("returns null when no DB mapping found", () => {
@@ -600,7 +613,7 @@ describe("SessionWebSocketManagerImpl", () => {
 
       sockets.set(ws, ["wsid:ws-nonexistent"]);
 
-      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
 
     it("rejects an expired mapping during hibernation recovery", () => {
@@ -616,24 +629,38 @@ describe("SessionWebSocketManagerImpl", () => {
         authorization_expires_at: Date.now() - 1,
       });
 
-      expect(manager.recoverClientMapping(ws)).toBeNull();
+      expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
       expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+    });
+
+    it("rejects an expired in-memory lease without attempting recovery", () => {
+      const { manager, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+
+      expect(manager.lookupClient(ws)).toEqual({ kind: "authorization_rejected" });
+      expect(ws.close).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("persistClientMapping", () => {
-    it("calls repository.upsertWsClientMapping", () => {
-      const { manager, mockRepo } = createManager();
+  describe("grantLease", () => {
+    it("mints, persists, and schedules one authorization deadline", async () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const { manager, alarmScheduler, mockRepo, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
 
-      manager.persistClientMapping("ws-1", "part-1", "client-1", 123_000);
-
+      await expect(manager.grantLease(ws, "part-1", "client-1")).resolves.toBe(301_000);
+      expect(alarmScheduler.schedule).toHaveBeenCalledWith(301_000);
       expect(mockRepo.upsertCalls).toHaveLength(1);
       expect(mockRepo.upsertCalls[0]).toMatchObject({
         wsId: "ws-1",
         participantId: "part-1",
         clientId: "client-1",
-        authorizationExpiresAt: 123_000,
+        authorizationExpiresAt: 301_000,
       });
+      now.mockRestore();
     });
   });
 
@@ -881,8 +908,8 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("expireAuthorizationLeases", () => {
-    it("closes expired live mappings and returns the next deadline", () => {
-      const { manager, sockets, mockRepo } = createManager();
+    it("closes expired live mappings and schedules the next deadline", async () => {
+      const { manager, sockets, mockRepo, alarmScheduler } = createManager();
       const expired = createFakeWebSocket();
       sockets.set(expired, ["wsid:expired"]);
       mockRepo.addMapping("expired", {
@@ -902,8 +929,9 @@ describe("SessionWebSocketManagerImpl", () => {
         authorization_expires_at: 3_000,
       });
 
-      expect(manager.expireAuthorizationLeases(2_000)).toBe(3_000);
+      await manager.expireAuthorizationLeases(2_000);
       expect(expired.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+      expect(alarmScheduler.schedule).toHaveBeenCalledWith(3_000);
     });
   });
 

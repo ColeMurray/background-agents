@@ -79,8 +79,6 @@ describe("WorkspaceSettings", () => {
           key: "owner",
           name: "Owner",
           description: null,
-          isSystem: true,
-          revision: 1,
           permissions: [],
           assignmentCount: 1,
         },

@@ -103,30 +103,30 @@ type ServiceAuthorization =
   | { kind: "deny" }
   | {
       kind: "actor";
-      ceiling?: PermissionId;
       actorlessGrants?: readonly ActorlessServiceGrant[];
     };
 
 export type RouteAuthorization =
   | { kind: "none" }
   | { kind: "authenticated" }
+  | { kind: "active-self" }
+  | { kind: "active-global"; service: ServiceAuthorization }
   | {
       kind: "active-user";
       allOf: readonly RouteAuthorizationRequirement[];
       service: ServiceAuthorization;
-      additionalHandlerChecks?: boolean;
     }
   | {
       kind: "service";
       services: readonly BotServiceName[];
       actor: "required" | "optional";
-      additionalHandlerChecks?: boolean;
     };
 
 export const NO_AUTHORIZATION = { kind: "none" } as const satisfies RouteAuthorization;
 export const AUTHENTICATED_USER = {
   kind: "authenticated",
 } as const satisfies RouteAuthorization;
+export const ACTIVE_SELF = { kind: "active-self" } as const satisfies RouteAuthorization;
 
 export function permissionRequirement(permission: PermissionId): RouteAuthorizationRequirement {
   return { kind: "permission", permission };
@@ -187,23 +187,12 @@ export function requireAll(...allOf: readonly RouteAuthorizationRequirement[]): 
   return { kind: "active-user", allOf, service: { kind: "actor" } };
 }
 
-export function handlerAuthorized(options?: {
-  service?: "deny" | "actor";
-  serviceCeiling?: PermissionId;
+export function activeGlobal(options?: {
   actorlessGrants?: readonly ActorlessServiceGrant[];
 }): RouteAuthorization {
   return {
-    kind: "active-user",
-    allOf: [],
-    service:
-      options?.service === "actor"
-        ? {
-            kind: "actor",
-            ceiling: options.serviceCeiling,
-            actorlessGrants: options.actorlessGrants,
-          }
-        : { kind: "deny" },
-    additionalHandlerChecks: true,
+    kind: "active-global",
+    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
   };
 }
 
@@ -211,7 +200,7 @@ export function serviceAuthorized(
   service: BotServiceName,
   actor: "required" | "optional" = "optional"
 ): RouteAuthorization {
-  return { kind: "service", services: [service], actor, additionalHandlerChecks: true };
+  return { kind: "service", services: [service], actor };
 }
 
 type UserPrincipal = Extract<Principal, { kind: "user" }>;

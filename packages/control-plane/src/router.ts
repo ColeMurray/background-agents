@@ -312,7 +312,13 @@ export function enforceRoutePrincipal(
 }
 
 async function enforceActiveUser(route: Route, ctx: RequestContext): Promise<Response | null> {
-  if (route.authorization.kind !== "active-user") return null;
+  if (
+    route.authorization.kind !== "active-user" &&
+    route.authorization.kind !== "active-self" &&
+    route.authorization.kind !== "active-global"
+  ) {
+    return null;
+  }
   let resolvedServiceUserId: string | null = null;
   if (
     ctx.principal?.kind === "service" &&
@@ -395,7 +401,10 @@ function enforceServiceRouteAuthorization(
     }
     return null;
   }
-  if (authorization.kind !== "active-user" || authorization.service.kind === "deny") {
+  if (
+    (authorization.kind !== "active-user" && authorization.kind !== "active-global") ||
+    authorization.service.kind === "deny"
+  ) {
     return json({ error: "Forbidden", code: "service_capability_required" }, 403);
   }
   if (principal.actor) return null;
@@ -553,15 +562,6 @@ async function enforceRouteAuthorization(
   ctx: RequestContext
 ): Promise<Response | null> {
   if (route.authorization.kind !== "active-user") return null;
-  const servicePolicy = route.authorization.service;
-  if (
-    ctx.principal?.kind === "service" &&
-    servicePolicy.kind === "actor" &&
-    servicePolicy.ceiling &&
-    !serviceAllowsPermission(ctx.principal.service, servicePolicy.ceiling)
-  ) {
-    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
-  }
   for (const requirement of route.authorization.allOf) {
     let authorizationError: Response | null;
     switch (requirement.kind) {

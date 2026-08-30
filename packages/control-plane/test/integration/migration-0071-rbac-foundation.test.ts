@@ -111,7 +111,6 @@ describe("migration 0071: RBAC foundation", () => {
       "normalized_name",
       "description",
       "is_system",
-      "revision",
     ]);
     expect(await tableColumns("user_role_assignments")).toEqual(["user_id", "role_id"]);
     expect(await tableColumns("session_access")).toEqual(["session_id", "user_id", "relation"]);

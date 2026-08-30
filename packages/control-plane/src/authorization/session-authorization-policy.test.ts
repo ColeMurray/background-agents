@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
-import { sessionPermissionScope, sessionRequiredRelation } from "./session-authorization-policy";
+import {
+  sessionPermissionScope,
+  sessionRequiredRelation,
+  verifySessionAuthorization,
+} from "./session-authorization-policy";
 
 function authorization(permissions: EffectiveAuthorization["permissions"]): EffectiveAuthorization {
   return {
@@ -25,5 +29,42 @@ describe("session authorization policy", () => {
     expect(sessionRequiredRelation("collaborate")).toBe("access");
     expect(sessionRequiredRelation("delete")).toBe("creator");
     expect(sessionRequiredRelation("participants.manage")).toBe("creator");
+  });
+
+  it("verifies permission scope and relationship through one policy", async () => {
+    const database = (
+      relation: "creator" | "participant" | null,
+      suspendedAt: number | null = null
+    ) => ({
+      prepare: (query: string) => ({
+        bind: () => ({
+          first: async () =>
+            query.includes("FROM users u")
+              ? {
+                  user_id: "user-1",
+                  suspended_at: suspendedAt,
+                  role_id: "role_builtin_member",
+                  role_key: "member",
+                  role_name: "Member",
+                }
+              : relation
+                ? { relation }
+                : null,
+        }),
+      }),
+    });
+
+    await expect(
+      verifySessionAuthorization(database(null) as never, "user-1", "session-1", "collaborate")
+    ).resolves.toBe("valid");
+    await expect(
+      verifySessionAuthorization(database("participant") as never, "user-1", "session-1", "delete")
+    ).resolves.toBe("rejected");
+    await expect(
+      verifySessionAuthorization(database("creator") as never, "user-1", "session-1", "delete")
+    ).resolves.toBe("valid");
+    await expect(
+      verifySessionAuthorization(database(null, 1) as never, "user-1", "session-1", "collaborate")
+    ).resolves.toBe("rejected");
   });
 });

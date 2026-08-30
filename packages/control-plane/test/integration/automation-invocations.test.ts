@@ -27,7 +27,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: now + 86_400_000,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -90,7 +90,19 @@ async function countRows(table: string, where = "1=1"): Promise<number> {
 }
 
 describe("automation invocations (D1 integration)", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+         VALUES ('user-1', 'Execution Owner', NULL, 0, NULL, 1, 1)`
+      ),
+      env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = 'user-1'"
+      ),
+    ]);
+  });
 
   it("reauthorizes the owner and target-use permissions at invocation admission", async () => {
     const ownerId = "11111111111111111111111111111111";
@@ -108,8 +120,8 @@ describe("automation invocations (D1 integration)", () => {
       ).bind(ownerId),
       env.DB.prepare(
         `INSERT INTO roles
-          (id, key, name, normalized_name, description, is_system, revision)
-         VALUES (?, NULL, 'Execution Test', 'execution test', NULL, 0, 1)`
+          (id, key, name, normalized_name, description, is_system)
+         VALUES (?, NULL, 'Execution Test', 'execution test', NULL, 0)`
       ).bind(roleId),
       env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
         roleId,
@@ -133,7 +145,6 @@ describe("automation invocations (D1 integration)", () => {
         invocation,
         children: [child],
         overlapScope: { kind: "automation" },
-        enforceExecutionAuthorization: true,
       });
     const grant = (permission: string) =>
       env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)")

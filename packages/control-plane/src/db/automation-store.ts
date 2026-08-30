@@ -916,15 +916,12 @@ export class AutomationStore {
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
     authorizationGuard?: GuardedWrite;
-    enforceExecutionAuthorization?: boolean;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
     const guards: GuardedWrite[] = [];
     if (params.authorizationGuard) guards.push(params.authorizationGuard);
-    if (params.enforceExecutionAuthorization) {
-      guards.push(automationExecutionGuard(invocation.automation_id));
-    }
+    guards.push(automationExecutionGuard(invocation.automation_id));
     const statements: SqlStatement[] = [];
     statements.push(
       this.db

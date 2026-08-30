@@ -46,11 +46,15 @@ describe("useCurrentUserAuthorization", () => {
     );
     const { result, rerender } = renderHook(useCurrentUserAuthorization, { wrapper });
     await waitFor(() => expect(result.current.authorization?.role.key).toBe("owner"));
+    const ownerHasPermission = result.current.hasPermission;
+    rerender();
+    expect(result.current.hasPermission).toBe(ownerHasPermission);
 
     currentUser = "member";
     rerender();
 
     await waitFor(() => expect(result.current.authorization?.role.key).toBe("member"));
+    expect(result.current.hasPermission).not.toBe(ownerHasPermission);
     expect(result.current.hasPermission("workspace.transfer_ownership")).toBe(false);
   });
 });

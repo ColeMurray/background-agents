@@ -15,7 +15,7 @@ import {
   json,
   error,
   parseJsonBody,
-  handlerAuthorized,
+  activeGlobal,
   requirePermission,
 } from "./shared";
 
@@ -111,8 +111,7 @@ export const modelPreferencesRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVI
   {
     method: "GET",
     pattern: parsePattern("/model-preferences"),
-    authorization: handlerAuthorized({
-      service: "actor",
+    authorization: activeGlobal({
       actorlessGrants: [{ service: "slack-bot" }],
     }),
     handler: handleGetModelPreferences,

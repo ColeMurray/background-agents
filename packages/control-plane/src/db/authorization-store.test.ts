@@ -26,13 +26,9 @@ function fakeDatabase(options: {
   };
 }
 
-const replaceRoleInput: Parameters<AuthorizationStore["replaceRole"]>[0] = {
-  roleId: "role_custom",
-  expectedRevision: 1,
-  name: "Custom",
-  normalizedName: "custom",
-  description: null,
-  permissions: [],
+const replaceMemberStatusInput: Parameters<AuthorizationStore["replaceMemberStatus"]>[0] = {
+  targetUserId: "target",
+  suspended: true,
   actorUserId: "actor",
   requestId: "request",
   now: 100,
@@ -49,7 +45,6 @@ describe("AuthorizationStore", () => {
             name: "Custom",
             description: null,
             is_system: 0,
-            revision: 2,
             assignment_count: "4",
           },
         ],
@@ -62,15 +57,13 @@ describe("AuthorizationStore", () => {
         key: null,
         name: "Custom",
         description: null,
-        isSystem: false,
-        revision: 2,
         assignmentCount: 4,
       },
     ]);
   });
 
   it.each(["applied", "actor_authorization_changed", "not_found", "conflict"] as const)(
-    "returns the %s role replacement batch outcome",
+    "returns the %s member status replacement batch outcome",
     async (status) => {
       const store = new AuthorizationStore(
         fakeDatabase({
@@ -78,7 +71,9 @@ describe("AuthorizationStore", () => {
         })
       );
 
-      await expect(store.replaceRole(replaceRoleInput)).resolves.toEqual({ status });
+      await expect(store.replaceMemberStatus(replaceMemberStatusInput)).resolves.toEqual({
+        status,
+      });
     }
   );
 
@@ -86,6 +81,6 @@ describe("AuthorizationStore", () => {
     const failure = new Error("database unavailable");
     const store = new AuthorizationStore(fakeDatabase({ batchError: failure }));
 
-    await expect(store.replaceRole(replaceRoleInput)).rejects.toBe(failure);
+    await expect(store.replaceMemberStatus(replaceMemberStatusInput)).rejects.toBe(failure);
   });
 });

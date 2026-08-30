@@ -10,7 +10,6 @@ export function WorkspaceSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canReadMembers = hasPermission("workspace.members.read");
   const canReadRoles = hasPermission("workspace.roles.read");
-  const canRead = canReadMembers || canReadRoles;
   const canManage = hasPermission("workspace.members.manage");
   const canAssignRoles = canManage && canReadRoles;
   const canTransfer = hasPermission("workspace.transfer_ownership");
@@ -23,9 +22,6 @@ export function WorkspaceSettings() {
     (member) => member.role.key === "owner" && member.suspendedAt === null
   ).length;
 
-  if (!canRead) {
-    return <ErrorBanner>You do not have permission to view workspace administration.</ErrorBanner>;
-  }
   if (loading) return <p className="text-sm text-muted-foreground">Loading workspace access...</p>;
   if (error) return <ErrorBanner>Failed to load workspace access.</ErrorBanner>;
 
