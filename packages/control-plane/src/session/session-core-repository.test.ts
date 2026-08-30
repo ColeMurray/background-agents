@@ -110,7 +110,7 @@ describe("SessionCoreRepository", () => {
       });
 
       expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO session");
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO NOTHING");
       expect(mock.calls[0].params).toEqual([
         "sess-1",
         "test-session",

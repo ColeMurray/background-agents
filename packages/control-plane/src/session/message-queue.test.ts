@@ -17,6 +17,7 @@ import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
+import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
 
@@ -235,7 +236,27 @@ function buildQueue() {
   const projectTerminalMessage = vi.fn(async () => {});
   const getProviderAuthenticationError = vi.fn(async (_model: string) => null as string | null);
 
-  const queue = new SessionMessageQueue(
+  const alarmScheduler = createEarliestAlarmScheduler(
+    { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
+    alarmDeadlines
+  );
+  const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
+    backgroundTasks,
+    log,
+    repository as unknown as SessionCoreRepository,
+    repository as unknown as MessageRepository,
+    wsManager as unknown as SessionWebSocketManager,
+    messenger,
+    callbackService as unknown as CallbackNotificationService,
+    sessionStatus as unknown as SessionStatusService,
+    projectTerminalMessage,
+    sandboxLifecycle,
+    alarmScheduler,
+    alarmDeadlines,
+    (): void => queue.broadcastPromptQueue(),
+    (): Promise<void> => queue.processMessageQueue()
+  );
+  const queue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
     log,
     repository as unknown as SessionCoreRepository,
@@ -252,16 +273,14 @@ function buildQueue() {
     sandboxLifecycle,
     null,
     "github",
-    createEarliestAlarmScheduler(
-      { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
-      alarmDeadlines
-    ),
-    alarmDeadlines,
+    alarmScheduler,
+    executionStop,
     () => executionTimeoutMs
   );
 
   return {
     queue,
+    executionStop,
     repository,
     attachmentRepository,
     wsManager,
@@ -1287,8 +1306,8 @@ describe("SessionMessageQueue", () => {
       id: "msg-budget",
       created_at: 900,
     });
-    const preparation = h.queue.prepareBudgetStop("Session cost limit reached", 1000);
-    await h.queue.deliverBudgetStop(preparation);
+    const preparation = h.executionStop.prepare("Session cost limit reached", 1000);
+    await h.executionStop.deliver(preparation);
 
     expect(preparation.stopped).toBe(true);
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
@@ -1314,14 +1333,17 @@ describe("SessionMessageQueue", () => {
     });
     h.setAlarm.mockRejectedValue(new Error("alarm unavailable"));
 
-    const preparation = h.queue.prepareBudgetStop("Session cost limit reached", 1000);
-    await expect(h.queue.deliverBudgetStop(preparation)).resolves.toBeUndefined();
+    const preparation = h.executionStop.prepare("Session cost limit reached", 1000);
+    await expect(h.executionStop.deliver(preparation)).resolves.toBeUndefined();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "stop_alarm_failed"
+    );
     expect(h.log.error).toHaveBeenCalledWith(
-      "Budget stop effect failed",
-      expect.objectContaining({ effect: "alarm_schedule" })
+      "Stop confirmation alarm failed",
+      expect.objectContaining({ error: expect.any(Error) })
     );
   });
 
@@ -1334,7 +1356,7 @@ describe("SessionMessageQueue", () => {
       created_at: 900,
     });
 
-    await h.queue.stopExecution();
+    await h.executionStop.stop();
 
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1373,7 +1395,7 @@ describe("SessionMessageQueue", () => {
       })
     );
 
-    await h.queue.stopExecution();
+    await h.executionStop.stop();
     expect(h.broadcast).not.toHaveBeenCalledWith({
       type: "sandbox_event",
       event: expect.objectContaining({ type: "execution_complete" }),
@@ -1396,7 +1418,7 @@ describe("SessionMessageQueue", () => {
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
 
-    await h.queue.stopExecution();
+    await h.executionStop.stop();
 
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalledWith(
       "msg-next",
@@ -1419,7 +1441,7 @@ describe("SessionMessageQueue", () => {
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
     h.wsManager.getSandboxSocket.mockReturnValue(null);
 
-    await h.queue.stopExecution();
+    await h.executionStop.stop();
 
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "stop_send_failed"
@@ -1437,7 +1459,7 @@ describe("SessionMessageQueue", () => {
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
     h.wsManager.send.mockReturnValue(false);
 
-    await h.queue.stopExecution();
+    await h.executionStop.stop();
 
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "stop_send_failed"
@@ -1454,7 +1476,7 @@ describe("SessionMessageQueue", () => {
       })
       .mockReturnValue(null);
 
-    await h.queue.recoverStopConfirmationTimeout();
+    await h.executionStop.recoverStopConfirmationTimeout();
 
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "stop_confirmation_timeout"
@@ -1469,7 +1491,7 @@ describe("SessionMessageQueue", () => {
       .mockReturnValueOnce({ id: "msg-stopped", deadline: Date.now() - 1 })
       .mockReturnValue(null);
 
-    await h.queue.resumeAfterSandboxTermination();
+    await h.executionStop.resumeAfterSandboxTermination();
 
     expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-stopped");
   });
@@ -1489,21 +1511,10 @@ describe("SessionMessageQueue", () => {
     expect(h.wsManager.send).not.toHaveBeenCalled();
   });
 
-  it("suppresses session status reconcile when stopExecution is called with suppress flag", async () => {
-    const h = buildQueue();
-    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
-      id: "msg-10",
-      created_at: 900,
-    });
-    await h.queue.stopExecution({ suppressStatusReconcile: true });
-
-    expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
-  });
-
   it("does not finalize or stop when no message is processing", async () => {
     const h = buildQueue();
 
-    await h.queue.stopExecution();
+    await h.executionStop.stop();
     await h.queue.failStuckProcessingMessage();
 
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
@@ -1625,6 +1636,23 @@ describe("SessionMessageQueue", () => {
 
       expect(h.repository.getPendingOrProcessingCount).not.toHaveBeenCalled();
       expect(h.participantService.create).not.toHaveBeenCalled();
+    });
+
+    it("rejects a full queue before participant mutations", async () => {
+      const h = buildQueue();
+      h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content: "Continue",
+          authorId: "new-user",
+          source: "agent",
+        })
+      ).rejects.toMatchObject({ name: "PromptQueueFullError" });
+
+      expect(h.participantService.create).not.toHaveBeenCalled();
+      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
 
     it.each(["cancelled", "archived"] as const)(

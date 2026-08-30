@@ -91,6 +91,7 @@ function createProcessor() {
   };
   const backgroundTasks = createTestBackgroundTasks();
   const budgetService = {
+    ingestStepFinish: vi.fn(async () => true),
     evaluateObservedCost: vi.fn(async () => {}),
     recordCostTrackingUnavailable: vi.fn(),
   };
@@ -104,7 +105,6 @@ function createProcessor() {
     wsManager as unknown as SessionWebSocketManager,
     new SandboxStreamingEventHandler(
       backgroundTasks,
-      repository as unknown as SessionCoreRepository,
       eventRepository,
       callbackService as unknown as CallbackNotificationService,
       messenger,
@@ -398,7 +398,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
   });
 
-  it("adds step_finish cost to session aggregate and broadcasts event", async () => {
+  it("routes step_finish through atomic budget ingestion", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {
       type: "step_finish",
@@ -410,17 +410,12 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123, expect.any(Number));
-    expect(h.budgetService.evaluateObservedCost).toHaveBeenCalledWith(
-      1.25,
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
       "msg-1",
       expect.any(Number)
     );
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
-    expect(h.broadcast.mock.invocationCallOrder[0]).toBeLessThan(
-      h.budgetService.evaluateObservedCost.mock.invocationCallOrder[0]
-    );
   });
 
   it("records unavailable cost tracking for positive-token steps without cost", async () => {
@@ -435,8 +430,8 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.budgetService.recordCostTrackingUnavailable).toHaveBeenCalledWith(
-      { input: 10 },
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
       "msg-1",
       expect.any(Number)
     );
@@ -454,9 +449,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with negative cost", async () => {
@@ -471,8 +468,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with Infinity cost", async () => {
@@ -487,9 +487,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("completes processing message and schedules post-completion work", async () => {

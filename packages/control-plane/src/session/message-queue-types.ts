@@ -12,21 +12,9 @@ export interface PromptMessageData {
   attachments?: SessionAttachmentReference[];
 }
 
-export interface StopExecutionOptions {
-  suppressStatusReconcile?: boolean;
-  reason?: string;
-}
-
 export interface RecordedMessageFailure {
   event: Extract<SandboxEvent, { type: "execution_complete" }>;
   completion: RecordedMessageCompletion;
-}
-
-export interface BudgetStopPreparation {
-  stopped: boolean;
-  processingMessageId: string | null;
-  stopConfirmationDeadline: number | null;
-  failure: RecordedMessageFailure | null;
 }
 
 export interface EnqueuePromptCoreData {

@@ -18,6 +18,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "snapshot_ready",
   "push_complete",
   "push_error",
+  "step_finish",
 ]);
 
 /**

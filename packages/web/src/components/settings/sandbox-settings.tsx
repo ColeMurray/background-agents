@@ -740,6 +740,7 @@ export function SandboxSettingsEditor({
       </fieldset>
 
       <SessionCostSettingsFields
+        isGlobal={isGlobal}
         maxSessionCostUsd={sessionCostSettings.maxCost}
         costWarningThresholdPct={sessionCostSettings.threshold}
         onMaxSessionCostUsdChange={sessionCostSettings.setMaxCost}

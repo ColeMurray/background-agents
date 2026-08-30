@@ -8,6 +8,7 @@ import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createHandler() {
   const repository = {
+    getSession: vi.fn(() => null),
     upsertSession: vi.fn(),
     replaceSessionRepositories: vi.fn(),
     transaction: vi.fn((callback: () => void) => callback()),
@@ -58,6 +59,33 @@ function createHandler() {
 }
 
 describe("SessionInitHandler", () => {
+  it("does not repeat initialization side effects for an existing session", async () => {
+    const { handler, repository, sandboxRepository, encryptScmToken, scheduleWarmSandbox } =
+      createHandler();
+    repository.getSession.mockReturnValue({ id: "session-do-id" } as never);
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.replaceSessionRepositories).not.toHaveBeenCalled();
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(encryptScmToken).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
     ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],

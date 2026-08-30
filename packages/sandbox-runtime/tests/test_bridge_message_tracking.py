@@ -170,15 +170,25 @@ class TestHandlePartTranslation:
 
         events = stream._handle_part(make_state("cp-message-123"), part, None)
 
-        assert events == [
-            {
-                "type": "step_finish",
-                "cost": 0.001,
-                "tokens": 150,
-                "reason": "end_turn",
-                "messageId": "cp-message-123",
-            }
-        ]
+        assert events[0] | {"ackId": "ignored"} == {
+            "type": "step_finish",
+            "ackId": "ignored",
+            "cost": 0.001,
+            "tokens": 150,
+            "reason": "end_turn",
+            "messageId": "cp-message-123",
+        }
+        assert events[0]["ackId"].startswith("step_finish:v1:")
+
+    def test_step_finish_omits_unknown_cost(self, bridge: AgentBridge):
+        stream = bridge._ensure_prompt_stream()
+        events = stream._handle_part(
+            make_state("cp-message-123"),
+            {"type": "step-finish", "id": "step-1", "cost": None, "tokens": 150},
+            None,
+        )
+
+        assert "cost" not in events[0]
 
 
 class TestBuildPromptRequestBody:

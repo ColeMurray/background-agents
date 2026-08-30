@@ -218,6 +218,7 @@ export class SessionConnectionAuthenticator {
     data: {
       token: string;
       clientId: string;
+      capabilities?: ClientInfo["capabilities"];
     }
   ): Promise<void> {
     const { wsManager, participantService, presenceService, log } = this.deps;
@@ -290,6 +291,7 @@ export class SessionConnectionAuthenticator {
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
+        capabilities: data.capabilities ?? [],
         ws,
       };
 
@@ -344,7 +346,12 @@ export class SessionConnectionAuthenticator {
     wsManager.setClient(ws, client);
     const parsed = wsManager.classify(ws);
     if (parsed.kind === "client" && parsed.wsId) {
-      wsManager.persistClientMapping(parsed.wsId, client.participantId, client.clientId);
+      wsManager.persistClientMapping(
+        parsed.wsId,
+        client.participantId,
+        client.clientId,
+        client.capabilities ?? []
+      );
       log.debug("Stored ws_client_mapping", {
         ws_id: parsed.wsId,
         participant_id: client.participantId,
@@ -380,6 +387,13 @@ export class SessionConnectionAuthenticator {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
+      capabilities: (() => {
+        try {
+          return JSON.parse(mapping.capabilities ?? "[]") as ClientInfo["capabilities"];
+        } catch {
+          return [];
+        }
+      })(),
       ws,
     };
 

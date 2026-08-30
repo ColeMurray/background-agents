@@ -229,8 +229,8 @@ same budget-stop path.
 `sandboxSettingsSchema` gains:
 
 ```ts
-maxSessionCostUsd: z.number().optional();
-costWarningThresholdPct: z.number().optional();
+maxSessionCostUsd: z.number().positive().optional();
+costWarningThresholdPct: z.number().int().min(1).max(99).optional();
 ```
 
 `maxSessionCostUsd` is a finite number greater than zero. `costWarningThresholdPct` is an integer

@@ -81,4 +81,28 @@ describe("session prompt API route", () => {
       attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
     });
   });
+
+  it("preserves structured budget-exhausted responses", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json(
+        { error: "Session cost limit reached", code: "BUDGET_EXHAUSTED" },
+        { status: 409 }
+      )
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/sessions/session-1/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "Continue" }),
+      }) as never,
+      { params: Promise.resolve({ id: "session-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "Session cost limit reached",
+      code: "BUDGET_EXHAUSTED",
+    });
+  });
 });

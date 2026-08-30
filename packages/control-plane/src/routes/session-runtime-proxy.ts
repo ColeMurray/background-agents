@@ -324,13 +324,19 @@ const budgetProxyRoute = defineRoute(
       const parsed = sessionBudgetUpdateSchema.safeParse(rawBody);
       if (!parsed.success) return error("Invalid budget request", 400);
 
+      const session = await new SessionIndexStore(ctx.db).get(sessionId);
+      if (!session) return error("Session not found", 404);
+      if (
+        !enforcement.enforced.canonicalUserId ||
+        session.userId !== enforcement.enforced.canonicalUserId
+      ) {
+        return error("Only the session owner can change the cost limit", 403);
+      }
+
       return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.budget, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...parsed.data,
-          userId: enforcement.enforced.participantUserId,
-        }),
+        body: JSON.stringify(parsed.data),
       });
     },
   })

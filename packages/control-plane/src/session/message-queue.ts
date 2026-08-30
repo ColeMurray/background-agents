@@ -22,7 +22,7 @@ import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
-import { STOP_CONFIRMATION_TIMEOUT_MS, type MessageRepository } from "./message-repository";
+import type { MessageRepository } from "./message-repository";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -36,7 +36,7 @@ import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
-import type { AlarmDeadlineStore } from "./alarm/scheduler";
+import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -45,15 +45,11 @@ import {
   resolveSessionAttachments,
 } from "./session-attachment-resolver";
 import type {
-  BudgetStopPreparation,
   EnqueuedPrompt,
   EnqueuePromptCoreData,
   PromptMessageData,
   RecordedMessageFailure,
-  StopExecutionOptions,
 } from "./message-queue-types";
-
-export type { BudgetStopPreparation } from "./message-queue-types";
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
@@ -155,7 +151,7 @@ export class SessionMessageQueue {
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
-    private readonly alarmDeadlines: AlarmDeadlineStore,
+    private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number
   ) {}
@@ -362,7 +358,7 @@ export class SessionMessageQueue {
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
       if (awaitingStop.deadline <= Date.now()) {
-        await this.recoverStopConfirmationTimeout();
+        await this.executionStop.recoverStopConfirmationTimeout();
       } else {
         await this.alarmScheduler.schedule(awaitingStop.deadline);
       }
@@ -480,7 +476,7 @@ export class SessionMessageQueue {
     if (!sent) {
       this.messageRepository.updateMessageToPending(message.id);
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
-      await this.resumeAfterSandboxTermination();
+      await this.executionStop.resumeAfterSandboxTermination();
     } else {
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
@@ -513,149 +509,10 @@ export class SessionMessageQueue {
     });
   }
 
-  /**
-   * Stop the current execution.
-   *
-   * Marks the processing message as failed, upserts a synthetic
-   * execution_complete, broadcasts that synthetic event so every client flushes
-   * its buffered tokens, and forwards the stop to the sandbox.
-   */
-  async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
-    const now = Date.now();
-    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
-    let stoppedMessageId: string | null = null;
-
-    if (processingMessage) {
-      const failure = this.recordMessageFailure(
-        processingMessage,
-        options.reason ?? "Execution was stopped",
-        now,
-        "processing"
-      );
-      if (!failure) {
-        this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-        return;
-      }
-      this.projectMessageFailure(failure);
-      stoppedMessageId = processingMessage.id;
-      const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
-      this.messageRepository.markMessageAwaitingStopConfirmation(
-        processingMessage.id,
-        stopConfirmationDeadline
-      );
-      await this.alarmScheduler.schedule(stopConfirmationDeadline);
-      this.broadcastPromptQueue();
-      this.log.info("prompt.stopped", {
-        event: "prompt.stopped",
-        message_id: processingMessage.id,
-      });
-      if (!options.suppressStatusReconcile) {
-        await this.sessionStatus.reconcileAfterExecution(false);
-      }
-    }
-
-    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (stoppedMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
-      await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
-      await this.resumeAfterSandboxTermination();
-    }
-  }
-
-  prepareBudgetStop(reason: string, now: number): BudgetStopPreparation {
-    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
-    const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
-    let failure: RecordedMessageFailure | null = null;
-
-    if (processingMessage) {
-      failure = this.recordMessageFailure(processingMessage, reason, now, "processing");
-      if (failure) {
-        this.messageRepository.markMessageAwaitingStopConfirmation(
-          processingMessage.id,
-          stopConfirmationDeadline
-        );
-        this.alarmDeadlines.setPendingEarliest(stopConfirmationDeadline);
-      }
-    }
-
-    return {
-      stopped: failure !== null,
-      processingMessageId: failure ? (processingMessage?.id ?? null) : null,
-      stopConfirmationDeadline: failure ? stopConfirmationDeadline : null,
-      failure,
-    };
-  }
-
-  async deliverBudgetStop(preparation: BudgetStopPreparation): Promise<void> {
-    if (
-      !preparation.failure ||
-      !preparation.processingMessageId ||
-      preparation.stopConfirmationDeadline === null
-    ) {
-      return;
-    }
-    this.projectMessageFailure(preparation.failure);
-    this.broadcastPromptQueue();
-    this.log.info("prompt.stopped", {
-      event: "prompt.stopped",
-      message_id: preparation.processingMessageId,
-      reason: "budget_exhausted",
-    });
-    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    const stopSent = sandboxWs !== null && this.wsManager.send(sandboxWs, { type: "stop" });
-    await Promise.all([
-      this.runBudgetStopEffect("alarm_schedule", () =>
-        this.alarmScheduler.schedule(preparation.stopConfirmationDeadline!)
-      ),
-      this.runBudgetStopEffect("status_reconcile", () =>
-        this.sessionStatus.reconcileAfterExecution(false)
-      ),
-      this.runBudgetStopEffect("sandbox_stop", async () => {
-        if (stopSent) return;
-        await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
-        await this.resumeAfterSandboxTermination();
-      }),
-    ]);
-  }
-
-  private async runBudgetStopEffect(name: string, effect: () => Promise<void>): Promise<void> {
-    try {
-      await effect();
-    } catch (error) {
-      this.log.error("Budget stop effect failed", {
-        event: "prompt.budget_stop_effect_failed",
-        effect: name,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  async recoverStopConfirmationTimeout(): Promise<void> {
-    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
-    if (!awaitingStop || awaitingStop.deadline > Date.now()) return;
-    this.log.warn("Sandbox did not confirm stop before deadline", {
-      event: "prompt.stop_confirmation_timeout",
-      message_id: awaitingStop.id,
-    });
-    await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_confirmation_timeout");
-    await this.resumeAfterSandboxTermination();
-  }
-
-  async resumeAfterSandboxTermination(): Promise<void> {
-    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
-    if (awaitingStop) {
-      this.messageRepository.clearMessageAwaitingStopConfirmation(awaitingStop.id);
-    }
-    await this.processMessageQueue();
-  }
-
   async handleFatalSandboxFailure(reason: string): Promise<void> {
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
-    if (await termination) await this.resumeAfterSandboxTermination();
+    if (await termination) await this.executionStop.resumeAfterSandboxTermination();
   }
 
   /** Close every unfinished message synchronously; status projection happens afterwards. */
@@ -796,6 +653,7 @@ export class SessionMessageQueue {
   ): Promise<{ messageId: string; status: "queued" }> {
     this.assertPromptableSession();
     this.assertBudgetAvailable();
+    this.assertQueueCapacity();
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
       const name = data.scmEnrichment?.name || data.authorId;

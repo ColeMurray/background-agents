@@ -128,6 +128,9 @@ export class SessionInitHandler {
         { status: 400 }
       );
     }
+    if (this.sessionCoreRepository.getSession()) {
+      return Response.json({ sessionId, status: "created" });
+    }
 
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {

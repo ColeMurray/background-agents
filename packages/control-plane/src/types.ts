@@ -3,6 +3,7 @@
  */
 
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
+import type { ClientCapability } from "@open-inspect/shared/types/websocket";
 
 // Environment bindings
 export interface Env {
@@ -121,5 +122,6 @@ export interface ClientInfo {
   lastSeen: number;
   clientId: string;
   ws: WebSocket;
+  capabilities?: ClientCapability[];
   lastFetchHistoryAtMs?: number;
 }

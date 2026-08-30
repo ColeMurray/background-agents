@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionInternalPaths } from "../session/contracts";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { SessionIndexStore } from "../db/session-index";
 
 function createCtx(db: SqlDatabase = {} as SqlDatabase): RequestContext {
   return {
@@ -43,8 +44,14 @@ function getHandler(method: string, path: string) {
   throw new Error(`No route found for ${method} ${path}`);
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("session runtime proxy routes", () => {
   it("forwards budget updates with verified user identity", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+      id: "session-1",
+      userId: "user-1",
+    } as Awaited<ReturnType<SessionIndexStore["get"]>>);
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
@@ -67,7 +74,31 @@ describe("session runtime proxy routes", () => {
     expect(response.status).toBe(200);
     expect(route.authentication.kind).toBe("user");
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.budget);
-    await expect(requests[0].json()).resolves.toEqual({ maxCostUsd: 20, userId: "user-1" });
+    await expect(requests[0].json()).resolves.toEqual({ maxCostUsd: 20 });
+  });
+
+  it("rejects budget updates from a non-owner", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+      id: "session-1",
+      userId: "owner-1",
+    } as Awaited<ReturnType<SessionIndexStore["get"]>>);
+    const fetch = vi.fn(async () => Response.json({ maxSessionCostUsd: 20 }));
+    const path = "/sessions/session-1/budget";
+    const { handler, match } = getHandler("PATCH", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ maxCostUsd: 20 }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(403);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each([

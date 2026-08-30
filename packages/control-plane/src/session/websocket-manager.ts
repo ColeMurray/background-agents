@@ -7,6 +7,7 @@
  */
 
 import type { Logger } from "../logger";
+import type { ClientCapability } from "@open-inspect/shared/types/websocket";
 import type { ClientInfo } from "../types";
 import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
@@ -63,7 +64,13 @@ export interface SessionWebSocketManager {
   recoverClientMapping(ws: WebSocket): WsClientMappingResult | null;
 
   /** Persist ws-to-participant mapping for hibernation survival. */
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    capabilities?: ClientCapability[]
+  ): void;
+  supportsClientCapability(ws: WebSocket, capability: ClientCapability): boolean;
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
   isClientSynchronizing(ws: WebSocket): boolean;
@@ -254,13 +261,31 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
   }
 
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void {
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    capabilities: ClientCapability[] = []
+  ): void {
     this.wsClientMappingRepository.upsertWsClientMapping({
       wsId,
       participantId,
       clientId,
+      capabilities,
       createdAt: Date.now(),
     });
+  }
+
+  supportsClientCapability(ws: WebSocket, capability: ClientCapability): boolean {
+    const cached = this.clients.get(ws);
+    if (cached) return cached.capabilities?.includes(capability) ?? false;
+    const mapping = this.recoverClientMapping(ws);
+    if (!mapping) return false;
+    try {
+      return (JSON.parse(mapping.capabilities ?? "[]") as unknown[]).includes(capability);
+    } catch {
+      return false;
+    }
   }
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {

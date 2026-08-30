@@ -496,6 +496,12 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("adds acknowledged step finish receipts for fresh and migrated sessions", () => {
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
+    const migration = MIGRATIONS.find((entry) => entry.id === 47);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
+  });
+
   it("adds Autofix admission metadata and indexes for fresh and migrated sessions", () => {
     const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
       ");"

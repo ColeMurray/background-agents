@@ -6,6 +6,7 @@ import {
   serverMessageSchema,
   type ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
+import { SESSION_BUDGET_CAPABILITY } from "@open-inspect/shared/types/websocket";
 
 function parseWsMessage(raw: unknown): ServerMessage | null {
   const result = serverMessageSchema.safeParse(raw);
@@ -181,6 +182,7 @@ export function useSessionTransport(
         type: "subscribe",
         token: wsTokenRef.current,
         clientId: crypto.randomUUID(),
+        capabilities: [SESSION_BUDGET_CAPABILITY],
       })
     );
   }, []);

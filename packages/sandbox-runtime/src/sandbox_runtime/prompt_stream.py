@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
 import re
 import time
@@ -671,15 +672,19 @@ class OpenCodePromptStream:
             )
 
         elif part_type == "step-finish":
-            events.append(
-                {
-                    "type": "step_finish",
-                    "cost": part.get("cost"),
-                    "tokens": part.get("tokens"),
-                    "reason": part.get("reason"),
-                    "messageId": state.message_id,
-                }
+            source_identity = ":".join(
+                str(part.get(key, "")) for key in ("sessionID", "messageID", "id")
             )
+            finish_event = {
+                "type": "step_finish",
+                "ackId": f"step_finish:v1:{hashlib.sha256(source_identity.encode()).hexdigest()}",
+                "tokens": part.get("tokens"),
+                "reason": part.get("reason"),
+                "messageId": state.message_id,
+            }
+            if part.get("cost") is not None:
+                finish_event["cost"] = part["cost"]
+            events.append(finish_event)
 
         if is_subtask:
             child_session_id = part.get("sessionID", "")

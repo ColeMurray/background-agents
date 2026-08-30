@@ -47,6 +47,8 @@ interface SessionRightSidebarProps {
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
 
+const DEFAULT_CAN_MANAGE_BUDGET = false;
+
 export function SessionRightSidebarContent({
   sessionId,
   sessionState,
@@ -61,7 +63,7 @@ export function SessionRightSidebarContent({
   diffLoading,
   selectedDiff,
   onOpenDiff,
-  canManageBudget = false,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
@@ -296,6 +298,7 @@ export function SessionRightSidebar({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
 }: SessionRightSidebarProps) {
   return (
     <aside
@@ -321,6 +324,7 @@ export function SessionRightSidebar({
         diffLoading={diffLoading}
         selectedDiff={selectedDiff}
         onOpenDiff={onOpenDiff}
+        canManageBudget={canManageBudget}
       />
     </aside>
   );

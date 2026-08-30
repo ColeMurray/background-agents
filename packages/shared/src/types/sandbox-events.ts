@@ -84,7 +84,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
-    cost: z.number().optional(),
+    cost: z.number().nullable().optional(),
     tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),

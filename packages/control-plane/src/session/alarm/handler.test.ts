@@ -11,6 +11,8 @@ function createHandler() {
   };
   const messageQueue = {
     failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
+  };
+  const executionStop = {
     recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
     resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
@@ -34,6 +36,7 @@ function createHandler() {
   const handler = createAlarmHandler({
     repository: repository as unknown as MessageRepository,
     messageQueue,
+    executionStop,
     lifecycleManager,
     alarmScheduler,
     getExecutionTimeoutMs: () => 1000,
@@ -45,6 +48,7 @@ function createHandler() {
     handler,
     repository,
     messageQueue,
+    executionStop,
     lifecycleManager,
     alarmScheduler,
     now,
@@ -54,8 +58,15 @@ function createHandler() {
 
 describe("createAlarmHandler", () => {
   it("delegates to lifecycle manager when no processing message exists", async () => {
-    const { handler, repository, messageQueue, lifecycleManager, alarmScheduler, now } =
-      createHandler();
+    const {
+      handler,
+      repository,
+      messageQueue,
+      executionStop,
+      lifecycleManager,
+      alarmScheduler,
+      now,
+    } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
 
     await handler.handle();
@@ -63,7 +74,7 @@ describe("createAlarmHandler", () => {
     expect(now).not.toHaveBeenCalled();
     expect(alarmScheduler.schedule).not.toHaveBeenCalled();
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
-    expect(messageQueue.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
+    expect(executionStop.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 
@@ -119,6 +130,8 @@ describe("createAlarmHandler", () => {
     };
     const messageQueue = {
       failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
+    };
+    const executionStop = {
       recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
       resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
@@ -126,6 +139,7 @@ describe("createAlarmHandler", () => {
     const handler = createAlarmHandler({
       repository: repository as unknown as MessageRepository,
       messageQueue,
+      executionStop,
       lifecycleManager,
       alarmScheduler,
       getExecutionTimeoutMs: () => 1000,
@@ -162,24 +176,24 @@ describe("createAlarmHandler", () => {
   });
 
   it("fails stuck work without resuming after a connecting timeout", async () => {
-    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    const { handler, repository, messageQueue, executionStop, lifecycleManager } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
     lifecycleManager.handleAlarm.mockResolvedValue("sandbox_failed");
 
     await handler.handle();
 
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
-    expect(messageQueue.resumeAfterSandboxTermination).not.toHaveBeenCalled();
+    expect(executionStop.resumeAfterSandboxTermination).not.toHaveBeenCalled();
   });
 
   it("fails stuck work and resumes after lifecycle termination", async () => {
-    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    const { handler, repository, messageQueue, executionStop, lifecycleManager } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
     lifecycleManager.handleAlarm.mockResolvedValue("sandbox_terminated");
 
     await handler.handle();
 
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
-    expect(messageQueue.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
+    expect(executionStop.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
   });
 });

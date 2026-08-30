@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionBudgetHandler } from "./session-budget.handler";
-import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionBudgetService } from "../../budget-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
 
-function createHandler(role: "owner" | "member" | null = "owner") {
+function createHandler() {
   const session = {
     id: "session-1",
     total_cost: 8,
@@ -13,9 +12,6 @@ function createHandler(role: "owner" | "member" | null = "owner") {
     cost_tracking_unavailable: 0,
   };
   const repository = { getSession: vi.fn(() => session) };
-  const participants = {
-    getParticipantByCanonicalOrUserId: vi.fn(() => (role ? { id: "p-1", role } : null)),
-  };
   const budgetService = {
     updateLimit: vi.fn(async (maxCostUsd: number | null) => {
       session.max_cost_usd = maxCostUsd as number;
@@ -25,7 +21,6 @@ function createHandler(role: "owner" | "member" | null = "owner") {
   return {
     handler: new SessionBudgetHandler(
       repository as unknown as SessionCoreRepository,
-      participants as unknown as ParticipantRepository,
       budgetService as unknown as SessionBudgetService,
       () => 1000
     ),
@@ -44,25 +39,17 @@ function request(body: unknown): Request {
 describe("SessionBudgetHandler", () => {
   it("lets the owner update the live limit", async () => {
     const h = createHandler();
-    const response = await h.handler.update(request({ userId: "user-1", maxCostUsd: 20 }));
+    const response = await h.handler.update(request({ maxCostUsd: 20 }));
 
     expect(response.status).toBe(200);
     expect(h.budgetService.updateLimit).toHaveBeenCalledWith(20, 1000);
     expect(await response.json()).toMatchObject({ maxSessionCostUsd: 20, totalCost: 8 });
   });
 
-  it.each(["member", null] as const)("rejects a %s", async (role) => {
-    const h = createHandler(role);
-    const response = await h.handler.update(request({ userId: "user-1", maxCostUsd: null }));
-
-    expect(response.status).toBe(403);
-    expect(h.budgetService.updateLimit).not.toHaveBeenCalled();
-  });
-
   it.each([{ maxCostUsd: 0 }, { maxCostUsd: -1 }, { maxCostUsd: 1, extra: true }, {}])(
     "rejects invalid body %#",
     async (body) => {
-      const response = await createHandler().handler.update(request({ userId: "user-1", ...body }));
+      const response = await createHandler().handler.update(request(body));
       expect(response.status).toBe(400);
     }
   );

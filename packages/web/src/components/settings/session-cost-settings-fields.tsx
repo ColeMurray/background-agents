@@ -6,6 +6,7 @@ import {
 import { Input } from "@/components/ui/input";
 
 interface SessionCostSettingsFieldsProps {
+  isGlobal: boolean;
   maxSessionCostUsd: string;
   costWarningThresholdPct: string;
   onMaxSessionCostUsdChange: (value: string) => void;
@@ -13,6 +14,7 @@ interface SessionCostSettingsFieldsProps {
 }
 
 export function SessionCostSettingsFields({
+  isGlobal,
   maxSessionCostUsd,
   costWarningThresholdPct,
   onMaxSessionCostUsdChange,
@@ -23,7 +25,8 @@ export function SessionCostSettingsFields({
       <legend className="block text-sm font-medium text-foreground mb-1.5">Session Cost</legend>
       <p className="text-xs text-muted-foreground mb-2">
         Stops additional model work after reported session cost reaches the limit. Leave the limit
-        blank for unlimited sessions. Unreported model cost cannot be limited.
+        blank {isGlobal ? "for unlimited sessions" : "to inherit the broader setting"}. Unreported
+        model cost cannot be limited.
       </p>
       <div className="grid gap-3 max-w-sm sm:grid-cols-2">
         <div>
@@ -41,7 +44,7 @@ export function SessionCostSettingsFields({
             inputMode="decimal"
             value={maxSessionCostUsd}
             onChange={(event) => onMaxSessionCostUsdChange(event.target.value)}
-            placeholder="No limit"
+            placeholder={isGlobal ? "No limit" : "Inherit"}
           />
         </div>
         <div>

@@ -3,15 +3,15 @@ import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
 import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
+import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
 import type { MessageRepository } from "../message-repository";
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
-  messageQueue: Pick<
-    SessionMessageQueue,
-    | "failStuckProcessingMessage"
-    | "recoverStopConfirmationTimeout"
-    | "resumeAfterSandboxTermination"
+  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  executionStop: Pick<
+    ExecutionStopCoordinator,
+    "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   alarmScheduler: AlarmScheduler;
@@ -35,7 +35,7 @@ export interface AlarmHandler {
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
-      await deps.messageQueue.recoverStopConfirmationTimeout();
+      await deps.executionStop.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
       // already failed (by lifecycle recovery or a prior alarm),
@@ -70,7 +70,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         await deps.messageQueue.failStuckProcessingMessage();
       }
       if (lifecycleResult === "sandbox_terminated") {
-        await deps.messageQueue.resumeAfterSandboxTermination();
+        await deps.executionStop.resumeAfterSandboxTermination();
       }
     },
   };

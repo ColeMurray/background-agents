@@ -4,7 +4,7 @@ import type { EventRepository } from "./event-repository";
 import type { SessionMessenger } from "./messenger";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionRow } from "./types";
-import type { BudgetStopPreparation } from "./message-queue";
+import type { ExecutionStopPreparation } from "./execution-stop-coordinator";
 
 function session(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -45,6 +45,10 @@ function createService(row = session()) {
   const repository = {
     getSession: vi.fn(() => current),
     transaction: vi.fn((closure: () => void) => closure()),
+    addSessionCost: vi.fn((cost: number) => {
+      current = { ...current, total_cost: current.total_cost + cost };
+      return current.total_cost;
+    }),
     markCostWarningSent: vi.fn(() => {
       current = { ...current, cost_warning_sent: 1 };
     }),
@@ -65,9 +69,12 @@ function createService(row = session()) {
       }
     ),
   };
-  const eventRepository = { createEvent: vi.fn() };
+  const eventRepository = {
+    createEvent: vi.fn(),
+    recordStepFinishReceipt: vi.fn(() => true),
+  };
   const broadcast = vi.fn();
-  const preparation = { stopped: true } as BudgetStopPreparation;
+  const preparation = { stopped: true } as ExecutionStopPreparation;
   const prepareBudgetStop = vi.fn(() => preparation);
   const deliverBudgetStop = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
@@ -75,8 +82,7 @@ function createService(row = session()) {
     repository as unknown as SessionCoreRepository,
     eventRepository as unknown as EventRepository,
     { broadcast } as unknown as SessionMessenger,
-    prepareBudgetStop,
-    deliverBudgetStop,
+    { prepare: prepareBudgetStop, deliver: deliverBudgetStop },
     processMessageQueue,
     () => "budget-event-1"
   );
@@ -92,10 +98,41 @@ function createService(row = session()) {
 }
 
 describe("SessionBudgetService", () => {
-  it("persists and broadcasts one threshold warning", async () => {
-    const h = createService();
+  it("deduplicates and applies cost with its budget transition in one transaction", async () => {
+    const h = createService(session({ total_cost: 7 }));
+    const event = {
+      type: "step_finish" as const,
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp: 1,
+      ackId: "step_finish:1",
+      cost: 1,
+    };
 
-    await h.service.evaluateObservedCost(8, "message-1", 1000);
+    await expect(h.service.ingestStepFinish(event, "message-1", 1000)).resolves.toBe(true);
+    h.eventRepository.recordStepFinishReceipt.mockReturnValueOnce(false);
+    await expect(h.service.ingestStepFinish(event, "message-1", 1001)).resolves.toBe(false);
+
+    expect(h.repository.addSessionCost).toHaveBeenCalledOnce();
+    expect(h.repository.markCostWarningSent).toHaveBeenCalledOnce();
+    expect(h.repository.transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists and broadcasts one threshold warning", async () => {
+    const h = createService(session({ total_cost: 7 }));
+
+    await h.service.ingestStepFinish(
+      {
+        type: "step_finish",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        ackId: "step_finish:warning",
+        cost: 1,
+      },
+      "message-1",
+      1000
+    );
 
     expect(h.repository.transaction).toHaveBeenCalledOnce();
     expect(h.repository.markCostWarningSent).toHaveBeenCalledWith(1000);
@@ -114,9 +151,20 @@ describe("SessionBudgetService", () => {
   });
 
   it("establishes exhaustion through the budget stop path", async () => {
-    const h = createService(session({ total_cost: 10.25 }));
+    const h = createService(session({ total_cost: 9.25 }));
 
-    await h.service.evaluateObservedCost(10.25, "message-1", 1000);
+    await h.service.ingestStepFinish(
+      {
+        type: "step_finish",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        ackId: "step_finish:exhaust",
+        cost: 1,
+      },
+      "message-1",
+      1000
+    );
 
     expect(h.prepareBudgetStop).toHaveBeenCalledOnce();
     expect(h.deliverBudgetStop).toHaveBeenCalledOnce();
@@ -129,11 +177,26 @@ describe("SessionBudgetService", () => {
     );
   });
 
-  it("latches omitted cost only for positive token usage", () => {
+  it("latches omitted cost only for positive token usage", async () => {
     const h = createService();
 
-    h.service.recordCostTrackingUnavailable({ input: 1 }, "message-1", 1000);
-    h.service.recordCostTrackingUnavailable({ input: 1 }, "message-1", 1001);
+    const event = {
+      type: "step_finish" as const,
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp: 1,
+      tokens: { input: 1 },
+    };
+    await h.service.ingestStepFinish(
+      { ...event, ackId: "step_finish:unpriced-1" },
+      "message-1",
+      1000
+    );
+    await h.service.ingestStepFinish(
+      { ...event, ackId: "step_finish:unpriced-2" },
+      "message-1",
+      1001
+    );
 
     expect(h.repository.markCostTrackingUnavailable).toHaveBeenCalledOnce();
     expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();

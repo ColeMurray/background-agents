@@ -142,6 +142,15 @@ CREATE TABLE IF NOT EXISTS events (
   timeline_sequence INTEGER NOT NULL UNIQUE
 );
 
+-- Deduplicated receipts for acknowledged cost-bearing runtime steps
+CREATE TABLE IF NOT EXISTS step_finish_receipts (
+  ack_id TEXT PRIMARY KEY,
+  message_id TEXT,
+  event_json TEXT NOT NULL,
+  observed_cost REAL,
+  received_at INTEGER NOT NULL
+);
+
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
@@ -206,6 +215,7 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   ws_id TEXT PRIMARY KEY,
   participant_id TEXT NOT NULL,
   client_id TEXT,
+  capabilities TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
@@ -639,6 +649,27 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(
         sql,
         `ALTER TABLE session ADD COLUMN cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0`
+      );
+    },
+  },
+  {
+    id: 47,
+    description: "Add acknowledged step finish receipts",
+    run: `CREATE TABLE IF NOT EXISTS step_finish_receipts (
+      ack_id TEXT PRIMARY KEY,
+      message_id TEXT,
+      event_json TEXT NOT NULL,
+      observed_cost REAL,
+      received_at INTEGER NOT NULL
+    )`,
+  },
+  {
+    id: 48,
+    description: "Add WebSocket client capabilities",
+    run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'`
       );
     },
   },

@@ -69,6 +69,28 @@ export class EventRepository {
     );
   }
 
+  recordStepFinishReceipt(data: {
+    ackId: string;
+    messageId: string | null;
+    eventJson: string;
+    observedCost: number | null;
+    receivedAt: number;
+  }): boolean {
+    const result = this.sql.exec(
+      `INSERT INTO step_finish_receipts
+         (ack_id, message_id, event_json, observed_cost, received_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(ack_id) DO NOTHING
+       RETURNING ack_id`,
+      data.ackId,
+      data.messageId,
+      data.eventJson,
+      data.observedCost,
+      data.receivedAt
+    );
+    return result.toArray().length === 1;
+  }
+
   createContextCompactionEvent(data: CreateEventData & { messageId: string }): void {
     this.transactionSync(() => {
       this.sql.exec(
