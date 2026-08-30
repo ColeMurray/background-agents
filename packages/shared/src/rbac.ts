@@ -209,7 +209,6 @@ export const PERMISSION_REGISTRY = Object.fromEntries(
 
 export const permissionIdSchema = z.enum(PERMISSION_IDS);
 export const builtInRoleKeySchema = z.enum(BUILT_IN_ROLE_KEYS);
-export const workspaceAccessStatusSchema = z.enum(["active", "suspended"]);
 
 export function permissionsForBuiltInRole(role: BuiltInRoleKey): PermissionId[] {
   return PERMISSION_IDS.filter((permission) =>
@@ -253,10 +252,9 @@ export const roleSummarySchema = roleReferenceSchema.extend({
 export const effectiveAuthorizationSchema = z
   .object({
     userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID"),
-    accessStatus: workspaceAccessStatusSchema,
+    suspendedAt: z.number().int().nonnegative().nullable(),
     role: roleReferenceSchema.nullable(),
     permissions: z.array(permissionIdSchema),
-    authorizationVersion: z.number().int().positive(),
   })
   .strict();
 
@@ -266,8 +264,7 @@ export const workspaceMemberSchema = z
     displayName: z.string().nullable(),
     email: z.string().nullable(),
     avatarUrl: z.string().nullable(),
-    accessStatus: workspaceAccessStatusSchema,
-    authorizationVersion: z.number().int().positive(),
+    suspendedAt: z.number().int().nonnegative().nullable(),
     role: roleReferenceSchema,
     createdAt: z.number().int().nonnegative(),
   })
@@ -293,18 +290,15 @@ export const replaceRoleInputSchema = z.object(roleMutationFields).strict();
 export const replaceMemberRoleInputSchema = z
   .object({
     roleId: z.string().min(1),
-    authorizationVersion: z.number().int().positive(),
   })
   .strict();
 
 export const replaceMemberStatusInputSchema = z
   .object({
-    accessStatus: workspaceAccessStatusSchema,
-    authorizationVersion: z.number().int().positive(),
+    suspended: z.boolean(),
   })
   .strict();
 
-export type WorkspaceAccessStatus = z.infer<typeof workspaceAccessStatusSchema>;
 export type RoleReference = z.infer<typeof roleReferenceSchema>;
 export type RoleSummary = z.infer<typeof roleSummarySchema>;
 export type EffectiveAuthorization = z.infer<typeof effectiveAuthorizationSchema>;

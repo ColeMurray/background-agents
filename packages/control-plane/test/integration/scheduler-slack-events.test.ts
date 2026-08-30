@@ -210,9 +210,7 @@ describe("Scheduler slack event handling (integration)", () => {
     [
       "suspended",
       async () => {
-        await env.DB.prepare("UPDATE users SET access_status = 'suspended' WHERE id = ?")
-          .bind("user-1")
-          .run();
+        await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind("user-1").run();
       },
     ],
     [

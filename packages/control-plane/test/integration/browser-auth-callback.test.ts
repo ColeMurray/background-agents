@@ -325,7 +325,11 @@ describe("browser auth callback", () => {
         .bind(session.user.id)
         .first()
     ).resolves.toEqual({ key: "member" });
-    await expect(env.DB.prepare("SELECT * FROM workspace_bootstrap").first()).resolves.toBeNull();
+    await expect(
+      env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.owner_bootstrapped'"
+      ).first()
+    ).resolves.toEqual({ count: 0 });
 
     const enrichment = await resolveGitHubEnrichmentForRequest(
       env,

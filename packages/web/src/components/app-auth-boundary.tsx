@@ -67,7 +67,7 @@ export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
         </div>
       );
     }
-    if (authorization.accessStatus === "suspended" || !authorization.role) {
+    if (authorization.suspendedAt !== null || !authorization.role) {
       return (
         <div className="min-h-screen flex items-center justify-center px-6">
           <ErrorBanner role="alert">Your workspace access is disabled.</ErrorBanner>

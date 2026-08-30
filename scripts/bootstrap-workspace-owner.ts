@@ -86,96 +86,90 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
   const requestId = sqlLiteral(`operator-cli:${options.auditId}`);
   const now = sqlLiteral(options.now);
   const ownerRoleId = sqlLiteral(OWNER_ROLE_ID);
-  const targetHasOwner = `EXISTS (
+  const targetIsOwner = `EXISTS (
     SELECT 1 FROM user_role_assignments assignment
     WHERE assignment.user_id = ${userId} AND assignment.role_id = ${ownerRoleId}
   )`;
-  const completedForTarget = `EXISTS (
-    SELECT 1 FROM workspace_bootstrap
-    WHERE singleton = 1 AND owner_user_id = ${userId} AND assignment_completed_at IS NOT NULL
+  const anotherUnsuspendedOwner = `EXISTS (
+    SELECT 1 FROM users owner
+    JOIN user_role_assignments assignment ON assignment.user_id = owner.id
+    WHERE assignment.role_id = ${ownerRoleId}
+      AND owner.suspended_at IS NULL AND owner.id <> ${userId}
+  )`;
+  const successfulBootstrap = `EXISTS (
+    SELECT 1 FROM authorization_audit_events
+    WHERE action = 'workspace.owner_bootstrapped'
+      AND principal_kind = 'service'
+      AND actor_service_snapshot = 'operator-cli'
+      AND decision_outcome = 'allowed'
+      AND operation_result = 'succeeded'
   )`;
   const schemaReady = `(SELECT COUNT(*) FROM pragma_table_info('users')
-    WHERE name IN ('id', 'access_status', 'authorization_version', 'last_authorization_mutation_id', 'updated_at')) = 5
+    WHERE name IN ('id', 'suspended_at')) = 2
   AND (SELECT COUNT(*) FROM pragma_table_info('roles')
     WHERE name IN ('id', 'key', 'is_system')) = 3
   AND (SELECT COUNT(*) FROM pragma_table_info('user_role_assignments')
     WHERE name IN ('user_id', 'role_id', 'assigned_by', 'assigned_at')) = 4
-  AND (SELECT COUNT(*) FROM pragma_table_info('workspace_bootstrap')
-    WHERE name IN ('singleton', 'owner_user_id', 'claimed_at', 'assignment_completed_at')) = 4
   AND (SELECT COUNT(*) FROM pragma_table_info('authorization_audit_events')
     WHERE name IN (
       'id', 'occurred_at', 'request_id', 'policy_id', 'principal_kind',
-      'actor_service_snapshot', 'authorization_version', 'action', 'resource_type',
+      'actor_service_snapshot', 'action', 'resource_type',
       'target_user_id_snapshot', 'decision_outcome', 'operation_result', 'reason_code', 'metadata_json'
-    )) = 14`;
-  const preconditions = `${schemaReady}
+    )) = 13`;
+  const commonPreconditions = `${schemaReady}
   AND (SELECT COUNT(*) FROM users WHERE id = ${userId}) = 1
   AND (SELECT COUNT(*) FROM user_role_assignments WHERE user_id = ${userId}) = 1
   AND EXISTS (
-    SELECT 1 FROM users WHERE id = ${userId} AND access_status = 'active'
+    SELECT 1 FROM users WHERE id = ${userId} AND suspended_at IS NULL
   )
   AND EXISTS (
     SELECT 1 FROM roles
     WHERE id = ${ownerRoleId} AND key = 'owner' AND is_system = 1
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM users other_user
-    JOIN user_role_assignments other_assignment ON other_assignment.user_id = other_user.id
-    WHERE other_assignment.role_id = ${ownerRoleId}
-      AND other_user.access_status = 'active' AND other_user.id <> ${userId}
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM workspace_bootstrap
-    WHERE singleton = 1 AND owner_user_id <> ${userId}
-      AND assignment_completed_at IS NOT NULL
   )`;
+  const ready = `${commonPreconditions}
+  AND NOT (${targetIsOwner})
+  AND NOT (${anotherUnsuspendedOwner})
+  AND NOT (${successfulBootstrap})`;
+  const noOp = `${commonPreconditions}
+  AND ${targetIsOwner}
+  AND NOT (${anotherUnsuspendedOwner})
+  AND ${successfulBootstrap}`;
+  const executableState = `((${ready}) OR (${noOp}))
+  AND NOT EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ${auditId})`;
 
   const preflight = `SELECT 'preflight' AS report,
   CASE
     WHEN NOT (${schemaReady}) THEN 'refused'
     WHEN (SELECT COUNT(*) FROM users WHERE id = ${userId}) <> 1 THEN 'refused'
     WHEN (SELECT COUNT(*) FROM user_role_assignments WHERE user_id = ${userId}) <> 1 THEN 'refused'
-    WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND access_status = 'active') THEN 'refused'
+    WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND suspended_at IS NULL) THEN 'refused'
     WHEN NOT EXISTS (
       SELECT 1 FROM roles WHERE id = ${ownerRoleId} AND key = 'owner' AND is_system = 1
     ) THEN 'refused'
-    WHEN EXISTS (
-      SELECT 1 FROM users other_user
-      JOIN user_role_assignments other_assignment ON other_assignment.user_id = other_user.id
-      WHERE other_assignment.role_id = ${ownerRoleId}
-        AND other_user.access_status = 'active' AND other_user.id <> ${userId}
-    ) THEN 'refused'
-    WHEN EXISTS (
-      SELECT 1 FROM workspace_bootstrap
-      WHERE singleton = 1 AND owner_user_id <> ${userId}
-        AND assignment_completed_at IS NOT NULL
-    ) THEN 'refused'
-    WHEN ${targetHasOwner} AND ${completedForTarget} THEN 'no-op'
+    WHEN ${anotherUnsuspendedOwner} THEN 'refused'
+    WHEN ${successfulBootstrap} AND NOT (${targetIsOwner}) THEN 'refused'
+    WHEN ${targetIsOwner} AND NOT (${successfulBootstrap}) THEN 'refused'
+    WHEN ${targetIsOwner} AND ${successfulBootstrap} THEN 'no-op'
     ELSE 'ready'
   END AS status,
   CASE
     WHEN NOT (${schemaReady}) THEN 'required RBAC schema is missing or incomplete'
     WHEN (SELECT COUNT(*) FROM users WHERE id = ${userId}) <> 1 THEN 'target user does not exist exactly once'
     WHEN (SELECT COUNT(*) FROM user_role_assignments WHERE user_id = ${userId}) <> 1 THEN 'target must have exactly one role assignment'
-    WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND access_status = 'active') THEN 'target user is not active'
+    WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND suspended_at IS NULL) THEN 'target user is suspended'
     WHEN NOT EXISTS (
       SELECT 1 FROM roles WHERE id = ${ownerRoleId} AND key = 'owner' AND is_system = 1
     ) THEN 'built-in Owner role is missing or inconsistent'
-    WHEN EXISTS (
-      SELECT 1 FROM users other_user
-      JOIN user_role_assignments other_assignment ON other_assignment.user_id = other_user.id
-      WHERE other_assignment.role_id = ${ownerRoleId}
-        AND other_user.access_status = 'active' AND other_user.id <> ${userId}
-    ) THEN 'another active Owner already exists'
-    WHEN EXISTS (
-      SELECT 1 FROM workspace_bootstrap
-      WHERE singleton = 1 AND owner_user_id <> ${userId}
-        AND assignment_completed_at IS NOT NULL
-    ) THEN 'bootstrap was completed for another user'
-    WHEN ${targetHasOwner} AND ${completedForTarget} THEN 'selected user is already the completed active Owner'
+    WHEN ${anotherUnsuspendedOwner} THEN 'another unsuspended Owner already exists'
+    WHEN ${successfulBootstrap} AND NOT (${targetIsOwner}) THEN 'successful bootstrap history exists without the target as current Owner'
+    WHEN ${targetIsOwner} AND NOT (${successfulBootstrap}) THEN 'target is Owner without successful bootstrap history'
+    WHEN ${targetIsOwner} AND ${successfulBootstrap} THEN 'selected user is the current unsuspended Owner with bootstrap history'
     ELSE 'selected user can be bootstrapped'
   END AS detail,
-  ${userId} AS user_id;`;
+  ${userId} AS user_id,
+  (SELECT suspended_at FROM users WHERE id = ${userId}) AS suspended_at,
+  (SELECT role_id FROM user_role_assignments WHERE user_id = ${userId}) AS role_id,
+  ${successfulBootstrap} AS successful_bootstrap_history;`;
 
   if (!options.execute) return `${preflight}\n`;
 
@@ -183,78 +177,56 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
 
 -- Deliberately overflow on any failed precondition. Wrangler executes a D1
 -- SQL file atomically, so this aborts before mutation and rolls back the file.
-SELECT CASE WHEN ${preconditions}
+SELECT CASE WHEN ${executableState}
   THEN 1 ELSE abs(-9223372036854775808) END AS precondition_guard;
-
-UPDATE users
-SET authorization_version = authorization_version + 1,
-    last_authorization_mutation_id = ${auditId},
-    updated_at = ${now}
-WHERE id = ${userId} AND access_status = 'active'
-  AND NOT (${targetHasOwner} AND ${completedForTarget});
 
 UPDATE user_role_assignments
 SET role_id = ${ownerRoleId}, assigned_by = NULL, assigned_at = ${now}
 WHERE user_id = ${userId}
-  AND EXISTS (
-    SELECT 1 FROM users
-    WHERE id = ${userId} AND last_authorization_mutation_id = ${auditId}
-  );
-
-INSERT INTO workspace_bootstrap
-  (singleton, owner_user_id, claimed_at, assignment_completed_at)
-SELECT 1, ${userId}, ${now}, ${now}
-WHERE EXISTS (
-  SELECT 1 FROM users
-  WHERE id = ${userId} AND last_authorization_mutation_id = ${auditId}
-)
-ON CONFLICT(singleton) DO UPDATE SET
-  owner_user_id = excluded.owner_user_id,
-  claimed_at = excluded.claimed_at,
-  assignment_completed_at = excluded.assignment_completed_at
-WHERE EXISTS (
-  SELECT 1 FROM users
-  WHERE id = ${userId} AND last_authorization_mutation_id = ${auditId}
-);
+  AND (${ready});
 
 INSERT INTO authorization_audit_events
   (id, occurred_at, request_id, policy_id, principal_kind,
-   actor_service_snapshot, authorization_version, action, resource_type,
+   actor_service_snapshot, action, resource_type,
    target_user_id_snapshot, decision_outcome, operation_result, reason_code, metadata_json)
 SELECT ${auditId}, ${now}, ${requestId}, 'workspace.owner_bootstrapped', 'service',
-       'operator-cli', authorization_version, 'workspace.owner_bootstrapped', 'workspace',
+       'operator-cli', 'workspace.owner_bootstrapped', 'workspace',
        ${userId}, 'allowed', 'succeeded', 'operator_cli', '{}'
-FROM users
-WHERE id = ${userId} AND last_authorization_mutation_id = ${auditId};
+WHERE EXISTS (
+    SELECT 1 FROM user_role_assignments
+    WHERE user_id = ${userId} AND role_id = ${ownerRoleId}
+      AND assigned_by IS NULL AND assigned_at = ${now}
+  )
+  AND NOT (${successfulBootstrap});
 
 -- The last statement before reporting fails the entire atomic file if any
 -- write was incomplete. A true idempotent no-op also satisfies this state.
-SELECT CASE WHEN ${preconditions}
-  AND ${targetHasOwner} AND ${completedForTarget}
-  AND (
-    NOT EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND last_authorization_mutation_id = ${auditId})
-    OR EXISTS (
+SELECT CASE WHEN ${commonPreconditions}
+  AND ${targetIsOwner}
+  AND NOT (${anotherUnsuspendedOwner})
+  AND ${successfulBootstrap}
+  AND ((
+    EXISTS (
       SELECT 1 FROM authorization_audit_events
       WHERE id = ${auditId} AND target_user_id_snapshot = ${userId}
-        AND actor_service_snapshot = 'operator-cli' AND metadata_json = '{}'
+        AND action = 'workspace.owner_bootstrapped'
+        AND principal_kind = 'service' AND actor_service_snapshot = 'operator-cli'
+        AND decision_outcome = 'allowed' AND operation_result = 'succeeded'
+        AND metadata_json = '{}'
     )
-  )
+  ) OR NOT EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}))
   THEN 1 ELSE abs(-9223372036854775808) END AS postcondition_guard;
 
 SELECT 'postcondition' AS report,
   CASE WHEN EXISTS (
-    SELECT 1 FROM users WHERE id = ${userId} AND last_authorization_mutation_id = ${auditId}
+    SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}
   ) THEN 'executed' ELSE 'no-op' END AS status,
   u.id AS user_id,
-  u.access_status,
-  u.authorization_version,
+  u.suspended_at,
   assignment.role_id,
-  bootstrap.assignment_completed_at,
   EXISTS(SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}) AS audit_written
 FROM users u
 JOIN user_role_assignments assignment ON assignment.user_id = u.id
-JOIN workspace_bootstrap bootstrap
-  ON bootstrap.singleton = 1 AND bootstrap.owner_user_id = u.id
 WHERE u.id = ${userId};
 `;
 }
@@ -322,9 +294,7 @@ export async function run(options: BootstrapCliOptions): Promise<void> {
   if (preflight(options.database, options.userId) !== "no-op") {
     throw new Error("Owner bootstrap postcondition verification failed");
   }
-  console.error(
-    "Owner bootstrap command completed; verify /health reports rbac.ownerBootstrap=complete."
-  );
+  console.error("Owner bootstrap command completed; verify /health reports an unsuspended Owner.");
 }
 
 async function main(): Promise<void> {

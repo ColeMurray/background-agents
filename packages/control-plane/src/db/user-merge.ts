@@ -71,8 +71,6 @@ interface UserMergeCounts {
   skillProfilesDeduped: number;
   skillProfilesRepointed: number;
   roleAssignmentsRemoved: number;
-  survivorAuthorizationVersionsIncremented: number;
-  workspaceBootstrapRepointed: number;
   sessionAccessCollisionsUpdated: number;
   sessionAccessDeduped: number;
   sessionAccessRepointed: number;
@@ -101,13 +99,12 @@ export async function mergeUsers(
     throw new UserMergeError("Survivor and loser must be different users");
   }
   const survivor = await db
-    .prepare(`SELECT id, email, access_status, authorization_version FROM users WHERE id = ?`)
+    .prepare(`SELECT id, email, suspended_at FROM users WHERE id = ?`)
     .bind(survivorId)
     .first<{
       id: string;
       email: string | null;
-      access_status: string;
-      authorization_version: number;
+      suspended_at: number | null;
     }>();
   if (!survivor) {
     throw new UserMergeError(`Survivor user ${survivorId} not found`);
@@ -115,13 +112,12 @@ export async function mergeUsers(
   // A missing loser row is not an error: re-running a completed merge must
   // be a no-op, and a partially-applied merge must be resumable.
   const loser = await db
-    .prepare(`SELECT id, email, email_verified, authorization_version FROM users WHERE id = ?`)
+    .prepare(`SELECT id, email, email_verified FROM users WHERE id = ?`)
     .bind(loserId)
     .first<{
       id: string;
       email: string | null;
       email_verified: number;
-      authorization_version: number;
     }>();
   if (!loser) {
     return { survivorId, loserId, dryRun: options.dryRun === true, counts: emptyCounts() };
@@ -154,7 +150,7 @@ export async function mergeUsers(
   if (survivorRole && loserRole && survivorRole.role_id !== loserRole.role_id) {
     throw new UserMergeError("Resolve conflicting user roles before merging");
   }
-  if (loserRole?.role_key === "owner" && survivor.access_status !== "active") {
+  if (loserRole?.role_key === "owner" && survivor.suspended_at !== null) {
     throw new UserMergeError("The surviving Owner must be active before merging");
   }
   // The loser's email backfills an email-less survivor after the loser row's
@@ -182,25 +178,16 @@ export async function mergeUsers(
            EXISTS (
              SELECT 1 FROM users u
              JOIN user_role_assignments ura ON ura.user_id = u.id
-             WHERE u.id = ? AND u.authorization_version = ? AND u.access_status = ?
-               AND ura.role_id = ?
+              WHERE u.id = ? AND u.suspended_at IS ? AND ura.role_id = ?
            )
            AND EXISTS (
              SELECT 1 FROM users u
              JOIN user_role_assignments ura ON ura.user_id = u.id
-             WHERE u.id = ? AND u.authorization_version = ? AND ura.role_id = ?
+              WHERE u.id = ? AND ura.role_id = ?
            )
          THEN 1 ELSE abs(-9223372036854775808) END AS merge_guard`
       )
-      .bind(
-        survivorId,
-        survivor.authorization_version,
-        survivor.access_status,
-        survivorRole.role_id,
-        loserId,
-        loser.authorization_version,
-        loserRole.role_id
-      )
+      .bind(survivorId, survivor.suspended_at, survivorRole.role_id, loserId, loserRole.role_id)
   );
   const track: Partial<Record<keyof UserMergeCounts, number>> = {};
   const add = (key: keyof UserMergeCounts, statement: SqlStatement) => {
@@ -309,25 +296,8 @@ export async function mergeUsers(
 
   // Preserve RBAC and session-access invariants before deleting the loser.
   add(
-    "survivorAuthorizationVersionsIncremented",
-    db
-      .prepare(
-        `UPDATE users
-         SET authorization_version = authorization_version + 1,
-             updated_at = ?
-         WHERE id = ?`
-      )
-      .bind(Date.now(), survivorId)
-  );
-  add(
     "roleAssignmentsRemoved",
     db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId)
-  );
-  add(
-    "workspaceBootstrapRepointed",
-    db
-      .prepare("UPDATE workspace_bootstrap SET owner_user_id = ? WHERE owner_user_id = ?")
-      .bind(survivorId, loserId)
   );
   add(
     "sessionAccessCollisionsUpdated",
@@ -476,8 +446,6 @@ function emptyCounts(): UserMergeCounts {
     skillProfilesDeduped: 0,
     skillProfilesRepointed: 0,
     roleAssignmentsRemoved: 0,
-    survivorAuthorizationVersionsIncremented: 0,
-    workspaceBootstrapRepointed: 0,
     sessionAccessCollisionsUpdated: 0,
     sessionAccessDeduped: 0,
     sessionAccessRepointed: 0,
@@ -511,7 +479,6 @@ async function previewCounts(
     skillProfilesDeduped,
     skillProfiles,
     roleAssignments,
-    workspaceBootstrap,
     sessionAccessCollisionsUpdated,
     sessionAccessDeduped,
     sessionAccess,
@@ -577,9 +544,6 @@ async function previewCounts(
     db.prepare(`SELECT COUNT(*) AS count FROM skill_profiles WHERE user_id = ?`).bind(loserId),
     db
       .prepare(`SELECT COUNT(*) AS count FROM user_role_assignments WHERE user_id = ?`)
-      .bind(loserId),
-    db
-      .prepare(`SELECT COUNT(*) AS count FROM workspace_bootstrap WHERE owner_user_id = ?`)
       .bind(loserId),
     db
       .prepare(
@@ -668,8 +632,6 @@ async function previewCounts(
     skillProfilesDeduped: count(skillProfilesDeduped),
     skillProfilesRepointed: count(skillProfiles) - count(skillProfilesDeduped),
     roleAssignmentsRemoved: count(roleAssignments),
-    survivorAuthorizationVersionsIncremented: count(users),
-    workspaceBootstrapRepointed: count(workspaceBootstrap),
     sessionAccessCollisionsUpdated: count(sessionAccessCollisionsUpdated),
     sessionAccessDeduped: count(sessionAccessDeduped),
     sessionAccessRepointed: count(sessionAccess) - count(sessionAccessDeduped),

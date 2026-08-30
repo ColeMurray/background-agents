@@ -22,10 +22,9 @@ function recordingDb(): { db: SqlDatabase; bindings: unknown[][] } {
 
 const authorization: EffectiveAuthorization = {
   userId: "11111111111111111111111111111111",
-  accessStatus: "active",
+  suspendedAt: null,
   role: null,
   permissions: [],
-  authorizationVersion: 7,
 };
 
 describe("automation authorization guards", () => {

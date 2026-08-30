@@ -8,7 +8,6 @@ import {
   type EffectiveAuthorization,
   type PermissionId,
   type RoleSummary,
-  type WorkspaceAccessStatus,
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
 import { AuthorizationStore, type AuthorizationRoleRecord } from "../db/authorization-store";
@@ -44,16 +43,15 @@ export class AuthorizationService {
     if (!record?.role) throw new AuthorizationError(403, "assignment_required");
 
     const permissions =
-      record.accessStatus === "active"
+      record.suspendedAt === null
         ? await this.loadRolePermissions(record.role.id, record.role.key)
         : [];
 
     return {
       userId: record.userId,
-      accessStatus: record.accessStatus,
+      suspendedAt: record.suspendedAt,
       role: record.role,
       permissions,
-      authorizationVersion: record.authorizationVersion,
     };
   }
 
@@ -62,7 +60,7 @@ export class AuthorizationService {
     permission: PermissionId
   ): Promise<EffectiveAuthorization> {
     const authorization = await this.getEffectiveAuthorization(userId);
-    if (authorization.accessStatus !== "active") {
+    if (authorization.suspendedAt !== null) {
       throw new AuthorizationError(403, "active_user_required");
     }
     if (!authorization.permissions.includes(permission)) {
@@ -81,28 +79,22 @@ export class AuthorizationService {
     return role ? this.toRoleSummary(role) : null;
   }
 
-  async createRole(
-    input: unknown,
-    actorUserId: string,
-    actorAuthorizationVersion: number,
-    requestId: string
-  ): Promise<RoleSummary> {
+  async createRole(input: unknown, actorUserId: string, requestId: string): Promise<RoleSummary> {
     const parsed = createRoleInputSchema.parse(input);
     const roleId = `role_${crypto.randomUUID()}`;
-    const outcome = await this.store.createRole({
-      roleId,
-      name: parsed.name,
-      normalizedName: normalizeRoleName(parsed.name),
-      description: parsed.description ?? null,
-      permissions: parsed.permissions,
-      actorUserId,
-      actorAuthorizationVersion,
-      actorMutationId: crypto.randomUUID(),
-      requestId,
-      now: Date.now(),
-    });
-    if (outcome === "actor_conflict") {
-      throw new RbacConflictError("Actor authorization changed");
+    try {
+      await this.store.createRole({
+        roleId,
+        name: parsed.name,
+        normalizedName: normalizeRoleName(parsed.name),
+        description: parsed.description ?? null,
+        permissions: parsed.permissions,
+        actorUserId,
+        requestId,
+        now: Date.now(),
+      });
+    } catch (cause) {
+      await this.rethrowMutationFailure(cause, actorUserId, ["workspace.roles.manage"]);
     }
     return (await this.getRole(roleId))!;
   }
@@ -112,7 +104,6 @@ export class AuthorizationService {
     expectedRevision: number,
     input: unknown,
     actorUserId: string,
-    actorAuthorizationVersion: number,
     requestId: string
   ): Promise<RoleSummary> {
     const parsed = replaceRoleInputSchema.parse(input);
@@ -123,52 +114,49 @@ export class AuthorizationService {
       throw new RbacConflictError("Role revision conflict");
     }
 
-    const outcome = await this.store.replaceRole({
-      roleId,
-      expectedRevision,
-      nextRevision: expectedRevision + 1,
-      name: parsed.name,
-      normalizedName: normalizeRoleName(parsed.name),
-      description: parsed.description ?? null,
-      permissions: parsed.permissions,
-      actorUserId,
-      actorAuthorizationVersion,
-      actorMutationId: crypto.randomUUID(),
-      mutationId: crypto.randomUUID(),
-      requestId,
-      now: Date.now(),
-    });
-    if (outcome === "actor_conflict") {
-      throw new RbacConflictError("Actor authorization changed");
-    }
-    if (outcome === "revision_conflict") {
-      throw new RbacConflictError("Role revision conflict");
+    try {
+      await this.store.replaceRole({
+        roleId,
+        expectedRevision,
+        name: parsed.name,
+        normalizedName: normalizeRoleName(parsed.name),
+        description: parsed.description ?? null,
+        permissions: parsed.permissions,
+        actorUserId,
+        requestId,
+        now: Date.now(),
+      });
+    } catch (cause) {
+      await this.rethrowMutationFailure(
+        cause,
+        actorUserId,
+        ["workspace.roles.manage"],
+        async () => {
+          const current = await this.getRole(roleId);
+          return !current || current.isSystem || current.revision !== expectedRevision;
+        }
+      );
     }
     return (await this.getRole(roleId))!;
   }
 
-  async deleteRole(
-    roleId: string,
-    actorUserId: string,
-    actorAuthorizationVersion: number,
-    requestId: string
-  ): Promise<void> {
+  async deleteRole(roleId: string, actorUserId: string, requestId: string): Promise<void> {
     const existing = await this.getRole(roleId);
     if (!existing || existing.isSystem || existing.assignmentCount > 0) {
       throw new RbacConflictError("Role is built-in, assigned, or missing");
     }
-    const outcome = await this.store.deleteRole({
-      roleId,
-      actorUserId,
-      actorAuthorizationVersion,
-      actorMutationId: crypto.randomUUID(),
-      requestId,
-    });
-    if (outcome === "actor_conflict") {
-      throw new RbacConflictError("Actor authorization changed");
-    }
-    if (outcome === "role_conflict") {
-      throw new RbacConflictError("Role is built-in, assigned, or missing");
+    try {
+      await this.store.deleteRole({ roleId, actorUserId, requestId, now: Date.now() });
+    } catch (cause) {
+      await this.rethrowMutationFailure(
+        cause,
+        actorUserId,
+        ["workspace.roles.manage"],
+        async () => {
+          const current = await this.getRole(roleId);
+          return !current || current.isSystem || current.assignmentCount > 0;
+        }
+      );
     }
   }
 
@@ -179,10 +167,7 @@ export class AuthorizationService {
   async replaceMemberRole(input: {
     targetUserId: string;
     roleId: string;
-    expectedVersion: number;
     actorUserId: string;
-    actorAuthorizationVersion: number;
-    actorCanTransferOwnership: boolean;
     requestId: string;
   }): Promise<void> {
     const [target, role] = await Promise.all([
@@ -190,72 +175,80 @@ export class AuthorizationService {
       this.getRole(input.roleId),
     ]);
     if (!role) throw new AuthorizationError(404, "role_not_found");
-    if (target.authorizationVersion !== input.expectedVersion) {
-      throw new RbacConflictError("Authorization version conflict");
-    }
     const ownerSensitive = target.role?.key === "owner" || role.key === "owner";
-    if (ownerSensitive && !input.actorCanTransferOwnership) {
-      throw new AuthorizationError(403, "permission_required", "workspace.transfer_ownership");
+    if (ownerSensitive) {
+      await this.requirePermission(input.actorUserId, "workspace.transfer_ownership");
     }
-    if (target.role?.key === "owner" && role.key !== "owner") {
-      await this.requireAnotherActiveOwner(input.targetUserId);
-    }
-
-    const outcome = await this.store.replaceMemberRole({
-      targetUserId: input.targetUserId,
-      roleId: input.roleId,
-      expectedVersion: input.expectedVersion,
-      actorUserId: input.actorUserId,
-      actorAuthorizationVersion: input.actorAuthorizationVersion,
-      actorMutationId: crypto.randomUUID(),
-      mutationId: crypto.randomUUID(),
-      requestId: input.requestId,
-      now: Date.now(),
-    });
-    if (outcome === "actor_conflict") {
-      throw new RbacConflictError("Actor authorization changed");
-    }
-    if (outcome === "version_conflict") {
-      throw new RbacConflictError("Authorization version conflict");
+    try {
+      await this.store.replaceMemberRole({
+        targetUserId: input.targetUserId,
+        roleId: input.roleId,
+        actorUserId: input.actorUserId,
+        requestId: input.requestId,
+        now: Date.now(),
+      });
+    } catch (cause) {
+      await this.rethrowMutationFailure(
+        cause,
+        input.actorUserId,
+        ownerSensitive
+          ? ["workspace.members.manage", "workspace.transfer_ownership"]
+          : ["workspace.members.manage"],
+        async () => {
+          const [currentTarget, currentRole] = await Promise.all([
+            this.getEffectiveAuthorization(input.targetUserId),
+            this.getRole(input.roleId),
+          ]);
+          return (
+            !currentRole ||
+            (!ownerSensitive &&
+              (currentTarget.role?.key === "owner" || currentRole.key === "owner")) ||
+            (currentTarget.role?.key === "owner" &&
+              currentRole.key !== "owner" &&
+              !(await this.store.hasAnotherUnsuspendedOwner(input.targetUserId)))
+          );
+        }
+      );
     }
   }
 
   async replaceMemberStatus(input: {
     targetUserId: string;
-    accessStatus: WorkspaceAccessStatus;
-    expectedVersion: number;
+    suspended: boolean;
     actorUserId: string;
-    actorAuthorizationVersion: number;
-    actorCanTransferOwnership: boolean;
     requestId: string;
   }): Promise<void> {
     const target = await this.getEffectiveAuthorization(input.targetUserId);
-    if (target.authorizationVersion !== input.expectedVersion) {
-      throw new RbacConflictError("Authorization version conflict");
+    const ownerSensitive = target.role?.key === "owner";
+    if (ownerSensitive) {
+      await this.requirePermission(input.actorUserId, "workspace.transfer_ownership");
     }
-    if (target.role?.key === "owner" && !input.actorCanTransferOwnership) {
-      throw new AuthorizationError(403, "permission_required", "workspace.transfer_ownership");
-    }
-    if (target.role?.key === "owner" && input.accessStatus === "suspended") {
-      await this.requireAnotherActiveOwner(input.targetUserId);
-    }
-
-    const outcome = await this.store.replaceMemberStatus({
-      targetUserId: input.targetUserId,
-      accessStatus: input.accessStatus,
-      expectedVersion: input.expectedVersion,
-      actorUserId: input.actorUserId,
-      actorAuthorizationVersion: input.actorAuthorizationVersion,
-      actorMutationId: crypto.randomUUID(),
-      mutationId: crypto.randomUUID(),
-      requestId: input.requestId,
-      now: Date.now(),
-    });
-    if (outcome === "actor_conflict") {
-      throw new RbacConflictError("Actor authorization changed");
-    }
-    if (outcome === "version_conflict") {
-      throw new RbacConflictError("Authorization version conflict");
+    try {
+      await this.store.replaceMemberStatus({
+        targetUserId: input.targetUserId,
+        suspended: input.suspended,
+        actorUserId: input.actorUserId,
+        requestId: input.requestId,
+        now: Date.now(),
+      });
+    } catch (cause) {
+      await this.rethrowMutationFailure(
+        cause,
+        input.actorUserId,
+        ownerSensitive
+          ? ["workspace.members.manage", "workspace.transfer_ownership"]
+          : ["workspace.members.manage"],
+        async () => {
+          const currentIsOwner =
+            (await this.getEffectiveAuthorization(input.targetUserId)).role?.key === "owner";
+          return (
+            (!ownerSensitive && currentIsOwner) ||
+            (input.suspended &&
+              currentIsOwner &&
+              !(await this.store.hasAnotherUnsuspendedOwner(input.targetUserId)))
+          );
+        }
+      );
     }
   }
 
@@ -276,9 +269,31 @@ export class AuthorizationService {
     };
   }
 
-  private async requireAnotherActiveOwner(excludedUserId: string): Promise<void> {
-    if (!(await this.store.hasAnotherActiveOwner(excludedUserId))) {
-      throw new RbacConflictError("At least one active Owner is required");
+  private async requireAnotherUnsuspendedOwner(excludedUserId: string): Promise<void> {
+    if (!(await this.store.hasAnotherUnsuspendedOwner(excludedUserId))) {
+      throw new RbacConflictError("At least one unsuspended Owner is required");
     }
+  }
+
+  private async rethrowMutationFailure(
+    cause: unknown,
+    actorUserId: string,
+    permissions: PermissionId[],
+    expectedConflict?: () => Promise<boolean>
+  ): Promise<never> {
+    try {
+      for (const permission of permissions) {
+        await this.requirePermission(actorUserId, permission);
+      }
+    } catch (actorCause) {
+      if (actorCause instanceof AuthorizationError) {
+        throw new RbacConflictError("Actor authorization changed");
+      }
+      throw cause;
+    }
+    if (expectedConflict && (await expectedConflict())) {
+      throw new RbacConflictError("RBAC precondition conflict");
+    }
+    throw cause;
   }
 }

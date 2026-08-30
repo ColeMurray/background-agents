@@ -89,16 +89,8 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        const actor = await service.requirePermission(
-          ctx.principal.userId,
-          "workspace.roles.manage"
-        );
-        const role = await service.createRole(
-          body,
-          ctx.principal.userId,
-          actor.authorizationVersion,
-          ctx.request_id
-        );
+        await service.requirePermission(ctx.principal.userId, "workspace.roles.manage");
+        const role = await service.createRole(body, ctx.principal.userId, ctx.request_id);
         return json(role, 201);
       } catch (cause) {
         return rbacErrorResponse(cause);
@@ -133,17 +125,13 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        const actor = await service.requirePermission(
-          ctx.principal.userId,
-          "workspace.roles.manage"
-        );
+        await service.requirePermission(ctx.principal.userId, "workspace.roles.manage");
         return json(
           await service.replaceRole(
             decodeURIComponent(match.groups!.id),
             revision,
             body,
             ctx.principal.userId,
-            actor.authorizationVersion,
             ctx.request_id
           )
         );
@@ -160,14 +148,10 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     handler: async (_request, _env, match, ctx) => {
       const service = new AuthorizationService(ctx.db);
       try {
-        const actor = await service.requirePermission(
-          ctx.principal.userId,
-          "workspace.roles.manage"
-        );
+        await service.requirePermission(ctx.principal.userId, "workspace.roles.manage");
         await service.deleteRole(
           decodeURIComponent(match.groups!.id),
           ctx.principal.userId,
-          actor.authorizationVersion,
           ctx.request_id
         );
         return new Response(null, { status: 204 });
@@ -203,18 +187,12 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        const actor = await service.requirePermission(
-          ctx.principal.userId,
-          "workspace.members.manage"
-        );
+        await service.requirePermission(ctx.principal.userId, "workspace.members.manage");
         const parsed = replaceMemberRoleInputSchema.parse(body);
         await service.replaceMemberRole({
           targetUserId,
           roleId: parsed.roleId,
-          expectedVersion: parsed.authorizationVersion,
           actorUserId: ctx.principal.userId,
-          actorAuthorizationVersion: actor.authorizationVersion,
-          actorCanTransferOwnership: actor.permissions.includes("workspace.transfer_ownership"),
           requestId: ctx.request_id,
         });
         return json(await service.getEffectiveAuthorization(targetUserId));
@@ -235,18 +213,12 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        const actor = await service.requirePermission(
-          ctx.principal.userId,
-          "workspace.members.manage"
-        );
+        await service.requirePermission(ctx.principal.userId, "workspace.members.manage");
         const parsed = replaceMemberStatusInputSchema.parse(body);
         await service.replaceMemberStatus({
           targetUserId,
-          accessStatus: parsed.accessStatus,
-          expectedVersion: parsed.authorizationVersion,
+          suspended: parsed.suspended,
           actorUserId: ctx.principal.userId,
-          actorAuthorizationVersion: actor.authorizationVersion,
-          actorCanTransferOwnership: actor.permissions.includes("workspace.transfer_ownership"),
           requestId: ctx.request_id,
         });
         return json(await service.getEffectiveAuthorization(targetUserId));

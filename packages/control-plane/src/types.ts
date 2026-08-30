@@ -120,7 +120,6 @@ export interface ClientInfo {
   status: "active" | "idle" | "away";
   lastSeen: number;
   clientId: string;
-  authorizationVersion: number;
   authorizationExpiresAt: number;
   ws: WebSocket;
   lastFetchHistoryAtMs?: number;

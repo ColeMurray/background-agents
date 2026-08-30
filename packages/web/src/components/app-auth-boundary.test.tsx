@@ -19,10 +19,9 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 
 const activeAuthorization = {
   userId: "11111111111111111111111111111111",
-  accessStatus: "active" as const,
+  suspendedAt: null,
   role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
   permissions: ["workspace.read" as const],
-  authorizationVersion: 1,
 };
 
 afterEach(() => {
@@ -89,7 +88,7 @@ describe("AppAuthBoundary", () => {
       status: "authenticated",
     });
     vi.mocked(useCurrentUserAuthorization).mockReturnValue({
-      authorization: { ...activeAuthorization, accessStatus: "suspended", permissions: [] },
+      authorization: { ...activeAuthorization, suspendedAt: 1, permissions: [] },
       loading: false,
       error: null,
       hasPermission: () => false,

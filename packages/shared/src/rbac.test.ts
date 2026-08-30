@@ -4,8 +4,11 @@ import {
   BUILT_IN_ROLE_REGISTRY,
   PERMISSION_IDS,
   createRoleInputSchema,
+  effectiveAuthorizationSchema,
   normalizeRoleName,
   permissionsForBuiltInRole,
+  replaceMemberRoleInputSchema,
+  replaceMemberStatusInputSchema,
 } from "./rbac";
 
 describe("RBAC registry", () => {
@@ -87,6 +90,24 @@ describe("RBAC registry", () => {
   it("rejects role names outside the deterministic normalization set", () => {
     expect(() =>
       createRoleInputSchema.parse({ name: "Release Managers!", permissions: [] })
+    ).toThrow();
+  });
+
+  it("uses suspension timestamps without authorization versions in public contracts", () => {
+    expect(
+      effectiveAuthorizationSchema.parse({
+        userId: "11111111111111111111111111111111",
+        suspendedAt: null,
+        role: null,
+        permissions: [],
+      })
+    ).toMatchObject({ suspendedAt: null });
+    expect(replaceMemberRoleInputSchema.parse({ roleId: "role_custom" })).toEqual({
+      roleId: "role_custom",
+    });
+    expect(replaceMemberStatusInputSchema.parse({ suspended: true })).toEqual({ suspended: true });
+    expect(() =>
+      replaceMemberStatusInputSchema.parse({ suspended: true, suspendedAt: 123 })
     ).toThrow();
   });
 });

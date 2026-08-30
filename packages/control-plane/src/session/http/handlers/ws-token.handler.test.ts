@@ -19,7 +19,6 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_token_expires_at: 1000,
     ws_auth_token: null,
     ws_token_created_at: null,
-    ws_authorization_version: null,
     joined_at: 1,
     ...overrides,
   };
@@ -65,7 +64,6 @@ function createHandler() {
           headers: request.headers,
           body: JSON.stringify({
             canonicalUserId: "user-1",
-            authorizationVersion: 7,
             ...body,
           }),
         }),
@@ -159,8 +157,7 @@ describe("WsTokenHandler", () => {
     expect(repository.updateParticipantWsToken).toHaveBeenCalledWith(
       "participant-1",
       "token-hash",
-      1234,
-      7
+      1234
     );
     expect(log.info).toHaveBeenCalledWith("Generated WS token", {
       participant_id: "participant-1",
@@ -247,8 +244,7 @@ describe("WsTokenHandler", () => {
     expect(repository.updateParticipantWsToken).toHaveBeenCalledWith(
       "participant-new",
       "token-hash",
-      1234,
-      7
+      1234
     );
     expect(getParticipantByUserId).toHaveBeenCalledTimes(2);
   });

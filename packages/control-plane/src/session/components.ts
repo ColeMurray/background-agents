@@ -127,7 +127,7 @@ import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
-import { AuthorizationStore } from "../db/authorization-store";
+import { AuthorizationError, AuthorizationService } from "../authorization/service";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -691,16 +691,31 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     schedulePullRequestRefresh,
     scmProviderName,
     alarmScheduler,
-    verifyAuthorization: async ({ userId, authorizationVersion }) => {
+    verifyAuthorization: async (userId) => {
       if (!db) return "unavailable";
       try {
-        const current = await new AuthorizationStore(db).getEffectiveAuthorization(userId);
-        return current?.accessStatus === "active" &&
-          current.role !== null &&
-          current.authorizationVersion === authorizationVersion
-          ? "valid"
-          : "rejected";
+        const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
+        if (authorization.suspendedAt !== null) return "rejected";
+        if (authorization.permissions.includes("sessions.collaborate.any")) return "valid";
+        if (!authorization.permissions.includes("sessions.collaborate.own")) return "rejected";
+
+        const session = sessionCoreRepository.getSession();
+        if (!session) return "rejected";
+        const sessionId = resolvePublicSessionId(session, durableObjectId);
+        const relationship = await db
+          .prepare(
+            `SELECT 1 AS allowed FROM session_access
+             WHERE session_id = ? AND user_id = ? AND state = 'active'
+               AND relation IN ('creator', 'participant')
+             UNION ALL
+             SELECT 1 AS allowed FROM sessions WHERE id = ? AND user_id = ?
+             LIMIT 1`
+          )
+          .bind(sessionId, userId, sessionId, userId)
+          .first<{ allowed: number }>();
+        return relationship ? "valid" : "rejected";
       } catch (error) {
+        if (error instanceof AuthorizationError) return "rejected";
         log.error("WebSocket authorization verification failed", {
           user_id: userId,
           error: error instanceof Error ? error : String(error),

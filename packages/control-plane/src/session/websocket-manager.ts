@@ -71,7 +71,6 @@ export interface SessionWebSocketManager {
     wsId: string,
     participantId: string,
     clientId: string,
-    authorizationVersion: number,
     authorizationExpiresAt: number
   ): void;
 
@@ -273,7 +272,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     if (
       !mapping ||
       typeof mapping.authorization_expires_at !== "number" ||
-      typeof mapping.authorization_version !== "number" ||
       mapping.authorization_expires_at <= Date.now()
     ) {
       if (mapping) this.rejectExpiredAuthorization(ws, parsed);
@@ -286,7 +284,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     wsId: string,
     participantId: string,
     clientId: string,
-    authorizationVersion: number,
     authorizationExpiresAt: number
   ): void {
     this.wsClientMappingRepository.upsertWsClientMapping({
@@ -294,7 +291,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       participantId,
       clientId,
       createdAt: Date.now(),
-      authorizationVersion,
       authorizationExpiresAt,
     });
   }
@@ -401,8 +397,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     if (parsed.kind !== "client" || !parsed.wsId) return null;
     const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
     if (!mapping) return null;
-    return typeof mapping.authorization_expires_at === "number" &&
-      typeof mapping.authorization_version === "number"
+    return typeof mapping.authorization_expires_at === "number"
       ? mapping.authorization_expires_at
       : "invalid";
   }

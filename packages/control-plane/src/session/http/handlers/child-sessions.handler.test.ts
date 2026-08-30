@@ -52,7 +52,6 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_token_expires_at: 1234,
     ws_auth_token: null,
     ws_token_created_at: null,
-    ws_authorization_version: null,
     joined_at: 1,
     ...overrides,
   };

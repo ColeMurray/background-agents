@@ -126,8 +126,8 @@ describe("ParticipantRepository", () => {
   });
 
   it("updates the WebSocket token", () => {
-    repository.updateParticipantWsToken("p-1", "new-hash", 8000, 7);
-    expect(mock.calls[0].params).toEqual(["new-hash", 8000, 7, "p-1"]);
+    repository.updateParticipantWsToken("p-1", "new-hash", 8000);
+    expect(mock.calls[0].params).toEqual(["new-hash", 8000, "p-1"]);
   });
 
   it("lists participants by join time", () => {

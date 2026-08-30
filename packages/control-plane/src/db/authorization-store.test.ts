@@ -25,15 +25,11 @@ function fakeDatabase(options: {
 const replaceRoleInput: Parameters<AuthorizationStore["replaceRole"]>[0] = {
   roleId: "role_custom",
   expectedRevision: 1,
-  nextRevision: 2,
   name: "Custom",
   normalizedName: "custom",
   description: null,
   permissions: [],
   actorUserId: "actor",
-  actorAuthorizationVersion: 3,
-  actorMutationId: "actor-mutation",
-  mutationId: "role-mutation",
   requestId: "request",
   now: 100,
 };
@@ -69,29 +65,13 @@ describe("AuthorizationStore", () => {
     ]);
   });
 
-  it("reports actor conflicts before role revision conflicts", async () => {
+  it("executes role replacement as one guarded batch", async () => {
     const store = new AuthorizationStore(
       fakeDatabase({
-        batchResults: [result(0), result(0), result(0), result(0), result(0)],
+        batchResults: [result(0), result(1), result(1), result(1)],
       })
     );
 
-    await expect(store.replaceRole(replaceRoleInput)).resolves.toBe("actor_conflict");
-  });
-
-  it("interprets the guarded role update position without exposing batch results", async () => {
-    const conflictStore = new AuthorizationStore(
-      fakeDatabase({
-        batchResults: [result(1), result(1), result(1), result(0), result(0)],
-      })
-    );
-    const successfulStore = new AuthorizationStore(
-      fakeDatabase({
-        batchResults: [result(1), result(1), result(1), result(1), result(1)],
-      })
-    );
-
-    await expect(conflictStore.replaceRole(replaceRoleInput)).resolves.toBe("revision_conflict");
-    await expect(successfulStore.replaceRole(replaceRoleInput)).resolves.toBe("succeeded");
+    await expect(store.replaceRole(replaceRoleInput)).resolves.toBeUndefined();
   });
 });

@@ -331,7 +331,7 @@ async function enforceActiveUser(route: Route, ctx: RequestContext): Promise<Res
   try {
     const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
     ctx.authorization = authorization;
-    if (authorization.accessStatus !== "active") {
+    if (authorization.suspendedAt !== null) {
       return json({ error: "Forbidden", code: "active_user_required" }, 403);
     }
     return null;
@@ -515,13 +515,16 @@ export const routes: Route[] = [
     handler: async (_request, _env, _match, ctx) => {
       let ownerBootstrap: "complete" | "owner_bootstrap_pending" | "unknown";
       try {
-        const bootstrap = await ctx.db
+        const owner = await ctx.db
           .prepare(
-            `SELECT 1 AS complete FROM workspace_bootstrap
-             WHERE singleton = 1 AND assignment_completed_at IS NOT NULL`
+            `SELECT 1 AS complete FROM users u
+             JOIN user_role_assignments ura ON ura.user_id = u.id
+             JOIN roles r ON r.id = ura.role_id
+             WHERE r.key = 'owner' AND u.suspended_at IS NULL
+             LIMIT 1`
           )
           .first();
-        ownerBootstrap = bootstrap ? "complete" : "owner_bootstrap_pending";
+        ownerBootstrap = owner ? "complete" : "owner_bootstrap_pending";
       } catch {
         ownerBootstrap = "unknown";
       }

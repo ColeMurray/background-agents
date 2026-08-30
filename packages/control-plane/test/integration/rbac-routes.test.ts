@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthorizationService } from "../../src/authorization/service";
 import { UserStore } from "../../src/db/user-store";
@@ -19,28 +19,23 @@ describe("RBAC routes", () => {
       id: string;
     }>();
     if (!user) throw new Error("Browser user was not seeded");
-    await env.DB.batch([
-      env.DB.prepare(
-        "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = ?"
-      ).bind(user.id),
-      env.DB.prepare(
-        `INSERT OR REPLACE INTO workspace_bootstrap
-          (singleton, owner_user_id, claimed_at, assignment_completed_at) VALUES (1, ?, 1, 1)`
-      ).bind(user.id),
-    ]);
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = ?"
+    )
+      .bind(user.id)
+      .run();
     return user.id;
   }
 
-  it("keeps ordinary browser users as Member before operator Owner bootstrap", async () => {
+  it("keeps ordinary browser users as Member without an Owner assignment", async () => {
     const first = await serviceFetch("https://cp.test/me/authorization", {
       initialUserRole: "member",
     });
     expect(first.status).toBe(200);
     await expect(first.json()).resolves.toMatchObject({
-      accessStatus: "active",
+      suspendedAt: null,
       role: { key: "member" },
     });
-    expect(await env.DB.prepare("SELECT * FROM workspace_bootstrap").first()).toBeNull();
   });
 
   it("assigns Member to identities created after the migration boundary", async () => {
@@ -79,7 +74,7 @@ describe("RBAC routes", () => {
     ).toEqual({ key: "member" });
   });
 
-  it("suspends an emailed member before Owner bootstrap", async () => {
+  it("suspends an emailed member without an Owner assignment", async () => {
     await serviceFetch("https://cp.test/me/authorization");
     const actor = await env.DB.prepare(
       "SELECT id FROM users WHERE email = 'browser@test.local'"
@@ -90,20 +85,16 @@ describe("RBAC routes", () => {
       emailVerified: true,
     });
     const service = new AuthorizationService(sqlDatabase(env.DB));
-    const actorAuthorization = await service.getEffectiveAuthorization(actor!.id);
 
     await service.replaceMemberStatus({
       targetUserId: member.id,
-      accessStatus: "suspended",
-      expectedVersion: 1,
+      suspended: true,
       actorUserId: actor!.id,
-      actorAuthorizationVersion: actorAuthorization.authorizationVersion,
-      actorCanTransferOwnership: false,
       requestId: "suspend-without-bootstrap",
     });
 
     await expect(service.getEffectiveAuthorization(member.id)).resolves.toMatchObject({
-      accessStatus: "suspended",
+      suspendedAt: expect.any(Number),
     });
   });
 
@@ -177,9 +168,6 @@ describe("RBAC routes", () => {
         roleId,
         user!.id
       ),
-      env.DB.prepare(
-        "UPDATE users SET authorization_version = authorization_version + 1 WHERE id = ?"
-      ).bind(user!.id),
     ]);
 
     const response = await serviceFetch("https://cp.test/sessions/parent/children", {
@@ -195,12 +183,12 @@ describe("RBAC routes", () => {
     });
   });
 
-  it("rolls back a command admitted with a stale authorization snapshot", async () => {
+  it("rolls back a command when the actor loses live permission", async () => {
     const ownerId = await seedOwner();
     const db = sqlDatabase(env.DB);
     const authorization = await new AuthorizationService(db).getEffectiveAuthorization(ownerId);
     await env.DB.prepare(
-      "UPDATE users SET authorization_version = authorization_version + 1 WHERE id = ?"
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
     )
       .bind(ownerId)
       .run();
@@ -286,34 +274,106 @@ describe("RBAC routes", () => {
     ).toEqual({ id: "other-session" });
   });
 
-  it("does not let the last active Owner be suspended", async () => {
+  it("does not let the last unsuspended Owner be suspended", async () => {
     await seedOwner();
     const owner = await env.DB.prepare(
-      `SELECT u.id, u.authorization_version
+      `SELECT u.id
        FROM users u
        JOIN user_role_assignments ura ON ura.user_id = u.id
        JOIN roles r ON r.id = ura.role_id
        WHERE r.key = 'owner'`
-    ).first<{ id: string; authorization_version: number }>();
+    ).first<{ id: string }>();
     expect(owner).not.toBeNull();
 
     const response = await serviceFetch(`https://cp.test/members/${owner!.id}/status`, {
       method: "PUT",
-      body: JSON.stringify({
-        accessStatus: "suspended",
-        authorizationVersion: owner!.authorization_version,
-      }),
+      body: JSON.stringify({ suspended: true }),
       headers: { "Content-Type": "application/json" },
     });
     expect(response.status).toBe(409);
+    expect(
+      await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(owner!.id).first()
+    ).toEqual({ suspended_at: null });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.member_status_updated'"
+      ).first()
+    ).toEqual({ count: 0 });
   });
 
-  it("requires an explicit active Owner assignment before merging an Owner", async () => {
+  it("lets an Owner suspend themselves when another unsuspended Owner exists", async () => {
+    const ownerId = await seedOwner();
+    const otherOwner = await new UserStore(sqlDatabase(env.DB)).createUser({
+      displayName: "Other Owner",
+    });
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = ?"
+    )
+      .bind(otherOwner.id)
+      .run();
+
+    const response = await serviceFetch(`https://cp.test/members/${ownerId}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ suspended: true }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(ownerId).first()
+    ).toEqual({ suspended_at: expect.any(Number) });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.member_status_updated'"
+      ).first()
+    ).toEqual({ count: 1 });
+  });
+
+  it("does not let the last unsuspended Owner demote themselves", async () => {
+    const ownerId = await seedOwner();
+
+    const response = await serviceFetch(`https://cp.test/members/${ownerId}/role`, {
+      method: "PUT",
+      body: JSON.stringify({ roleId: "role_builtin_administrator" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(
+      await env.DB.prepare(
+        `SELECT r.key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+        .bind(ownerId)
+        .first()
+    ).toEqual({ key: "owner" });
+  });
+
+  it("derives Owner bootstrap health from an unsuspended Owner assignment", async () => {
+    const pending = await SELF.fetch("https://cp.test/health");
+    await expect(pending.json()).resolves.toMatchObject({
+      rbac: { ownerBootstrap: "owner_bootstrap_pending" },
+    });
+
+    const ownerId = await seedOwner();
+    const complete = await SELF.fetch("https://cp.test/health");
+    await expect(complete.json()).resolves.toMatchObject({
+      rbac: { ownerBootstrap: "complete" },
+    });
+
+    await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(ownerId).run();
+    const suspended = await SELF.fetch("https://cp.test/health");
+    await expect(suspended.json()).resolves.toMatchObject({
+      rbac: { ownerBootstrap: "owner_bootstrap_pending" },
+    });
+  });
+
+  it("requires an explicit unsuspended Owner assignment before merging an Owner", async () => {
     const store = new UserStore(sqlDatabase(env.DB));
     const survivor = await store.createUser({ displayName: "Survivor" });
     const loser = await store.createUser({ displayName: "Owner" });
     await env.DB.batch([
-      env.DB.prepare("UPDATE users SET access_status = 'suspended' WHERE id = ?").bind(survivor.id),
+      env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(survivor.id),
       env.DB.prepare(
         "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = ?"
       ).bind(loser.id),
@@ -328,7 +388,7 @@ describe("RBAC routes", () => {
     ).rejects.toThrow("Resolve conflicting user roles before merging");
   });
 
-  it("manages custom roles and member assignments with version checks", async () => {
+  it("manages custom roles and member assignments without authorization versions", async () => {
     await seedOwner();
 
     const create = await serviceFetch("https://cp.test/roles", {
@@ -364,10 +424,10 @@ describe("RBAC routes", () => {
     expect(stale.status).toBe(409);
     expect(
       await env.DB.prepare(
-        `SELECT COUNT(*) AS count, MIN(authorization_version) AS authorization_version
+        `SELECT COUNT(*) AS count
          FROM authorization_audit_events WHERE action = 'workspace.role_updated'`
       ).first()
-    ).toEqual({ count: 1, authorization_version: 1 });
+    ).toEqual({ count: 1 });
 
     const member = await new UserStore(sqlDatabase(env.DB)).createUser({
       displayName: "Member",
@@ -376,26 +436,32 @@ describe("RBAC routes", () => {
     });
     const assign = await serviceFetch(`https://cp.test/members/${member.id}/role`, {
       method: "PUT",
-      body: JSON.stringify({ roleId: role.id, authorizationVersion: 1 }),
+      body: JSON.stringify({ roleId: role.id }),
       headers: { "Content-Type": "application/json" },
     });
     expect(assign.status).toBe(200);
     await expect(assign.json()).resolves.toMatchObject({
       role: { id: role.id },
-      authorizationVersion: 2,
     });
 
     const suspend = await serviceFetch(`https://cp.test/members/${member.id}/status`, {
       method: "PUT",
-      body: JSON.stringify({ accessStatus: "suspended", authorizationVersion: 2 }),
+      body: JSON.stringify({ suspended: true }),
       headers: { "Content-Type": "application/json" },
     });
     expect(suspend.status).toBe(200);
     await expect(suspend.json()).resolves.toMatchObject({
-      accessStatus: "suspended",
+      suspendedAt: expect.any(Number),
       permissions: [],
-      authorizationVersion: 3,
     });
+
+    const restore = await serviceFetch(`https://cp.test/members/${member.id}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ suspended: false }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(restore.status).toBe(200);
+    await expect(restore.json()).resolves.toMatchObject({ suspendedAt: null });
   });
 
   it("rejects privileged mutations when the actor authorization changes", async () => {
@@ -404,17 +470,15 @@ describe("RBAC routes", () => {
       displayName: "Target Member",
     });
     const service = new AuthorizationService(sqlDatabase(env.DB));
-    const authorized = await service.requirePermission(ownerId, "workspace.roles.manage");
+    await service.requirePermission(ownerId, "workspace.roles.manage");
     const editableRole = await service.createRole(
       { name: "Editable Role", permissions: ["workspace.read"] },
       ownerId,
-      authorized.authorizationVersion,
       "setup-editable-role"
     );
     const deletableRole = await service.createRole(
       { name: "Deletable Role", permissions: ["workspace.read"] },
       ownerId,
-      authorized.authorizationVersion,
       "setup-deletable-role"
     );
 
@@ -422,16 +486,12 @@ describe("RBAC routes", () => {
       env.DB.prepare(
         "UPDATE user_role_assignments SET role_id = 'role_builtin_member' WHERE user_id = ?"
       ).bind(ownerId),
-      env.DB.prepare(
-        "UPDATE users SET authorization_version = authorization_version + 1 WHERE id = ?"
-      ).bind(ownerId),
     ]);
 
     await expect(
       service.createRole(
         { name: "Stale Actor Role", permissions: ["workspace.read"] },
         ownerId,
-        authorized.authorizationVersion,
         "stale-role-request"
       )
     ).rejects.toThrow("Actor authorization changed");
@@ -441,37 +501,25 @@ describe("RBAC routes", () => {
         editableRole.revision,
         { name: "Edited By Stale Actor", permissions: ["workspace.read"] },
         ownerId,
-        authorized.authorizationVersion,
         "stale-role-edit"
       )
     ).rejects.toThrow("Actor authorization changed");
     await expect(
-      service.deleteRole(
-        deletableRole.id,
-        ownerId,
-        authorized.authorizationVersion,
-        "stale-role-delete"
-      )
+      service.deleteRole(deletableRole.id, ownerId, "stale-role-delete")
     ).rejects.toThrow("Actor authorization changed");
     await expect(
       service.replaceMemberRole({
         targetUserId: member.id,
         roleId: editableRole.id,
-        expectedVersion: 1,
         actorUserId: ownerId,
-        actorAuthorizationVersion: authorized.authorizationVersion,
-        actorCanTransferOwnership: true,
         requestId: "stale-member-role-request",
       })
     ).rejects.toThrow("Actor authorization changed");
     await expect(
       service.replaceMemberStatus({
         targetUserId: member.id,
-        accessStatus: "suspended",
-        expectedVersion: 1,
+        suspended: true,
         actorUserId: ownerId,
-        actorAuthorizationVersion: authorized.authorizationVersion,
-        actorCanTransferOwnership: true,
         requestId: "stale-member-request",
       })
     ).rejects.toThrow("Actor authorization changed");
@@ -487,8 +535,8 @@ describe("RBAC routes", () => {
       role: { key: "member" },
     });
     expect(
-      await env.DB.prepare("SELECT access_status FROM users WHERE id = ?").bind(member.id).first()
-    ).toEqual({ access_status: "active" });
+      await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(member.id).first()
+    ).toEqual({ suspended_at: null });
   });
 
   it("returns a conflict for duplicate normalized role names", async () => {
@@ -512,7 +560,7 @@ describe("RBAC routes", () => {
 
   it("rejects suspended users at the backend after reauthentication", async () => {
     await seedOwner();
-    await env.DB.prepare("UPDATE users SET access_status = 'suspended'").run();
+    await env.DB.prepare("UPDATE users SET suspended_at = 1").run();
 
     const response = await serviceFetch("https://cp.test/repos");
     expect(response.status).toBe(403);

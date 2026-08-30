@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { initSession, queryDO } from "./helpers";
 
 function wsTokenBody(body: Record<string, unknown>): string {
-  return JSON.stringify({ canonicalUserId: "user-1", authorizationVersion: 1, ...body });
+  return JSON.stringify({ canonicalUserId: "user-1", ...body });
 }
 
 describe("POST /internal/ws-token", () => {
@@ -60,18 +60,15 @@ describe("POST /internal/ws-token", () => {
     const participants = await queryDO<{
       ws_auth_token: string | null;
       ws_token_created_at: number | null;
-      ws_authorization_version: number | null;
     }>(
       stub,
-      `SELECT ws_auth_token, ws_token_created_at, ws_authorization_version
-       FROM participants WHERE user_id = 'user-1'`
+      `SELECT ws_auth_token, ws_token_created_at FROM participants WHERE user_id = 'user-1'`
     );
 
     expect(participants[0].ws_auth_token).not.toBeNull();
     // SHA-256 hash is 64 hex characters
     expect(participants[0].ws_auth_token!.length).toBe(64);
     expect(participants[0].ws_token_created_at).toEqual(expect.any(Number));
-    expect(participants[0].ws_authorization_version).toBe(1);
   });
 
   it("rejects ws-token without userId", async () => {

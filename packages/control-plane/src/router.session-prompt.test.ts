@@ -60,9 +60,8 @@ function createEnv(sessionFetch: ReturnType<typeof vi.fn>): Record<string, unkno
     bind: vi.fn(() => statement),
     first: vi.fn(async () => ({
       user_id: "user-1",
-      access_status: "active",
+      suspended_at: null,
       assigned: 1,
-      authorization_version: 1,
       role_id: "role-administrator",
       role_key: "administrator",
       role_name: "Administrator",

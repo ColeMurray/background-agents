@@ -14,17 +14,15 @@ vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 const authorizations = {
   owner: {
     userId: "11111111111111111111111111111111",
-    accessStatus: "active" as const,
+    suspendedAt: null,
     role: { id: "role_builtin_owner", key: "owner" as const, name: "Owner" },
     permissions: ["workspace.transfer_ownership" as const],
-    authorizationVersion: 1,
   },
   member: {
     userId: "22222222222222222222222222222222",
-    accessStatus: "active" as const,
+    suspendedAt: null,
     role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
     permissions: ["workspace.read" as const],
-    authorizationVersion: 1,
   },
 };
 

@@ -191,8 +191,7 @@ function createCtx(
     first: vi.fn(async () => ({
       active: 1,
       user_id: "user-1",
-      access_status: "active",
-      authorization_version: 1,
+      suspended_at: null,
       role_id: "role_builtin_owner",
       role_key: "owner",
       role_name: "Owner",
@@ -207,10 +206,9 @@ function createCtx(
       ? {
           authorization: {
             userId: principal.userId,
-            accessStatus: "active" as const,
+            suspendedAt: null,
             role: { id: "role_builtin_owner", key: "owner" as const, name: "Owner" },
             permissions: [...permissions],
-            authorizationVersion: 1,
           },
         }
       : {}),

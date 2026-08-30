@@ -14,7 +14,7 @@ async function userColumns(): Promise<string[]> {
 }
 
 async function restoreMigration(): Promise<void> {
-  if (!(await userColumns()).includes("access_status")) {
+  if (!(await userColumns()).includes("suspended_at")) {
     await env.DB.batch(migration().queries.map((query) => env.DB.prepare(query)));
   }
 }
@@ -31,13 +31,10 @@ describe("migration 0071: RBAC foundation", () => {
       DROP TRIGGER assign_default_role_after_user_insert;
       DROP TABLE session_access;
       DROP TABLE authorization_audit_events;
-      DROP TABLE workspace_bootstrap;
       DROP TABLE user_role_assignments;
       DROP TABLE role_permissions;
       DROP TABLE roles;
-      ALTER TABLE users DROP COLUMN last_authorization_mutation_id;
-      ALTER TABLE users DROP COLUMN authorization_version;
-      ALTER TABLE users DROP COLUMN access_status;
+      ALTER TABLE users DROP COLUMN suspended_at;
     `);
     await env.DB.batch([
       env.DB.prepare(
@@ -73,7 +70,7 @@ describe("migration 0071: RBAC foundation", () => {
 
     expect(
       await env.DB.prepare(
-        `SELECT u.id, u.access_status, u.authorization_version, r.key AS role_key
+        `SELECT u.id, u.suspended_at, r.key AS role_key
          FROM users u
          JOIN user_role_assignments ura ON ura.user_id = u.id
          JOIN roles r ON r.id = ura.role_id
@@ -83,14 +80,12 @@ describe("migration 0071: RBAC foundation", () => {
       results: [
         {
           id: "11111111111111111111111111111111",
-          access_status: "active",
-          authorization_version: 1,
+          suspended_at: null,
           role_key: "administrator",
         },
         {
           id: "22222222222222222222222222222222",
-          access_status: "active",
-          authorization_version: 1,
+          suspended_at: null,
           role_key: "administrator",
         },
       ],

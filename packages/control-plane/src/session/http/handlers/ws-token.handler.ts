@@ -8,7 +8,6 @@ const nullableOptionalString = z.string().nullable().optional();
 const generateWsTokenRequestSchema = sessionScmDisplayFieldsSchema.extend({
   userId: z.string().optional(),
   canonicalUserId: z.string().min(1),
-  authorizationVersion: z.number().int().positive(),
   scmUserId: nullableOptionalString,
   scmTokenEncrypted: nullableOptionalString,
   scmRefreshTokenEncrypted: nullableOptionalString,
@@ -105,12 +104,7 @@ export class WsTokenHandler {
     const plainToken = this.generateId(32);
     const tokenHash = await this.hashToken(plainToken);
 
-    this.repository.updateParticipantWsToken(
-      participant.id,
-      tokenHash,
-      now,
-      body.authorizationVersion
-    );
+    this.repository.updateParticipantWsToken(participant.id, tokenHash, now);
     log.info("Generated WS token", { participant_id: participant.id, user_id: body.userId });
 
     return Response.json({

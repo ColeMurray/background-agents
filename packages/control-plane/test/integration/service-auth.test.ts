@@ -314,7 +314,7 @@ describe("sig1 service-credential authentication", () => {
       body: JSON.stringify({ title: "Actor session", model: "anthropic/claude-haiku-4-5" }),
     });
     const identity = await new UserStore(env.DB).getIdentity("slack", "U-SUSPENDED");
-    await env.DB.prepare("UPDATE users SET access_status = 'suspended' WHERE id = ?")
+    await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?")
       .bind(identity!.userId)
       .run();
 

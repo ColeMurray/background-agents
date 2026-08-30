@@ -13,7 +13,7 @@ function executionPredicate(
   const environmentGuard = rolePermissionPredicate("environments.use");
   const additionalGuards = requiredAnyOf.map(rolePermissionPredicate);
   return {
-    sql: `a.id = ? AND a.deleted_at IS NULL AND u.access_status = 'active'
+    sql: `a.id = ? AND a.deleted_at IS NULL AND u.suspended_at IS NULL
       AND ${createGuard.sql}
       AND (
         NOT EXISTS (SELECT 1 FROM automation_repositories ar WHERE ar.automation_id = a.id)
@@ -44,7 +44,7 @@ function authPredicate(
   const ownGuard = rolePermissionPredicate(`automations.${operation}.own`);
   const requiredPermissionGuards = requiredPermissions.map(rolePermissionPredicate);
   return {
-    sql: `u.id = ? AND u.access_status = 'active' AND u.authorization_version = ?
+    sql: `u.id = ? AND u.suspended_at IS NULL
       AND (
         ${anyGuard.sql}
         OR (${ownGuard.sql} AND EXISTS (
@@ -54,7 +54,6 @@ function authPredicate(
       ${requiredPermissionGuards.length > 0 ? `AND ${requiredPermissionGuards.map((guard) => guard.sql).join(" AND ")}` : ""}`,
     values: [
       authorization.userId,
-      authorization.authorizationVersion,
       ...anyGuard.values,
       ...ownGuard.values,
       automationId,
@@ -110,15 +109,11 @@ export function bindPermissionSetGuard(
          SELECT 1 FROM users u
          JOIN user_role_assignments ura ON ura.user_id = u.id
          JOIN roles r ON r.id = ura.role_id
-         WHERE u.id = ? AND u.access_status = 'active' AND u.authorization_version = ?
+          WHERE u.id = ? AND u.suspended_at IS NULL
             AND ${permissionGuards.map((guard) => guard.sql).join(" AND ")}
        ) THEN 1 ELSE abs(-9223372036854775808) END AS authorization_guard`
     )
-    .bind(
-      authorization.userId,
-      authorization.authorizationVersion,
-      ...permissionGuards.flatMap((guard) => guard.values)
-    );
+    .bind(authorization.userId, ...permissionGuards.flatMap((guard) => guard.values));
 }
 
 export function bindAutomationAuthorizationGuard(

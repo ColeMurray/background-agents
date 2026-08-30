@@ -201,7 +201,7 @@ export async function resolveCanonicalUserId(
   const requireActive = async (userId: string): Promise<{ userId: string } | Response> => {
     try {
       const active = await ctx.db
-        .prepare("SELECT 1 AS active FROM users WHERE id = ? AND access_status = 'active'")
+        .prepare("SELECT 1 AS active FROM users WHERE id = ? AND suspended_at IS NULL")
         .bind(userId)
         .first<{ active: number }>();
       return active ? { userId } : error("Workspace access is disabled", 403);

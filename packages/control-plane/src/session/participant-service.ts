@@ -114,7 +114,6 @@ export class ParticipantService {
       scm_token_expires_at: null,
       ws_auth_token: null,
       ws_token_created_at: null,
-      ws_authorization_version: null,
       joined_at: now,
     };
   }

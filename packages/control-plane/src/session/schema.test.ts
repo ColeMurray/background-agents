@@ -270,9 +270,8 @@ describe("applyMigrations", () => {
   });
 
   it("adds WebSocket authorization lease state for fresh and migrated DOs", () => {
-    expect(SCHEMA_SQL).toContain("ws_authorization_version INTEGER");
-    expect(SCHEMA_SQL).toContain("authorization_version INTEGER NOT NULL");
     expect(SCHEMA_SQL).toContain("authorization_expires_at INTEGER NOT NULL");
+    expect(SCHEMA_SQL).not.toContain("authorization_version");
 
     const migration = MIGRATIONS.find((entry) => entry.id === 46);
     expect(typeof migration?.run).toBe("function");
@@ -280,13 +279,7 @@ describe("applyMigrations", () => {
     run(mock.sql);
     expect(
       mock.calls.filter(({ query }) => query.includes("ALTER TABLE")).map(({ query }) => query)
-    ).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("participants ADD COLUMN ws_authorization_version"),
-        expect.stringContaining("ws_client_mapping ADD COLUMN authorization_version"),
-        expect.stringContaining("ws_client_mapping ADD COLUMN authorization_expires_at"),
-      ])
-    );
+    ).toEqual([expect.stringContaining("ws_client_mapping ADD COLUMN authorization_expires_at")]);
   });
 
   it("keeps repository context consistent at the session table boundary", () => {

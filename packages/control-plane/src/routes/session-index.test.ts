@@ -24,8 +24,7 @@ function createCtx(principal?: Principal): RequestContext {
     bind: vi.fn(() => statement),
     first: vi.fn(async () => ({
       user_id: "user-1",
-      access_status: "active",
-      authorization_version: 1,
+      suspended_at: null,
       role_id: "role_builtin_owner",
       role_key: "owner",
       role_name: "Owner",
@@ -48,10 +47,9 @@ function createCtx(principal?: Principal): RequestContext {
       ? {
           authorization: {
             userId: principal.userId,
-            accessStatus: "active" as const,
+            suspendedAt: null,
             role: { id: "role_builtin_owner", key: "owner" as const, name: "Owner" },
             permissions: ["sessions.read.any", "sessions.delete.any"] as const,
-            authorizationVersion: 1,
           },
         }
       : {}),

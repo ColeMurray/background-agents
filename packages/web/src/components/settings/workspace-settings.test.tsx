@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -37,8 +37,7 @@ describe("WorkspaceSettings", () => {
           displayName: "Ada",
           email: "ada@example.com",
           avatarUrl: null,
-          accessStatus: "active",
-          authorizationVersion: 1,
+          suspendedAt: null,
           role: { id: "role_release", key: null, name: "Release Managers" },
           createdAt: 1,
         },
@@ -55,7 +54,7 @@ describe("WorkspaceSettings", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
-  it("does not offer destructive controls for the sole active Owner", () => {
+  it("does not offer destructive controls for the sole unsuspended Owner", () => {
     vi.mocked(useCurrentUserAuthorization).mockReturnValue({
       authorization: null,
       loading: false,
@@ -73,8 +72,7 @@ describe("WorkspaceSettings", () => {
           displayName: "Owner",
           email: "owner@example.com",
           avatarUrl: null,
-          accessStatus: "active",
-          authorizationVersion: 1,
+          suspendedAt: null,
           role: { id: "role_builtin_owner", key: "owner", name: "Owner" },
           createdAt: 1,
         },
@@ -101,5 +99,39 @@ describe("WorkspaceSettings", () => {
     expect(screen.getAllByText("Owner").length).toBeGreaterThan(0);
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Suspend" })).toBeDisabled();
+  });
+
+  it("restores a suspended member through the boolean status contract", async () => {
+    const updateMember = vi.fn().mockResolvedValue(undefined);
+    const member = {
+      userId: "11111111111111111111111111111111",
+      displayName: "Ada",
+      email: "ada@example.com",
+      avatarUrl: null,
+      suspendedAt: 100,
+      role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
+      createdAt: 1,
+    };
+    vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+      authorization: null,
+      loading: false,
+      error: null,
+      hasPermission: (permission) =>
+        permission === "workspace.members.read" || permission === "workspace.members.manage",
+    });
+    vi.mocked(useWorkspaceAdministration).mockReturnValue({
+      members: [member],
+      roles: [],
+      loading: false,
+      error: undefined,
+      updateMember,
+    });
+
+    render(<WorkspaceSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    await waitFor(() =>
+      expect(updateMember).toHaveBeenCalledWith(member, { kind: "status", suspended: false })
+    );
   });
 });

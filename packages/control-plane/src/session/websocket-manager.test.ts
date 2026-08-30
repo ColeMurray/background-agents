@@ -102,7 +102,6 @@ function createMockRepository() {
     participantId: string;
     clientId: string;
     createdAt: number;
-    authorizationVersion: number;
     authorizationExpiresAt: number;
   }> = [];
 
@@ -115,7 +114,6 @@ function createMockRepository() {
       participantId: string;
       clientId: string;
       createdAt: number;
-      authorizationVersion: number;
       authorizationExpiresAt: number;
     }) => {
       upsertCalls.push(data);
@@ -126,7 +124,6 @@ function createMockRepository() {
         scm_name: null,
         auth_name: null,
         scm_login: null,
-        authorization_version: data.authorizationVersion,
         authorization_expires_at: data.authorizationExpiresAt,
       });
     },
@@ -153,11 +150,10 @@ function createMockRepository() {
     },
     addMapping: (
       wsId: string,
-      mapping: Omit<WsClientMappingResult, "authorization_version" | "authorization_expires_at"> &
-        Partial<Pick<WsClientMappingResult, "authorization_version" | "authorization_expires_at">>
+      mapping: Omit<WsClientMappingResult, "authorization_expires_at"> &
+        Partial<Pick<WsClientMappingResult, "authorization_expires_at">>
     ) => {
       mappings.set(wsId, {
-        authorization_version: 1,
         authorization_expires_at: Date.now() + 300_000,
         ...mapping,
       });
@@ -174,7 +170,6 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: Date.now(),
     clientId: "client-1",
-    authorizationVersion: 1,
     authorizationExpiresAt: Date.now() + 300_000,
     ws: createFakeWebSocket(),
     ...overrides,
@@ -581,7 +576,6 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: "Test",
         auth_name: null,
         scm_login: "testuser",
-        authorization_version: 1,
         authorization_expires_at: Date.now() + 300_000,
       };
       mockRepo.addMapping("ws-42", mapping);
@@ -638,14 +632,13 @@ describe("SessionWebSocketManagerImpl", () => {
     it("calls repository.upsertWsClientMapping", () => {
       const { manager, mockRepo } = createManager();
 
-      manager.persistClientMapping("ws-1", "part-1", "client-1", 7, 123_000);
+      manager.persistClientMapping("ws-1", "part-1", "client-1", 123_000);
 
       expect(mockRepo.upsertCalls).toHaveLength(1);
       expect(mockRepo.upsertCalls[0]).toMatchObject({
         wsId: "ws-1",
         participantId: "part-1",
         clientId: "client-1",
-        authorizationVersion: 7,
         authorizationExpiresAt: 123_000,
       });
     });
@@ -927,7 +920,6 @@ describe("SessionWebSocketManagerImpl", () => {
         user_id: "u-1",
         scm_name: null,
         scm_login: null,
-        authorization_version: null,
         authorization_expires_at: null,
       });
 

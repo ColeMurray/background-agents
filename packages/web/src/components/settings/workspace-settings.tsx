@@ -19,8 +19,8 @@ export function WorkspaceSettings() {
     readRoles: canReadRoles,
   });
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const activeOwnerCount = members.filter(
-    (member) => member.role.key === "owner" && member.accessStatus === "active"
+  const unsuspendedOwnerCount = members.filter(
+    (member) => member.role.key === "owner" && member.suspendedAt === null
   ).length;
 
   if (!canRead) {
@@ -71,7 +71,7 @@ export function WorkspaceSettings() {
                 {canAssignRoles &&
                 (member.role.key !== "owner" ||
                   (canTransfer &&
-                    !(member.accessStatus === "active" && activeOwnerCount === 1))) ? (
+                    !(member.suspendedAt === null && unsuspendedOwnerCount === 1))) ? (
                   <select
                     aria-label={`Role for ${member.displayName ?? member.userId}`}
                     value={member.role.id}
@@ -101,18 +101,18 @@ export function WorkspaceSettings() {
                     !canManage ||
                     (member.role.key === "owner" &&
                       (!canTransfer ||
-                        (member.accessStatus === "active" && activeOwnerCount === 1)))
+                        (member.suspendedAt === null && unsuspendedOwnerCount === 1)))
                   }
                   onClick={() =>
                     void mutate(() =>
                       updateMember(member, {
                         kind: "status",
-                        accessStatus: member.accessStatus === "active" ? "suspended" : "active",
+                        suspended: member.suspendedAt === null,
                       })
                     )
                   }
                 >
-                  {member.accessStatus === "active" ? "Suspend" : "Restore"}
+                  {member.suspendedAt === null ? "Suspend" : "Restore"}
                 </Button>
               </div>
             ))}

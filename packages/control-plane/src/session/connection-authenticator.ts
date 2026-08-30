@@ -45,10 +45,7 @@ export interface SessionConnectionAuthenticatorDeps {
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
   alarmScheduler: AlarmScheduler;
-  verifyAuthorization: (input: {
-    userId: string;
-    authorizationVersion: number;
-  }) => Promise<"valid" | "rejected" | "unavailable">;
+  verifyAuthorization: (userId: string) => Promise<"valid" | "rejected" | "unavailable">;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
 }
@@ -266,22 +263,19 @@ export class SessionConnectionAuthenticator {
         return;
       }
 
-      if (!participant.canonical_user_id || participant.ws_authorization_version == null) {
+      if (!participant.canonical_user_id) {
         wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
         return;
       }
 
-      const authorization = await this.deps.verifyAuthorization({
-        userId: participant.canonical_user_id,
-        authorizationVersion: participant.ws_authorization_version,
-      });
+      const authorization = await this.deps.verifyAuthorization(participant.canonical_user_id);
       if (authorization !== "valid") {
         log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "client",
           outcome: "auth_failed",
           reject_reason:
-            authorization === "unavailable" ? "authorization_unavailable" : "authorization_stale",
+            authorization === "unavailable" ? "authorization_unavailable" : "authorization_denied",
           participant_id: participant.id,
           user_id: participant.canonical_user_id,
         });
@@ -326,7 +320,6 @@ export class SessionConnectionAuthenticator {
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
-        authorizationVersion: participant.ws_authorization_version,
         authorizationExpiresAt,
         ws,
       };
@@ -383,7 +376,6 @@ export class SessionConnectionAuthenticator {
         parsed.wsId,
         client.participantId,
         client.clientId,
-        client.authorizationVersion,
         client.authorizationExpiresAt
       );
       log.debug("Stored ws_client_mapping", {
@@ -410,10 +402,7 @@ export class SessionConnectionAuthenticator {
       wsManager.close(ws, 4002, "Session expired, please reconnect");
       return null;
     }
-    if (
-      typeof mapping.authorization_version !== "number" ||
-      typeof mapping.authorization_expires_at !== "number"
-    ) {
+    if (typeof mapping.authorization_expires_at !== "number") {
       wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
       return null;
     }
@@ -428,7 +417,6 @@ export class SessionConnectionAuthenticator {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
-      authorizationVersion: mapping.authorization_version,
       authorizationExpiresAt: mapping.authorization_expires_at,
       ws,
     };

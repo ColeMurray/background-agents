@@ -467,16 +467,12 @@ export async function issueClientWsToken(
   )
     .bind(sessionName, canonicalUserId, now)
     .run();
-  const authorization = await env.DB.prepare("SELECT authorization_version FROM users WHERE id = ?")
-    .bind(canonicalUserId)
-    .first<{ authorization_version: number }>();
   const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       userId: opts.userId ?? "user-1",
       canonicalUserId,
-      authorizationVersion: authorization?.authorization_version ?? 1,
       scmLogin: opts.scmLogin,
       scmName: opts.scmName,
     }),

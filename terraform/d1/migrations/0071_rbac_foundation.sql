@@ -1,7 +1,4 @@
-ALTER TABLE users ADD COLUMN access_status TEXT NOT NULL DEFAULT 'active'
-  CHECK (access_status IN ('active', 'suspended'));
-ALTER TABLE users ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE users ADD COLUMN last_authorization_mutation_id TEXT;
+ALTER TABLE users ADD COLUMN suspended_at INTEGER;
 
 CREATE TABLE roles (
   id TEXT PRIMARY KEY,
@@ -11,7 +8,6 @@ CREATE TABLE roles (
   description TEXT,
   is_system INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
   revision INTEGER NOT NULL DEFAULT 1,
-  last_mutation_id TEXT,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL,
@@ -36,13 +32,6 @@ CREATE TABLE user_role_assignments (
   assigned_at INTEGER NOT NULL
 );
 
-CREATE TABLE workspace_bootstrap (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  claimed_at INTEGER NOT NULL,
-  assignment_completed_at INTEGER
-);
-
 CREATE TABLE authorization_audit_events (
   id TEXT PRIMARY KEY,
   occurred_at INTEGER NOT NULL,
@@ -53,7 +42,6 @@ CREATE TABLE authorization_audit_events (
   actor_service_snapshot TEXT,
   actor_provider_snapshot TEXT,
   actor_provider_user_id_snapshot TEXT,
-  authorization_version INTEGER,
   action TEXT NOT NULL,
   resource_type TEXT NOT NULL,
   resource_id TEXT,

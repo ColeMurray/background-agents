@@ -12,10 +12,7 @@ function createDatabase(): DatabaseSync {
     PRAGMA foreign_keys = ON;
     CREATE TABLE users (
       id TEXT PRIMARY KEY,
-      access_status TEXT NOT NULL,
-      authorization_version INTEGER NOT NULL,
-      last_authorization_mutation_id TEXT,
-      updated_at INTEGER NOT NULL
+      suspended_at INTEGER
     );
     CREATE TABLE roles (
       id TEXT PRIMARY KEY,
@@ -28,12 +25,6 @@ function createDatabase(): DatabaseSync {
       assigned_by TEXT,
       assigned_at INTEGER NOT NULL
     );
-    CREATE TABLE workspace_bootstrap (
-      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      owner_user_id TEXT NOT NULL REFERENCES users(id),
-      claimed_at INTEGER NOT NULL,
-      assignment_completed_at INTEGER
-    );
     CREATE TABLE authorization_audit_events (
       id TEXT PRIMARY KEY,
       occurred_at INTEGER NOT NULL,
@@ -44,7 +35,6 @@ function createDatabase(): DatabaseSync {
       actor_service_snapshot TEXT,
       actor_provider_snapshot TEXT,
       actor_provider_user_id_snapshot TEXT,
-      authorization_version INTEGER,
       action TEXT NOT NULL,
       resource_type TEXT NOT NULL,
       resource_id TEXT,
@@ -57,17 +47,41 @@ function createDatabase(): DatabaseSync {
     INSERT INTO roles (id, key, is_system) VALUES
       ('role_builtin_owner', 'owner', 1),
       ('role_builtin_member', 'member', 1);
-    INSERT INTO users
-      (id, access_status, authorization_version, last_authorization_mutation_id, updated_at)
-    VALUES ('${USER_ID}', 'active', 7, NULL, 1);
+    INSERT INTO users (id, suspended_at) VALUES ('${USER_ID}', NULL);
     INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
     VALUES ('${USER_ID}', 'role_builtin_member', NULL, 1);
   `);
   return database;
 }
 
+function sql(execute: boolean, auditId = "audit-id", now = 100): string {
+  return buildBootstrapSql({ userId: USER_ID, execute, auditId, now });
+}
+
+function preflight(database: DatabaseSync): Record<string, unknown> {
+  return { ...database.prepare(sql(false, "unused", 0)).get() };
+}
+
 function execute(database: DatabaseSync, auditId: string, now: number): void {
-  database.exec(buildBootstrapSql({ userId: USER_ID, execute: true, auditId, now }));
+  database.exec(sql(true, auditId, now));
+}
+
+function insertSuccessfulHistory(
+  database: DatabaseSync,
+  targetUserId = OTHER_USER_ID,
+  id = "audit-history"
+): void {
+  database
+    .prepare(
+      `INSERT INTO authorization_audit_events
+        (id, occurred_at, request_id, policy_id, principal_kind,
+         actor_service_snapshot, action, resource_type, target_user_id_snapshot,
+         decision_outcome, operation_result, reason_code, metadata_json)
+       VALUES (?, 1, 'operator-cli:history', 'workspace.owner_bootstrapped', 'service',
+         'operator-cli', 'workspace.owner_bootstrapped', 'workspace', ?,
+         'allowed', 'succeeded', 'operator_cli', '{}')`
+    )
+    .run(id, targetUserId);
 }
 
 describe("Owner bootstrap CLI arguments", () => {
@@ -106,106 +120,20 @@ describe("Owner bootstrap CLI arguments", () => {
 });
 
 describe("Owner bootstrap SQL", () => {
-  it("keeps dry-run SQL read-only", () => {
+  it("reports ready only for an unsuspended target with one assignment and no Owner or history", () => {
     const database = createDatabase();
-    database.exec(
-      buildBootstrapSql({ userId: USER_ID, execute: false, auditId: "unused", now: 10 })
-    );
 
-    assert.deepEqual(
-      { ...database.prepare("SELECT role_id FROM user_role_assignments").get() },
-      {
-        role_id: "role_builtin_member",
-      }
-    );
+    assert.deepEqual(preflight(database), {
+      report: "preflight",
+      status: "ready",
+      detail: "selected user can be bootstrapped",
+      user_id: USER_ID,
+      suspended_at: null,
+      role_id: "role_builtin_member",
+      successful_bootstrap_history: 0,
+    });
     assert.equal(
-      database.prepare("SELECT COUNT(*) AS count FROM workspace_bootstrap").get()!.count,
-      0
-    );
-  });
-
-  it("assigns Owner, increments version once, completes bootstrap, and writes a redacted audit", () => {
-    const database = createDatabase();
-    execute(database, "audit-'success", 100);
-
-    assert.deepEqual(
-      {
-        ...database
-          .prepare(
-            `SELECT u.access_status, u.authorization_version, a.role_id, a.assigned_by,
-                  b.owner_user_id, b.assignment_completed_at
-           FROM users u
-           JOIN user_role_assignments a ON a.user_id = u.id
-           JOIN workspace_bootstrap b ON b.owner_user_id = u.id
-           WHERE u.id = ?`
-          )
-          .get(USER_ID),
-      },
-      {
-        access_status: "active",
-        authorization_version: 8,
-        role_id: "role_builtin_owner",
-        assigned_by: null,
-        owner_user_id: USER_ID,
-        assignment_completed_at: 100,
-      }
-    );
-    assert.deepEqual(
-      {
-        ...database
-          .prepare(
-            `SELECT principal_kind, actor_service_snapshot, authorization_version, action,
-                  target_user_id_snapshot, reason_code, metadata_json
-           FROM authorization_audit_events`
-          )
-          .get(),
-      },
-      {
-        principal_kind: "service",
-        actor_service_snapshot: "operator-cli",
-        authorization_version: 8,
-        action: "workspace.owner_bootstrapped",
-        target_user_id_snapshot: USER_ID,
-        reason_code: "operator_cli",
-        metadata_json: "{}",
-      }
-    );
-  });
-
-  it("is an idempotent no-op for the selected completed active Owner", () => {
-    const database = createDatabase();
-    execute(database, "audit-first", 100);
-    execute(database, "audit-second", 200);
-
-    assert.equal(
-      database.prepare("SELECT authorization_version FROM users").get()!.authorization_version,
-      8
-    );
-    assert.equal(
-      database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
-      1
-    );
-    assert.equal(
-      database.prepare("SELECT assignment_completed_at FROM workspace_bootstrap").get()!
-        .assignment_completed_at,
-      100
-    );
-  });
-
-  it("refuses another active Owner without changing the selected user", () => {
-    const database = createDatabase();
-    database.exec(`
-      INSERT INTO users
-        (id, access_status, authorization_version, last_authorization_mutation_id, updated_at)
-      VALUES ('${OTHER_USER_ID}', 'active', 1, NULL, 1);
-      INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
-      VALUES ('${OTHER_USER_ID}', 'role_builtin_owner', NULL, 1);
-    `);
-
-    assert.throws(() => execute(database, "audit-refused", 100), /integer overflow/);
-    assert.equal(
-      database.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?").get(USER_ID)!
-        .role_id,
+      database.prepare("SELECT role_id FROM user_role_assignments").get()!.role_id,
       "role_builtin_member"
     );
     assert.equal(
@@ -214,53 +142,171 @@ describe("Owner bootstrap SQL", () => {
     );
   });
 
-  it("requires the RBAC schema and an active target with exactly one assignment", () => {
+  it("assigns Owner and writes exactly one redacted successful service audit", () => {
+    const database = createDatabase();
+    execute(database, "audit-'success", 100);
+
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            `SELECT role_id, assigned_by, assigned_at
+             FROM user_role_assignments WHERE user_id = ?`
+          )
+          .get(USER_ID),
+      },
+      { role_id: "role_builtin_owner", assigned_by: null, assigned_at: 100 }
+    );
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            `SELECT id, request_id, policy_id, principal_kind, actor_user_id_snapshot,
+                    actor_service_snapshot, actor_provider_snapshot,
+                    actor_provider_user_id_snapshot, action, resource_type, resource_id,
+                    target_user_id_snapshot, decision_outcome, operation_result,
+                    reason_code, metadata_json
+             FROM authorization_audit_events`
+          )
+          .get(),
+      },
+      {
+        id: "audit-'success",
+        request_id: "operator-cli:audit-'success",
+        policy_id: "workspace.owner_bootstrapped",
+        principal_kind: "service",
+        actor_user_id_snapshot: null,
+        actor_service_snapshot: "operator-cli",
+        actor_provider_snapshot: null,
+        actor_provider_user_id_snapshot: null,
+        action: "workspace.owner_bootstrapped",
+        resource_type: "workspace",
+        resource_id: null,
+        target_user_id_snapshot: USER_ID,
+        decision_outcome: "allowed",
+        operation_result: "succeeded",
+        reason_code: "operator_cli",
+        metadata_json: "{}",
+      }
+    );
+  });
+
+  it("is an idempotent no-op for the current unsuspended Owner with global bootstrap history", () => {
+    const database = createDatabase();
+    execute(database, "audit-first", 100);
+    execute(database, "audit-second", 200);
+
+    assert.deepEqual(preflight(database), {
+      report: "preflight",
+      status: "no-op",
+      detail: "selected user is the current unsuspended Owner with bootstrap history",
+      user_id: USER_ID,
+      suspended_at: null,
+      role_id: "role_builtin_owner",
+      successful_bootstrap_history: 1,
+    });
+    assert.equal(
+      database.prepare("SELECT assigned_at FROM user_role_assignments").get()!.assigned_at,
+      100
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS count FROM authorization_audit_events").get()!.count,
+      1
+    );
+  });
+
+  it("treats bootstrap history as immutable workspace-global provenance", () => {
+    const database = createDatabase();
+    database.exec(
+      `UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = '${USER_ID}'`
+    );
+    insertSuccessfulHistory(database);
+
+    assert.equal(preflight(database).status, "no-op");
+  });
+
+  it("refuses another unsuspended Owner without changing the selected user", () => {
+    const database = createDatabase();
+    database.exec(`
+      INSERT INTO users (id, suspended_at) VALUES ('${OTHER_USER_ID}', NULL);
+      INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
+      VALUES ('${OTHER_USER_ID}', 'role_builtin_owner', NULL, 1);
+    `);
+
+    assert.deepEqual(preflight(database), {
+      report: "preflight",
+      status: "refused",
+      detail: "another unsuspended Owner already exists",
+      user_id: USER_ID,
+      suspended_at: null,
+      role_id: "role_builtin_member",
+      successful_bootstrap_history: 0,
+    });
+    assert.throws(() => execute(database, "audit-refused", 100), /integer overflow/);
+    assert.equal(
+      database.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?").get(USER_ID)!
+        .role_id,
+      "role_builtin_member"
+    );
+  });
+
+  it("requires the RBAC schema and an unsuspended target with exactly one assignment", () => {
     const missingSchema = new DatabaseSync(":memory:");
     assert.throws(() => execute(missingSchema, "audit-missing-schema", 100), /no such table/);
 
     const incompleteSchema = createDatabase();
-    incompleteSchema.exec("DROP TABLE authorization_audit_events");
-    const preflight = incompleteSchema
-      .prepare(buildBootstrapSql({ userId: USER_ID, execute: false, auditId: "unused", now: 100 }))
-      .get();
-    assert.equal(preflight!.status, "refused");
-    assert.equal(preflight!.detail, "required RBAC schema is missing or incomplete");
+    incompleteSchema.exec("ALTER TABLE authorization_audit_events DROP COLUMN metadata_json");
+    assert.deepEqual(preflight(incompleteSchema), {
+      report: "preflight",
+      status: "refused",
+      detail: "required RBAC schema is missing or incomplete",
+      user_id: USER_ID,
+      suspended_at: null,
+      role_id: "role_builtin_member",
+      successful_bootstrap_history: 0,
+    });
 
     const suspended = createDatabase();
-    suspended.exec(`UPDATE users SET access_status = 'suspended' WHERE id = '${USER_ID}'`);
+    suspended.exec(`UPDATE users SET suspended_at = 1 WHERE id = '${USER_ID}'`);
+    assert.equal(preflight(suspended).detail, "target user is suspended");
     assert.throws(() => execute(suspended, "audit-suspended", 100), /integer overflow/);
-    assert.equal(
-      suspended.prepare("SELECT authorization_version FROM users").get()!.authorization_version,
-      7
-    );
 
     const missingAssignment = createDatabase();
     missingAssignment.exec(`DELETE FROM user_role_assignments WHERE user_id = '${USER_ID}'`);
-    assert.throws(() => execute(missingAssignment, "audit-unassigned", 100), /integer overflow/);
     assert.equal(
-      missingAssignment.prepare("SELECT COUNT(*) AS count FROM workspace_bootstrap").get()!.count,
-      0
+      preflight(missingAssignment).detail,
+      "target must have exactly one role assignment"
     );
+    assert.throws(() => execute(missingAssignment, "audit-unassigned", 100), /integer overflow/);
   });
 
-  it("refuses a completed bootstrap for another user", () => {
-    const database = createDatabase();
-    database.exec(`
-      INSERT INTO users
-        (id, access_status, authorization_version, last_authorization_mutation_id, updated_at)
-      VALUES ('${OTHER_USER_ID}', 'suspended', 1, NULL, 1);
-      INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
-      VALUES ('${OTHER_USER_ID}', 'role_builtin_owner', NULL, 1);
-      INSERT INTO workspace_bootstrap
-        (singleton, owner_user_id, claimed_at, assignment_completed_at)
-      VALUES (1, '${OTHER_USER_ID}', 1, 1);
-    `);
-
-    assert.throws(() => execute(database, "audit-refused", 100), /integer overflow/);
+  it("refuses history without the current target Owner and Owner without history", () => {
+    const historyWithoutOwner = createDatabase();
+    insertSuccessfulHistory(historyWithoutOwner);
     assert.equal(
-      database.prepare("SELECT authorization_version FROM users WHERE id = ?").get(USER_ID)!
-        .authorization_version,
-      7
+      preflight(historyWithoutOwner).detail,
+      "successful bootstrap history exists without the target as current Owner"
     );
+    assert.throws(() => execute(historyWithoutOwner, "audit-refused", 100), /integer overflow/);
+
+    const ownerWithoutHistory = createDatabase();
+    ownerWithoutHistory.exec(
+      `UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = '${USER_ID}'`
+    );
+    assert.equal(
+      preflight(ownerWithoutHistory).detail,
+      "target is Owner without successful bootstrap history"
+    );
+    assert.throws(() => execute(ownerWithoutHistory, "audit-refused", 100), /integer overflow/);
+  });
+
+  it("uses only current RBAC schema and the generated audit ID as execution provenance", () => {
+    const generated = sql(true, "audit-exact", 100);
+
+    assert.doesNotMatch(
+      generated,
+      /workspace_bootstrap|authorization_version|access_status|mutation_id/
+    );
+    assert.match(generated, /SELECT 1 FROM authorization_audit_events WHERE id = 'audit-exact'/);
   });
 });

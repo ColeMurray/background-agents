@@ -885,8 +885,7 @@ function authorizedDb() {
           sql.includes("FROM users u")
             ? {
                 user_id: "canonical-user-123",
-                access_status: "active",
-                authorization_version: 1,
+                suspended_at: null,
                 role_id: "role-1",
                 role_key: "member",
                 role_name: "Member",

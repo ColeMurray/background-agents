@@ -5,7 +5,6 @@ import {
   roleListResponseSchema,
   workspaceMemberListResponseSchema,
   type RoleSummary,
-  type WorkspaceAccessStatus,
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -32,18 +31,14 @@ export function useWorkspaceAdministration(input: { readMembers: boolean; readRo
 
   async function updateMember(
     user: WorkspaceMember,
-    action:
-      | { kind: "role"; roleId: string }
-      | { kind: "status"; accessStatus: WorkspaceAccessStatus }
+    action: { kind: "role"; roleId: string } | { kind: "status"; suspended: boolean }
   ): Promise<void> {
     const path =
       action.kind === "role"
         ? (`/api/members/${encodeURIComponent(user.userId)}/role` as const)
         : (`/api/members/${encodeURIComponent(user.userId)}/status` as const);
     const body =
-      action.kind === "role"
-        ? { roleId: action.roleId, authorizationVersion: user.authorizationVersion }
-        : { accessStatus: action.accessStatus, authorizationVersion: user.authorizationVersion };
+      action.kind === "role" ? { roleId: action.roleId } : { suspended: action.suspended };
     const response = await browserApiFetch(path, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

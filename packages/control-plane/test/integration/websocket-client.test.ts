@@ -13,6 +13,25 @@ import {
 import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 
+async function grantOwnCollaboration(userId: string): Promise<void> {
+  const roleId = `role-ws-own-${crypto.randomUUID()}`;
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO roles
+        (id, key, name, normalized_name, is_system, revision, created_at, updated_at)
+       VALUES (?, NULL, ?, ?, 0, 1, ?, ?)`
+    ).bind(roleId, roleId, roleId, now, now),
+    env.DB.prepare(
+      "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate.own')"
+    ).bind(roleId),
+    env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+      roleId,
+      userId
+    ),
+  ]);
+}
+
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("rejects a nonexistent session before initializing its Durable Object", async () => {
     const name = `ws-client-nonexistent-${Date.now()}`;
@@ -194,7 +213,6 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       body: JSON.stringify({
         userId: "user-1",
         canonicalUserId: "user-1",
-        authorizationVersion: 1,
       }),
     });
     const { token } = await tokenRes.json<{ token: string }>();
@@ -228,24 +246,40 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(reason).toBe("Token expired");
   });
 
-  it("rejects a token whose authorization version is stale", async () => {
-    const name = `ws-client-stale-authorization-${Date.now()}`;
-    const userId = `stale-user-${Date.now()}`;
+  it("allows collaborate.any without a session relationship", async () => {
+    const name = `ws-client-any-authorization-${Date.now()}`;
+    const userId = `any-user-${Date.now()}`;
     await initNamedSession(name);
     const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
-    await env.DB.prepare(
-      "UPDATE users SET authorization_version = authorization_version + 1 WHERE id = ?"
-    )
-      .bind(userId)
+    await env.DB.prepare("DELETE FROM session_access WHERE session_id = ? AND user_id = ?")
+      .bind(name, userId)
       .run();
 
     const { ws } = await openClientWs(name);
-    const closed = new Promise<{ code: number }>((resolve) => {
-      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    const subscribed = collectMessages(ws, {
+      until: (message) => message.type === "subscribed",
     });
-    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "stale-client" }));
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "any-client" }));
 
-    await expect(closed).resolves.toEqual({ code: 4010 });
+    expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+    ws.close();
+  });
+
+  it("allows collaborate.own with an active session relationship", async () => {
+    const name = `ws-client-own-authorization-${Date.now()}`;
+    const userId = `own-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await grantOwnCollaboration(userId);
+
+    const { ws } = await openClientWs(name);
+    const subscribed = collectMessages(ws, {
+      until: (message) => message.type === "subscribed",
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "own-client" }));
+
+    expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+    ws.close();
   });
 
   it("rejects a token for a suspended user", async () => {
@@ -253,9 +287,45 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const userId = `suspended-user-${Date.now()}`;
     await initNamedSession(name);
     const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+      .bind(Date.now(), userId)
+      .run();
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "suspended-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("rejects collaborate.own after the session relationship is lost", async () => {
+    const name = `ws-client-lost-relationship-${Date.now()}`;
+    const userId = `lost-relationship-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await grantOwnCollaboration(userId);
+    await env.DB.prepare("DELETE FROM session_access WHERE session_id = ? AND user_id = ?")
+      .bind(name, userId)
+      .run();
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "lost-relationship-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("rejects a reconnect after collaborate permission is lost", async () => {
+    const name = `ws-client-lost-permission-${Date.now()}`;
+    const userId = `lost-permission-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
     await env.DB.prepare(
-      `UPDATE users SET access_status = 'suspended',
-         authorization_version = authorization_version + 1 WHERE id = ?`
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
     )
       .bind(userId)
       .run();
@@ -264,7 +334,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const closed = new Promise<{ code: number }>((resolve) => {
       ws.addEventListener("close", (event) => resolve({ code: event.code }));
     });
-    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "suspended-client" }));
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "lost-permission-client" }));
 
     await expect(closed).resolves.toEqual({ code: 4010 });
   });

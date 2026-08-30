@@ -287,12 +287,6 @@ CREATE TABLE user_role_assignments (
   assigned_at   INTEGER NOT NULL
 );
 
-CREATE TABLE workspace_bootstrap (
-  singleton      INTEGER PRIMARY KEY CHECK (singleton = 1),
-  owner_user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  claimed_at     INTEGER NOT NULL
-);
-
 CREATE TABLE authorization_audit_events (
   id             TEXT PRIMARY KEY,
   occurred_at    INTEGER NOT NULL,
@@ -303,7 +297,6 @@ CREATE TABLE authorization_audit_events (
   actor_service_snapshot TEXT,
   actor_provider_snapshot TEXT,
   actor_provider_user_id_snapshot TEXT,
-  authorization_version INTEGER,
   action         TEXT NOT NULL,
   resource_type  TEXT NOT NULL,
   resource_id    TEXT,
@@ -331,14 +324,11 @@ normalized value before uniqueness checks; SQLite `NOCASE` is not the product no
 `users` gains:
 
 ```sql
-ALTER TABLE users ADD COLUMN access_status TEXT NOT NULL DEFAULT 'active'
-  CHECK (access_status IN ('active', 'suspended'));
-ALTER TABLE users ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE users ADD COLUMN suspended_at INTEGER;
 ```
 
-Suspension blocks application requests without deleting identities or historical attribution.
-`authorization_version` changes whenever the user's assignment, assigned role permissions, or access
-status changes. It binds short-lived browser authorization leases to current policy.
+Suspension records the time access was disabled without deleting identities or historical
+attribution. A null value means the user is active.
 
 Every canonical identity is an active workspace member unless suspended. The RBAC migration seeds
 the built-in roles, assigns Administrator to every existing canonical user, and then creates the
@@ -349,12 +339,14 @@ repair authorization corruption implicitly.
 
 Initial ownership is assigned only by the root operator CLI after the intended Owner has signed in
 once. The operator supplies the canonical user ID, not an email or browser credential. One temporary
-SQL file and one Wrangler D1 execution validate the RBAC schema, active user, exact assignment,
-absence of another active Owner, and absence of another completed bootstrap before atomically
-assigning `role_builtin_owner`, incrementing `authorization_version`, completing
-`workspace_bootstrap`, and writing a redacted `operator-cli` audit event. The final SQL guard aborts
-the operation if the completed state is inconsistent. Re-running for the same completed active Owner
-is a no-op. Ownership changes after initialization use the authenticated member API.
+SQL file and one Wrangler D1 execution validate the RBAC schema, unsuspended user, exact assignment,
+absence of another unsuspended Owner, and absence of successful bootstrap history before atomically
+assigning `role_builtin_owner` and writing a redacted `operator-cli` audit event. A successful
+`workspace.owner_bootstrapped` event from the `operator-cli` service is immutable, workspace-global
+historical provenance; the current unsuspended Owner assignment is the actual readiness state. The
+final SQL guard verifies the exact generated audit ID and aborts the operation if the resulting
+state is inconsistent. Re-running for the current unsuspended Owner is a no-op only when that
+successful history exists. Ownership changes after initialization use the authenticated member API.
 
 ### Storage ownership
 
@@ -607,10 +599,9 @@ removal cannot remove creator visibility or creator-only rights.
 ```json
 {
   "userId": "canonical-id",
-  "accessStatus": "active",
+  "suspendedAt": null,
   "role": { "id": "role-id", "key": "member", "name": "Member" },
-  "permissions": ["repositories.read", "sessions.create"],
-  "authorizationVersion": 3
+  "permissions": ["repositories.read", "sessions.create"]
 }
 ```
 
@@ -637,7 +628,7 @@ This endpoint is available only to the current browser user. Responses are priva
 Owner assignment or removal requires `workspace.transfer_ownership`, including when the caller also
 has member-management permission. Suspending, deleting, or merging an Owner also requires transfer
 permission. Every role/status/delete/merge mutation uses guarded SQL that succeeds only if another
-active Owner remains in the same D1 batch. User deletion is blocked by assignment
+unsuspended Owner remains in the same D1 batch. User deletion is blocked by assignment
 `ON DELETE RESTRICT`; the assignment can be removed only through this guarded membership service.
 User merge requires an explicit surviving assignment, merges canonical session memberships, and
 preserves both immutable audit snapshots.
@@ -649,9 +640,8 @@ immutable `workspace.owner_recovered` audit event. There is no unauthenticated H
 endpoint.
 
 Role `PUT` requires the current `revision` through `If-Match` and increments it atomically.
-Assignment and status updates require the target's expected `authorizationVersion`. A mismatch
-returns `409` so full replacements cannot silently overwrite concurrent changes. Built-in registry
-changes increment the authorization version of every affected assigned user after reconciliation.
+Assignment and status updates use guarded SQL that rechecks authorization and Owner invariants in
+the same D1 batch as the mutation.
 
 ### Error contract
 
@@ -698,7 +688,7 @@ A Workspace settings section contains:
   actions.
 - Audit log: actor, action, target, outcome, reason, and timestamp.
 
-The UI prevents deleting assigned roles, editing built-ins, removing the last active Owner,
+The UI prevents deleting assigned roles, editing built-ins, removing the last unsuspended Owner,
 assigning Owner without transfer permission, and selecting unsupported permission IDs. The API
 repeats every invariant.
 
@@ -739,21 +729,19 @@ count, assignment count by role, authorization latency, and session-access proje
 ## Role Changes and Revocation
 
 - HTTP requests load current assignment/status and apply changes immediately.
-- Role permission edits increment `authorization_version` for assigned users in the same
-  transaction.
-- Browser WebSocket credentials are bound to the canonical user and current `authorization_version`.
-  Subscribe verifies both against D1 and rejects missing or suspended users, missing role
-  assignments, stale versions, and unavailable authorization storage.
+- Role permission edits take effect on the next authorization lookup.
+- Browser WebSocket credentials are bound to the canonical user. Subscribe verifies current D1
+  authorization and rejects missing or suspended users, missing role assignments, and unavailable
+  authorization storage.
 - A successful subscribe creates a five-minute wall-clock authorization lease. The DO persists its
-  version and expiry in `ws_client_mapping` and schedules the earliest expiry in its unified alarm.
-  On expiry the browser clears its credential and reconnects through the authorized HTTP token
-  route.
+  expiry in `ws_client_mapping` and schedules the earliest expiry in its unified alarm. On expiry
+  the browser clears its credential and reconnects through the authorized HTTP token route.
 - Alarm and hibernation restoration close every expired connection even when it is idle. Every
   inbound event and outbound broadcast also rejects expired leases as defense in depth. A role
   change therefore revokes live browser access within the five-minute wall-clock lease bound.
 - Bot calls authorize on every signed HTTP request. Stale Slack/Linear issue mappings do not bypass
   current policy.
-- Suspending a user invalidates Better Auth sessions and increments authorization version.
+- Suspending a user invalidates Better Auth sessions.
 - Existing sandboxes continue running because their credentials represent the session runtime, not
   the user. Users who lose lifecycle permission cannot reconnect or control them.
 
@@ -789,8 +777,10 @@ sequence is deploy, have the intended Owner sign in once, obtain the canonical I
 session, run `npm run rbac:bootstrap-owner -- --database <name> --user <id>`, review the dry-run
 preflight, rerun with `--execute`, and verify `/health` reports `ownerBootstrap=complete`.
 
-Before bootstrap completes, operator health reports `owner_bootstrap_pending`. Administrators and
-Members can use their existing capabilities, but no one can exercise Owner-only actions.
+When no unsuspended Owner assignment exists, operator health reports `owner_bootstrap_pending`.
+Health derives from that current assignment state, not historical bootstrap provenance.
+Administrators and Members can use their existing capabilities, but no one can exercise Owner-only
+actions.
 
 ## Failure Handling
 
@@ -820,8 +810,8 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 7. An actor-backed service cannot exceed the linked user's current permissions.
 8. An actorless service can execute only exact service-only operations.
 9. Sandbox credentials remain bound to one session and confer no workspace role.
-10. Before bootstrap, no user can exercise Owner-only actions; after bootstrap, at least one active
-    Owner always exists.
+10. Before bootstrap, no user can exercise Owner-only actions; after bootstrap, at least one
+    unsuspended Owner always exists.
 11. Only an Owner can add or remove Owner assignments.
 12. Role changes and privileged mutations produce durable, redacted audit events.
 13. Resource list queries enforce visibility before returning metadata.
@@ -844,8 +834,7 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 - Service ceiling and actor intersection for every bot.
 - Actorless exact-endpoint service permissions.
 - Last-Owner, built-in-role, assigned-role deletion, and transaction invariants.
-- Concurrent role revision, assignment-version, Owner demotion/suspension/delete, and user-merge
-  conflicts.
+- Concurrent role revision, Owner demotion/suspension/delete, and user-merge conflicts.
 - Stable `401`, `403`, `404`, and `503` behavior.
 - Route policy completeness requiring authorization metadata or named exemption.
 
@@ -854,13 +843,13 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 - Multi-user tests proving Member cannot list/read/mutate another member's private session.
 - Viewer can read but cannot prompt, launch, stop, delete, or access sandbox credentials.
 - Administrator can operate installation-wide resources but cannot transfer Owner.
-- Owner can assign roles without removing the last active Owner.
+- Owner can assign roles without removing the last unsuspended Owner.
 - Secret/settings/provider-account/skill/MCP/image routes enforce individual permissions.
 - Lists filter sessions and automations in SQL.
 - Session access projection follows participant addition/removal and repairs drift.
 - Projection failures at each saga boundary cannot activate stale generations or leak visibility.
-- Role change increments version and expires idle, active, hibernated, and multi-tab WebSocket
-  leases.
+- Role changes are enforced when idle, active, hibernated, and multi-tab WebSocket authorization
+  leases expire.
 - Suspended browser sessions and bot actors are denied.
 - D1 failure fails closed and audit failure aborts protected mutations.
 - Automation schedule, webhook, event, and manual triggers reauthorize the correct execution
@@ -899,10 +888,10 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 - Exact migration SQL executes under workerd/D1, including indexes and JSON checks.
 - Better Auth or bot identity creation followed by assignment failure cannot enter business routes
   and retries Member assignment idempotently.
-- Owner bootstrap requires an existing active canonical user with exactly one assignment and refuses
-  another active Owner or another completed bootstrap.
-- CLI bootstrap is atomic and idempotent, increments authorization version exactly once, writes a
-  redacted operator audit event, and leaves pending/completed state visible in operator health.
+- Owner bootstrap requires an existing unsuspended canonical user with exactly one assignment and
+  refuses another unsuspended Owner or inconsistent assignment/history state.
+- CLI bootstrap is atomic and idempotent, writes exactly one redacted operator audit event, and uses
+  the current unsuspended Owner assignment rather than historical provenance for operator health.
 
 ## Rollout
 

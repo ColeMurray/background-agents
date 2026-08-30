@@ -10,7 +10,6 @@ export interface WsClientMappingResult {
   scm_login: string | null;
   /** Dormant legacy column may still be present on older mapping fixtures. */
   auth_name?: string | null;
-  authorization_version: number | null;
   authorization_expires_at: number | null;
 }
 
@@ -20,7 +19,6 @@ export interface WsClientMappingData {
   participantId: string;
   clientId: string;
   createdAt: number;
-  authorizationVersion: number;
   authorizationExpiresAt: number;
 }
 
@@ -31,14 +29,12 @@ export class WsClientMappingRepository {
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
       `INSERT OR REPLACE INTO ws_client_mapping
-         (ws_id, participant_id, client_id, created_at, authorization_version,
-          authorization_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+         (ws_id, participant_id, client_id, created_at, authorization_expires_at)
+       VALUES (?, ?, ?, ?, ?)`,
       data.wsId,
       data.participantId,
       data.clientId,
       data.createdAt,
-      data.authorizationVersion,
       data.authorizationExpiresAt
     );
   }
@@ -47,8 +43,8 @@ export class WsClientMappingRepository {
     // Keep this indexed JOIN in one query: both tables share the session-local store,
     // and this read is on the hibernation-recovery hot path.
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, m.authorization_version,
-              m.authorization_expires_at, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
+      `SELECT m.participant_id, m.client_id, m.authorization_expires_at,
+              p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,

@@ -141,7 +141,7 @@ describe("handleCreateSession D1 ordering", () => {
       bind: vi.fn(() => statement),
       first: vi
         .fn()
-        .mockResolvedValueOnce({ access_status: "active", assigned: 1 })
+        .mockResolvedValueOnce({ suspended_at: null, assigned: 1 })
         .mockResolvedValueOnce({ active: 1 })
         .mockResolvedValue(null),
       all: vi.fn(async () => ({ results: [] })),
@@ -161,8 +161,7 @@ describe("handleCreateSession D1 ordering", () => {
               bind: vi.fn(() => authorizationStatement),
               first: vi.fn(async () => ({
                 user_id: "user-1",
-                access_status: "active",
-                authorization_version: 1,
+                suspended_at: null,
                 role_id: "role-1",
                 role_key: null,
                 role_name: "Test Role",
@@ -642,10 +641,9 @@ describe("handleCreateSession D1 ordering", () => {
         },
         authorization: {
           userId: "user-1",
-          accessStatus: "active",
+          suspendedAt: null,
           role: { id: "role-1", key: "member", name: "Member" },
           permissions: ["sessions.create", "repositories.use", "environments.use"],
-          authorizationVersion: 1,
         },
         db: testEnv["DB"] as never,
         executionCtx: TEST_BACKGROUND_TASK_CONTEXT,

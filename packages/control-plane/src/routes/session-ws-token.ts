@@ -47,7 +47,6 @@ async function handleSessionWsToken(
       body: JSON.stringify({
         userId,
         canonicalUserId,
-        authorizationVersion: authorization.authorizationVersion,
         scmLogin: body.scmLogin,
         scmName: body.scmName,
         scmEmail: body.scmEmail,
