@@ -84,11 +84,26 @@ export interface ImageBuildsFeed {
 
 /**
  * Drop superseded rows. The status endpoints don't emit them, but
- * `ImageBuildStatus` admits them — this is the one defensive filter, applied
+ * `ImageBuildStatus` admits them — applied with excludeOtherProviderBuilds
  * where the web fetches build rows from the control plane.
  */
 export function excludeSupersededBuilds(images: ImageBuildRecordView[]): ImageBuildRecordView[] {
   return images.filter((image) => image.status !== "superseded");
+}
+
+/**
+ * Drop rows from other sandbox providers. The control plane's status query is
+ * not provider-scoped, but everything downstream here is — spawn only uses
+ * the active provider's images and the trigger guard is keyed
+ * (scope, provider) — so rows left behind by a provider switch must not mask
+ * status, pin the rebuild guard, or drive the poll cadence. Applied with
+ * excludeSupersededBuilds where the web fetches build rows.
+ */
+export function excludeOtherProviderBuilds(
+  images: ImageBuildRecordView[],
+  activeProvider: string
+): ImageBuildRecordView[] {
+  return images.filter((image) => image.provider === activeProvider);
 }
 
 /** Map key for one build scope in the folded status map. */
@@ -123,36 +138,90 @@ const STATUS_FOLD_PRECEDENCE: Record<ImageBuildStatus, number> = {
 };
 
 /**
- * Fold each scope's build rows to one status: ready > building > failed.
- *
- * Only rows matching the scope's current fingerprint (per `units`) count —
- * spawn rejects stale-fingerprint rows, so a stale ready row must not outrank
- * a failed current build. A scope with no unit (transiently dropped from the
- * enabled feed) falls back to the unfiltered fold over all its rows.
+ * The rows that count toward a scope's status: rows matching the scope's
+ * current repo-set fingerprint (per `units`) — spawn rejects
+ * stale-fingerprint rows, so no surface may present one as this scope's
+ * image. A scope with no unit (transiently dropped from the enabled feed)
+ * keeps all its rows. Preserves feed order (createdAt DESC). Shared by the
+ * picker's fold and the settings row selector so every surface agrees on
+ * which builds exist, even where they answer different questions.
  */
-export function foldImageBuildStatusByScope(
+export function currentFingerprintBuilds(
   images: ImageBuildRecordView[],
   units: ImageBuildUnitView[]
-): Map<string, ImageBuildStatus> {
+): ImageBuildRecordView[] {
   const currentFingerprintByScope = new Map(
     units.map((unit) => [
       imageBuildScopeKey(unit.scopeKind, unit.scopeId),
       unit.repositoriesFingerprint,
     ])
   );
+  return images.filter((image) => {
+    const currentFingerprint = currentFingerprintByScope.get(
+      imageBuildScopeKey(image.scopeKind, image.scopeId)
+    );
+    return currentFingerprint === undefined || image.repositoriesFingerprint === currentFingerprint;
+  });
+}
+
+/**
+ * Fold each scope's countable rows to one status: ready > building > failed.
+ * Answers the session-target picker's question — "will spawn get a prebuilt
+ * image?" — so an older ready image outranks a newer failed rebuild.
+ */
+export function foldImageBuildStatusByScope(
+  images: ImageBuildRecordView[],
+  units: ImageBuildUnitView[]
+): Map<string, ImageBuildStatus> {
   const statusByScope = new Map<string, ImageBuildStatus>();
-  for (const image of images) {
+  for (const image of currentFingerprintBuilds(images, units)) {
     const key = imageBuildScopeKey(image.scopeKind, image.scopeId);
-    const currentFingerprint = currentFingerprintByScope.get(key);
-    if (currentFingerprint !== undefined && image.repositoriesFingerprint !== currentFingerprint) {
-      continue;
-    }
     const current = statusByScope.get(key);
     if (!current || STATUS_FOLD_PRECEDENCE[image.status] > STATUS_FOLD_PRECEDENCE[current]) {
       statusByScope.set(key, image.status);
     }
   }
   return statusByScope;
+}
+
+/**
+ * One fold of the feed into each scope's newest countable row (the feed is
+ * createdAt DESC, so a scope's first row wins). Answers the settings
+ * surfaces' question — "what did the latest build attempt do?" — which the
+ * rebuild/toggle controls act on. This can legitimately hold `failed` while
+ * the picker's fold reports `ready` for the same scope (an older ready image
+ * still serves); the two must only ever disagree on precedence, never on
+ * which rows count. Memo once per feed change and look rows up by
+ * imageBuildScopeKey.
+ */
+export function latestCurrentBuildsByScope(
+  images: ImageBuildRecordView[],
+  units: ImageBuildUnitView[]
+): Map<string, ImageBuildRecordView> {
+  const latestByScope = new Map<string, ImageBuildRecordView>();
+  for (const image of currentFingerprintBuilds(images, units)) {
+    const key = imageBuildScopeKey(image.scopeKind, image.scopeId);
+    if (!latestByScope.has(key)) {
+      latestByScope.set(key, image);
+    }
+  }
+  return latestByScope;
+}
+
+/**
+ * Scope keys with a build in progress under ANY fingerprint. The control
+ * plane's trigger guard is not fingerprint-scoped — one active build per
+ * scope, and a trigger against it returns `alreadyBuilding` in a 200 the
+ * handlers don't read — so rebuild controls must disable on this set even
+ * when the display row (latestCurrentBuildsByScope) hides a stale in-flight
+ * build.
+ */
+export function activeBuildScopeKeys(images: ImageBuildRecordView[]): Set<string> {
+  return new Set(
+    images
+      .filter((image) => image.status === "building")
+      .map((image) => imageBuildScopeKey(image.scopeKind, image.scopeId))
+  );
 }
 
 /**

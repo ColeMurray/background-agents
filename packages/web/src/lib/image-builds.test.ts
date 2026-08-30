@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import {
+  activeBuildScopeKeys,
+  currentFingerprintBuilds,
+  excludeOtherProviderBuilds,
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
@@ -12,6 +15,7 @@ import {
   imageBuildsEnabledReposResponseSchema,
   imageBuildsEnabledResponseSchema,
   imageBuildUnitViewSchema,
+  latestCurrentBuildsByScope,
   parsePrimaryBuildSha,
   repoImageBuildScopeId,
   type ImageBuildUnitView,
@@ -53,6 +57,18 @@ describe("excludeSupersededBuilds", () => {
     ];
 
     expect(excludeSupersededBuilds(rows).map((row) => row.id)).toEqual(["a", "c", "d"]);
+  });
+});
+
+describe("excludeOtherProviderBuilds", () => {
+  it("keeps only the active provider's rows", () => {
+    const rows = [
+      record({ id: "a", provider: "modal" }),
+      record({ id: "b", provider: "e2b" }),
+      record({ id: "c", provider: "modal" }),
+    ];
+
+    expect(excludeOtherProviderBuilds(rows, "modal").map((row) => row.id)).toEqual(["a", "c"]);
   });
 });
 
@@ -223,5 +239,82 @@ describe("imageBuildPollInterval", () => {
 
   it("does not poll before the feed has loaded", () => {
     expect(imageBuildPollInterval(undefined)).toBe(0);
+  });
+});
+
+describe("currentFingerprintBuilds", () => {
+  it("drops stale-fingerprint rows and preserves feed order", () => {
+    const rows = currentFingerprintBuilds(
+      [
+        record({ id: "a", repositoriesFingerprint: "fp-stale" }),
+        record({ id: "b", repositoriesFingerprint: "fp-current" }),
+        record({ id: "c", repositoriesFingerprint: "fp-current" }),
+      ],
+      [unit()]
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["b", "c"]);
+  });
+
+  it("keeps every row of a scope missing from units", () => {
+    const rows = currentFingerprintBuilds(
+      [record({ id: "a", repositoriesFingerprint: "fp-anything" })],
+      []
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["a"]);
+  });
+});
+
+describe("latestCurrentBuildsByScope", () => {
+  it("skips a newer stale-fingerprint row in favor of the newest current one", () => {
+    // Feed order is createdAt DESC: the stale ready row is newest overall.
+    const latest = latestCurrentBuildsByScope(
+      [
+        record({ id: "stale-newest", status: "ready", repositoriesFingerprint: "fp-stale" }),
+        record({ id: "current-failed", status: "failed" }),
+        record({ id: "current-older", status: "ready" }),
+      ],
+      [unit()]
+    );
+
+    expect(latest.get(imageBuildScopeKey("environment", "env-1"))?.id).toBe("current-failed");
+  });
+
+  it("maps each scope to its own newest row", () => {
+    const latest = latestCurrentBuildsByScope(
+      [
+        record({ id: "repo-newest", scopeKind: "repo", scopeId: "acme/web" }),
+        record({ id: "env-newest" }),
+        record({ id: "env-older" }),
+      ],
+      []
+    );
+
+    expect(latest.get(imageBuildScopeKey("repo", "acme/web"))?.id).toBe("repo-newest");
+    expect(latest.get(imageBuildScopeKey("environment", "env-1"))?.id).toBe("env-newest");
+  });
+
+  it("has no entry for a scope without countable rows", () => {
+    const latest = latestCurrentBuildsByScope(
+      [record({ id: "stale-only", repositoriesFingerprint: "fp-stale" })],
+      [unit()]
+    );
+
+    expect(latest.get(imageBuildScopeKey("environment", "env-1"))).toBeUndefined();
+  });
+});
+
+describe("activeBuildScopeKeys", () => {
+  it("includes scopes with a building row under any fingerprint", () => {
+    // The control plane's trigger guard is not fingerprint-scoped, so a
+    // stale-fingerprint building row still blocks a new trigger.
+    const active = activeBuildScopeKeys([
+      record({ id: "stale-building", status: "building", repositoriesFingerprint: "fp-stale" }),
+      record({ id: "repo-ready", scopeKind: "repo", scopeId: "acme/web", status: "ready" }),
+    ]);
+
+    expect(active.has(imageBuildScopeKey("environment", "env-1"))).toBe(true);
+    expect(active.has(imageBuildScopeKey("repo", "acme/web"))).toBe(false);
   });
 });

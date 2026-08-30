@@ -211,6 +211,38 @@ describe("GET /api/image-builds feed", () => {
     await expect(response.json()).resolves.toEqual({ units: [], enabledRepos: [], images: [] });
   });
 
+  it("filters other providers' rows at the fetch boundary", async () => {
+    // The control plane's status query is not provider-scoped, so rows left
+    // behind by a provider switch reach this route — they must not leak into
+    // the feed the selectors and rebuild guards fold over.
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") return Response.json({ units: [] });
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
+      return Response.json({
+        images: [
+          {
+            id: "previous-provider-build",
+            scopeKind: "environment",
+            scopeId: "env_1",
+            provider: "e2b",
+            status: "building",
+            repositoriesFingerprint: "fp-env",
+            repositoryShas: [],
+            runtimeVersion: "60",
+            buildDurationSeconds: null,
+            errorMessage: null,
+            createdAt: 1700000000000,
+          },
+        ],
+      });
+    });
+
+    const response = await getFeed();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ units: [], enabledRepos: [], images: [] });
+  });
+
   it("returns 502 when the control-plane feed has an invalid shape", async () => {
     vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
       if (path === "/image-builds/enabled") {
