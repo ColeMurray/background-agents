@@ -966,10 +966,11 @@ export class Scheduler {
       // window before a run has created its session (no steerable row yet), so
       // a reply racing the initial trigger gets the "already active" notice
       // instead of a second session.
-      const instructionsOverride = appendSlackSessionInstructions(
-        composeAutomationPrompt(event.contextBlock, automation.instructions),
+      const instructions = appendSlackSessionInstructions(
+        automation.instructions,
         slackSessionInstructions
       );
+      const instructionsOverride = composeAutomationPrompt(event.contextBlock, instructions);
       const result = await this.startInvocation(store, {
         automation,
         source: "event",
@@ -980,10 +981,7 @@ export class Scheduler {
         ...(event.source === "slack"
           ? {
               instructionsOverrideFactory: async () =>
-                appendSlackSessionInstructions(
-                  composeAutomationPrompt(await slackContextBlock(event), automation.instructions),
-                  slackSessionInstructions
-                ),
+                composeAutomationPrompt(await slackContextBlock(event), instructions),
             }
           : {}),
       });

@@ -2480,8 +2480,8 @@ describe("Scheduler", () => {
       expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
-        `Run tests\n---\n\n${sampleSlackContextBlock}\n\n` +
-          "## Additional Instructions\n\nAlways run tests."
+        "Run tests\n\n## Additional Instructions\n\nAlways run tests.\n---\n\n" +
+          sampleSlackContextBlock
       );
     });
 
