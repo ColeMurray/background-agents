@@ -39,16 +39,7 @@ CREATE TABLE authorization_audit_events (
   reason_code TEXT NOT NULL
 );
 
-CREATE TABLE session_access (
-  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  relation TEXT NOT NULL CHECK (relation IN ('creator', 'participant')),
-  PRIMARY KEY (session_id, user_id)
-);
-
 CREATE INDEX idx_role_assignments_role ON user_role_assignments(role_id, user_id);
-CREATE INDEX idx_session_access_user
-  ON session_access(user_id, session_id);
 
 INSERT INTO roles (
   id, key, name, normalized_name, description, is_system
@@ -78,9 +69,3 @@ SET user_id = (
 )
 WHERE user_id IS NULL
   AND created_by <> 'anonymous';
-
-INSERT INTO session_access (session_id, user_id, relation)
-SELECT id, user_id, 'creator'
-FROM sessions
-WHERE user_id IS NOT NULL
-  AND EXISTS (SELECT 1 FROM users WHERE users.id = sessions.user_id);

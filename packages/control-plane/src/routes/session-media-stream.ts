@@ -146,7 +146,9 @@ export const sessionMediaStreamRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SER
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/media/:artifactId"),
-    authorization: requireSession("read"),
+    authorization: requireSession("read", "id", {
+      actorlessGrants: [{ service: "slack-bot" }],
+    }),
     handler: handleMediaGet,
   }),
 ]);

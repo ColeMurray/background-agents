@@ -40,7 +40,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(49);
+    expect(PERMISSION_IDS).toHaveLength(42);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -54,10 +54,13 @@ describe("RBAC registry", () => {
       new Set(PERMISSION_IDS.filter((permission) => /\.(any|own)$/.test(permission)))
     );
     expect(
-      resolveScopedPermission("sessions.read", ["sessions.read.own", "sessions.read.any"])
+      resolveScopedPermission("automations.manage", [
+        "automations.manage.own",
+        "automations.manage.any",
+      ])
     ).toBe("any");
-    expect(resolveScopedPermission("sessions.read", ["sessions.read.own"])).toBe("own");
-    expect(resolveScopedPermission("sessions.read", [])).toBeNull();
+    expect(resolveScopedPermission("automations.manage", ["automations.manage.own"])).toBe("own");
+    expect(resolveScopedPermission("automations.manage", [])).toBeNull();
   });
 
   it("assigns every permission explicitly to Owner", () => {
@@ -72,12 +75,18 @@ describe("RBAC registry", () => {
     }
   });
 
-  it("preserves open read and collaboration for built-in Members", () => {
+  it("grants Members workspace-wide session operations", () => {
     const permissions = permissionsForBuiltInRole("member");
-    expect(permissions).toContain("sessions.read.any");
-    expect(permissions).toContain("sessions.collaborate.any");
-    expect(permissions).not.toContain("sessions.delete.any");
-    expect(permissions).not.toContain("sessions.participants.manage.any");
+    expect(permissions).toEqual(
+      expect.arrayContaining([
+        "sessions.read",
+        "sessions.collaborate",
+        "sessions.create",
+        "sessions.lifecycle",
+        "sessions.sandbox_access",
+        "sessions.delete",
+      ])
+    );
   });
 
   it("requires an assigned role and uses suspension timestamps in public contracts", () => {

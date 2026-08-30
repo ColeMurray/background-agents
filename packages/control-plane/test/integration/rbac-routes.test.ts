@@ -189,7 +189,7 @@ describe("RBAC routes", () => {
          VALUES (?, NULL, 'Child Collaborator', 'child collaborator', NULL, 0)`
       ).bind(roleId),
       env.DB.prepare(
-        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate.any')"
+        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate')"
       ).bind(roleId),
       env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`).bind(
         roleId,
@@ -232,9 +232,44 @@ describe("RBAC routes", () => {
       code: "permission_required",
       permission: "global_secrets.manage",
     });
+
+    await env.DB.prepare(
+      `INSERT INTO sessions (id, repo_owner, repo_name, status, created_at, updated_at)
+       VALUES ('viewer-session', 'acme', 'app', 'completed', 1, 1)`
+    ).run();
+    const sessionDelete = await serviceFetch("https://cp.test/sessions/viewer-session", {
+      method: "DELETE",
+    });
+    expect(sessionDelete.status).toBe(403);
+    await expect(sessionDelete.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "sessions.delete",
+    });
+
+    const read = await serviceFetch("https://cp.test/sessions/viewer-session");
+    expect(read.status).not.toBe(403);
+
+    for (const [path, method, permission, body] of [
+      ["/sessions", "POST", "sessions.create", { title: "Denied", model: "test/model" }],
+      ["/sessions/viewer-session/prompt", "POST", "sessions.collaborate", { content: "Denied" }],
+      ["/sessions/viewer-session/stop", "POST", "sessions.lifecycle", undefined],
+      ["/sessions/viewer-session/sandbox-access", "GET", "sessions.sandbox_access", undefined],
+    ] as const) {
+      const denied = await serviceFetch(`https://cp.test${path}`, {
+        method,
+        ...(body
+          ? { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }
+          : {}),
+      });
+      expect(denied.status, path).toBe(403);
+      await expect(denied.json()).resolves.toMatchObject({
+        code: "permission_required",
+        permission,
+      });
+    }
   });
 
-  it("keeps Member session discovery open while deletion remains creator-only", async () => {
+  it("allows Members to discover and delete sessions workspace-wide", async () => {
     await serviceFetch("https://cp.test/me/authorization", { initialUserRole: "member" });
     const member = await env.DB.prepare(
       "SELECT id FROM users WHERE email = 'browser@test.local'"
@@ -253,18 +288,16 @@ describe("RBAC routes", () => {
         `INSERT INTO sessions (id, repo_owner, repo_name, status, created_at, updated_at, user_id)
          VALUES ('unjoined-session', 'acme', 'app', 'completed', 3, 3, ?)`
       ).bind(other.id),
-      env.DB.prepare(
-        `INSERT INTO session_access (session_id, user_id, relation)
-         VALUES ('member-session', ?, 'creator')`
-      ).bind(member!.id),
-      env.DB.prepare(
-        `INSERT INTO session_access (session_id, user_id, relation)
-         VALUES ('other-session', ?, 'participant')`
-      ).bind(member!.id),
     ]);
 
     const listed = await serviceFetch("https://cp.test/sessions");
-    const deniedDelete = await serviceFetch("https://cp.test/sessions/other-session", {
+    const lifecycle = await serviceFetch("https://cp.test/sessions/other-session/stop", {
+      method: "POST",
+    });
+    const sandboxAccess = await serviceFetch(
+      "https://cp.test/sessions/other-session/sandbox-access"
+    );
+    const otherDelete = await serviceFetch("https://cp.test/sessions/other-session", {
       method: "DELETE",
     });
     const ownDelete = await serviceFetch("https://cp.test/sessions/member-session", {
@@ -272,34 +305,16 @@ describe("RBAC routes", () => {
     });
 
     expect(listed.status).toBe(200);
+    expect(lifecycle.status).not.toBe(403);
+    expect(sandboxAccess.status).not.toBe(403);
     await expect(listed.json()).resolves.toMatchObject({
       sessions: [{ id: "unjoined-session" }, { id: "other-session" }, { id: "member-session" }],
     });
-    expect(deniedDelete.status).toBe(403);
+    expect(otherDelete.status).toBe(200);
     expect(ownDelete.status).toBe(200);
     expect(
       await env.DB.prepare("SELECT id FROM sessions WHERE id = 'other-session'").first()
-    ).toEqual({ id: "other-session" });
-  });
-
-  it("does not authorize an own-session operation from sessions.user_id without a projection", async () => {
-    await serviceFetch("https://cp.test/me/authorization", { initialUserRole: "member" });
-    const member = await env.DB.prepare(
-      "SELECT id FROM users WHERE email = 'browser@test.local'"
-    ).first<{ id: string }>();
-    await env.DB.prepare(
-      `INSERT INTO sessions (id, repo_owner, repo_name, status, created_at, updated_at, user_id)
-       VALUES ('missing-projection', 'acme', 'app', 'completed', 1, 1, ?)`
-    )
-      .bind(member!.id)
-      .run();
-
-    const response = await serviceFetch("https://cp.test/sessions/missing-projection", {
-      method: "DELETE",
-    });
-
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({ code: "creator_required" });
+    ).toBeNull();
   });
 
   it("does not let the last unsuspended Owner be suspended", async () => {

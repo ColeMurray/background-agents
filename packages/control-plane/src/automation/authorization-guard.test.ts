@@ -29,7 +29,7 @@ describe("automation execution authorization", () => {
     const { db, bindings, queries } = recordingDb();
 
     await expect(
-      isAutomationExecutionAuthorized(db, "automation-1", ["sessions.collaborate.own"])
+      isAutomationExecutionAuthorized(db, "automation-1", ["sessions.collaborate"])
     ).resolves.toBe(true);
 
     expect(bindings).toHaveLength(1);

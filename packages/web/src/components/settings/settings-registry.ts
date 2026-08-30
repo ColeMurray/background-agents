@@ -225,7 +225,7 @@ export const SETTINGS_GROUPS = [
         description: "Review and restore archived sessions",
         keywords: "archive restore retention",
         icon: DataControlsIcon,
-        visibility: anyOf("sessions.read.any", "sessions.read.own"),
+        visibility: anyOf("sessions.read"),
         panel: lazyPanel(() =>
           import("./data-controls-settings").then(
             ({ DataControlsSettings }) => DataControlsSettings

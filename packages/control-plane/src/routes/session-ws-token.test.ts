@@ -37,7 +37,7 @@ function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
       userId: "user-1",
       suspendedAt: null,
       role: { id: "role-1", key: "member", name: "Member" },
-      permissions: ["sessions.collaborate.any"],
+      permissions: ["sessions.collaborate"],
     },
     metrics: {
       d1Queries: [],
@@ -91,27 +91,7 @@ describe("session ws-token route", () => {
     });
   });
 
-  it("projects a successful self-join into D1 access", async () => {
-    const access = accessDatabase();
-    const fetch = vi.fn(async () => Response.json({ token: "token-1" }));
-    const { route, match } = routeFor("/sessions/session-1/ws-token");
-
-    const response = await route.handler(
-      new Request("https://test.local/sessions/session-1/ws-token", {
-        method: "POST",
-        body: JSON.stringify({}),
-      }),
-      createEnv(fetch),
-      match,
-      createContext(access.db)
-    );
-
-    expect(response.status).toBe(200);
-    expect(access.statement.bind).toHaveBeenCalledWith("session-1", "user-1");
-    expect(access.run).toHaveBeenCalledOnce();
-  });
-
-  it("does not project access when the session runtime rejects the join", async () => {
+  it("forwards a runtime rejection without writing D1", async () => {
     const access = accessDatabase();
     const fetch = vi.fn(async () => Response.json({ error: "rejected" }, { status: 409 }));
     const { route, match } = routeFor("/sessions/session-1/ws-token");

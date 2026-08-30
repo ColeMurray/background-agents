@@ -19,8 +19,8 @@ import {
   parseJsonBody,
   parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  requirePermission,
   requireSession,
-  requireScopedPermission,
   type RequestContext,
   type Route,
   type UserRouteContext,
@@ -28,7 +28,7 @@ import {
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
-import { sessionPermissionScope } from "../authorization/session-authorization-policy";
+import { serviceAllowsPermission } from "../authorization/service-permissions";
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
@@ -75,8 +75,7 @@ async function handleListSessions(
         ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
         : undefined;
   const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
-  let readScope: "any" | "own" | undefined;
-  let lifecycleScope: "any" | "own" | null | undefined;
+  let canManageLifecycle = false;
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
@@ -84,20 +83,10 @@ async function handleListSessions(
   if (viewerUserId) {
     const authorization = ctx.authorization;
     if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-    const resolvedReadScope = sessionPermissionScope(authorization, "read");
-    if (!resolvedReadScope) {
-      return json(
-        {
-          error: "Forbidden",
-          code: "permission_required",
-          permission: "sessions.read.own",
-        },
-        403
-      );
-    }
-    readScope = ctx.principal?.kind === "service" ? "own" : resolvedReadScope;
-    lifecycleScope = sessionPermissionScope(authorization, "lifecycle");
-    if (ctx.principal?.kind === "service" && lifecycleScope) lifecycleScope = "own";
+    canManageLifecycle =
+      authorization.permissions.includes("sessions.lifecycle") &&
+      (ctx.principal?.kind !== "service" ||
+        serviceAllowsPermission(ctx.principal.service, "sessions.lifecycle"));
   }
 
   const store = new SessionIndexStore(ctx.db);
@@ -109,9 +98,7 @@ async function handleListSessions(
     createdByUserIds,
     limit,
     offset,
-    viewerUserId,
-    ...(readScope ? { readScope } : {}),
-    ...(lifecycleScope !== undefined ? { lifecycleScope } : {}),
+    ...(viewerUserId ? { viewerUserId, canManageLifecycle } : {}),
   });
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
@@ -156,20 +143,12 @@ async function handleListSessionInbox(
   const store = new SessionIndexStore(ctx.db);
   const authorization = ctx.authorization;
   if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-  const readScope = sessionPermissionScope(authorization, "read");
-  if (!readScope) {
-    return json(
-      { error: "Forbidden", code: "permission_required", permission: "sessions.read.own" },
-      403
-    );
-  }
   const commonOptions = {
     limit: SESSION_INBOX_LIMIT,
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
     excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
-    readScope,
-    lifecycleScope: sessionPermissionScope(authorization, "lifecycle"),
+    canManageLifecycle: authorization.permissions.includes("sessions.lifecycle"),
   };
 
   if (category === null) {
@@ -275,13 +254,13 @@ export const sessionIndexRoutes: Route[] = [
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions"),
-    authorization: requireScopedPermission("sessions.read", { service: "actor" }),
+    authorization: requirePermission("sessions.read"),
     handler: handleListSessions,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/inbox"),
-    authorization: requireScopedPermission("sessions.read"),
+    authorization: requirePermission("sessions.read", { service: "deny" }),
     handler: handleListSessionInbox,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {

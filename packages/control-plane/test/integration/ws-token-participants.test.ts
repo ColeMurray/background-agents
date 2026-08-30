@@ -112,11 +112,11 @@ describe("GET /internal/participants", () => {
   it("lists participants", async () => {
     const { stub } = await initSession({ userId: "user-1", scmLogin: "testuser" });
 
-    // Add a second participant
-    await stub.fetch("http://internal/internal/participants", {
+    // WebSocket token issuance creates runtime participant identity.
+    await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-2", scmLogin: "user2" }),
+      body: wsTokenBody({ userId: "user-2", canonicalUserId: "user-2", scmLogin: "user2" }),
     });
 
     const res = await stub.fetch("http://internal/internal/participants");
@@ -135,29 +135,5 @@ describe("GET /internal/participants", () => {
     const userIds = body.participants.map((p) => p.userId);
     expect(userIds).toContain("user-1");
     expect(userIds).toContain("user-2");
-  });
-});
-
-describe("POST /internal/participants", () => {
-  it("adds participant", async () => {
-    const { stub } = await initSession({ userId: "user-1" });
-
-    const res = await stub.fetch("http://internal/internal/participants", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-added", scmLogin: "addeduser" }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = await res.json<{ id: string; status: string }>();
-    expect(body.id).toEqual(expect.any(String));
-    expect(body.status).toBe("added");
-
-    const participants = await queryDO<{ user_id: string; role: string }>(
-      stub,
-      "SELECT user_id, role FROM participants WHERE user_id = 'user-added'"
-    );
-    expect(participants).toHaveLength(1);
-    expect(participants[0].role).toBe("member");
   });
 });

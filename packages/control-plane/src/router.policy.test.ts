@@ -99,6 +99,8 @@ describe("route policy table", () => {
       routeFor("GET", "/integration-settings/github/resolved/acme/widgets"),
       routeFor("GET", "/integration-settings/slack/watched-channels"),
       routeFor("GET", "/model-preferences"),
+      routeFor("POST", "/sessions/session-1/stop"),
+      routeFor("GET", "/sessions/session-1/media/artifact-1"),
     ]);
     const granted = routes.filter(
       (route) =>
@@ -121,14 +123,21 @@ describe("route policy table", () => {
     });
     expect(routeFor("GET", "/sessions")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "scoped-permission", stem: "sessions.read" }],
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "actor" },
     });
     expect(routeFor("GET", "/sessions/inbox")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "scoped-permission", stem: "sessions.read" }],
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "deny" },
     });
+    expect(routeFor("POST", "/sessions/session-1/stop")?.authorization).toMatchObject({
+      service: { kind: "actor", actorlessGrants: [{ service: "linear-bot" }] },
+    });
+    expect(routeFor("GET", "/sessions/session-1/media/artifact-1")?.authorization).toMatchObject({
+      service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
+    });
+    expect(routeFor("POST", "/sessions/session-1/participants")).toBeUndefined();
     expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [

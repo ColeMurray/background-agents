@@ -16,9 +16,11 @@ deferred beyond this foundation.
 
 Authorization will be enforced in the control plane after authentication and before business logic.
 The web will receive effective permissions for navigation and control affordances, but client checks
-will remain advisory. Session policy will combine role permissions with creator and participant
-relationships. Bot calls will be limited by both a fixed service capability ceiling and, when acting
-for a human, that canonical user's current role.
+will remain advisory. Sessions are workspace-wide resources governed by operation permissions, as
+specified in
+[Workspace-Wide Session Authorization](./2026-08-30-workspace-wide-session-authorization-design.md).
+Bot calls will be limited by both a fixed service capability ceiling and, when acting for a human,
+that canonical user's current role.
 
 This design retains one workspace per deployment. It does not add multiple organizations or
 per-repository user grants. The SCM App installation continues to define the repository universe;
@@ -60,7 +62,7 @@ RBAC determines which application actions a user may perform within that univers
 | Built-in role         | A protected role shipped by the application with code-defined permissions.        |
 | Custom role           | A workspace-defined role composed from registered permissions.                    |
 | Permission            | A stable `resource.action` identifier checked by backend policy.                  |
-| Relationship          | Context such as session creator or participant used alongside a permission.       |
+| Relationship          | Context such as automation ownership used alongside a scoped permission.          |
 | Capability ceiling    | The maximum permission set a first-party service can exercise.                    |
 | Effective permissions | The permissions produced by the current role, bounded by principal policy.        |
 
@@ -73,7 +75,7 @@ RBAC determines which application actions a user may perform within that univers
 | Role model       | Four protected built-ins plus custom roles.                                              |
 | Permission model | Fixed allow-only registry owned in shared code. Missing permission denies.               |
 | Enforcement      | Control plane is authoritative; web checks are presentation only.                        |
-| Resource scoping | Workspace-wide actions plus contextual own/participating/any session actions.            |
+| Resource scoping | Workspace-wide sessions plus contextual own/any automation actions.                      |
 | Repository scope | SCM installation defines visibility; role permissions govern app operations.             |
 | Services         | Static service ceilings; actor-backed calls use ceiling/actor intersection.              |
 | Sandboxes        | Existing session-bound capability model remains separate from human RBAC.                |
@@ -149,25 +151,17 @@ IDs are never reused for different semantics.
 
 #### Sessions
 
-| Permission                         | Actions                                                                                |
-| ---------------------------------- | -------------------------------------------------------------------------------------- |
-| `sessions.create`                  | Create a session using an allowed target.                                              |
-| `sessions.read.own`                | Read sessions created by the user or explicitly joined as a participant.               |
-| `sessions.read.any`                | Read any workspace session.                                                            |
-| `sessions.collaborate.own`         | Prompt, attach files, and connect to owned/participating sessions.                     |
-| `sessions.collaborate.any`         | Prompt, attach files, and connect to any session.                                      |
-| `sessions.lifecycle.own`           | Rename, archive, unarchive, stop, cancel, and refresh owned/participating sessions.    |
-| `sessions.lifecycle.any`           | Perform lifecycle actions on any session.                                              |
-| `sessions.delete.own`              | Delete sessions created by the user.                                                   |
-| `sessions.delete.any`              | Delete any session.                                                                    |
-| `sessions.participants.manage.own` | Add or remove participants in sessions created by the user.                            |
-| `sessions.participants.manage.any` | Add or remove participants in any session.                                             |
-| `sessions.sandbox_access.own`      | Obtain terminal, VNC, code-server, or sandbox access for owned/participating sessions. |
-| `sessions.sandbox_access.any`      | Obtain terminal, VNC, code-server, or sandbox access for any session.                  |
+| Permission                | Actions                                                               |
+| ------------------------- | --------------------------------------------------------------------- |
+| `sessions.create`         | Create a session using an allowed target.                             |
+| `sessions.read`           | Read every workspace session.                                         |
+| `sessions.collaborate`    | Prompt, attach files, and connect to every workspace session.         |
+| `sessions.lifecycle`      | Rename, archive, unarchive, stop, cancel, and refresh any session.    |
+| `sessions.delete`         | Delete any workspace session.                                         |
+| `sessions.sandbox_access` | Obtain terminal, VNC, code-server, or sandbox access for any session. |
 
-`own` means creator or existing participant unless a permission states creator only. Relationship
-checks are centralized and cannot be inferred from `created_by` fields in individual handlers.
-Read-state changes require session read access and always mutate only the caller's own read state.
+Session creator and participant data are attribution and runtime identity, not authorization.
+Read-state changes require `sessions.read` and always mutate only the caller's own read state.
 
 #### Automations and analytics
 
@@ -224,10 +218,9 @@ The table groups permissions for readability; the registry stores individual ide
 | Create sessions                                          |  Yes  |      Yes      |   Yes    |   No   |
 | Read any session                                         |  Yes  |      Yes      |   Yes    |  Yes   |
 | Collaborate in any session                               |  Yes  |      Yes      |   Yes    |   No   |
-| Perform session lifecycle operations                     |  Yes  |      Yes      | Own only |   No   |
-| Delete own/any sessions                                  |  Yes  |      Yes      | Own only |   No   |
-| Manage session participants                              |  Yes  |      Yes      | Own only |   No   |
-| Obtain sandbox access                                    |  Yes  |      Yes      | Own only |   No   |
+| Perform session lifecycle operations                     |  Yes  |      Yes      |   Yes    |   No   |
+| Delete sessions                                          |  Yes  |      Yes      |   Yes    |   No   |
+| Obtain sandbox access                                    |  Yes  |      Yes      |   Yes    |   No   |
 | Read automations                                         |  Yes  |      Yes      |   Yes    |  Yes   |
 | Create/manage/trigger automations                        |  Yes  |      Yes      | Own only |   No   |
 | Read analytics                                           |  Yes  |      Yes      |    No    |   No   |
@@ -236,10 +229,9 @@ The table groups permissions for readability; the registry stores individual ide
 | Manage shared skills and MCP servers                     |  Yes  |      Yes      |    No    |   No   |
 | Manage own skill profiles and personal preferences       |  Yes  |      Yes      |   Yes    |  Yes   |
 
-Viewer receives `sessions.read.any` but no collaborate or lifecycle permission. Member receives
-`sessions.read.any` and `sessions.collaborate.any` to preserve open discovery and collaboration,
-while delete, participant management, lifecycle, and sandbox access remain relationship-scoped.
-Administrator preserves the existing broad operational behavior.
+Viewer receives `sessions.read` but no collaborate or lifecycle permission. Member receives every
+non-administrative session operation across the workspace. Administrator preserves the existing
+broad operational behavior.
 
 ## Data Model
 
@@ -320,9 +312,9 @@ authenticated member API.
 - D1 is the source of truth for roles, assignments, status, custom-role grants, and audit events.
 - Shared code defines the permission catalog and built-in role grants; persisted permission rows are
   the runtime grant authority for custom roles.
-- Session creator attribution and canonical access relationships remain in D1.
-- Participant attribution remains in the Session Durable Object; the D1 access projection supports
-  authorization and lists.
+- Session creator attribution remains in D1 and is not an authorization relationship.
+- Participant attribution remains in the Session Durable Object for message identity, presence, SCM
+  metadata, and WebSocket tokens.
 - No role or permission set is copied into sessions, automations, or provider accounts.
 
 ## Policy Engine
@@ -346,11 +338,9 @@ type AuthorizationDecision = {
 };
 ```
 
-The engine exposes `requirePermission()` for ordinary checks and resource helpers such as
-`requireSessionAccess()` and `requireAutomationAccess()` for relationship-aware policy. Denial
-throws a typed `403` error with a stable reason code. Authentication failures remain `401`; missing
-resources remain `404` only after the caller has enough scope to discover them. Cross-user reads use
-`404` where exposing resource existence would violate session visibility.
+The engine exposes `requirePermission()` for ordinary checks and an automation resource helper for
+owner-scoped automation policy. Denial throws a typed `403` error with a stable reason code.
+Authentication failures remain `401`; missing resources remain `404` after permission admission.
 
 ### Human decision flow
 
@@ -358,7 +348,7 @@ resources remain `404` only after the caller has enough scope to discover them. 
 2. Load the user's role assignment and registered permission set.
 3. Deny if no assignment exists.
 4. Check the requested permission.
-5. If the permission is contextual, load resource creator/participant facts.
+5. For owner-scoped automation permissions, load the automation owner.
 6. Return an allow/deny decision with a stable reason.
 
 ### Service decision flow
@@ -367,8 +357,8 @@ Each service has a code-defined ceiling:
 
 - `web` may proxy browser-auth and discovery operations only; browser application routes authorize
   the human user principal produced by composed authentication.
-- `github-bot` may read repository/environment launch metadata, create sessions, prompt or stop
-  sessions it created, and post GitHub automation events.
+- `github-bot` may read repository/environment launch metadata, create sessions, read, prompt, or
+  stop workspace sessions, and post GitHub automation events.
 - `slack-bot` may read launch catalogs/preferences, create sessions, operate sessions mapped to its
   Slack thread, upload/download session media, and post Slack events.
 - `linear-bot` may read launch catalogs/preferences, create sessions, and operate sessions mapped to
@@ -377,7 +367,7 @@ Each service has a code-defined ceiling:
 For an actor-backed service request:
 
 ```text
-effective = service ceiling ∩ actor role permissions ∩ resource relationship
+effective = service ceiling ∩ actor role permissions
 ```
 
 The actor must resolve to an active canonical user with a role assignment. Service-authenticated
@@ -398,41 +388,18 @@ operations explicitly designated for a sandbox bound to the same session. It doe
 session creator's role and does not gain workspace permissions. Human role changes do not terminate
 an executing sandbox, but they can remove human access to its session and controls.
 
-### Session relationships
+### Session authorization and identity
 
-Session checks use facts from both D1 and the Session Durable Object:
+Session operations are workspace-scoped. A user with a session operation permission may apply it to
+every session, regardless of creator or participant identity. Deletion is also workspace-scoped.
 
-- creator: a D1 `session_access` row with `relation = 'creator'`;
-- participant: a D1 `session_access` row with `relation = 'participant'`;
-- participant aliases: web, Slack, GitHub, and Linear participant rows linked to canonical users for
-  attribution, presence, and SCM metadata;
-- target: session repository/environment snapshot, used to validate target-use permission at create
-  time rather than on every read.
+`sessions.user_id` retains immutable creator attribution for display, filtering, auditing, and
+credential lineage. Session Durable Object participants retain message identity, presence, SCM
+metadata, and WebSocket token ownership. Neither is an authorization grant.
 
-Participant aliases do not confer access by themselves. A successful participant activation writes
-the canonical D1 relationship, while message history keeps its original participant IDs. The Session
-DO has no local owner role; the D1 creator row remains the only creator relationship.
-
-Creating a WebSocket token or sending a prompt first requires an applicable collaborate permission.
-Built-in Members can collaborate across the workspace; a successful WebSocket-token request records
-the caller as an active participant so relationship-scoped lifecycle and sandbox permissions apply
-after joining. Custom roles can use `sessions.collaborate.own` when explicit invitation semantics
-are desired. Explicit participant addition requires `sessions.participants.manage.own` or `.any`.
-Removing a canonical membership revokes every provider alias for authorization while retaining
-historical message attribution. Session-local `owner/member` is retired as an authorization concept;
-D1 creator attribution is immutable and creator-only permissions do not transfer through participant
-management.
-
-Participant APIs accept only canonical target user IDs:
-
-| Method   | Path                                 | Policy                                   |
-| -------- | ------------------------------------ | ---------------------------------------- |
-| `GET`    | `/sessions/:id/participants`         | Applicable session read permission       |
-| `POST`   | `/sessions/:id/participants`         | Applicable participant-manage permission |
-| `DELETE` | `/sessions/:id/participants/:userId` | Applicable participant-manage permission |
-
-There is no session-owner transfer endpoint. Removing the creator's membership does not remove
-creator relationship or delete rights; deleting the session remains an explicit creator/any action.
+Creating a WebSocket token or sending a prompt requires `sessions.collaborate`. WebSocket
+subscription rechecks the represented canonical user's active role and collaboration permission.
+Private, invitation-only, participant-restricted, and creator-only session behavior is deferred.
 
 ### Automation execution authority
 
@@ -475,8 +442,8 @@ method and pattern:
 authorization: requirePermission("environments.manage");
 ```
 
-Relationship-aware routes identify the already-matched path parameter that names the protected
-session. Conjunctive policies list every requirement explicitly:
+Session routes identify the operation applied to the already-matched path parameter. Conjunctive
+policies list every requirement explicitly:
 
 ```ts
 authorization: requireAll(
@@ -485,13 +452,13 @@ authorization: requireAll(
 );
 ```
 
-The router executes declared permission, scoped-permission, session-relationship, and automation
-checks before handlers. Contextual mutations retain transactional resource guards to close stale
-authorization windows, while route metadata remains the structural policy authority. Personal
-active-user routes, active global routes, public routes, and service-only callbacks each use an
-explicit policy kind; narrow internal callbacks name their exact service. `router.policy.test.ts`
-rejects missing metadata, duplicate method/pattern pairs, incompatible authentication/authorization
-combinations, and session requirements that reference absent match groups.
+The router executes declared permission, session-operation, and automation checks before handlers.
+Request admission uses current authorization; a concurrent role change does not retroactively revoke
+an admitted HTTP request. Personal active-user routes, active global routes, public routes, and
+service-only callbacks each use an explicit policy kind; narrow internal callbacks name their exact
+service. `router.policy.test.ts` rejects missing metadata, duplicate method/pattern pairs,
+incompatible authentication/authorization combinations, and session requirements that reference
+absent match groups.
 
 ### Exemptions
 
@@ -510,44 +477,20 @@ execution-authority policy before side effects. `user-or-service` alone is never
 authorization after this change.
 
 A generated route-to-policy inventory covers every session, child-session, attachment, media, diff,
-pull-request, credential, automation, secret, settings, and callback endpoint. Child-session reads
-require access to both parent and child; sandbox child operations remain parent-session-bound; human
-child lifecycle uses the child's own creator/membership policy.
+pull-request, credential, automation, secret, settings, and callback endpoint. Sandbox child
+operations remain parent-session-bound; human child operations use workspace session permissions.
 
 ### Listing and filtering
 
-Authorization applies in SQL/list queries, not by fetching global results and filtering in memory.
+Authorization applies before list queries, with contextual automation ownership applied in SQL where
+needed.
 
-- Owner/Administrator/Viewer session lists may use `sessions.read.any`.
-- Member lists join creator and a D1 session-access projection populated when participants are
-  added.
+- Every user with `sessions.read` receives the workspace session list.
+- Creator and Mine filters use `sessions.user_id` as attribution, not access control.
 - Automation lists use `manage.any/read` or creator ownership as appropriate.
 - Resources requiring a missing read permission are omitted from catalogs and navigation.
 - Repository/environment catalogs require read permission; use permission is separately checked when
   launching or configuring an execution target.
-
-Because participant state currently resides only in a DO, D1 gains a projection of session access:
-
-```sql
-CREATE TABLE session_access (
-  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  relation   TEXT NOT NULL CHECK (relation IN ('creator', 'participant')),
-  PRIMARY KEY (session_id, user_id)
-);
-
-CREATE INDEX idx_session_access_user
-  ON session_access(user_id, session_id);
-```
-
-Creator access is inserted with the D1 session index. Participant addition calls the DO's idempotent
-canonical-user upsert first, then inserts the D1 participant row. If D1 activation fails after the
-DO write, authorization remains fail-closed and retry repeats the idempotent DO operation before
-inserting D1 access. A rejected DO operation never changes existing D1 access. D1 is authoritative
-for coarse list and participant access; the DO remains authoritative for live attribution aliases.
-
-Creator and participant rows share the primary key. Participant activation uses
-`ON CONFLICT DO NOTHING`, so adding a creator as a participant never replaces the D1 creator row.
 
 ## API Contracts
 
@@ -586,8 +529,8 @@ has member-management permission. Suspending, deleting, or merging an Owner also
 permission. Every role/status/delete/merge mutation uses guarded SQL that succeeds only if another
 unsuspended Owner remains in the same D1 batch. User deletion is blocked by assignment
 `ON DELETE RESTRICT`; the assignment can be removed only through this guarded membership service.
-User merge requires an explicit surviving assignment, merges canonical session memberships, and
-preserves both immutable audit snapshots.
+User merge requires an explicit surviving assignment, repoints canonical session creator
+attribution, and preserves both immutable audit snapshots.
 
 Assignment and status updates apply the request-scoped authorization decision and preserve Owner
 invariants in the same D1 batch as the mutation. Authorization changes do not retroactively revoke
@@ -605,9 +548,8 @@ Forbidden API responses use:
 }
 ```
 
-Relationship denials use codes such as `session_access_required`, `creator_required`,
-`active_user_required`, and `service_capability_required`. Responses do not disclose another user's
-role or whether a hidden session exists.
+Other denials use codes such as `active_user_required` and `service_capability_required`. Responses
+do not disclose another user's role.
 
 ## Web Experience
 
@@ -640,9 +582,9 @@ The API repeats every invariant.
 
 - Settings tabs appear only when at least one permission makes them useful.
 - New session requires `sessions.create` plus target `use` permission.
-- All/Mine becomes All/My sessions; All appears only with `sessions.read.any`.
-- Session controls reflect read, collaborate, lifecycle, delete, participant, and sandbox-access
-  permissions independently.
+- All/Mine becomes All/My sessions; both are filters over the workspace-wide session list.
+- Session controls reflect read, collaborate, lifecycle, delete, and sandbox-access permissions
+  independently.
 - Analytics requires `analytics.read`.
 - Automation create/manage actions are independent from automation read access.
 
@@ -656,7 +598,6 @@ Durable audit events are required for:
 - access suspension/restoration;
 - Owner assignment/removal;
 - secret, provider-account, commit-signing, integration, SCM, MCP, and shared-skill mutations;
-- session participant changes and cross-user session deletion;
 - allowed and denied member-management operations.
 
 Pure D1 mutations write the audit event in the same D1 batch.
@@ -667,7 +608,7 @@ permission, policy, resource type, opaque resource ID, reason code, request ID, 
 Secret values, OAuth credentials, prompt content, and signed tokens never enter audit metadata.
 
 Metrics include denial count by permission/reason/principal, unassigned active users, assignment
-count by role, authorization latency, and session-access projection drift.
+count by role, and authorization latency.
 
 ## Role Changes and Revocation
 
@@ -693,15 +634,12 @@ count by role, authorization latency, and session-access projection drift.
 
 The migration is additive and preserves current capability for every canonical user:
 
-1. Create role, permission, assignment, audit, and session-access tables.
+1. Create role, permission, assignment, and audit tables.
 2. Insert protected built-in role records; their permission sets remain code-owned.
 3. Assign Administrator to every canonical user present in `users`, including identities originally
    created through Slack, GitHub, or Linear.
 4. Create the unconditional default-role trigger. Identity provisioning after this point assigns
    Member.
-5. Backfill non-null session creators that still reference a canonical user into `session_access` as
-   `creator`.
-6. Unattributed sessions require `sessions.read.any`; they never satisfy an own relationship.
 
 No route switches to enforcement until every existing canonical user has an Administrator assignment
 and built-in role reconciliation succeeds. Administrators may continue using the application before
@@ -731,8 +669,6 @@ but no one can exercise Owner-only actions.
 - Missing user assignment denies shared application routes but permits sign-out and own identity
   discovery so an administrator can repair access.
 - Audit-write failure aborts transactional D1 administration.
-- Participant projection failure leaves D1 access absent for an idempotent retry; no cross-store
-  atomicity is assumed.
 - Web authorization metadata failure renders an unavailable state rather than the unrestricted app.
 
 ## Security Invariants
@@ -741,8 +677,7 @@ but no one can exercise Owner-only actions.
 2. Admission allowlists never imply a role beyond bootstrap/default assignment.
 3. Unknown permissions, missing assignments, suspended users, and policy errors deny access.
 4. Client-side permission checks are never authoritative.
-5. Creator/updater attribution is not an authorization check unless a named relationship policy uses
-   it.
+5. Creator and participant attribution are not authorization checks.
 6. A service cannot exceed its code-defined ceiling.
 7. An actor-backed service cannot exceed the linked user's current permissions.
 8. An actorless service can execute only exact service-only operations.
@@ -751,7 +686,7 @@ but no one can exercise Owner-only actions.
     unsuspended Owner always exists.
 11. Only an Owner can add or remove Owner assignments.
 12. Role changes and privileged mutations produce durable, redacted audit events.
-13. Resource list queries enforce visibility before returning metadata.
+13. Session lists require workspace read permission before returning metadata.
 14. Secret-management permission never makes stored secret values readable.
 15. External provider authorization is additional evidence, not a replacement for application RBAC.
 
@@ -767,7 +702,7 @@ but no one can exercise Owner-only actions.
 
 - Human permission allow/deny matrix for every built-in role.
 - Custom role resolution, suspension, missing assignment, and unknown permission behavior.
-- Session creator/participant/any relationship combinations.
+- Workspace-wide session operation permissions for every built-in role.
 - Service ceiling and actor intersection for every bot.
 - Actorless exact-endpoint service permissions.
 - Last-Owner, built-in-role, assignment, and transaction invariants.
@@ -777,14 +712,13 @@ but no one can exercise Owner-only actions.
 
 ### Control-plane integration
 
-- Multi-user tests proving Member cannot list/read/mutate another member's private session.
+- Multi-user tests proving permitted Members can read, collaborate, manage lifecycle, access the
+  sandbox, and delete across workspace sessions.
 - Viewer can read but cannot prompt, launch, stop, delete, or access sandbox credentials.
 - Administrator can operate installation-wide resources but cannot transfer Owner.
 - Owner can assign roles without removing the last unsuspended Owner.
 - Secret/settings/provider-account/skill/MCP/image routes enforce individual permissions.
-- Lists filter sessions and automations in SQL.
-- Session access projection follows successful participant activation.
-- Missing projection rows fail closed and cannot leak visibility.
+- Session lists remain workspace-wide while creator and Mine filters preserve attribution semantics.
 - Role changes are enforced when idle, active, hibernated, and multi-tab WebSocket authorization
   leases expire.
 - Suspended browser sessions and bot actors are denied.
@@ -809,7 +743,7 @@ but no one can exercise Owner-only actions.
 - Linked actor role is required for actor-backed launches and prompts.
 - Unlinked, suspended, and underprivileged actors fail closed with user-safe provider responses.
 - Existing GitHub collaborator, Slack webhook, and Linear organization checks remain enforced.
-- Stale external session mappings cannot bypass session relationship checks.
+- External session mappings cannot bypass actor role or service ceiling checks.
 
 ### Migration
 
@@ -818,7 +752,6 @@ but no one can exercise Owner-only actions.
 - Existing installation assigns every pre-migration canonical user Administrator, including bot-only
   identities, then requires the same explicit operator bootstrap.
 - Every canonical user receives exactly one assignment.
-- Session creator projection is idempotent and reports every unattributed row.
 - Built-in role reconciliation is idempotent and rejects incompatible registry drift.
 - Exact migration SQL executes under workerd/D1, including indexes and constraints.
 - Better Auth or bot identity creation followed by assignment failure cannot enter business routes
@@ -858,16 +791,16 @@ and cannot govern installation settings or repository/environment actions.
 
 ### External policy engine
 
-Rejected because the initial policy consists of a small fixed permission registry plus two local
-relationships. D1 and typed control-plane policy keep the trust boundary and operational footprint
-within the existing architecture.
+Rejected because the initial policy consists of a small fixed permission registry plus contextual
+automation ownership. D1 and typed control-plane policy keep the trust boundary and operational
+footprint within the existing architecture.
 
 ## Open Product Decisions
 
 The design chooses defaults for implementation, but product confirmation is required before
 enforcement:
 
-1. Member session visibility is own/participating only; Viewer session visibility is workspace-wide.
+1. Session operations are workspace-wide when granted by the user's role.
 2. New canonical users default to Member after the RBAC migration boundary.
 3. Administrator receives all operational permissions except ownership transfer.
 4. Persisted custom roles cannot receive ownership transfer.
@@ -876,5 +809,5 @@ enforcement:
 7. Executing sandboxes continue after their creator is suspended or demoted.
 8. Authorization audit events are retained under the deployment's existing D1 retention policy.
 9. Scheduled/webhook automations stop launching when their owner loses current execution authority.
-10. Session creator is immutable; participant management never transfers creator-only rights.
+10. Session creator and participant identities are attribution, not authorization.
 11. Five minutes is a strict wall-clock browser WebSocket revocation bound, including idle sockets.

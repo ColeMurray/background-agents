@@ -1,70 +1,41 @@
 import { describe, expect, it } from "vitest";
-import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
-import {
-  sessionPermissionScope,
-  sessionRequiredRelation,
-  verifySessionAuthorization,
-} from "./session-authorization-policy";
-
-function authorization(permissions: EffectiveAuthorization["permissions"]): EffectiveAuthorization {
-  return {
-    userId: "user-1",
-    suspendedAt: null,
-    role: { id: "role-1", key: "member", name: "Member" },
-    permissions,
-  };
-}
+import { sessionPermission, verifySessionAuthorization } from "./session-authorization-policy";
 
 describe("session authorization policy", () => {
-  it("resolves any before own and returns null without either permission", () => {
-    expect(sessionPermissionScope(authorization(["sessions.read.own"]), "read")).toBe("own");
-    expect(
-      sessionPermissionScope(authorization(["sessions.read.own", "sessions.read.any"]), "read")
-    ).toBe("any");
-    expect(sessionPermissionScope(authorization([]), "read")).toBeNull();
+  it("maps each operation to one workspace permission", () => {
+    expect(sessionPermission("read")).toBe("sessions.read");
+    expect(sessionPermission("collaborate")).toBe("sessions.collaborate");
+    expect(sessionPermission("lifecycle")).toBe("sessions.lifecycle");
+    expect(sessionPermission("sandbox_access")).toBe("sessions.sandbox_access");
+    expect(sessionPermission("delete")).toBe("sessions.delete");
   });
 
-  it("owns the relation required by each session operation", () => {
-    expect(sessionRequiredRelation("read")).toBe("access");
-    expect(sessionRequiredRelation("collaborate")).toBe("access");
-    expect(sessionRequiredRelation("delete")).toBe("creator");
-    expect(sessionRequiredRelation("participants.manage")).toBe("creator");
-  });
-
-  it("verifies permission scope and relationship through one policy", async () => {
-    const database = (
-      relation: "creator" | "participant" | null,
-      suspendedAt: number | null = null
-    ) => ({
-      prepare: (query: string) => ({
-        bind: () => ({
-          first: async () =>
-            query.includes("FROM users u")
-              ? {
-                  user_id: "user-1",
-                  suspended_at: suspendedAt,
-                  role_id: "role_builtin_member",
-                  role_key: "member",
-                  role_name: "Member",
-                }
-              : relation
-                ? { relation }
-                : null,
-        }),
-      }),
+  it("verifies workspace permission without querying a session relationship", async () => {
+    const database = (roleKey: "member" | "viewer", suspendedAt: number | null = null) => ({
+      prepare: (query: string) => {
+        if (!query.includes("FROM users u")) throw new Error(`Unexpected query: ${query}`);
+        return {
+          bind: () => ({
+            first: async () => ({
+              user_id: "user-1",
+              suspended_at: suspendedAt,
+              role_id: `role_builtin_${roleKey}`,
+              role_key: roleKey,
+              role_name: roleKey === "member" ? "Member" : "Viewer",
+            }),
+          }),
+        };
+      },
     });
 
     await expect(
-      verifySessionAuthorization(database(null) as never, "user-1", "session-1", "collaborate")
+      verifySessionAuthorization(database("member") as never, "user-1", "collaborate")
     ).resolves.toBe("valid");
     await expect(
-      verifySessionAuthorization(database("participant") as never, "user-1", "session-1", "delete")
+      verifySessionAuthorization(database("viewer") as never, "user-1", "collaborate")
     ).resolves.toBe("rejected");
     await expect(
-      verifySessionAuthorization(database("creator") as never, "user-1", "session-1", "delete")
-    ).resolves.toBe("valid");
-    await expect(
-      verifySessionAuthorization(database(null, 1) as never, "user-1", "session-1", "collaborate")
+      verifySessionAuthorization(database("member", 1) as never, "user-1", "collaborate")
     ).resolves.toBe("rejected");
   });
 });

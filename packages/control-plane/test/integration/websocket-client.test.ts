@@ -13,24 +13,6 @@ import {
 import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 
-async function grantOwnCollaboration(userId: string): Promise<void> {
-  const roleId = `role-ws-own-${crypto.randomUUID()}`;
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO roles
-        (id, key, name, normalized_name, is_system)
-       VALUES (?, NULL, ?, ?, 0)`
-    ).bind(roleId, roleId, roleId),
-    env.DB.prepare(
-      "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate.own')"
-    ).bind(roleId),
-    env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
-      roleId,
-      userId
-    ),
-  ]);
-}
-
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("rejects a nonexistent session before initializing its Durable Object", async () => {
     const name = `ws-client-nonexistent-${Date.now()}`;
@@ -245,37 +227,17 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(reason).toBe("Token expired");
   });
 
-  it("allows collaborate.any without a session relationship", async () => {
-    const name = `ws-client-any-authorization-${Date.now()}`;
-    const userId = `any-user-${Date.now()}`;
+  it("allows workspace collaborators without a session relationship", async () => {
+    const name = `ws-client-workspace-authorization-${Date.now()}`;
+    const userId = `workspace-user-${Date.now()}`;
     await initNamedSession(name);
     const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
-    await env.DB.prepare("DELETE FROM session_access WHERE session_id = ? AND user_id = ?")
-      .bind(name, userId)
-      .run();
 
     const { ws } = await openClientWs(name);
     const subscribed = collectMessages(ws, {
       until: (message) => message.type === "subscribed",
     });
-    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "any-client" }));
-
-    expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
-    ws.close();
-  });
-
-  it("allows collaborate.own with an active session relationship", async () => {
-    const name = `ws-client-own-authorization-${Date.now()}`;
-    const userId = `own-user-${Date.now()}`;
-    await initNamedSession(name);
-    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
-    await grantOwnCollaboration(userId);
-
-    const { ws } = await openClientWs(name);
-    const subscribed = collectMessages(ws, {
-      until: (message) => message.type === "subscribed",
-    });
-    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "own-client" }));
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "workspace-client" }));
 
     expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
     ws.close();
@@ -295,25 +257,6 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       ws.addEventListener("close", (event) => resolve({ code: event.code }));
     });
     ws.send(JSON.stringify({ type: "subscribe", token, clientId: "suspended-client" }));
-
-    await expect(closed).resolves.toEqual({ code: 4010 });
-  });
-
-  it("rejects collaborate.own after the session relationship is lost", async () => {
-    const name = `ws-client-lost-relationship-${Date.now()}`;
-    const userId = `lost-relationship-user-${Date.now()}`;
-    await initNamedSession(name);
-    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
-    await grantOwnCollaboration(userId);
-    await env.DB.prepare("DELETE FROM session_access WHERE session_id = ? AND user_id = ?")
-      .bind(name, userId)
-      .run();
-
-    const { ws } = await openClientWs(name);
-    const closed = new Promise<{ code: number }>((resolve) => {
-      ws.addEventListener("close", (event) => resolve({ code: event.code }));
-    });
-    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "lost-relationship-client" }));
 
     await expect(closed).resolves.toEqual({ code: 4010 });
   });
@@ -344,7 +287,6 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     await initNamedSession(name);
     const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
     await env.DB.batch([
-      env.DB.prepare("DELETE FROM session_access WHERE user_id = ?").bind(userId),
       env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(userId),
       env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId),
     ]);

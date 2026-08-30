@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { activateSessionParticipantAccess } from "../../src/db/session-access";
 import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { cleanD1Tables } from "./cleanup";
@@ -36,94 +35,7 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.status).toBe("created");
   });
 
-  it("atomically creates the canonical creator access projection", async () => {
-    const userId = "11111111111111111111111111111111";
-    await env.DB.prepare(
-      `INSERT INTO users
-        (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
-       VALUES (?, 'Session Creator', NULL, 0, NULL, 1, 1)`
-    )
-      .bind(userId)
-      .run();
-    const store = new SessionIndexStore(env.DB);
-
-    await store.create({
-      id: "session-with-creator",
-      title: "Creator projection",
-      repoOwner: null,
-      repoName: null,
-      model: "anthropic/claude-haiku-4-5",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: "created",
-      userId,
-      createdAt: 10,
-      updatedAt: 10,
-    });
-
-    expect(
-      await env.DB.prepare(
-        "SELECT relation FROM session_access WHERE session_id = ? AND user_id = ?"
-      )
-        .bind("session-with-creator", userId)
-        .first()
-    ).toEqual({ relation: "creator" });
-
-    await activateSessionParticipantAccess(env.DB, "session-with-creator", userId);
-    expect(
-      await env.DB.prepare(
-        "SELECT relation FROM session_access WHERE session_id = ? AND user_id = ?"
-      )
-        .bind("session-with-creator", userId)
-        .first()
-    ).toEqual({ relation: "creator" });
-  });
-
-  it("fails closed when a creator projection is missing from an access-filtered list", async () => {
-    const userId = "11111111111111111111111111111111";
-    await env.DB.prepare(
-      `INSERT INTO users
-        (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
-       VALUES (?, 'Session Creator', NULL, 0, NULL, 1, 1)`
-    )
-      .bind(userId)
-      .run();
-    const store = new SessionIndexStore(env.DB);
-    await store.create({
-      id: "session-without-projection",
-      title: "Missing projection",
-      repoOwner: null,
-      repoName: null,
-      model: "anthropic/claude-haiku-4-5",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: "created",
-      userId,
-      createdAt: 10,
-      updatedAt: 10,
-    });
-    await env.DB.prepare("DELETE FROM session_access WHERE session_id = ?")
-      .bind("session-without-projection")
-      .run();
-
-    await expect(
-      store.list({ viewerUserId: userId, readScope: "own", lifecycleScope: null })
-    ).resolves.toMatchObject({ sessions: [] });
-  });
-
-  it("derives lifecycle capability from scope and the current relationship", async () => {
-    const creatorId = "11111111111111111111111111111111";
-    const participantId = "22222222222222222222222222222222";
-    const unrelatedId = "33333333333333333333333333333333";
-    for (const userId of [creatorId, participantId, unrelatedId]) {
-      await env.DB.prepare(
-        `INSERT INTO users
-          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
-         VALUES (?, ?, NULL, 0, NULL, 1, 1)`
-      )
-        .bind(userId, userId)
-        .run();
-    }
+  it("derives lifecycle capability from the workspace permission", async () => {
     const store = new SessionIndexStore(env.DB);
     await store.create({
       id: "session-capability",
@@ -134,21 +46,16 @@ describe("D1 SessionIndexStore", () => {
       reasoningEffort: null,
       baseBranch: null,
       status: "created",
-      userId: creatorId,
       createdAt: 10,
       updatedAt: 10,
     });
-    await activateSessionParticipantAccess(env.DB, "session-capability", participantId);
 
-    await expect(
-      store.list({ viewerUserId: participantId, readScope: "any", lifecycleScope: "own" })
-    ).resolves.toMatchObject({ sessions: [{ canManageLifecycle: true }] });
-    await expect(
-      store.list({ viewerUserId: unrelatedId, readScope: "any", lifecycleScope: "own" })
-    ).resolves.toMatchObject({ sessions: [{ canManageLifecycle: false }] });
-    await expect(
-      store.list({ viewerUserId: unrelatedId, readScope: "any", lifecycleScope: "any" })
-    ).resolves.toMatchObject({ sessions: [{ canManageLifecycle: true }] });
+    await expect(store.list({ canManageLifecycle: false })).resolves.toMatchObject({
+      sessions: [{ canManageLifecycle: false }],
+    });
+    await expect(store.list({ canManageLifecycle: true })).resolves.toMatchObject({
+      sessions: [{ canManageLifecycle: true }],
+    });
   });
 
   it("atomically snapshots provider auth with the session", async () => {

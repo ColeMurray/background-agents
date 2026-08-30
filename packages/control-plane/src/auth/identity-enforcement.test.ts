@@ -98,26 +98,7 @@ describe("applyIdentityEnforcement — identityless principals", () => {
 });
 
 describe("applyIdentityEnforcement — forbidden-field rejection", () => {
-  it("rejects forbidden keys with a 400 naming the field", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { rejection } = applyIdentityEnforcement(createCtx(USER_PRINCIPAL), "session-lifecycle", {
-      userId: "someone",
-      title: "ok",
-    });
-    expect(rejection).toBeDefined();
-    expect(rejection!.status).toBe(400);
-    expect(((await rejection!.clone().json()) as { error: string }).error).toBe(
-      "Field 'userId' is not accepted from verified callers"
-    );
-    const logged = loggedEvents(warn).find((e) => e.event === "identity.forbidden_field_rejected");
-    expect(logged).toMatchObject({ route: "session-lifecycle", field: "userId" });
-  });
-
   it("accepts bodies carrying only permitted fields", () => {
-    expect(
-      applyIdentityEnforcement(createCtx(USER_PRINCIPAL), "session-lifecycle", { title: "ok" })
-        .rejection
-    ).toBeUndefined();
     expect(
       applyIdentityEnforcement(createCtx(USER_PRINCIPAL), "session-create", {
         scmLogin: "ada",
@@ -199,11 +180,9 @@ describe("applyIdentityEnforcement — requires-user rejection", () => {
   });
 
   it("does not gate routes that accept participantless principals", () => {
-    for (const route of ["prompt", "session-lifecycle"] as const) {
-      const result = applyIdentityEnforcement(createCtx(ACTORLESS_BOT), route, {});
-      expect(result.rejection).toBeUndefined();
-      expect(result.enforced).toMatchObject({ participantUserId: null });
-    }
+    const result = applyIdentityEnforcement(createCtx(ACTORLESS_BOT), "prompt", {});
+    expect(result.rejection).toBeUndefined();
+    expect(result.enforced).toMatchObject({ participantUserId: null });
   });
 });
 

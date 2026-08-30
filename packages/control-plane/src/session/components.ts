@@ -573,7 +573,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sandboxHandler = new SandboxHandler(
     messageRepository,
     eventRepository,
-    participantRepository,
     artifactRepository,
     sessionCoreRepository,
     sandboxRepository,
@@ -609,7 +608,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
-    participantRepository,
     statusService,
     titleService,
     lifecycleWsManager,
@@ -690,10 +688,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     verifyAuthorization: async (userId) => {
       if (!db) return "unavailable";
       try {
-        const session = sessionCoreRepository.getSession();
-        if (!session) return "rejected";
-        const sessionId = resolvePublicSessionId(session, durableObjectId);
-        return verifySessionAuthorization(db, userId, sessionId, "collaborate");
+        return verifySessionAuthorization(db, userId, "collaborate");
       } catch (error) {
         log.error("WebSocket authorization verification failed", {
           user_id: userId,
@@ -725,7 +720,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       );
     },
     listParticipants: () => participantsHandler.listParticipants(),
-    addParticipant: (request) => sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => messagesHandler.listMessages(url),
@@ -735,8 +729,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     pullRequestsRefresh: () => pullRequestHandler.refreshPullRequests(),
     wsToken: (request, _url, requestLog) => wsTokenHandler.generateWsToken(request, requestLog),
     updateTitle: (request) => sessionLifecycleHandler.updateTitle(request),
-    archive: (request) => sessionLifecycleHandler.archive(request),
-    unarchive: (request) => sessionLifecycleHandler.unarchive(request),
+    archive: () => sessionLifecycleHandler.archive(),
+    unarchive: () => sessionLifecycleHandler.unarchive(),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, requestLog) =>
       sandboxHandler.verifySandboxToken(request, requestLog),

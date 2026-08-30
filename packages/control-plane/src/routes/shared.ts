@@ -76,7 +76,6 @@ export type SessionAuthorizationOperation =
   | "read"
   | "collaborate"
   | "lifecycle"
-  | "participants.manage"
   | "sandbox_access"
   | "delete";
 
@@ -139,12 +138,15 @@ export function sessionRequirement(
 
 export function requirePermission(
   permission: PermissionId,
-  options?: { actorlessGrants?: readonly ActorlessServiceGrant[] }
+  options?: { service?: "actor" | "deny"; actorlessGrants?: readonly ActorlessServiceGrant[] }
 ): RouteAuthorization {
   return {
     kind: "active-user",
     allOf: [permissionRequirement(permission)],
-    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
+    service:
+      options?.service === "deny"
+        ? { kind: "deny" }
+        : { kind: "actor", actorlessGrants: options?.actorlessGrants },
   };
 }
 
@@ -161,12 +163,13 @@ export function requireScopedPermission(
 
 export function requireSession(
   operation: SessionAuthorizationOperation,
-  sessionIdParam = "id"
+  sessionIdParam = "id",
+  options?: { actorlessGrants?: readonly ActorlessServiceGrant[] }
 ): RouteAuthorization {
   return {
     kind: "active-user",
     allOf: [sessionRequirement(operation, sessionIdParam)],
-    service: { kind: "actor" },
+    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
   };
 }
 

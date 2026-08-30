@@ -20,11 +20,7 @@ import { AutomationStore } from "./db/automation-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
-import {
-  sessionPermissionStem,
-  sessionRequiredRelation,
-} from "./authorization/session-authorization-policy";
-import { requireSessionAccess, SessionAccessError } from "./db/session-access";
+import { sessionPermission } from "./authorization/session-authorization-policy";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -463,48 +459,21 @@ async function enforceSessionRequirement(
   if (!userId) return null;
   const encodedSessionId = match.groups?.[requirement.sessionIdParam];
   if (!encodedSessionId) return json({ error: "Invalid session route" }, 400);
-  let sessionId: string;
   try {
-    sessionId = decodeURIComponent(encodedSessionId);
+    decodeURIComponent(encodedSessionId);
   } catch {
     return json({ error: "Invalid session route" }, 400);
   }
 
-  try {
-    const authorization = ctx.authorization;
-    if (!authorization) throw new Error("Missing request authorization");
-    const permissionStem = sessionPermissionStem(requirement.operation);
-    const ownPermission = SCOPED_PERMISSION_PAIRS[permissionStem].own;
-    if (
-      ctx.principal?.kind === "service" &&
-      !serviceAllowsPermission(ctx.principal.service, ownPermission)
-    ) {
-      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
-    }
-    const resolvedScope = resolveScopedPermission(permissionStem, authorization.permissions);
-    if (!resolvedScope) {
-      return json(
-        { error: "Forbidden", code: "permission_required", permission: ownPermission },
-        403
-      );
-    }
-
-    const scope = ctx.principal?.kind === "service" ? "own" : resolvedScope;
-    if (scope === "own") {
-      await requireSessionAccess(
-        ctx.db,
-        sessionId,
-        userId,
-        sessionRequiredRelation(requirement.operation)
-      );
-    }
-    return null;
-  } catch (error) {
-    if (error instanceof SessionAccessError) {
-      return json({ error: "Forbidden", code: error.code }, 403);
-    }
-    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  const permission = sessionPermission(requirement.operation);
+  if (
+    ctx.principal?.kind === "service" &&
+    !serviceAllowsPermission(ctx.principal.service, permission)
+  ) {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
   }
+  if (ctx.authorization?.permissions.includes(permission)) return null;
+  return json({ error: "Forbidden", code: "permission_required", permission }, 403);
 }
 
 async function enforceAutomationRequirement(

@@ -32,8 +32,6 @@ import {
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import { sessionAccessPredicate } from "./session-access";
-import type { SessionPermissionScope } from "../authorization/session-authorization-policy";
 
 export type {
   ListSessionInboxOptions,
@@ -156,8 +154,7 @@ export interface ListSessionsOptions {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
-  readScope?: SessionPermissionScope;
-  lifecycleScope?: SessionPermissionScope | null;
+  canManageLifecycle?: boolean;
 }
 
 export interface ListSessionsResult {
@@ -345,17 +342,8 @@ export class SessionIndexStore {
           session.createdAt
         )
     );
-    const creatorAccessStmt = session.userId
-      ? this.db
-          .prepare(
-            `INSERT INTO session_access (session_id, user_id, relation)
-             SELECT ?, id, 'creator' FROM users WHERE id = ?`
-          )
-          .bind(session.id, session.userId)
-      : null;
     const results = await this.db.batch([
       sessionStmt,
-      ...(creatorAccessStmt ? [creatorAccessStmt] : []),
       ...repositoryStmts,
       ...manifestStmts,
       ...providerAuthStmts,
@@ -535,8 +523,7 @@ export class SessionIndexStore {
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
-      readScope,
-      lifecycleScope,
+      canManageLifecycle = false,
     } = options;
 
     const conditions: string[] = [];
@@ -589,21 +576,11 @@ export class SessionIndexStore {
       conditions.push(`user_id IN (${createdByUserIds.map(() => "?").join(", ")})`);
       params.push(...createdByUserIds);
     }
-    if (viewerUserId && readScope) {
-      const access = sessionAccessPredicate("sessions", viewerUserId, readScope);
-      conditions.push(access.sql);
-      params.push(...access.params);
-    }
-
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const lifecycleCapability =
-      viewerUserId && lifecycleScope
-        ? sessionAccessPredicate("sessions", viewerUserId, lifecycleScope)
-        : { sql: "0", params: [] };
-    const pageSql = `SELECT sessions.*, ${lifecycleCapability.sql} AS can_manage_lifecycle
+    const pageSql = `SELECT sessions.*, ${canManageLifecycle ? 1 : 0} AS can_manage_lifecycle
                      FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
-    const pageParams = [...lifecycleCapability.params, ...params, limit + 1, offset];
+    const pageParams = [...params, limit + 1, offset];
     const result = viewerUserId
       ? await this.db
           .prepare(

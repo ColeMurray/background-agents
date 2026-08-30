@@ -80,26 +80,6 @@ describe("session inbox", () => {
     expect(body.items[0].descendantSessions.map(({ id }) => id)).toEqual([child.id, grandchild.id]);
   });
 
-  it("fails closed when a creator projection is missing from an access-filtered inbox", async () => {
-    await serviceFetch("https://example.com/sessions/inbox?category=finished");
-    const store = new SessionIndexStore(env.DB);
-    await store.create(session("missing-projection"));
-    await env.DB.prepare(
-      "DELETE FROM session_access WHERE session_id = 'missing-projection'"
-    ).run();
-
-    const result = await store.listInbox({
-      category: "finished",
-      viewerUserId: VIEWER_ID,
-      readScope: "own",
-      lifecycleScope: null,
-      limit: 20,
-      cursor: null,
-    });
-
-    expect(result.items).toEqual([]);
-  });
-
   it("persists roots and repairs them cycle-safely when parents change", async () => {
     const store = new SessionIndexStore(env.DB);
     await store.create(session("root"));

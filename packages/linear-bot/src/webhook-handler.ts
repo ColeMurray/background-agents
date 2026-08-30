@@ -224,10 +224,16 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
     const existingSession = await lookupIssueSession(env, issueId);
     if (existingSession) {
       const stopUrl = `https://internal/sessions/${existingSession.sessionId}/stop`;
+      const actorUserId =
+        webhook.agentActivity?.userId ??
+        webhook.agentSession.comment?.userId ??
+        webhook.agentSession.creatorId ??
+        undefined;
       try {
         const stopRes = await signedControlPlaneFetch(env, {
           method: "POST",
           url: stopUrl,
+          actor: actorUserId ? `linear:${actorUserId}` : undefined,
           traceId,
         });
         if (!stopRes.ok) {
@@ -309,12 +315,13 @@ function getFollowUp(webhook: AgentSessionWebhook): {
   source: "linear_agent_activity" | "linear_comment" | "linear_fallback";
   actorUserId?: string;
 } {
+  const fallbackActorUserId = webhook.agentSession.creatorId ?? undefined;
   const activityBody = webhook.agentActivity?.content?.body;
   if (activityBody) {
     return {
       content: activityBody,
       source: "linear_agent_activity",
-      actorUserId: webhook.agentActivity?.userId,
+      actorUserId: webhook.agentActivity?.userId ?? fallbackActorUserId,
     };
   }
 
@@ -323,11 +330,15 @@ function getFollowUp(webhook: AgentSessionWebhook): {
     return {
       content: comment.body,
       source: "linear_comment",
-      actorUserId: comment.userId,
+      actorUserId: comment.userId ?? fallbackActorUserId,
     };
   }
 
-  return { content: "Follow-up on the issue.", source: "linear_fallback" };
+  return {
+    content: "Follow-up on the issue.",
+    source: "linear_fallback",
+    actorUserId: fallbackActorUserId,
+  };
 }
 
 function buildLinearCallbackContext(params: {
@@ -419,6 +430,7 @@ async function handleFollowUp(
     const eventsRes = await signedControlPlaneFetch(env, {
       method: "GET",
       url: eventsUrl,
+      actor: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
       traceId,
     });
     if (eventsRes.ok) {

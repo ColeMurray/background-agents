@@ -1,5 +1,4 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
-import { activateSessionParticipantAccess } from "../db/session-access";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import type { Env } from "../types";
 import {
@@ -40,7 +39,7 @@ async function handleSessionWsToken(
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = authorization.userId;
 
-  const response = await ctx.metrics.time("do_fetch", () =>
+  return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -53,10 +52,6 @@ async function handleSessionWsToken(
       }),
     })
   );
-  if (response.ok) {
-    await activateSessionParticipantAccess(ctx.db, sessionId, canonicalUserId);
-  }
-  return response;
 }
 
 export const sessionWsTokenRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [

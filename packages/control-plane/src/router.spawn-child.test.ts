@@ -890,16 +890,14 @@ function authorizedDb() {
                 role_key: "member",
                 role_name: "Member",
               }
-            : sql.includes("FROM session_access")
-              ? { relation: "creator" }
-              : null
+            : null
         ),
         all: vi.fn(async () => ({
           results: sql.includes("FROM role_permissions")
             ? [
                 { permission_id: "sessions.create" },
                 { permission_id: "repositories.use" },
-                { permission_id: "sessions.collaborate.any" },
+                { permission_id: "sessions.collaborate" },
               ]
             : [],
         })),

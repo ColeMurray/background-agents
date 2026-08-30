@@ -26,10 +26,9 @@ afterEach(async () => {
 });
 
 describe("migration 0071: RBAC foundation", () => {
-  it("backfills existing users and session creators before enabling Member defaults", async () => {
+  it("backfills existing users before enabling Member defaults", async () => {
     await env.DB.exec(`
       DROP TRIGGER assign_default_role_after_user_insert;
-      DROP TABLE session_access;
       DROP TABLE authorization_audit_events;
       DROP TABLE user_role_assignments;
       DROP TABLE role_permissions;
@@ -90,15 +89,6 @@ describe("migration 0071: RBAC foundation", () => {
         },
       ],
     });
-    expect(await env.DB.prepare("SELECT * FROM session_access").all()).toMatchObject({
-      results: [
-        {
-          session_id: "existing-session",
-          user_id: "11111111111111111111111111111111",
-          relation: "creator",
-        },
-      ],
-    });
     expect(
       await env.DB.prepare(
         "SELECT user_id FROM automations WHERE id = 'existing-automation'"
@@ -113,12 +103,6 @@ describe("migration 0071: RBAC foundation", () => {
       "is_system",
     ]);
     expect(await tableColumns("user_role_assignments")).toEqual(["user_id", "role_id"]);
-    expect(await tableColumns("session_access")).toEqual(["session_id", "user_id", "relation"]);
-    expect(
-      (
-        await env.DB.prepare("PRAGMA index_info(idx_session_access_user)").all<{ name: string }>()
-      ).results.map((column) => column.name)
-    ).toEqual(["user_id", "session_id"]);
     expect(await tableColumns("authorization_audit_events")).toEqual([
       "id",
       "occurred_at",

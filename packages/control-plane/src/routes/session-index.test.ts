@@ -48,7 +48,7 @@ function createCtx(principal?: Principal): RequestContext {
             userId: principal.userId,
             suspendedAt: null,
             role: { id: "role_builtin_owner", key: "owner" as const, name: "Owner" },
-            permissions: ["sessions.read.any", "sessions.delete.any"] as const,
+            permissions: ["sessions.read", "sessions.delete", "sessions.lifecycle"] as const,
           },
         }
       : {}),
@@ -192,8 +192,7 @@ describe("session index routes", () => {
       limit: 50,
       offset: 0,
       viewerUserId: "0123456789abcdef0123456789abcdef",
-      readScope: "any",
-      lifecycleScope: null,
+      canManageLifecycle: true,
     });
   });
 

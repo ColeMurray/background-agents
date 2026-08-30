@@ -71,9 +71,6 @@ const USER_MERGE_COUNT_KEYS = [
   "skillProfilesDeduped",
   "skillProfilesRepointed",
   "roleAssignmentsRemoved",
-  "sessionAccessCollisionsUpdated",
-  "sessionAccessDeduped",
-  "sessionAccessRepointed",
   "providerAccountAuthorizationsRepointed",
   "providerAccountAuthorizationAttemptsRepointed",
   "keyboardShortcutPreferencesDeduped",
@@ -170,17 +167,6 @@ const SKILL_PROFILE_OPERATIONS = dedupeThenRepoint({
   )`,
 });
 
-const SESSION_ACCESS_OPERATIONS = dedupeThenRepoint({
-  dedupeKey: "sessionAccessDeduped",
-  repointKey: "sessionAccessRepointed",
-  table: "session_access",
-  collision: `EXISTS (
-    SELECT 1 FROM session_access survivor_access
-    WHERE survivor_access.user_id = ?
-      AND survivor_access.session_id = session_access.session_id
-  )`,
-});
-
 const FINAL_REPOINT_OPERATIONS = [
   regularRepoint("providerAccountAuthorizationsRepointed", "model_provider_account_authorizations"),
   regularRepoint(
@@ -198,7 +184,6 @@ const FINAL_REPOINT_OPERATIONS = [
 const TABLE_OPERATIONS = [
   ...BEFORE_SKILL_PROFILE_OPERATIONS,
   ...SKILL_PROFILE_OPERATIONS,
-  ...SESSION_ACCESS_OPERATIONS,
   ...FINAL_REPOINT_OPERATIONS,
 ] as const;
 
@@ -320,29 +305,11 @@ export async function mergeUsers(
   );
   addOperations(SKILL_PROFILE_OPERATIONS);
 
-  // Preserve RBAC and session-access invariants before deleting the loser.
+  // Preserve the survivor's RBAC assignment before deleting the loser.
   add(
     "roleAssignmentsRemoved",
     db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId)
   );
-  add(
-    "sessionAccessCollisionsUpdated",
-    db
-      .prepare(
-        `UPDATE session_access AS survivor_access
-         SET relation = 'creator'
-         WHERE survivor_access.user_id = ?
-           AND survivor_access.relation = 'participant'
-           AND EXISTS (
-             SELECT 1 FROM session_access AS loser_access
-             WHERE loser_access.user_id = ?
-               AND loser_access.session_id = survivor_access.session_id
-               AND loser_access.relation = 'creator'
-           )`
-      )
-      .bind(survivorId, loserId)
-  );
-  addOperations(SESSION_ACCESS_OPERATIONS);
   addOperations(FINAL_REPOINT_OPERATIONS);
 
   // Record the merge before deleting the user so the snapshots remain explicit.
@@ -415,11 +382,10 @@ async function previewCounts(
       total - (operation.subtract ? operationCounts[operation.subtract] : 0);
   }
 
-  const [skillProfileItemsMerged, roleAssignments, sessionAccessCollisionsUpdated, users] =
-    await db.batch<{ count: number }>([
-      db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM skill_profile_items loser_item
+  const [skillProfileItemsMerged, roleAssignments, users] = await db.batch<{ count: number }>([
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM skill_profile_items loser_item
          JOIN skill_profiles loser_profile ON loser_profile.id = loser_item.profile_id
          JOIN skill_profiles survivor_profile
            ON survivor_profile.user_id = ? AND survivor_profile.name = loser_profile.name
@@ -429,26 +395,13 @@ async function previewCounts(
              WHERE survivor_item.profile_id = survivor_profile.id
                AND survivor_item.skill_id = loser_item.skill_id
            )`
-        )
-        .bind(survivorId, loserId),
-      db
-        .prepare(`SELECT COUNT(*) AS count FROM user_role_assignments WHERE user_id = ?`)
-        .bind(loserId),
-      db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM session_access AS survivor_access
-         WHERE survivor_access.user_id = ?
-           AND survivor_access.relation = 'participant'
-           AND EXISTS (
-             SELECT 1 FROM session_access AS loser_access
-             WHERE loser_access.user_id = ?
-               AND loser_access.session_id = survivor_access.session_id
-               AND loser_access.relation = 'creator'
-           )`
-        )
-        .bind(survivorId, loserId),
-      db.prepare(`SELECT COUNT(*) AS count FROM users WHERE id = ?`).bind(loserId),
-    ]);
+      )
+      .bind(survivorId, loserId),
+    db
+      .prepare(`SELECT COUNT(*) AS count FROM user_role_assignments WHERE user_id = ?`)
+      .bind(loserId),
+    db.prepare(`SELECT COUNT(*) AS count FROM users WHERE id = ?`).bind(loserId),
+  ]);
 
   const count = (result: { results: { count: number }[] }) => result.results[0]?.count ?? 0;
 
@@ -470,7 +423,6 @@ async function previewCounts(
     ...operationCounts,
     skillProfileItemsMerged: count(skillProfileItemsMerged),
     roleAssignmentsRemoved: count(roleAssignments),
-    sessionAccessCollisionsUpdated: count(sessionAccessCollisionsUpdated),
     auditEventsCreated: count(users),
     canonicalEmailBackfilled,
     usersDeleted: count(users),

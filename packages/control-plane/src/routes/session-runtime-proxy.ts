@@ -1,4 +1,3 @@
-import { applyIdentityEnforcement } from "../auth/identity-enforcement";
 import { readBodyCapped } from "@open-inspect/shared/http-body";
 import type {
   SessionParticipantProfilesResponse,
@@ -7,7 +6,6 @@ import type {
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
-import { activateSessionParticipantAccess } from "../db/session-access";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -30,7 +28,6 @@ import {
   type RouteAuthorization,
   type RoutePolicy,
 } from "./shared";
-import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const participantsResponseSchema = z.object({
@@ -117,37 +114,6 @@ function legacyTokenRefreshRoute(
       },
     })
   );
-}
-
-async function handleAddParticipant(
-  request: Request,
-  _env: Env,
-  match: RegExpMatchArray,
-  ctx: SessionRouteContext
-): Promise<Response> {
-  const sessionId = getSessionId(match);
-  if (sessionId instanceof Response) return sessionId;
-
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-  if (
-    typeof body !== "object" ||
-    body === null ||
-    !("userId" in body) ||
-    !isCanonicalUserId(body.userId)
-  ) {
-    return error("A canonical participant userId is required", 400);
-  }
-
-  const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.participants, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) return response;
-
-  await activateSessionParticipantAccess(ctx.db, sessionId, body.userId);
-  return response;
 }
 
 async function handleSandboxError(
@@ -273,27 +239,22 @@ async function handleCreatePR(
 }
 
 /**
- * Read a lifecycle-route body (title/archive/unarchive) under identity
- * enforcement. Lifecycle routes accept bodyless requests — a parse failure
- * just yields no fields. The DO participant check runs against the verified
- * identity, never a caller-asserted one.
+ * Title updates accept a bodyless request but reject caller-supplied identity.
  */
-async function readEnforcedLifecycleBody(
-  request: Request,
-  ctx: SessionRouteContext
-): Promise<{ userId?: string; title?: string; rejection?: Response }> {
+async function readTitleBody(request: Request): Promise<{ title?: string; rejection?: Response }> {
   let body: { title?: string } = {};
   try {
     const parsed: unknown = await request.json();
-    if (isObjectBody(parsed)) body = parsed;
+    if (isObjectBody(parsed)) {
+      if ("userId" in parsed) {
+        return { rejection: error("Field 'userId' is not accepted from verified callers", 400) };
+      }
+      body = parsed;
+    }
   } catch {
     // Body parsing failed, continue without fields.
   }
-
-  const enforcement = applyIdentityEnforcement(ctx, "session-lifecycle", body);
-  if (enforcement.rejection) return { rejection: enforcement.rejection };
-
-  return { userId: enforcement.enforced.participantUserId ?? undefined, title: body.title };
+  return { title: body.title };
 }
 
 function lifecycleProxyRoute(
@@ -311,15 +272,17 @@ function lifecycleProxyRoute(
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
 
-        const { userId, title, rejection } = await readEnforcedLifecycleBody(request, ctx);
-        if (rejection) return rejection;
+        let body = {};
+        if (internalPath === SessionInternalPaths.updateTitle) {
+          const { title, rejection } = await readTitleBody(request);
+          if (rejection) return rejection;
+          body = { title };
+        }
 
         return ctx.sessionRuntime.fetch(sessionId, internalPath, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            internalPath === SessionInternalPaths.updateTitle ? { userId, title } : { userId }
-          ),
+          body: JSON.stringify(body),
         });
       },
     })
@@ -347,7 +310,9 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "POST",
     routePath: "/sessions/:id/stop",
     internalPath: SessionInternalPaths.stop,
-    authorization: requireSession("lifecycle"),
+    authorization: requireSession("lifecycle", "id", {
+      actorlessGrants: [{ service: "linear-bot" }],
+    }),
     runtimeMethod: "POST",
   }),
   defineRoute(
@@ -388,15 +353,6 @@ export const sessionRuntimeProxyRoutes: Route[] = [
       pattern: parsePattern("/sessions/:id/participant-profiles"),
       authorization: requireSession("read"),
       handler: handleParticipantProfiles,
-    })
-  ),
-  defineRoute(
-    GITHUB_USER_OR_SERVICE_ROUTE,
-    sessionRoute({
-      method: "POST",
-      pattern: parsePattern("/sessions/:id/participants"),
-      authorization: requireSession("participants.manage"),
-      handler: handleAddParticipant,
     })
   ),
   simpleProxyRoute({

@@ -460,13 +460,6 @@ export async function issueClientWsToken(
   )
     .bind(canonicalUserId, "WebSocket Test User", now, now)
     .run();
-  await env.DB.prepare(
-    `INSERT INTO session_access (session_id, user_id, relation)
-     VALUES (?, ?, 'participant')
-     ON CONFLICT(session_id, user_id) DO NOTHING`
-  )
-    .bind(sessionName, canonicalUserId)
-    .run();
   const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -57,7 +57,7 @@ The control plane provides:
 
 | Endpoint                        | Method    | Description                    |
 | ------------------------------- | --------- | ------------------------------ |
-| `/sessions`                     | GET       | List user's sessions           |
+| `/sessions`                     | GET       | List workspace sessions        |
 | `/sessions`                     | POST      | Create new session             |
 | `/sessions/:id`                 | GET       | Get canonical session snapshot |
 | `/sessions/:id`                 | DELETE    | Delete session                 |
@@ -67,7 +67,7 @@ The control plane provides:
 | `/sessions/:id/ws`              | WebSocket | Real-time connection           |
 | `/sessions/:id/events`          | GET       | Paginated events               |
 | `/sessions/:id/artifacts`       | GET       | List artifacts                 |
-| `/sessions/:id/participants`    | GET/POST  | Manage participants            |
+| `/sessions/:id/participants`    | GET       | List runtime participants      |
 | `/sessions/:id/messages`        | GET       | List messages                  |
 | `/sessions/:id/pr`              | POST      | Create pull request            |
 | `/sessions/:id/scm-credentials` | POST      | Broker sandbox git credentials |

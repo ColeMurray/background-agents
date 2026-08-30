@@ -261,7 +261,7 @@ describe("sig1 service-credential authentication", () => {
     expect(response.status).toBe(401);
   });
 
-  it("persists bot session ownership from the signed actor", async () => {
+  it("persists bot creator attribution and permits cross-actor collaboration", async () => {
     const created = await signedFetch({
       service: "slack-bot",
       method: "POST",
@@ -294,15 +294,75 @@ describe("sig1 service-credential authentication", () => {
       })
     );
 
-    const unrelated = await signedFetch({
+    const collaboratorList = await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: "https://test.local/sessions",
+      actor: "slack:U0002",
+    });
+    expect(collaboratorList.status).toBe(200);
+    await expect(collaboratorList.json()).resolves.toMatchObject({
+      sessions: [
+        expect.objectContaining({ title: "Slack-owned session", canManageLifecycle: true }),
+      ],
+    });
+
+    const collaborator = await signedFetch({
       service: "slack-bot",
       method: "POST",
       url: `https://test.local/sessions/${createdBody.sessionId}/prompt`,
       actor: "slack:U0002",
-      body: JSON.stringify({ prompt: "Cross-session prompt" }),
+      body: JSON.stringify({ content: "Cross-session prompt" }),
     });
-    expect(unrelated.status).toBe(403);
-    await expect(unrelated.json()).resolves.toMatchObject({ code: "session_access_required" });
+    expect(collaborator.status).toBe(200);
+
+    const deniedByServiceCeiling = await signedFetch({
+      service: "slack-bot",
+      method: "DELETE",
+      url: `https://test.local/sessions/${createdBody.sessionId}`,
+      actor: "slack:U0002",
+    });
+    expect(deniedByServiceCeiling.status).toBe(403);
+    await expect(deniedByServiceCeiling.json()).resolves.toMatchObject({
+      code: "service_capability_required",
+    });
+  });
+
+  it("allows only narrow actorless session callbacks", async () => {
+    const created = await signedFetch({
+      service: "linear-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "linear:U-CREATOR",
+      body: JSON.stringify({
+        title: "Linear callback session",
+        model: "anthropic/claude-haiku-4-5",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { sessionId } = await created.json<{ sessionId: string }>();
+
+    const linearStop = await signedFetch({
+      service: "linear-bot",
+      method: "POST",
+      url: `https://test.local/sessions/${sessionId}/stop`,
+    });
+    expect(linearStop.status).not.toBe(403);
+
+    const slackMedia = await signedFetch({
+      service: "slack-bot",
+      method: "GET",
+      url: `https://test.local/sessions/${sessionId}/media/missing-artifact`,
+    });
+    expect(slackMedia.status).not.toBe(403);
+
+    const wrongService = await signedFetch({
+      service: "github-bot",
+      method: "POST",
+      url: `https://test.local/sessions/${sessionId}/stop`,
+    });
+    expect(wrongService.status).toBe(403);
+    await expect(wrongService.json()).resolves.toMatchObject({ code: "service_actor_required" });
   });
 
   it("denies suspended canonical bot actors and actorless broad requests", async () => {

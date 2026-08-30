@@ -367,10 +367,6 @@ class FakeD1Database {
       return { meta: { changes: 0 } };
     }
 
-    if (normalized.startsWith("INSERT INTO session_access")) {
-      return { meta: { changes: 1 } };
-    }
-
     throw new Error(`Unexpected mutation query: ${query}`);
   }
 

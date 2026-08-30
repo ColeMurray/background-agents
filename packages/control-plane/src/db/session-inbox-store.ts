@@ -6,16 +6,13 @@ import type {
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
-import { sessionAccessPredicate } from "./session-access";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import type { SessionPermissionScope } from "../authorization/session-authorization-policy";
 
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
-  readScope: SessionPermissionScope;
-  lifecycleScope: SessionPermissionScope | null;
+  canManageLifecycle: boolean;
   excludeAutomatedSessions?: boolean;
   viewerUserId: string;
   limit: number;
@@ -192,21 +189,14 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
-      | "createdByUserIds"
-      | "excludeAutomatedSessions"
-      | "viewerUserId"
-      | "readScope"
-      | "lifecycleScope"
+      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId" | "canManageLifecycle"
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
-    const lifecycleCapability = options.lifecycleScope
-      ? sessionAccessPredicate("sessions", options.viewerUserId, options.lifecycleScope)
-      : { sql: "0", params: [] };
     return {
       sql: `WITH RECURSIVE eligible_sessions AS (
               SELECT sessions.*, ${unreadSql("sessions")} AS unread,
-                     ${lifecycleCapability.sql} AS can_manage_lifecycle
+                      ${options.canManageLifecycle ? 1 : 0} AS can_manage_lifecycle
               FROM sessions
               LEFT JOIN users viewer ON viewer.id = ?
               LEFT JOIN session_read_states read_state
@@ -252,15 +242,12 @@ export class SessionInboxStore {
               FROM effective_sessions
               GROUP BY effective_root_session_id
             )`,
-      params: [...lifecycleCapability.params, options.viewerUserId, ...params],
+      params: [options.viewerUserId, ...params],
     };
   }
 
   private eligibility(
-    options: Pick<
-      ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId" | "readScope"
-    >
+    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomatedSessions">
   ): { conditions: string[]; params: unknown[] } {
     const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
     const params: unknown[] = [];
@@ -273,9 +260,6 @@ export class SessionInboxStore {
       );
       params.push(...options.createdByUserIds);
     }
-    const access = sessionAccessPredicate("sessions", options.viewerUserId, options.readScope);
-    conditions.push(access.sql);
-    params.push(...access.params);
     return { conditions, params };
   }
 
