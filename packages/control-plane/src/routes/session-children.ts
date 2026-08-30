@@ -18,7 +18,7 @@ import {
   json,
   NO_AUTHORIZATION,
   parsePattern,
-  requireSession,
+  requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
   type Route,
@@ -265,7 +265,7 @@ export const sessionChildRoutes: Route[] = [
   defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/children"),
-    authorization: requireSession("read", "id"),
+    authorization: requirePermission("sessions.read"),
     handler: handleListChildren,
   }),
   defineRoute(
@@ -273,7 +273,7 @@ export const sessionChildRoutes: Route[] = [
     sessionRoute({
       method: "GET",
       pattern: parsePattern("/sessions/:id/children/:childId"),
-      authorization: requireSession("read", "childId"),
+      authorization: requirePermission("sessions.read"),
       handler: handleGetChild,
     })
   ),
@@ -282,7 +282,7 @@ export const sessionChildRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
-      authorization: requireSession("lifecycle", "childId"),
+      authorization: requirePermission("sessions.lifecycle"),
       handler: handleCancelChild,
     })
   ),

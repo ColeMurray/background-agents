@@ -20,7 +20,6 @@ import { AutomationStore } from "./db/automation-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
-import { sessionPermission } from "./authorization/session-authorization-policy";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -33,7 +32,7 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   NO_AUTHORIZATION,
   parsePattern,
-  requireSession,
+  requirePermission,
   json,
   error,
   HttpError,
@@ -450,32 +449,6 @@ async function enforceScopedPermissionRequirement(
   return json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403);
 }
 
-async function enforceSessionRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "session" }>,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response | null> {
-  const userId = authorizationUserId(ctx);
-  if (!userId) return null;
-  const encodedSessionId = match.groups?.[requirement.sessionIdParam];
-  if (!encodedSessionId) return json({ error: "Invalid session route" }, 400);
-  try {
-    decodeURIComponent(encodedSessionId);
-  } catch {
-    return json({ error: "Invalid session route" }, 400);
-  }
-
-  const permission = sessionPermission(requirement.operation);
-  if (
-    ctx.principal?.kind === "service" &&
-    !serviceAllowsPermission(ctx.principal.service, permission)
-  ) {
-    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
-  }
-  if (ctx.authorization?.permissions.includes(permission)) return null;
-  return json({ error: "Forbidden", code: "permission_required", permission }, 403);
-}
-
 async function enforceAutomationRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
   match: RegExpMatchArray,
@@ -532,9 +505,6 @@ async function enforceRouteAuthorization(
       case "scoped-permission":
         authorizationError = await enforceScopedPermissionRequirement(requirement, ctx);
         break;
-      case "session":
-        authorizationError = await enforceSessionRequirement(requirement, match, ctx);
-        break;
       case "automation":
         authorizationError = await enforceAutomationRequirement(requirement, match, ctx);
         break;
@@ -588,7 +558,7 @@ export const routes: Route[] = [
   defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "POST",
     pattern: parsePattern("/sessions/:id/slack-notify"),
-    authorization: requireSession("collaborate"),
+    authorization: requirePermission("sessions.collaborate"),
     handler: handleSlackNotify,
   }),
 

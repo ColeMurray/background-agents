@@ -33,12 +33,6 @@ import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
-export type {
-  ListSessionInboxOptions,
-  ListSessionInboxResult,
-  ListSessionInboxSnapshotResult,
-} from "./session-inbox-store";
-
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
 
 export interface ChildAdmissionLease {
@@ -60,7 +54,7 @@ const MAX_DESCENDANT_DEPTH = 10;
  * primary, mirrored into the scalar repo_owner/repo_name columns). Aliases
  * the shared wire type so Session.repositories and this share one shape.
  */
-export type SessionIndexRepository = SessionListRepository;
+type SessionIndexRepository = SessionListRepository;
 
 export interface SessionEntry {
   id: string;
@@ -148,8 +142,6 @@ export interface ListSessionsOptions {
   status?: SessionStatus;
   excludeStatus?: SessionStatus;
   excludeAutomationLineage?: boolean;
-  repoOwner?: string;
-  repoName?: string;
   createdByUserIds?: readonly string[];
   limit?: number;
   offset?: number;
@@ -517,8 +509,6 @@ export class SessionIndexStore {
       status,
       excludeStatus,
       excludeAutomationLineage,
-      repoOwner,
-      repoName,
       createdByUserIds,
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
@@ -545,31 +535,6 @@ export class SessionIndexStore {
       // actor), but auto reviews and review-request handling are bot-initiated,
       // so they are lineage-excluded alongside automation runs.
       conditions.push("automation_id IS NULL AND spawn_source NOT IN ('automation', 'github-bot')");
-    }
-
-    // Repo filters match against the membership table so a session is found
-    // through ANY member, not just the scalar primary mirror. The scalar arm
-    // is the fallback for pre-feature sessions without member rows.
-    const normalizedRepoOwner = normalizeRepoIdentifier(repoOwner);
-    const normalizedRepoName = normalizeRepoIdentifier(repoName);
-    if (normalizedRepoOwner || normalizedRepoName) {
-      const memberConditions: string[] = [];
-      const scalarConditions: string[] = [];
-      const repoFilterParams: unknown[] = [];
-      if (normalizedRepoOwner) {
-        memberConditions.push("sr.repo_owner = ?");
-        scalarConditions.push("repo_owner = ?");
-        repoFilterParams.push(normalizedRepoOwner);
-      }
-      if (normalizedRepoName) {
-        memberConditions.push("sr.repo_name = ?");
-        scalarConditions.push("repo_name = ?");
-        repoFilterParams.push(normalizedRepoName);
-      }
-      conditions.push(
-        `(EXISTS (SELECT 1 FROM session_repositories sr WHERE sr.session_id = sessions.id AND ${memberConditions.join(" AND ")}) OR (${scalarConditions.join(" AND ")}))`
-      );
-      params.push(...repoFilterParams, ...repoFilterParams);
     }
 
     if (createdByUserIds?.length) {

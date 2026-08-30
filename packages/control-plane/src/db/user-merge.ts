@@ -26,8 +26,9 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
  *   the preceding statement, so a stop exactly between those two statements
  *   is not re-derivable from the database. The CLI prints a recovery record
  *   before executing to cover that residual case.
- * - Browser sessions (`auth_sessions`) are re-pointed, not deleted — the
- *   merged person stays signed in as the survivor.
+ * - Browser sessions (`auth_sessions`) issued to the loser are deleted. An
+ *   issued bearer credential is never rewritten to authenticate as another
+ *   canonical user.
  * - Verification never transfers to an unproven address: the loser's email
  *   (and its `email_verified` flag) backfills the survivor only when the
  *   survivor has no email of its own.
@@ -63,7 +64,7 @@ const USER_MERGE_COUNT_KEYS = [
   "readStatesDeduped",
   "readStatesRepointed",
   "sessionsRepointed",
-  "authSessionsRepointed",
+  "authSessionsDeleted",
   "automationsOwnedRepointed",
   "automationsCreatedRepointed",
   "scmTokensRepointed",
@@ -95,6 +96,16 @@ function regularRepoint(key: UserMergeCountKey, table: string, column = "user_id
     key,
     execute: (db, survivorId, loserId) =>
       db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).bind(survivorId, loserId),
+    preview: (db, _survivorId, loserId) =>
+      db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
+  };
+}
+
+function regularDelete(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
+  return {
+    key,
+    execute: (db, _survivorId, loserId) =>
+      db.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).bind(loserId),
     preview: (db, _survivorId, loserId) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
   };
@@ -151,7 +162,7 @@ const BEFORE_SKILL_PROFILE_OPERATIONS = [
     )`,
   }),
   regularRepoint("sessionsRepointed", "sessions"),
-  regularRepoint("authSessionsRepointed", "auth_sessions", "userId"),
+  regularDelete("authSessionsDeleted", "auth_sessions", "userId"),
   regularRepoint("automationsOwnedRepointed", "automations"),
   regularRepoint("automationsCreatedRepointed", "automations", "created_by"),
   regularRepoint("scmTokensRepointed", "user_scm_tokens"),

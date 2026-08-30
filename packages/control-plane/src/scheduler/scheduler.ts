@@ -73,6 +73,7 @@ import { resolveAutomationSessionTarget } from "../automation/session-target";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
+import type { GitHubEnrichment } from "../session/identity";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -191,7 +192,7 @@ export class AutomationTriggerBlockedError extends Error {
 
 export class AutomationExecutionUnauthorizedError extends Error {
   constructor() {
-    super("Automation owner is not authorized to execute");
+    super("Automation execution principal is not authorized");
     this.name = "AutomationExecutionUnauthorizedError";
   }
 }
@@ -199,6 +200,8 @@ export class AutomationExecutionUnauthorizedError extends Error {
 interface StartInvocationParams {
   automation: AutomationRow;
   source: AutomationInvocationSource;
+  /** Human authority used for a manual firing; unattended sources use the automation owner. */
+  executionPrincipal?: ExecutionPrincipal;
   /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
   scheduledAt?: number;
   /** Next cron slot, advanced atomically with the insert (schedule source only). */
@@ -221,6 +224,12 @@ interface StartInvocationParams {
    * `instructionsOverride` so admitted children cannot be stranded.
    */
   instructionsOverrideFactory?: () => Promise<string>;
+}
+
+interface ExecutionPrincipal {
+  platformUserId: string;
+  participantUserId: string;
+  scmEnrichment?: GitHubEnrichment;
 }
 
 type StartInvocationResult =
@@ -343,7 +352,23 @@ export class Scheduler {
         automation = { ...automation, user_id: identity.userId };
       }
     }
-    if (!(await isAutomationExecutionAuthorized(this.db, automation.id))) {
+    const executionPrincipal =
+      params.executionPrincipal ??
+      (automation.user_id
+        ? {
+            platformUserId: automation.user_id,
+            participantUserId: automation.created_by,
+          }
+        : null);
+    if (
+      !executionPrincipal ||
+      !(await isAutomationExecutionAuthorized(
+        this.db,
+        automation.id,
+        [],
+        executionPrincipal.platformUserId
+      ))
+    ) {
       throw new AutomationExecutionUnauthorizedError();
     }
     const now = Date.now();
@@ -523,9 +548,16 @@ export class Scheduler {
           automation,
           child,
           providerAuthSnapshot.providerAuth,
-          sessionId
+          sessionId,
+          executionPrincipal
         );
-        await this.sendPromptToSession(sessionId, automation, child.id, instructionsOverride);
+        await this.sendPromptToSession(
+          sessionId,
+          automation,
+          child.id,
+          executionPrincipal,
+          instructionsOverride
+        );
         child.status = "running";
         child.session_id = sessionId;
       } catch (e) {
@@ -1072,7 +1104,11 @@ export class Scheduler {
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
-  async trigger(automationId: string): Promise<SchedulerTriggerResult> {
+  async trigger(
+    automationId: string,
+    requesterUserId: string,
+    requesterEnrichment?: GitHubEnrichment
+  ): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
@@ -1082,6 +1118,11 @@ export class Scheduler {
     const result = await this.startInvocation(store, {
       automation,
       source: "manual",
+      executionPrincipal: {
+        platformUserId: requesterUserId,
+        participantUserId: requesterUserId,
+        scmEnrichment: requesterEnrichment,
+      },
     });
 
     if (result.outcome !== "started") {
@@ -1351,7 +1392,8 @@ export class Scheduler {
     automation: AutomationRow,
     run: AutomationRunRow,
     providerAuth: SessionModelProviderAuthInput[],
-    sessionId: string
+    sessionId: string,
+    executionPrincipal: ExecutionPrincipal
   ): Promise<void> {
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -1389,7 +1431,7 @@ export class Scheduler {
         environmentId: target.environmentId,
       },
       { mode: "all" },
-      automation.user_id
+      executionPrincipal.platformUserId
     );
 
     const sessionInput: SessionInitInput = {
@@ -1398,10 +1440,15 @@ export class Scheduler {
       title: `[Auto] ${automation.name}`,
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
-      participantUserId: automation.created_by,
-      platformUserId: automation.user_id,
-      scmTokenEncrypted: null,
-      scmRefreshTokenEncrypted: null,
+      participantUserId: executionPrincipal.participantUserId,
+      platformUserId: executionPrincipal.platformUserId,
+      scmUserId: executionPrincipal.scmEnrichment?.scmUserId,
+      scmLogin: executionPrincipal.scmEnrichment?.scmLogin,
+      scmName: executionPrincipal.scmEnrichment?.displayName,
+      scmEmail: executionPrincipal.scmEnrichment?.email,
+      scmTokenEncrypted: executionPrincipal.scmEnrichment?.accessTokenEncrypted ?? null,
+      scmRefreshTokenEncrypted: executionPrincipal.scmEnrichment?.refreshTokenEncrypted ?? null,
+      scmTokenExpiresAt: executionPrincipal.scmEnrichment?.tokenExpiresAt,
       codeServerEnabled,
       vncEnabled,
       sandboxSettings,
@@ -1420,6 +1467,7 @@ export class Scheduler {
     sessionId: string,
     automation: AutomationRow,
     runId: string,
+    executionPrincipal: ExecutionPrincipal,
     instructionsOverride?: string
   ): Promise<void> {
     const callbackContext: AutomationCallbackContext = {
@@ -1431,8 +1479,8 @@ export class Scheduler {
 
     await this.enqueueSessionPrompt(sessionId, {
       content: instructionsOverride ?? automation.instructions,
-      authorId: automation.created_by,
-      canonicalUserId: automation.user_id,
+      authorId: executionPrincipal.participantUserId,
+      canonicalUserId: executionPrincipal.platformUserId,
       source: "automation",
       callbackContext,
     });

@@ -127,7 +127,7 @@ import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
-import { verifySessionAuthorization } from "../authorization/session-authorization-policy";
+import { AuthorizationError, AuthorizationService } from "../authorization/service";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -688,8 +688,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     verifyAuthorization: async (userId) => {
       if (!db) return "unavailable";
       try {
-        return verifySessionAuthorization(db, userId, "collaborate");
+        await new AuthorizationService(db).requirePermission(userId, "sessions.collaborate");
+        return "valid";
       } catch (error) {
+        if (error instanceof AuthorizationError) return "rejected";
         log.error("WebSocket authorization verification failed", {
           user_id: userId,
           error: error instanceof Error ? error : String(error),

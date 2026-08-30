@@ -38,4 +38,15 @@ describe("automation execution authorization", () => {
     expect(queries[0]).toContain("automation_repositories");
     expect(queries[0]).toContain("automation_environments");
   });
+
+  it("authorizes an explicit execution user instead of the stored owner", async () => {
+    const { db, bindings, queries } = recordingDb();
+
+    await expect(
+      isAutomationExecutionAuthorized(db, "automation-1", [], "requester-1")
+    ).resolves.toBe(true);
+
+    expect(bindings[0]?.slice(0, 2)).toEqual(["requester-1", "automation-1"]);
+    expect(queries[0]).toContain("JOIN users u ON u.id = ?");
+  });
 });

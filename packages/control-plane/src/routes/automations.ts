@@ -74,6 +74,8 @@ import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
+import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 
 const logger = createLogger("router:automations");
 
@@ -1193,7 +1195,7 @@ async function handleResumeAutomation(
 }
 
 async function handleTriggerAutomation(
-  _request: Request,
+  request: Request,
   env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
@@ -1202,11 +1204,36 @@ async function handleTriggerAutomation(
   if (!id) return error("Automation ID required", 400);
 
   admittedAutomation(ctx);
+  const requesterUserId = ctx.authorization?.userId;
+  if (!requesterUserId) return error("Authorization unavailable", 503);
+
+  let requesterEnrichment;
+  try {
+    requesterEnrichment = await resolveGitHubEnrichmentForRequest(
+      env,
+      ctx.db,
+      new UserStore(ctx.db),
+      requesterUserId,
+      await resolveGitHubCredentialAuthority(ctx, request.headers)
+    );
+  } catch (enrichmentError) {
+    logger.warn("Failed to enrich manual automation trigger with GitHub identity", {
+      error:
+        enrichmentError instanceof Error ? enrichmentError : new Error(String(enrichmentError)),
+      automation_id: id,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
-    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
+    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
+      id,
+      requesterUserId,
+      requesterEnrichment ?? undefined
+    );
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",

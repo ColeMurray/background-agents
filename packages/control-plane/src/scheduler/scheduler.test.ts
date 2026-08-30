@@ -359,7 +359,7 @@ const sampleAutomation = {
   next_run_at: now - 60000,
   consecutive_failures: 0,
   created_by: "user-1",
-  user_id: null as string | null,
+  user_id: "user-1" as string | null,
   created_at: now - 86400000,
   updated_at: now - 86400000,
   deleted_at: null,
@@ -499,7 +499,8 @@ describe("Scheduler", () => {
 
   describe("tick", () => {
     it("returns empty summary when no overdue automations", async () => {
-      const scheduler = createScheduler();
+      const env = createEnv();
+      const scheduler = createScheduler(env);
       const result = await scheduler.tick();
 
       expect(result).toEqual({ processed: 0, skipped: 0, failed: 0 });
@@ -509,7 +510,9 @@ describe("Scheduler", () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
 
-      const scheduler = createScheduler();
+      const env = createEnv();
+      const fetchMock = vi.mocked(env.SESSION.get(env.SESSION.idFromName("auto-1")).fetch);
+      const scheduler = createScheduler(env);
       const result = await scheduler.tick();
 
       expect(result).toMatchObject({ processed: 1 });
@@ -533,6 +536,14 @@ describe("Scheduler", () => {
         expect.any(String),
         expect.any(Number)
       );
+      await expect(getInitBody(fetchMock)).resolves.toMatchObject({
+        userId: sampleAutomation.created_by,
+        canonicalUserId: sampleAutomation.user_id,
+      });
+      await expect(getPromptBody(fetchMock)).resolves.toMatchObject({
+        authorId: sampleAutomation.created_by,
+        canonicalUserId: sampleAutomation.user_id,
+      });
     });
 
     it("rejects unattended execution before invocation work when the owner is unauthorized", async () => {
@@ -543,7 +554,12 @@ describe("Scheduler", () => {
       const result = await createScheduler().tick();
 
       expect(result).toEqual({ processed: 0, skipped: 0, failed: 1 });
-      expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledWith(expect.anything(), "auto-1");
+      expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledWith(
+        expect.anything(),
+        "auto-1",
+        [],
+        "user-1"
+      );
       expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       expect(mockResolveSessionProviderAuth).not.toHaveBeenCalled();
@@ -1355,7 +1371,7 @@ describe("Scheduler", () => {
     });
 
     it("repairs legacy automation identity before invocation admission", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockStore.getOverdueAutomations.mockResolvedValue([{ ...sampleAutomation, user_id: null }]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockUserStoreGetIdentity.mockResolvedValue({ userId: "looked-up-user" });
 
@@ -1371,17 +1387,15 @@ describe("Scheduler", () => {
       );
     });
 
-    it("creates session with null userId when identity lookup finds nothing", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+    it("rejects a legacy automation when identity lookup finds nothing", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([{ ...sampleAutomation, user_id: null }]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
       mockUserStoreGetIdentity.mockResolvedValue(null);
 
-      const scheduler = createScheduler();
-      await scheduler.tick();
+      const result = await createScheduler().tick();
 
-      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: null })
-      );
+      expect(result).toEqual({ processed: 0, skipped: 0, failed: 1 });
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
     });
 
     it("swallows launch-failure tracking errors and logs scheduler.fail_track_error", async () => {
@@ -2039,7 +2053,9 @@ describe("Scheduler", () => {
       mockStore.getById.mockResolvedValue(null);
 
       const scheduler = createScheduler();
-      await expect(scheduler.trigger("nonexistent")).rejects.toThrow("Automation not found");
+      await expect(scheduler.trigger("nonexistent", "user-1")).rejects.toThrow(
+        "Automation not found"
+      );
     });
 
     it("rejects when active run exists, recording nothing", async () => {
@@ -2047,7 +2063,9 @@ describe("Scheduler", () => {
       mockStore.getActiveRunForAutomation.mockResolvedValue({ id: "run-active" });
 
       const scheduler = createScheduler();
-      await expect(scheduler.trigger("auto-1")).rejects.toThrow("An active run already exists");
+      await expect(scheduler.trigger("auto-1", "user-1")).rejects.toThrow(
+        "An active run already exists"
+      );
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
@@ -2057,7 +2075,7 @@ describe("Scheduler", () => {
       mockIsAutomationExecutionAuthorized.mockResolvedValue(false);
 
       const scheduler = createScheduler();
-      await expect(scheduler.trigger("auto-1")).rejects.toBeInstanceOf(
+      await expect(scheduler.trigger("auto-1", "user-1")).rejects.toBeInstanceOf(
         AutomationExecutionUnauthorizedError
       );
       expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
@@ -2069,8 +2087,18 @@ describe("Scheduler", () => {
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
       mockStore.getRepositoriesForAutomation.mockResolvedValue([repositoryRow("auto-1")]);
 
-      const scheduler = createScheduler();
-      const result = await scheduler.trigger("auto-1");
+      const env = createEnv();
+      const fetchMock = vi.mocked(env.SESSION.get(env.SESSION.idFromName("auto-1")).fetch);
+      const scheduler = createScheduler(env);
+      const result = await scheduler.trigger("auto-1", "user-1", {
+        scmUserId: "123",
+        scmLogin: "requester",
+        displayName: "Requester",
+        email: "123+requester@users.noreply.github.com",
+        accessTokenEncrypted: "encrypted-access",
+        refreshTokenEncrypted: "encrypted-refresh",
+        tokenExpiresAt: 123456,
+      });
 
       expect(result).toEqual({
         invocationId: expect.any(String),
@@ -2088,6 +2116,15 @@ describe("Scheduler", () => {
         expect.any(String),
         expect.any(Number)
       );
+      await expect(getInitBody(fetchMock)).resolves.toMatchObject({
+        scmUserId: "123",
+        scmLogin: "requester",
+        scmName: "Requester",
+        scmEmail: "123+requester@users.noreply.github.com",
+        scmTokenEncrypted: "encrypted-access",
+        scmRefreshTokenEncrypted: "encrypted-refresh",
+        scmTokenExpiresAt: 123456,
+      });
     });
 
     it("rejects when every launch fails, still recording the failed children", async () => {
@@ -2111,7 +2148,9 @@ describe("Scheduler", () => {
         .spyOn((scheduler as unknown as { log: Logger }).log, "error")
         .mockImplementation(() => {});
 
-      await expect(scheduler.trigger("auto-1")).rejects.toThrow("Failed to trigger automation");
+      await expect(scheduler.trigger("auto-1", "user-1")).rejects.toThrow(
+        "Failed to trigger automation"
+      );
 
       const failTrackCall = errorSpy.mock.calls.find(
         ([, data]) =>
@@ -2481,7 +2520,9 @@ describe("Scheduler", () => {
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
-      const scheduler = createScheduler();
+      const env = createEnv();
+      const fetchMock = vi.mocked(env.SESSION.get(env.SESSION.idFromName("auto-slack")).fetch);
+      const scheduler = createScheduler(env);
       // Matching text so the trigger conditions pass.
       const result = await scheduler.event(makeSlackEvent());
 
@@ -2503,6 +2544,14 @@ describe("Scheduler", () => {
       expect(lastInsertedChildren()[0]).toMatchObject({
         automation_id: "auto-slack",
         status: "starting",
+      });
+      await expect(getInitBody(fetchMock)).resolves.toMatchObject({
+        userId: sampleSlackAutomation.created_by,
+        canonicalUserId: sampleSlackAutomation.user_id,
+      });
+      await expect(getPromptBody(fetchMock)).resolves.toMatchObject({
+        authorId: sampleSlackAutomation.created_by,
+        canonicalUserId: sampleSlackAutomation.user_id,
       });
     });
 

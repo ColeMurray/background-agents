@@ -9,7 +9,7 @@ import {
   json,
   parsePattern,
   NO_AUTHORIZATION,
-  requireSession,
+  requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type SandboxRouteContext,
@@ -95,7 +95,7 @@ export const sessionSkillRoutes: Route[] = [
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/skills"),
-    authorization: requireSession("read"),
+    authorization: requirePermission("sessions.read"),
     handler: handleSessionSkillsView,
   }),
   defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {

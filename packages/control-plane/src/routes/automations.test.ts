@@ -20,9 +20,19 @@ import {
 import { PERMISSION_IDS, type PermissionId } from "@open-inspect/shared/rbac";
 
 const mockProviderAdapterGet = vi.hoisted(() => vi.fn());
+const mockResolveGitHubCredentialAuthority = vi.hoisted(() => vi.fn());
+const mockResolveGitHubEnrichmentForRequest = vi.hoisted(() => vi.fn());
 
 vi.mock("../auth/model-provider-account-default-adapters", () => ({
   modelProviderAccountAdapterRegistry: { get: mockProviderAdapterGet },
+}));
+
+vi.mock("../source-control/github-credential-authority", () => ({
+  resolveGitHubCredentialAuthority: mockResolveGitHubCredentialAuthority,
+}));
+
+vi.mock("../session/identity", () => ({
+  resolveGitHubEnrichmentForRequest: mockResolveGitHubEnrichmentForRequest,
 }));
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -322,6 +332,8 @@ describe("automation route handlers", () => {
       archivedAt: null,
     });
     mockProviderAdapterGet.mockReturnValue({});
+    mockResolveGitHubCredentialAuthority.mockResolvedValue({ kind: "legacy" });
+    mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -1711,6 +1723,12 @@ describe("automation route handlers", () => {
     it("triggers automation via the scheduler", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      const enrichment = {
+        scmUserId: "123",
+        scmLogin: "requester",
+        accessTokenEncrypted: "encrypted-access",
+      };
+      mockResolveGitHubEnrichmentForRequest.mockResolvedValue(enrichment);
 
       const res = await callRoute("POST", "/automations/auto-1/trigger");
       expect(res.status).toBe(201);
@@ -1718,7 +1736,7 @@ describe("automation route handlers", () => {
         invocationId: "inv-1",
         runs: [{ id: "run-1" }],
       });
-      expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1");
+      expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", enrichment);
     });
 
     it("returns 404 when automation not found", async () => {

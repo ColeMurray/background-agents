@@ -26,7 +26,7 @@ import {
   error,
   GITHUB_USER_OR_SERVICE_ROUTE,
   parsePattern,
-  requireSession,
+  requirePermission,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -182,7 +182,7 @@ export const sessionPromptRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/prompt"),
-    authorization: requireSession("collaborate"),
+    authorization: requirePermission("sessions.collaborate"),
     handler: handleSessionPrompt,
   }),
 ]);

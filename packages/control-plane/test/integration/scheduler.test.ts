@@ -5,7 +5,11 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-import { Scheduler, resolveAutomationProviderAuth } from "../../src/scheduler/scheduler";
+import {
+  AutomationExecutionUnauthorizedError,
+  Scheduler,
+  resolveAutomationProviderAuth,
+} from "../../src/scheduler/scheduler";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
@@ -528,8 +532,8 @@ describe("Scheduler (integration)", () => {
       ];
 
       const [triggerA, triggerB, tick] = await Promise.allSettled([
-        schedulers[0]!.trigger("auto-concurrent-admission"),
-        schedulers[1]!.trigger("auto-concurrent-admission"),
+        schedulers[0]!.trigger("auto-concurrent-admission", "user-1"),
+        schedulers[1]!.trigger("auto-concurrent-admission", "user-1"),
         schedulers[2]!.tick(),
       ]);
 
@@ -630,7 +634,7 @@ describe("Scheduler (integration)", () => {
     });
 
     it("rejects when automation is not found", async () => {
-      await expect(createScheduler().trigger("nonexistent")).rejects.toThrow(
+      await expect(createScheduler().trigger("nonexistent", "user-1")).rejects.toThrow(
         "Automation not found"
       );
     });
@@ -649,8 +653,71 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      await expect(createScheduler().trigger("auto-trig1")).rejects.toThrow(
+      await expect(createScheduler().trigger("auto-trig1", "user-1")).rejects.toThrow(
         "An active run already exists"
+      );
+    });
+
+    it("requires the requester to have session execution authority", async () => {
+      const requesterId = "manual-trigger-requester";
+      await seedActiveUser(requesterId);
+      const roleId = "role_manual_trigger_only";
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
+           VALUES (?, NULL, 'Manual Trigger Only', 'manual trigger only', NULL, 0)`
+        ).bind(roleId),
+        env.DB.prepare(
+          `INSERT INTO role_permissions (role_id, permission_id)
+           VALUES (?, 'automations.trigger.any')`
+        ).bind(roleId),
+        env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`).bind(
+          roleId,
+          requesterId
+        ),
+      ]);
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-trigger-only" }));
+
+      await expect(
+        createScheduler().trigger("auto-trigger-only", requesterId)
+      ).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+      expect(await fetchRuns("auto-trigger-only")).toEqual([]);
+    });
+
+    it("creates manual-trigger sessions as the requester", async () => {
+      const requesterId = "manual-trigger-requester";
+      await seedActiveUser(requesterId);
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-requester-principal" }));
+      const promptBodies: Array<Record<string, unknown>> = [];
+      const sessionFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        const path = new URL(request.url).pathname;
+        if (path === "/internal/init") return Response.json({ status: "ok" });
+        if (path === "/internal/prompt") {
+          promptBodies.push(await request.json<Record<string, unknown>>());
+          return Response.json({ messageId: "msg-requester", status: "queued" });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+      const schedulerEnv = {
+        ...(env as Env),
+        SESSION: {
+          idFromName: vi.fn((name: string) => name),
+          get: vi.fn(() => ({ fetch: sessionFetch })),
+        } as unknown as DurableObjectNamespace,
+      };
+
+      await createScheduler(schedulerEnv).trigger("auto-requester-principal", requesterId);
+
+      expect(
+        await env.DB.prepare(
+          `SELECT user_id FROM sessions WHERE automation_id = 'auto-requester-principal'`
+        ).first()
+      ).toEqual({ user_id: requesterId });
+      expect(promptBodies).toContainEqual(
+        expect.objectContaining({ authorId: requesterId, canonicalUserId: requesterId })
       );
     });
 
@@ -684,7 +751,7 @@ describe("Scheduler (integration)", () => {
         } as unknown as DurableObjectNamespace,
       };
 
-      const result = await createScheduler(schedulerEnv).trigger("auto-trig2");
+      const result = await createScheduler(schedulerEnv).trigger("auto-trig2", "user-1");
       expect(result).toEqual({
         invocationId: expect.any(String),
         runs: [expect.objectContaining({ status: "running" })],

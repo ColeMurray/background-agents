@@ -72,17 +72,9 @@ export interface RouteDefinition<Context extends RequestContext = RequestContext
   handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
 }
 
-export type SessionAuthorizationOperation =
-  | "read"
-  | "collaborate"
-  | "lifecycle"
-  | "sandbox_access"
-  | "delete";
-
 export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
   | { kind: "scoped-permission"; stem: ScopedPermissionStem }
-  | { kind: "session"; operation: SessionAuthorizationOperation; sessionIdParam: string }
   | {
       kind: "automation";
       operation: "manage" | "trigger";
@@ -129,13 +121,6 @@ export function permissionRequirement(permission: PermissionId): RouteAuthorizat
   return { kind: "permission", permission };
 }
 
-export function sessionRequirement(
-  operation: SessionAuthorizationOperation,
-  sessionIdParam = "id"
-): RouteAuthorizationRequirement {
-  return { kind: "session", operation, sessionIdParam };
-}
-
 export function requirePermission(
   permission: PermissionId,
   options?: { service?: "actor" | "deny"; actorlessGrants?: readonly ActorlessServiceGrant[] }
@@ -158,18 +143,6 @@ export function requireScopedPermission(
     kind: "active-user",
     allOf: [{ kind: "scoped-permission", stem }],
     service: options?.service === "actor" ? { kind: "actor" } : { kind: "deny" },
-  };
-}
-
-export function requireSession(
-  operation: SessionAuthorizationOperation,
-  sessionIdParam = "id",
-  options?: { actorlessGrants?: readonly ActorlessServiceGrant[] }
-): RouteAuthorization {
-  return {
-    kind: "active-user",
-    allOf: [sessionRequirement(operation, sessionIdParam)],
-    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
   };
 }
 

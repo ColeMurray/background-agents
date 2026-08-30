@@ -110,7 +110,7 @@ describe("mergeUsers", () => {
     expect(result.counts).toMatchObject({
       identitiesRepointed: 1,
       sessionsRepointed: 1,
-      authSessionsRepointed: 1,
+      authSessionsDeleted: 1,
       automationsOwnedRepointed: 1,
       automationsCreatedRepointed: 1,
       scmTokensRepointed: 1,
@@ -130,12 +130,12 @@ describe("mergeUsers", () => {
         user_id: string;
       }>()
     ).toEqual({ user_id: SURVIVOR });
-    // The loser's browser session survives, re-keyed to the survivor.
+    // Bearer sessions issued to the loser are invalidated, never re-keyed.
     expect(
       await env.DB.prepare(`SELECT userId FROM auth_sessions WHERE id = 'authsess-loser'`).first<{
         userId: string;
       }>()
-    ).toEqual({ userId: SURVIVOR });
+    ).toBeNull();
     expect(
       await env.DB.prepare(
         `SELECT user_id, created_by FROM automations WHERE id = 'auto-1'`

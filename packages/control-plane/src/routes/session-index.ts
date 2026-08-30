@@ -20,7 +20,6 @@ import {
   parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   requirePermission,
-  requireSession,
   type RequestContext,
   type Route,
   type UserRouteContext,
@@ -266,13 +265,13 @@ export const sessionIndexRoutes: Route[] = [
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "PATCH",
     pattern: parsePattern("/sessions/:id/read-state"),
-    authorization: requireSession("read"),
+    authorization: requirePermission("sessions.read"),
     handler: handlePatchReadState,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "DELETE",
     pattern: parsePattern("/sessions/:id"),
-    authorization: requireSession("delete"),
+    authorization: requirePermission("sessions.delete"),
     handler: handleDeleteSession,
   }),
 ];

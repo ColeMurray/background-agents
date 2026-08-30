@@ -45,9 +45,7 @@ describe("route policy table", () => {
         );
         expect(authorization.allOf.length).toBeGreaterThan(0);
         for (const requirement of authorization.allOf) {
-          if (requirement.kind === "session") {
-            expect(route.pattern.source).toContain(`?<${requirement.sessionIdParam}>`);
-          } else if (requirement.kind === "automation") {
+          if (requirement.kind === "automation") {
             expect(route.pattern.source).toContain(`?<${requirement.automationIdParam}>`);
           }
         }
@@ -142,12 +140,12 @@ describe("route policy table", () => {
       kind: "active-user",
       allOf: [
         { kind: "permission", permission: "sessions.create" },
-        { kind: "session", operation: "collaborate", sessionIdParam: "id" },
+        { kind: "permission", permission: "sessions.collaborate" },
       ],
     });
     expect(routeFor("GET", "/sessions/parent/children/child")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "session", operation: "read", sessionIdParam: "childId" }],
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
     });
     expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
       kind: "service",

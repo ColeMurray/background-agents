@@ -2,10 +2,12 @@
 
 **Date:** 2026-08-28
 
-**Status:** Research only
+**Status:** Superseded research snapshot
 
 **Scope:** Current identity, authentication, authorization, resources, actions, storage, user
 workflows, service integrations, and operational trust boundaries relevant to application RBAC.
+
+The implemented model is documented in [Role-Based Access Control](./2026-08-28-rbac-design.md).
 
 This document is intentionally research-only. It does not include recommendations, implementation
 plans, proposed code/API/schema changes, task breakdowns, estimates, or rollout steps.

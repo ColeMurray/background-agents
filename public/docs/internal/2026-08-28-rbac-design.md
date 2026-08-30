@@ -448,7 +448,7 @@ policies list every requirement explicitly:
 ```ts
 authorization: requireAll(
   permissionRequirement("sessions.create"),
-  sessionRequirement("collaborate", "id")
+  permissionRequirement("sessions.collaborate")
 );
 ```
 
