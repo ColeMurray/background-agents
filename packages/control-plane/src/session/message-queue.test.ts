@@ -861,6 +861,25 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
+  it("drops malformed Autofix origin context from the dispatch-time user event", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(
+      createMessage({
+        source: "github",
+        origin_context: JSON.stringify({ kind: "review", authorType: "human" }),
+      })
+    );
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    const event = h.repository.startMessageProcessing.mock.calls[0][2];
+    expect(event).not.toHaveProperty("origin");
+    expect(h.log.error).toHaveBeenCalledWith("prompt.invalid_origin_context", {
+      message_id: "msg-1",
+    });
+  });
+
   it("fails an unavailable prompt model before spawning or dispatching", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValueOnce(
