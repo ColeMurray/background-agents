@@ -94,26 +94,4 @@ describe("AuthorizationStore", () => {
     await expect(conflictStore.replaceRole(replaceRoleInput)).resolves.toBe("revision_conflict");
     await expect(successfulStore.replaceRole(replaceRoleInput)).resolves.toBe("succeeded");
   });
-
-  it("uses bootstrap completion rather than the trailing guard result", async () => {
-    const store = new AuthorizationStore(
-      fakeDatabase({
-        batchResults: [result(1), result(1), result(1), result(1), result(1), result(0)],
-      })
-    );
-
-    await expect(
-      store.tryBootstrapOwner({
-        userId: "owner",
-        provider: "github",
-        providerUserId: "provider-owner",
-        verifiedEmail: "owner@example.com",
-        configuredEmail: "owner@example.com",
-        evidenceObservedAt: 50,
-        requestId: "request",
-        authorizationVersion: 1,
-        now: 100,
-      })
-    ).resolves.toBe(true);
-  });
 });

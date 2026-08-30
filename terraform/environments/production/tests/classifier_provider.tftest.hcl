@@ -25,7 +25,6 @@ variables {
   repo_secrets_encryption_key = "test-repo-key"
   nextauth_secret             = "test-browser-auth-secret-with-32-characters"
   deployment_name             = "classifier-provider-test"
-  rbac_bootstrap_owner_email  = "owner@example.com"
 
   modal_token_id     = "test-modal-token-id"
   modal_token_secret = "test-modal-token-secret"

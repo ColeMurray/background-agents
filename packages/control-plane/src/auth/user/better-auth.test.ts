@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SqlDatabase, SqlStatement } from "../../db/sql-database";
-import { createUserAuth, runPostSessionInitialization } from "./better-auth";
+import { createUserAuth } from "./better-auth";
 
 const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
@@ -17,15 +17,6 @@ const UNREACHED_DATABASE: SqlDatabase = {
 };
 
 describe("Better Auth provider execution", () => {
-  it("does not fail sign-in when post-session initialization fails", async () => {
-    const initialize = vi.fn(async () => {
-      throw new Error("bootstrap unavailable");
-    });
-
-    await expect(runPostSessionInitialization(initialize, "user-1")).resolves.toBeUndefined();
-    expect(initialize).toHaveBeenCalledWith("user-1");
-  });
-
   it("rejects a provider that is disabled before sign-in executes", async () => {
     const auth = createUserAuth({
       database: UNREACHED_DATABASE,

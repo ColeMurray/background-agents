@@ -324,10 +324,8 @@ describe("browser auth callback", () => {
       )
         .bind(session.user.id)
         .first()
-    ).resolves.toEqual({ key: "owner" });
-    await expect(
-      env.DB.prepare("SELECT owner_user_id FROM workspace_bootstrap WHERE singleton = 1").first()
-    ).resolves.toEqual({ owner_user_id: session.user.id });
+    ).resolves.toEqual({ key: "member" });
+    await expect(env.DB.prepare("SELECT * FROM workspace_bootstrap").first()).resolves.toBeNull();
 
     const enrichment = await resolveGitHubEnrichmentForRequest(
       env,

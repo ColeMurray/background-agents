@@ -31,7 +31,7 @@ describe("RBAC routes", () => {
     return user.id;
   }
 
-  it("keeps ordinary browser users as Member before configured Owner bootstrap", async () => {
+  it("keeps ordinary browser users as Member before operator Owner bootstrap", async () => {
     const first = await serviceFetch("https://cp.test/me/authorization", {
       initialUserRole: "member",
     });
@@ -79,53 +79,7 @@ describe("RBAC routes", () => {
     ).toEqual({ key: "member" });
   });
 
-  it("promotes a matching custom-role user during Owner bootstrap", async () => {
-    const user = await new UserStore(sqlDatabase(env.DB)).resolveOrCreateUser({
-      provider: "github",
-      providerUserId: "custom-owner",
-      providerEmail: "custom.owner@example.com",
-      displayName: "Custom Owner",
-    });
-    const roleId = "role_custom_bootstrap";
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO roles
-          (id, key, name, normalized_name, description, is_system, revision,
-           created_by, updated_by, created_at, updated_at)
-         VALUES (?, NULL, 'Bootstrap Custom', 'bootstrap custom', NULL, 0, 1, ?, ?, 1, 1)`
-      ).bind(roleId, user.id, user.id),
-      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
-        roleId,
-        user.id
-      ),
-      env.DB.prepare(
-        `INSERT INTO browser_sign_in_evidence (provider, provider_user_id, email, observed_at)
-         VALUES ('github', 'custom-owner', 'custom.owner@example.com', 10)`
-      ),
-    ]);
-
-    const bootstrapped = await new AuthorizationService(sqlDatabase(env.DB)).tryBootstrapOwner({
-      userId: user.id,
-      provider: "github",
-      providerUserId: "custom-owner",
-      verifiedEmail: "custom.owner@example.com",
-      evidenceObservedAt: 10,
-      configuredEmail: "custom.owner@example.com",
-      requestId: "custom-owner-bootstrap",
-    });
-
-    expect(bootstrapped).toBe(true);
-    await expect(
-      env.DB.prepare(
-        `SELECT r.key FROM user_role_assignments ura
-         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
-      )
-        .bind(user.id)
-        .first()
-    ).resolves.toEqual({ key: "owner" });
-  });
-
-  it("suspends an emailed member when no bootstrap email or claim exists", async () => {
+  it("suspends an emailed member before Owner bootstrap", async () => {
     await serviceFetch("https://cp.test/me/authorization");
     const actor = await env.DB.prepare(
       "SELECT id FROM users WHERE email = 'browser@test.local'"
@@ -145,7 +99,6 @@ describe("RBAC routes", () => {
       actorUserId: actor!.id,
       actorAuthorizationVersion: actorAuthorization.authorizationVersion,
       actorCanTransferOwnership: false,
-      bootstrapOwnerEmail: undefined,
       requestId: "suspend-without-bootstrap",
     });
 
@@ -262,40 +215,6 @@ describe("RBAC routes", () => {
     expect(
       await env.DB.prepare("SELECT display_name FROM users WHERE id = ?").bind(ownerId).first()
     ).not.toEqual({ display_name: "stale-write" });
-  });
-
-  it("protects the configured Owner candidate until bootstrap completes", async () => {
-    await serviceFetch("https://cp.test/me/authorization");
-    const actor = await env.DB.prepare(
-      "SELECT id FROM users WHERE email = 'browser@test.local'"
-    ).first<{ id: string }>();
-    await env.DB.prepare(
-      "UPDATE user_role_assignments SET role_id = 'role_builtin_administrator' WHERE user_id = ?"
-    )
-      .bind(actor!.id)
-      .run();
-    const candidate = await new UserStore(sqlDatabase(env.DB)).createUser({
-      displayName: "Configured Owner",
-      email: "octocat@example.com",
-      emailVerified: true,
-    });
-
-    const suspend = await serviceFetch(`https://cp.test/members/${candidate.id}/status`, {
-      method: "PUT",
-      body: JSON.stringify({ accessStatus: "suspended", authorizationVersion: 1 }),
-      headers: { "Content-Type": "application/json" },
-    });
-    const demote = await serviceFetch(`https://cp.test/members/${candidate.id}/role`, {
-      method: "PUT",
-      body: JSON.stringify({ roleId: "role_builtin_viewer", authorizationVersion: 1 }),
-      headers: { "Content-Type": "application/json" },
-    });
-
-    expect(suspend.status).toBe(409);
-    expect(demote.status).toBe(409);
-    await expect(
-      new AuthorizationService(sqlDatabase(env.DB)).getEffectiveAuthorization(candidate.id)
-    ).resolves.toMatchObject({ accessStatus: "active", role: { key: "member" } });
   });
 
   it("denies sensitive business mutations to Viewer", async () => {
@@ -542,7 +461,6 @@ describe("RBAC routes", () => {
         actorUserId: ownerId,
         actorAuthorizationVersion: authorized.authorizationVersion,
         actorCanTransferOwnership: true,
-        bootstrapOwnerEmail: "owner@example.com",
         requestId: "stale-member-role-request",
       })
     ).rejects.toThrow("Actor authorization changed");
@@ -554,7 +472,6 @@ describe("RBAC routes", () => {
         actorUserId: ownerId,
         actorAuthorizationVersion: authorized.authorizationVersion,
         actorCanTransferOwnership: true,
-        bootstrapOwnerEmail: "owner@example.com",
         requestId: "stale-member-request",
       })
     ).rejects.toThrow("Actor authorization changed");

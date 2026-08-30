@@ -144,180 +144,6 @@ export class AuthorizationStore {
     return result.results.map((row) => row.permission_id);
   }
 
-  async getBootstrapCandidate(userId: string): Promise<{
-    accessStatus: WorkspaceAccessStatus;
-    authorizationVersion: number;
-    roleKey: BuiltInRoleKey | null;
-  } | null> {
-    const row = await this.db
-      .prepare(
-        `SELECT u.access_status, u.authorization_version, r.key AS role_key
-         FROM users u
-         JOIN user_role_assignments ura ON ura.user_id = u.id
-         JOIN roles r ON r.id = ura.role_id
-         WHERE u.id = ?`
-      )
-      .bind(userId)
-      .first<{
-        access_status: WorkspaceAccessStatus;
-        authorization_version: number;
-        role_key: BuiltInRoleKey | null;
-      }>();
-    return row
-      ? {
-          accessStatus: row.access_status,
-          authorizationVersion: row.authorization_version,
-          roleKey: row.role_key,
-        }
-      : null;
-  }
-
-  async tryBootstrapOwner(input: {
-    userId: string;
-    provider: "github" | "google";
-    providerUserId: string;
-    verifiedEmail: string;
-    configuredEmail: string;
-    evidenceObservedAt: number;
-    requestId: string;
-    authorizationVersion: number;
-    now: number;
-  }): Promise<boolean> {
-    const results = await this.db.batch([
-      this.db
-        .prepare(
-          `INSERT INTO workspace_bootstrap
-            (singleton, owner_user_id, claimed_at, assignment_completed_at)
-           SELECT 1, ?, ?, NULL
-            WHERE EXISTS (
-              SELECT 1 FROM users u
-              JOIN user_role_assignments ura ON ura.user_id = u.id
-              JOIN roles r ON r.id = ura.role_id
-              WHERE u.id = ? AND u.access_status = 'active'
-                AND (r.key IS NULL OR r.key <> 'owner')
-            )
-              AND ? = ?
-              AND EXISTS (
-                SELECT 1 FROM browser_sign_in_evidence evidence
-                JOIN user_identities identity
-                  ON identity.provider = evidence.provider
-                 AND identity.provider_user_id = evidence.provider_user_id
-                WHERE identity.user_id = ? AND evidence.provider = ?
-                  AND evidence.provider_user_id = ? AND evidence.email = ?
-                  AND evidence.observed_at = ?
-              )
-            ON CONFLICT(singleton) DO NOTHING`
-        )
-        .bind(
-          input.userId,
-          input.now,
-          input.userId,
-          input.verifiedEmail,
-          input.configuredEmail,
-          input.userId,
-          input.provider,
-          input.providerUserId,
-          input.verifiedEmail,
-          input.evidenceObservedAt
-        ),
-      this.db
-        .prepare(
-          `UPDATE user_role_assignments
-           SET role_id = ?, assigned_by = ?, assigned_at = ?
-           WHERE user_id = ?
-             AND EXISTS (
-               SELECT 1 FROM workspace_bootstrap
-               WHERE singleton = 1 AND owner_user_id = ? AND assignment_completed_at IS NULL
-             )
-             AND EXISTS (SELECT 1 FROM users WHERE id = ? AND access_status = 'active')
-             AND EXISTS (
-               SELECT 1 FROM roles WHERE id = user_role_assignments.role_id
-                 AND (key IS NULL OR key <> 'owner')
-             )`
-        )
-        .bind(OWNER_ROLE_ID, input.userId, input.now, input.userId, input.userId, input.userId),
-      this.db
-        .prepare(
-          `UPDATE users SET authorization_version = authorization_version + 1, updated_at = ?
-           WHERE id = ?
-             AND EXISTS (
-             SELECT 1 FROM workspace_bootstrap
-             WHERE singleton = 1 AND owner_user_id = ? AND assignment_completed_at IS NULL
-             )
-             AND access_status = 'active'
-             AND EXISTS (
-               SELECT 1 FROM user_role_assignments ura
-               JOIN roles r ON r.id = ura.role_id
-               WHERE ura.user_id = users.id AND r.key = 'owner'
-             )`
-        )
-        .bind(input.now, input.userId, input.userId),
-      this.db
-        .prepare(
-          `INSERT INTO authorization_audit_events
-            (id, occurred_at, request_id, policy_id, principal_kind,
-              actor_user_id_snapshot, authorization_version, action, resource_type,
-              target_user_id_snapshot,
-             decision_outcome, operation_result, reason_code, metadata_json)
-            SELECT ?, ?, ?, 'workspace.owner_bootstrapped', 'user', ?, ?,
-                  'workspace.owner_bootstrapped', 'workspace', ?, 'allowed', 'succeeded',
-                  'configured_owner_email', '{}'
-           WHERE EXISTS (
-             SELECT 1 FROM workspace_bootstrap
-             WHERE singleton = 1 AND owner_user_id = ? AND assignment_completed_at IS NULL
-           )
-             AND EXISTS (
-               SELECT 1 FROM users u
-               JOIN user_role_assignments ura ON ura.user_id = u.id
-               JOIN roles r ON r.id = ura.role_id
-               WHERE u.id = ? AND u.access_status = 'active' AND r.key = 'owner'
-           )`
-        )
-        .bind(
-          crypto.randomUUID(),
-          input.now,
-          input.requestId,
-          input.userId,
-          input.authorizationVersion,
-          input.userId,
-          input.userId,
-          input.userId
-        ),
-      this.db
-        .prepare(
-          `UPDATE workspace_bootstrap SET assignment_completed_at = ?
-           WHERE singleton = 1 AND owner_user_id = ? AND assignment_completed_at IS NULL
-             AND EXISTS (
-               SELECT 1 FROM users u
-               JOIN user_role_assignments ura ON ura.user_id = u.id
-               JOIN roles r ON r.id = ura.role_id
-               WHERE u.id = ? AND u.access_status = 'active' AND r.key = 'owner'
-             )`
-        )
-        .bind(input.now, input.userId, input.userId),
-      this.db
-        .prepare(
-          `SELECT CASE WHEN
-             EXISTS (
-               SELECT 1 FROM workspace_bootstrap wb
-               JOIN users u ON u.id = wb.owner_user_id
-               JOIN user_role_assignments ura ON ura.user_id = u.id
-               JOIN roles r ON r.id = ura.role_id
-               WHERE wb.singleton = 1 AND wb.assignment_completed_at IS NOT NULL
-                 AND r.key = 'owner' AND u.access_status = 'active'
-             )
-             OR NOT EXISTS (
-               SELECT 1 FROM workspace_bootstrap
-               WHERE singleton = 1 AND owner_user_id = ?
-             )
-           THEN 1 ELSE abs(-9223372036854775808) END AS bootstrap_guard`
-        )
-        .bind(input.userId),
-    ]);
-
-    return results[4]?.meta.changes === 1;
-  }
-
   async listRoles(): Promise<AuthorizationRoleRecord[]> {
     const result = await this.db
       .prepare(
@@ -578,21 +404,9 @@ export class AuthorizationStore {
     actorAuthorizationVersion: number;
     actorMutationId: string;
     mutationId: string;
-    bootstrapOwnerEmail: string | null;
     requestId: string;
     now: number;
   }): Promise<MemberMutationOutcome> {
-    const preservesBootstrapEligibility = `(
-      EXISTS (SELECT 1 FROM workspace_bootstrap WHERE singleton = 1)
-      OR NOT EXISTS (
-        SELECT 1 FROM users bootstrap_candidate
-        WHERE bootstrap_candidate.id = ? AND lower(trim(bootstrap_candidate.email)) = ?
-      )
-      OR EXISTS (
-        SELECT 1 FROM roles bootstrap_role
-        WHERE bootstrap_role.id = ? AND bootstrap_role.key IN ('administrator', 'member')
-      )
-    )`;
     const results = await this.db.batch([
       this.actorGuardStatement(
         input.actorUserId,
@@ -620,8 +434,7 @@ export class AuthorizationStore {
                    AND other_user.id <> ?
                )
               )
-              AND ${preservesBootstrapEligibility}
-              AND ${ACTOR_GUARD_SQL}`
+               AND ${ACTOR_GUARD_SQL}`
         )
         .bind(
           input.roleId,
@@ -634,9 +447,6 @@ export class AuthorizationStore {
           OWNER_ROLE_ID,
           input.targetUserId,
           input.targetUserId,
-          input.targetUserId,
-          input.bootstrapOwnerEmail,
-          input.roleId,
           input.actorUserId,
           input.actorMutationId
         ),
@@ -660,8 +470,7 @@ export class AuthorizationStore {
                    AND other_user.id <> users.id
                )
               )
-              AND ${preservesBootstrapEligibility}
-              AND ${ACTOR_GUARD_SQL}`
+               AND ${ACTOR_GUARD_SQL}`
         )
         .bind(
           input.now,
@@ -670,9 +479,6 @@ export class AuthorizationStore {
           input.expectedVersion,
           input.roleId,
           OWNER_ROLE_ID,
-          input.targetUserId,
-          input.bootstrapOwnerEmail,
-          input.roleId,
           input.actorUserId,
           input.actorMutationId
         ),
@@ -710,7 +516,6 @@ export class AuthorizationStore {
     actorAuthorizationVersion: number;
     actorMutationId: string;
     mutationId: string;
-    bootstrapOwnerEmail: string | null;
     requestId: string;
     now: number;
   }): Promise<MemberMutationOutcome> {
@@ -741,14 +546,7 @@ export class AuthorizationStore {
                    AND other_user.id <> users.id
                )
               )
-              AND (
-                ? <> 'suspended'
-                OR EXISTS (SELECT 1 FROM workspace_bootstrap WHERE singleton = 1)
-                OR ? IS NULL
-                OR lower(trim(email)) <> ?
-                OR email IS NULL
-              )
-              AND ${ACTOR_GUARD_SQL}`
+               AND ${ACTOR_GUARD_SQL}`
         )
         .bind(
           input.accessStatus,
@@ -757,9 +555,6 @@ export class AuthorizationStore {
           input.targetUserId,
           input.expectedVersion,
           input.accessStatus,
-          input.accessStatus,
-          input.bootstrapOwnerEmail,
-          input.bootstrapOwnerEmail,
           input.actorUserId,
           input.actorMutationId
         ),

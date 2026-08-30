@@ -65,21 +65,21 @@ RBAC determines which application actions a user may perform within that univers
 
 ## Decisions
 
-| Area             | Decision                                                                                      |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| Tenancy          | One implicit workspace per deployment.                                                        |
-| User assignment  | Exactly one role per canonical user.                                                          |
-| Role model       | Four protected built-ins plus custom roles.                                                   |
-| Permission model | Fixed allow-only registry owned in shared code. Missing permission denies.                    |
-| Enforcement      | Control plane is authoritative; web checks are presentation only.                             |
-| Resource scoping | Workspace-wide actions plus contextual own/participating/any session actions.                 |
-| Repository scope | SCM installation defines visibility; role permissions govern app operations.                  |
-| Services         | Static service ceilings; actor-backed calls use ceiling/actor intersection.                   |
-| Sandboxes        | Existing session-bound capability model remains separate from human RBAC.                     |
-| Role changes     | Immediate for HTTP; short authorization leases bound live browser connections.                |
-| Audit            | Durable audit events for RBAC changes and sensitive mutations; structured denial logs.        |
-| Owner bootstrap  | Every deployment requires an explicit Terraform bootstrap Owner email.                        |
-| Migration        | The configured browser user becomes Owner; all existing canonical users become Administrator. |
+| Area             | Decision                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| Tenancy          | One implicit workspace per deployment.                                                   |
+| User assignment  | Exactly one role per canonical user.                                                     |
+| Role model       | Four protected built-ins plus custom roles.                                              |
+| Permission model | Fixed allow-only registry owned in shared code. Missing permission denies.               |
+| Enforcement      | Control plane is authoritative; web checks are presentation only.                        |
+| Resource scoping | Workspace-wide actions plus contextual own/participating/any session actions.            |
+| Repository scope | SCM installation defines visibility; role permissions govern app operations.             |
+| Services         | Static service ceilings; actor-backed calls use ceiling/actor intersection.              |
+| Sandboxes        | Existing session-bound capability model remains separate from human RBAC.                |
+| Role changes     | Immediate for HTTP; short authorization leases bound live browser connections.           |
+| Audit            | Durable audit events for RBAC changes and sensitive mutations; structured denial logs.   |
+| Owner bootstrap  | Every deployment requires an explicit operator bootstrap after the Owner signs in.       |
+| Migration        | Existing canonical users become Administrator; the operator explicitly bootstraps Owner. |
 
 ## Authorization Model
 
@@ -360,30 +360,21 @@ Suspension blocks application requests without deleting identities or historical
 `authorization_version` changes whenever the user's assignment, assigned role permissions, or access
 status changes. It binds short-lived browser authorization leases to current policy.
 
-Every canonical identity is an active workspace member unless suspended. Every deployment supplies
-`rbac_bootstrap_owner_email` through Terraform. Terraform normalizes and passes it to the control
-plane as the plain-text `RBAC_BOOTSTRAP_OWNER_EMAIL` binding. The variable is required, must contain
-one syntactically valid email address, and is not a secret.
-
-The RBAC migration assigns Administrator to every canonical user present at the migration boundary
-and then writes `rbac_migration_state`. Every identity created after that marker receives Member,
-including identities first observed through a bot. Identity creation and default role assignment are
-one database-triggered workflow. Authorization denies a missing assignment; ordinary sign-in and
+Every canonical identity is an active workspace member unless suspended. The RBAC migration assigns
+Administrator to every canonical user present at the migration boundary and then writes
+`rbac_migration_state`. Every identity created after that marker receives Member, including
+identities first observed through a bot. Identity creation and default role assignment are one
+database-triggered workflow. Authorization denies a missing assignment; ordinary sign-in and
 identity resolution never repair authorization corruption implicitly.
 
-During a successful GitHub or Google OAuth callback, while the authenticating provider and its
-verified email evidence are available, the control plane compares the normalized email with
-`RBAC_BOOTSTRAP_OWNER_EMAIL`. On a match, one D1 batch attempts `INSERT ... ON CONFLICT DO NOTHING`
-on singleton bootstrap row 1 and replaces any eligible non-Owner assignment, including a custom
-role, with Owner only when this user owns the bootstrap row. A final guard rolls the batch back if
-the claim belongs to this user but the active Owner assignment was not established. The result is
-read back before returning authorization state. A non-matching user keeps their existing role.
-Bot-created identities can never claim Owner because bootstrap requires live browser authentication.
-
-The Terraform binding is bootstrap-only. Once `workspace_bootstrap` exists, D1 role assignments are
-the source of truth. Changing `rbac_bootstrap_owner_email` does not transfer, add, remove, or
-recover an Owner. Ownership changes use the authenticated member API, and exceptional recovery uses
-the operator CLI. A post-bootstrap binding mismatch does not mutate authorization state.
+Initial ownership is assigned only by the root operator CLI after the intended Owner has signed in
+once. The operator supplies the canonical user ID, not an email or browser credential. One temporary
+SQL file and one Wrangler D1 execution validate the RBAC schema, active user, exact assignment,
+absence of another active Owner, and absence of another completed bootstrap before atomically
+assigning `role_builtin_owner`, incrementing `authorization_version`, completing
+`workspace_bootstrap`, and writing a redacted `operator-cli` audit event. The final SQL guard aborts
+the operation if the completed state is inconsistent. Re-running for the same completed active Owner
+is a no-op. Ownership changes after initialization use the authenticated member API.
 
 ### Storage ownership
 
@@ -811,34 +802,22 @@ The migration is additive and preserves current capability for every canonical u
 
 No route switches to enforcement until every existing canonical user has an Administrator
 assignment, the migration marker exists, and built-in role reconciliation succeeds. Administrators
-may continue using the application before Owner bootstrap. On the first successful browser sign-in
-whose verified email matches `rbac_bootstrap_owner_email`, that user atomically claims the singleton
-bootstrap row and their assignment changes from Administrator or Member to Owner. Other users retain
-their assigned role. Bot identity creation never invokes this operation.
+may continue using the application before Owner bootstrap. After deployment, the intended Owner
+signs in once to create a canonical user and assignment. An operator then dry-runs and executes the
+root CLI against that canonical ID. Sign-in and bot identity creation never assign Owner.
 
 Deployment documentation will state that Administrator preserves the previous installation-wide
 operational behavior, while Member becomes the default for newly admitted users.
 
-### Terraform configuration
+### Operator bootstrap
 
-Every deployment sets the bootstrap identity explicitly:
+Terraform exports the D1 database name but does not configure an Owner identity. The supported
+sequence is deploy, have the intended Owner sign in once, obtain the canonical ID from the browser
+session, run `npm run rbac:bootstrap-owner -- --database <name> --user <id>`, review the dry-run
+preflight, rerun with `--execute`, and verify `/health` reports `ownerBootstrap=complete`.
 
-```hcl
-rbac_bootstrap_owner_email = "owner@example.com"
-```
-
-Terraform adds a required `rbac_bootstrap_owner_email` string variable, validates that it contains
-one non-empty email address, normalizes it with `lower(trimspace(...))`, and binds the normalized
-value to the control-plane Worker as `RBAC_BOOTSTRAP_OWNER_EMAIL`. It is plain configuration rather
-than a secret. Terraform cannot prove that GitHub organization membership or OAuth email evidence
-will admit the address, so the control plane performs the authoritative comparison after browser
-authentication and admission.
-
-Before bootstrap completes, operator health reports `owner_bootstrap_pending` and the configured
-email in redacted form. Administrators and Members can use their existing capabilities, but no one
-can exercise Owner-only actions. After bootstrap, Terraform continues supplying the value for
-deployment consistency, but changing it has no authorization effect and emits a
-configuration-mismatch warning.
+Before bootstrap completes, operator health reports `owner_bootstrap_pending`. Administrators and
+Members can use their existing capabilities, but no one can exercise Owner-only actions.
 
 ## Failure Handling
 
@@ -938,21 +917,20 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 
 ### Migration
 
-- Empty installation assigns Member to new identities and only upgrades the browser user matching
-  `rbac_bootstrap_owner_email` to Owner under concurrent sign-ins.
+- Empty installation assigns Member to new identities and requires an explicit canonical-ID operator
+  bootstrap for the initial Owner.
 - Existing installation assigns every pre-migration canonical user Administrator, including bot-only
-  identities, then upgrades the configured browser user to Owner when they sign in.
+  identities, then requires the same explicit operator bootstrap.
 - Every canonical user receives exactly one assignment; migration-boundary races repair to Member.
 - Session creator projection is idempotent and reports every unattributed row.
 - Built-in role reconciliation is idempotent and rejects incompatible registry drift.
 - Exact migration SQL executes under workerd/D1, including indexes and JSON checks.
 - Better Auth or bot identity creation followed by assignment failure cannot enter business routes
   and retries Member assignment idempotently.
-- Owner bootstrap refuses provider-only identity evidence and requires a live admitted browser
-  session with matching verified email.
-- A configured email that fails admission or lacks verified browser email evidence leaves bootstrap
-  pending and visible in operator health.
-- Changing the Terraform email after bootstrap warns but cannot transfer ownership.
+- Owner bootstrap requires an existing active canonical user with exactly one assignment and refuses
+  another active Owner or another completed bootstrap.
+- CLI bootstrap is atomic and idempotent, increments authorization version exactly once, writes a
+  redacted operator audit event, and leaves pending/completed state visible in operator health.
 
 ## Rollout
 

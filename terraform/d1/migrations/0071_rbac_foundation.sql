@@ -43,14 +43,6 @@ CREATE TABLE workspace_bootstrap (
   assignment_completed_at INTEGER
 );
 
-CREATE TABLE browser_sign_in_evidence (
-  provider TEXT NOT NULL CHECK (provider IN ('github', 'google')),
-  provider_user_id TEXT NOT NULL,
-  email TEXT NOT NULL,
-  observed_at INTEGER NOT NULL,
-  PRIMARY KEY (provider, provider_user_id)
-);
-
 CREATE TABLE rbac_migration_state (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   assignments_completed_at INTEGER NOT NULL

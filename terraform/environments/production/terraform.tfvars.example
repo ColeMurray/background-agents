@@ -358,10 +358,6 @@ enable_service_bindings = false
 # membership). Set at least one unless you intentionally opt into open access
 # with unsafe_allow_all_users = true.
 
-# Verified browser email that may claim the initial Owner role. This remains
-# bootstrap-only configuration; later ownership changes happen inside the app.
-rbac_bootstrap_owner_email = ""
-
 # Comma-separated list of GitHub usernames allowed to sign in
 allowed_users = ""
 

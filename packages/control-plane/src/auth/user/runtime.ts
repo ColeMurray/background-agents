@@ -17,7 +17,6 @@ import { SignInClaim } from "./sign-in-claim";
 import { IdentityClaimStore } from "../../db/identity-claim-store";
 import type { SqlDatabase } from "../../db/sql-database";
 import type { Env } from "../../types";
-import { AuthorizationService } from "../../authorization/service";
 
 const MINIMUM_SECRET_LENGTH = 32;
 
@@ -78,7 +77,6 @@ interface NormalizedUserAuthConfig {
   readonly appName: string;
   readonly admission: AdmissionPolicyConfig;
   readonly providers: ProviderCredentials;
-  readonly bootstrapOwnerEmail?: string;
 }
 
 function normalizeProviderCredentials(
@@ -127,7 +125,6 @@ function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
       unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
     },
     providers,
-    bootstrapOwnerEmail: env.RBAC_BOOTSTRAP_OWNER_EMAIL?.trim() || undefined,
   };
 }
 
@@ -216,43 +213,10 @@ function createUserAuthRuntime(
     createGoogleAuthConfig(config.providers.google, admissionPolicy)
   );
 
-  const bootstrapOwner = config.bootstrapOwnerEmail
-    ? async (userId: string) => {
-        const evidence = await database
-          .prepare(
-            `SELECT evidence.provider, evidence.provider_user_id, evidence.email, evidence.observed_at
-             FROM browser_sign_in_evidence evidence
-             JOIN user_identities identity
-               ON identity.provider = evidence.provider
-              AND identity.provider_user_id = evidence.provider_user_id
-             WHERE identity.user_id = ? AND evidence.provider IN ('github', 'google')
-             ORDER BY evidence.observed_at DESC LIMIT 1`
-          )
-          .bind(userId)
-          .first<{
-            provider: "github" | "google";
-            provider_user_id: string;
-            email: string;
-            observed_at: number;
-          }>();
-        if (!evidence) return;
-        await new AuthorizationService(database).tryBootstrapOwner({
-          userId,
-          provider: evidence.provider,
-          providerUserId: evidence.provider_user_id,
-          verifiedEmail: evidence.email,
-          evidenceObservedAt: evidence.observed_at,
-          configuredEmail: config.bootstrapOwnerEmail!,
-          requestId: crypto.randomUUID(),
-        });
-      }
-    : undefined;
-
   const auth = createUserAuth({
     database,
     publicWebOrigin: config.publicWebOrigin,
     secret: config.secret,
-    ...(bootstrapOwner ? { afterSessionCreated: bootstrapOwner } : {}),
     ...(github ? { github } : {}),
     ...(google ? { google } : {}),
   });

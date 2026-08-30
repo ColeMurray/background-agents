@@ -32,7 +32,6 @@ describe("migration 0071: RBAC foundation", () => {
       DROP TABLE session_access;
       DROP TABLE privileged_operation_outbox;
       DROP TABLE authorization_audit_events;
-      DROP TABLE browser_sign_in_evidence;
       DROP TABLE workspace_bootstrap;
       DROP TABLE user_role_assignments;
       DROP TABLE role_permissions;

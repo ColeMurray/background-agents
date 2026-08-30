@@ -101,7 +101,6 @@ module "control_plane_worker" {
       { name = "ALLOWED_EMAILS", value = var.allowed_emails },
       { name = "ALLOWED_GITHUB_ORGS", value = var.allowed_github_orgs },
       { name = "UNSAFE_ALLOW_ALL_USERS", value = tostring(var.unsafe_allow_all_users) },
-      { name = "RBAC_BOOTSTRAP_OWNER_EMAIL", value = local.rbac_bootstrap_owner_email },
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },

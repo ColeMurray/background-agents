@@ -196,7 +196,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     pattern: /^\/members\/(?<id>[^/]+)\/role$/,
     authorization: requirePermission("workspace.members.manage"),
     cacheControl: "private, no-store",
-    handler: async (request, env, match, ctx) => {
+    handler: async (request, _env, match, ctx) => {
       const targetUserId = decodeURIComponent(match.groups!.id);
       if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
       const body = await parseJsonBody<unknown>(request);
@@ -215,7 +215,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
           actorUserId: ctx.principal.userId,
           actorAuthorizationVersion: actor.authorizationVersion,
           actorCanTransferOwnership: actor.permissions.includes("workspace.transfer_ownership"),
-          bootstrapOwnerEmail: env.RBAC_BOOTSTRAP_OWNER_EMAIL,
           requestId: ctx.request_id,
         });
         return json(await service.getEffectiveAuthorization(targetUserId));
@@ -229,7 +228,7 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     pattern: /^\/members\/(?<id>[^/]+)\/status$/,
     authorization: requirePermission("workspace.members.manage"),
     cacheControl: "private, no-store",
-    handler: async (request, env, match, ctx) => {
+    handler: async (request, _env, match, ctx) => {
       const targetUserId = decodeURIComponent(match.groups!.id);
       if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
       const body = await parseJsonBody<unknown>(request);
@@ -248,7 +247,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
           actorUserId: ctx.principal.userId,
           actorAuthorizationVersion: actor.authorizationVersion,
           actorCanTransferOwnership: actor.permissions.includes("workspace.transfer_ownership"),
-          bootstrapOwnerEmail: env.RBAC_BOOTSTRAP_OWNER_EMAIL,
           requestId: ctx.request_id,
         });
         return json(await service.getEffectiveAuthorization(targetUserId));

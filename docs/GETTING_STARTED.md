@@ -614,7 +614,6 @@ enable_service_bindings        = false
 
 # Access Control (set at least one allowlist for production). A user is admitted
 # if they match ANY allowlist below.
-rbac_bootstrap_owner_email = "you@example.com"     # Verified browser email for initial Owner
 allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
 allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
 allowed_emails        = ""                      # Exact addresses (e.g., "pm@gmail.com") — for users on shared domains
@@ -649,10 +648,6 @@ configurations because they authorize repository operations; they do not enable 
 > checks membership at sign-in only with the signing-in user's OAuth token; existing sessions last
 > until session expiry. The `read:org` OAuth scope is requested only when org access is configured,
 > and GitHub Apps using org access need Organization permissions: Members read-only.
-
-`rbac_bootstrap_owner_email` must match the verified email returned by an enabled browser sign-in
-provider. That user receives Owner on their first matching sign-in. The value is bootstrap-only;
-changing Terraform later does not transfer ownership.
 
 ### Enable Google Login (Optional)
 
@@ -727,6 +722,48 @@ terraform apply
 ```
 
 Terraform will update the workers with the required bindings.
+
+---
+
+## Step 7a: Bootstrap the Workspace Owner
+
+Owner assignment is an explicit operator action. After both deployment phases complete:
+
+1. Have the intended Owner sign in to the deployed web application once. This creates their
+   canonical user and default role assignment.
+2. While signed in, open `/api/auth/get-session` on the web application origin and record the
+   32-character lowercase hexadecimal `user.id`. The bootstrap command accepts this canonical ID,
+   never an email address.
+3. Obtain the D1 database name with `terraform output -raw d1_database_name` from
+   `terraform/environments/production`.
+4. From the repository root, run the remote dry run (the default):
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>"
+```
+
+5. Confirm the preflight result is `ready` (or `no-op` for an already completed bootstrap), then
+   execute the same command with `--execute`:
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>" \
+  --execute
+```
+
+The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or
+`wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
+assignment, another active Owner, or a completed bootstrap for another user. There is no force
+option.
+
+6. Verify the control-plane health response contains `"rbac":{"ownerBootstrap":"complete"}`:
+
+```bash
+curl "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health"
+```
 
 ---
 
@@ -1032,10 +1069,6 @@ Secrets and variables → Actions → _Variables_ to point the Slack/Linear clas
 model (for example `gpt-5.4-mini`). Leave it unset to keep the Terraform default. An OpenAI value
 also requires the `CLASSIFICATION_OPENAI_API_KEY` secret; an Anthropic value is served by
 `ANTHROPIC_API_KEY`.
-
-`RBAC_BOOTSTRAP_OWNER_EMAIL` is a required Actions **variable**. Set it to the verified browser
-email that will claim the initial Owner role before running the RBAC migration. It is bootstrap-only
-and is not an ownership-transfer mechanism.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

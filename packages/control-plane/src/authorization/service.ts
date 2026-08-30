@@ -12,7 +12,6 @@ import {
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
 import { AuthorizationStore, type AuthorizationRoleRecord } from "../db/authorization-store";
-import { normalizeEmail } from "../db/email";
 import type { SqlDatabase } from "../db/sql-database";
 
 export class AuthorizationError extends Error {
@@ -70,37 +69,6 @@ export class AuthorizationService {
       throw new AuthorizationError(403, "permission_required", permission);
     }
     return authorization;
-  }
-
-  async tryBootstrapOwner(input: {
-    userId: string;
-    provider: "github" | "google";
-    providerUserId: string;
-    verifiedEmail: string;
-    evidenceObservedAt: number;
-    configuredEmail: string;
-    requestId: string;
-  }): Promise<boolean> {
-    const configuredEmail = normalizeEmail(input.configuredEmail);
-    const verifiedEmail = normalizeEmail(input.verifiedEmail);
-    if (!configuredEmail || verifiedEmail !== configuredEmail) return false;
-
-    const candidate = await this.store.getBootstrapCandidate(input.userId);
-    if (!candidate || candidate.accessStatus !== "active" || candidate.roleKey === "owner") {
-      return false;
-    }
-
-    return this.store.tryBootstrapOwner({
-      userId: input.userId,
-      provider: input.provider,
-      providerUserId: input.providerUserId,
-      verifiedEmail,
-      configuredEmail,
-      evidenceObservedAt: input.evidenceObservedAt,
-      requestId: input.requestId,
-      authorizationVersion: candidate.authorizationVersion,
-      now: Date.now(),
-    });
   }
 
   async listRoles(): Promise<RoleSummary[]> {
@@ -215,7 +183,6 @@ export class AuthorizationService {
     actorUserId: string;
     actorAuthorizationVersion: number;
     actorCanTransferOwnership: boolean;
-    bootstrapOwnerEmail: string | undefined;
     requestId: string;
   }): Promise<void> {
     const [target, role] = await Promise.all([
@@ -242,7 +209,6 @@ export class AuthorizationService {
       actorAuthorizationVersion: input.actorAuthorizationVersion,
       actorMutationId: crypto.randomUUID(),
       mutationId: crypto.randomUUID(),
-      bootstrapOwnerEmail: normalizeEmail(input.bootstrapOwnerEmail),
       requestId: input.requestId,
       now: Date.now(),
     });
@@ -261,7 +227,6 @@ export class AuthorizationService {
     actorUserId: string;
     actorAuthorizationVersion: number;
     actorCanTransferOwnership: boolean;
-    bootstrapOwnerEmail: string | undefined;
     requestId: string;
   }): Promise<void> {
     const target = await this.getEffectiveAuthorization(input.targetUserId);
@@ -283,7 +248,6 @@ export class AuthorizationService {
       actorAuthorizationVersion: input.actorAuthorizationVersion,
       actorMutationId: crypto.randomUUID(),
       mutationId: crypto.randomUUID(),
-      bootstrapOwnerEmail: normalizeEmail(input.bootstrapOwnerEmail),
       requestId: input.requestId,
       now: Date.now(),
     });

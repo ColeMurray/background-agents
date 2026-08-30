@@ -60,8 +60,6 @@ export class SignInClaim {
     // Without a provider-verified email there is nothing to claim.
     if (!subject || !email || !profile.user.emailVerified) return;
 
-    await this.store.recordBrowserSignInEvidence(provider, subject, email, Date.now());
-
     const identityOwnerId = await this.store.findIdentityOwnerId(provider, subject);
     if (identityOwnerId) {
       await this.subjectClaim(provider, subject, identityOwnerId, email);
