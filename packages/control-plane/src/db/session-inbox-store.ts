@@ -8,11 +8,16 @@ import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import {
+  sessionAccessPredicate,
+  type SessionPermissionScope,
+} from "../authorization/session-authorization-policy";
 
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
-  accessUserId?: string;
+  readScope: SessionPermissionScope;
+  lifecycleScope: SessionPermissionScope | null;
   excludeAutomatedSessions?: boolean;
   viewerUserId: string;
   limit: number;
@@ -43,6 +48,7 @@ interface InboxSessionRow extends ViewerReadStateRow {
   effective_root_session_id: string;
   latest_updated_at: number;
   category: SessionInboxCategory;
+  can_manage_lifecycle: number;
 }
 
 interface InboxPageData {
@@ -67,6 +73,7 @@ function toListItem(row: InboxSessionRow): SessionListItem {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     readState: readStateFromRow(row),
+    canManageLifecycle: row.can_manage_lifecycle === 1,
   };
 }
 
@@ -187,13 +194,21 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId"
+      | "createdByUserIds"
+      | "excludeAutomatedSessions"
+      | "viewerUserId"
+      | "readScope"
+      | "lifecycleScope"
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
+    const lifecycleCapability = options.lifecycleScope
+      ? sessionAccessPredicate("sessions", options.viewerUserId, options.lifecycleScope)
+      : { sql: "0", params: [] };
     return {
       sql: `WITH RECURSIVE eligible_sessions AS (
-              SELECT sessions.*, ${unreadSql("sessions")} AS unread
+              SELECT sessions.*, ${unreadSql("sessions")} AS unread,
+                     ${lifecycleCapability.sql} AS can_manage_lifecycle
               FROM sessions
               LEFT JOIN users viewer ON viewer.id = ?
               LEFT JOIN session_read_states read_state
@@ -239,14 +254,14 @@ export class SessionInboxStore {
               FROM effective_sessions
               GROUP BY effective_root_session_id
             )`,
-      params: [options.viewerUserId, ...params],
+      params: [...lifecycleCapability.params, options.viewerUserId, ...params],
     };
   }
 
   private eligibility(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "accessUserId"
+      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId" | "readScope"
     >
   ): { conditions: string[]; params: unknown[] } {
     const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
@@ -260,15 +275,9 @@ export class SessionInboxStore {
       );
       params.push(...options.createdByUserIds);
     }
-    if (options.accessUserId) {
-      conditions.push(
-        `EXISTS (
-          SELECT 1 FROM session_access access
-          WHERE access.session_id = sessions.id AND access.user_id = ?
-        )`
-      );
-      params.push(options.accessUserId);
-    }
+    const access = sessionAccessPredicate("sessions", options.viewerUserId, options.readScope);
+    conditions.push(access.sql);
+    params.push(...access.params);
     return { conditions, params };
   }
 

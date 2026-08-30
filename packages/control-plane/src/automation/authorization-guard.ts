@@ -45,18 +45,17 @@ function authPredicate(
   const requiredPermissionGuards = requiredPermissions.map(rolePermissionPredicate);
   return {
     sql: `u.id = ? AND u.suspended_at IS NULL
-      AND (
-        ${anyGuard.sql}
-        OR (${ownGuard.sql} AND EXISTS (
-         SELECT 1 FROM automations a WHERE a.id = ? AND a.user_id = u.id
-        ))
+      AND EXISTS (
+        SELECT 1 FROM automations a
+        WHERE a.id = ? AND a.deleted_at IS NULL
+          AND (${anyGuard.sql} OR (${ownGuard.sql} AND a.user_id = u.id))
       )
       ${requiredPermissionGuards.length > 0 ? `AND ${requiredPermissionGuards.map((guard) => guard.sql).join(" AND ")}` : ""}`,
     values: [
       authorization.userId,
+      automationId,
       ...anyGuard.values,
       ...ownGuard.values,
-      automationId,
       ...requiredPermissionGuards.flatMap((guard) => guard.values),
     ],
   };

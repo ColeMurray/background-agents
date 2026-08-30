@@ -15,7 +15,10 @@ Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
   value: vi.fn(),
 });
 
-const mocks = vi.hoisted(() => ({ repoImagesEnabled: true }));
+const mocks = vi.hoisted(() => ({
+  repoImagesEnabled: true,
+  allowedPermissions: null as Set<string> | null,
+}));
 
 vi.mock("@/hooks/use-keyboard-shortcuts", () => ({
   useKeyboardShortcuts: () => ({ labels: { "new-session": "Cmd/Ctrl+Shift+O" } }),
@@ -23,6 +26,13 @@ vi.mock("@/hooks/use-keyboard-shortcuts", () => ({
 
 vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.repoImagesEnabled,
+}));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      mocks.allowedPermissions === null || mocks.allowedPermissions.has(permission),
+  }),
 }));
 
 beforeEach(() => {
@@ -39,6 +49,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.repoImagesEnabled = true;
+  mocks.allowedPermissions = null;
   vi.unstubAllGlobals();
 });
 
@@ -161,6 +172,27 @@ describe("GlobalCommandMenu", () => {
     expect(screen.queryByText("Images")).not.toBeInTheDocument();
   });
 
+  it("omits settings destinations the user cannot view", () => {
+    mocks.allowedPermissions = new Set(["models.preferences.manage"]);
+    renderMenu();
+
+    expect(screen.getByText("Appearance")).toBeInTheDocument();
+    expect(screen.getByText("Models")).toBeInTheDocument();
+    expect(screen.queryByText("Secrets")).not.toBeInTheDocument();
+  });
+
+  it("requires repository read access for the repository secrets destination", () => {
+    mocks.allowedPermissions = new Set(["repositories.secrets.manage"]);
+    const { rerender, props } = renderMenu();
+
+    expect(screen.queryByText("Secrets")).not.toBeInTheDocument();
+
+    mocks.allowedPermissions.add("repositories.read");
+    rerender(<GlobalCommandMenu open {...props} />);
+
+    expect(screen.getByText("Secrets")).toBeInTheDocument();
+  });
+
   it("preserves order-independent session search", async () => {
     const user = userEvent.setup();
     renderMenu([
@@ -172,6 +204,7 @@ describe("GlobalCommandMenu", () => {
         status: "active",
         createdAt: 1,
         updatedAt: 2,
+        canManageLifecycle: true,
       },
     ]);
 

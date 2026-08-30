@@ -45,6 +45,8 @@ describe("route policy table", () => {
         for (const requirement of authorization.allOf) {
           if (requirement.kind === "session") {
             expect(route.pattern.source).toContain(`?<${requirement.sessionIdParam}>`);
+          } else if (requirement.kind === "automation") {
+            expect(route.pattern.source).toContain(`?<${requirement.automationIdParam}>`);
           }
         }
         if (authorization.service.kind === "actor") {
@@ -121,6 +123,21 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
       kind: "service",
       services: ["github-bot"],
+    });
+  });
+
+  it.each([
+    ["PUT", "/automations/automation-1", "manage"],
+    ["DELETE", "/automations/automation-1", "manage"],
+    ["POST", "/automations/automation-1/pause", "manage"],
+    ["POST", "/automations/automation-1/resume", "manage"],
+    ["POST", "/automations/automation-1/trigger", "trigger"],
+    ["POST", "/automations/automation-1/regenerate-key", "manage"],
+  ])("declares typed automation admission for %s %s", (method, path, operation) => {
+    expect(routeFor(method, path)?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "automation", operation, automationIdParam: "id" }],
+      service: { kind: "deny" },
     });
   });
 

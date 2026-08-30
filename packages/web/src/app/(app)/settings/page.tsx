@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState, type ComponentType } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   DEFAULT_SETTINGS_CATEGORY,
@@ -11,41 +11,10 @@ import {
 } from "@/components/settings/settings-nav";
 import { SettingsMobileHeader } from "@/components/settings/settings-mobile-header";
 import { useSettingsIsMobile } from "@/components/settings/settings-viewport-context";
-import { SecretsSettings } from "@/components/settings/secrets-settings";
-import { EnvironmentsSettings } from "@/components/settings/environments-settings";
-import { ModelsSettings } from "@/components/settings/models-settings";
-import { DataControlsSettings } from "@/components/settings/data-controls-settings";
-import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
-import { IntegrationsSettings } from "@/components/settings/integrations-settings";
-import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
-import { ScmSettingsPage } from "@/components/settings/scm-settings";
-import { ImagesSettings } from "@/components/settings/images-settings";
-import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
-import { AppearanceSettings } from "@/components/settings/appearance-settings";
-import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
-import { SkillsSettings } from "@/components/settings/skills-settings";
-import { WorkspaceSettings } from "@/components/settings/workspace-settings";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { resolveSettingsCategory } from "@/components/settings/settings-registry";
+import { getSettingsPanel, resolveSettingsCategory } from "@/components/settings/settings-registry";
 import type { PermissionId } from "@open-inspect/shared/rbac";
-
-const SETTINGS_PANELS: Record<SettingsCategory, ComponentType> = {
-  workspace: WorkspaceSettings,
-  appearance: AppearanceSettings,
-  "keyboard-shortcuts": KeyboardShortcutsSettings,
-  models: ModelsSettings,
-  "provider-accounts": ProviderAccountsSettings,
-  skills: SkillsSettings,
-  environments: EnvironmentsSettings,
-  secrets: SecretsSettings,
-  scm: ScmSettingsPage,
-  sandbox: SandboxSettingsPage,
-  images: ImagesSettings,
-  integrations: IntegrationsSettings,
-  "mcp-servers": McpServersSettings,
-  "data-controls": DataControlsSettings,
-};
 
 function resolveAuthorizedCategory(
   requested: string | null,
@@ -160,8 +129,12 @@ function SettingsPageContent() {
     repoImagesEnabled,
     permissions
   );
-  const ActivePanel = SETTINGS_PANELS[renderedCategory];
-  const content = <ActivePanel />;
+  const ActivePanel = getSettingsPanel(renderedCategory);
+  const content = (
+    <Suspense fallback={null}>
+      <ActivePanel />
+    </Suspense>
+  );
 
   if (isMobile) {
     return (

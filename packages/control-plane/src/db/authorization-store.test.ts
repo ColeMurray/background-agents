@@ -8,6 +8,7 @@ function result(changes: number, rows: unknown[] = []): SqlResult {
 
 function fakeDatabase(options: {
   batchResults?: SqlResult[];
+  batchError?: Error;
   allResults?: unknown[];
 }): SqlDatabase {
   const statement: SqlStatement = {
@@ -18,7 +19,10 @@ function fakeDatabase(options: {
   };
   return {
     prepare: () => statement,
-    batch: async <T>() => (options.batchResults ?? []) as SqlResult<T>[],
+    batch: async <T>() => {
+      if (options.batchError) throw options.batchError;
+      return (options.batchResults ?? []) as SqlResult<T>[];
+    },
   };
 }
 
@@ -65,13 +69,23 @@ describe("AuthorizationStore", () => {
     ]);
   });
 
-  it("executes role replacement as one guarded batch", async () => {
-    const store = new AuthorizationStore(
-      fakeDatabase({
-        batchResults: [result(0), result(1), result(1), result(1)],
-      })
-    );
+  it.each(["applied", "actor_authorization_changed", "not_found", "conflict"] as const)(
+    "returns the %s role replacement batch outcome",
+    async (status) => {
+      const store = new AuthorizationStore(
+        fakeDatabase({
+          batchResults: [result(0, [{ status }]), result(1), result(1), result(1)],
+        })
+      );
 
-    await expect(store.replaceRole(replaceRoleInput)).resolves.toBeUndefined();
+      await expect(store.replaceRole(replaceRoleInput)).resolves.toEqual({ status });
+    }
+  );
+
+  it("does not classify an unexpected database failure as a conflict", async () => {
+    const failure = new Error("database unavailable");
+    const store = new AuthorizationStore(fakeDatabase({ batchError: failure }));
+
+    await expect(store.replaceRole(replaceRoleInput)).rejects.toBe(failure);
   });
 });

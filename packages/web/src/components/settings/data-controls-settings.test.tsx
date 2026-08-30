@@ -53,6 +53,7 @@ function createArchivedSession(index: number, overrides: Record<string, unknown>
     status: "archived",
     createdAt: 1000 + index,
     updatedAt: 2000 + index,
+    canManageLifecycle: true,
     ...overrides,
   };
 }
@@ -150,6 +151,17 @@ afterEach(async () => {
 });
 
 describe("DataControlsSettings — unarchive flow", () => {
+  it("hides unarchive when the row lacks lifecycle capability", async () => {
+    installFetch({
+      archivedSessions: [createArchivedSession(1, { canManageLifecycle: false })],
+    });
+
+    renderComponent();
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Unarchive" })).not.toBeInTheDocument();
+  });
+
   it("removes the row when the unarchive request succeeds", async () => {
     installFetch({
       archivedSessions: [createArchivedSession(1)],

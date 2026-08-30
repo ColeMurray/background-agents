@@ -146,17 +146,6 @@ vi.mock("./shared", async (importOriginal) => {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Find the handler for a given method + path from automationRoutes. */
-function getHandler(method: string, path: string) {
-  for (const route of automationRoutes) {
-    if (route.method === method && route.pattern.test(path)) {
-      const match = path.match(route.pattern)!;
-      return { handler: route.handler, match };
-    }
-  }
-  throw new Error(`No route found for ${method} ${path}`);
-}
-
 function createEnv(): Env {
   return {
     DB: { batch: mockBatch } as unknown as D1Database,
@@ -184,18 +173,23 @@ const SLACK_BOT_PRINCIPAL: Principal = {
 
 function createCtx(
   principal: Principal = USER_PRINCIPAL,
-  permissions: readonly PermissionId[] = PERMISSION_IDS
+  permissions: readonly PermissionId[] = PERMISSION_IDS,
+  authorizationCurrent = true
 ): RequestContext {
   const statement = {
     bind: vi.fn(() => statement),
-    first: vi.fn(async () => ({
-      active: 1,
-      user_id: "user-1",
-      suspended_at: null,
-      role_id: "role_builtin_owner",
-      role_key: "owner",
-      role_name: "Owner",
-    })),
+    first: vi.fn(async () =>
+      authorizationCurrent
+        ? {
+            active: 1,
+            user_id: "user-1",
+            suspended_at: null,
+            role_id: "role_builtin_owner",
+            role_key: "owner",
+            role_name: "Owner",
+          }
+        : null
+    ),
     all: vi.fn(async () => ({ results: [] })),
   };
   return {
@@ -231,9 +225,14 @@ async function callRoute(
     query?: Record<string, string | string[]>;
     principal?: Principal;
     permissions?: readonly PermissionId[];
+    authorizationCurrent?: boolean;
   }
 ): Promise<Response> {
-  const { handler, match } = getHandler(method, path);
+  const route = automationRoutes.find(
+    (candidate) => candidate.method === method && candidate.pattern.test(path)
+  );
+  if (!route) throw new Error(`No route found for ${method} ${path}`);
+  const match = path.match(route.pattern)!;
   const url = new URL(`https://test.local${path}`);
   if (options?.query) {
     for (const [k, v] of Object.entries(options.query)) {
@@ -247,12 +246,23 @@ async function callRoute(
     init.headers = { "Content-Type": "application/json" };
     init.body = JSON.stringify(options.body);
   }
-  return handler(
-    new Request(url, init),
-    createEnv(),
-    match,
-    createCtx(options?.principal, options?.permissions)
-  );
+  const ctx = createCtx(options?.principal, options?.permissions, options?.authorizationCurrent);
+  const automationRequirement =
+    route.authorization.kind === "active-user"
+      ? route.authorization.allOf.find((requirement) => requirement.kind === "automation")
+      : undefined;
+  if (automationRequirement) {
+    const automation = await mockStore.getById(
+      match.groups?.[automationRequirement.automationIdParam]
+    );
+    if (!automation)
+      return new Response(JSON.stringify({ error: "Automation not found" }), { status: 404 });
+    ctx.automationAdmission = {
+      automation,
+      authorizationGuard: { sql: "automation-authorization-guard" } as never,
+    };
+  }
+  return route.handler(new Request(url, init), createEnv(), match, ctx);
 }
 
 // ─── Sample data ────────────────────────────────────────────────────────────
@@ -1688,6 +1698,34 @@ describe("automation route handlers", () => {
         expect(mockStore.update).not.toHaveBeenCalled();
       }
     );
+
+    it("returns 404 when the key update affects no current automation", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "webhook" });
+      mockBatch.mockResolvedValue([
+        { meta: { changes: 0 }, results: [] },
+        { meta: { changes: 0 }, results: [] },
+      ]);
+
+      const res = await callRoute("POST", "/automations/auto-1/regenerate-key");
+
+      expect(res.status).toBe(404);
+      await expect(res.json()).resolves.toEqual({ error: "Automation not found" });
+    });
+
+    it("returns 409 and does not report success when authorization changes before the batch", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "webhook" });
+      mockBatch.mockRejectedValue(new Error("authorization guard failed"));
+
+      const res = await callRoute("POST", "/automations/auto-1/regenerate-key", {
+        authorizationCurrent: false,
+      });
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toEqual({
+        error: "Authorization changed",
+        code: "authorization_conflict",
+      });
+    });
   });
 
   describe("POST /automations/:id/trigger", () => {
@@ -1713,14 +1751,9 @@ describe("automation route handlers", () => {
     it("returns 409 when the scheduler reports an active run", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
-      const env = createEnv();
       mockSchedulerTrigger.mockRejectedValue(new AutomationTriggerBlockedError());
 
-      const { handler, match } = getHandler("POST", "/automations/auto-1/trigger");
-      const request = new Request("https://test.local/automations/auto-1/trigger", {
-        method: "POST",
-      });
-      const res = await handler(request, env, match, createCtx());
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
       expect(res.status).toBe(409);
       expect(await res.json()).toEqual({
         error: "A run is already active for this automation",

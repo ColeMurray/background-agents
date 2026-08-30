@@ -106,7 +106,49 @@ describe("D1 SessionIndexStore", () => {
       .bind("session-without-projection")
       .run();
 
-    await expect(store.list({ accessUserId: userId })).resolves.toMatchObject({ sessions: [] });
+    await expect(
+      store.list({ viewerUserId: userId, readScope: "own", lifecycleScope: null })
+    ).resolves.toMatchObject({ sessions: [] });
+  });
+
+  it("derives lifecycle capability from scope and the current relationship", async () => {
+    const creatorId = "11111111111111111111111111111111";
+    const participantId = "22222222222222222222222222222222";
+    const unrelatedId = "33333333333333333333333333333333";
+    for (const userId of [creatorId, participantId, unrelatedId]) {
+      await env.DB.prepare(
+        `INSERT INTO users
+          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+         VALUES (?, ?, NULL, 0, NULL, 1, 1)`
+      )
+        .bind(userId, userId)
+        .run();
+    }
+    const store = new SessionIndexStore(env.DB);
+    await store.create({
+      id: "session-capability",
+      title: "Lifecycle capability",
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      userId: creatorId,
+      createdAt: 10,
+      updatedAt: 10,
+    });
+    await activateSessionParticipantAccess(env.DB, "session-capability", participantId);
+
+    await expect(
+      store.list({ viewerUserId: participantId, readScope: "any", lifecycleScope: "own" })
+    ).resolves.toMatchObject({ sessions: [{ canManageLifecycle: true }] });
+    await expect(
+      store.list({ viewerUserId: unrelatedId, readScope: "any", lifecycleScope: "own" })
+    ).resolves.toMatchObject({ sessions: [{ canManageLifecycle: false }] });
+    await expect(
+      store.list({ viewerUserId: unrelatedId, readScope: "any", lifecycleScope: "any" })
+    ).resolves.toMatchObject({ sessions: [{ canManageLifecycle: true }] });
   });
 
   it("atomically snapshots provider auth with the session", async () => {

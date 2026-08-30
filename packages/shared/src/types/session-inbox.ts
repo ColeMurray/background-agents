@@ -17,6 +17,7 @@ export interface SessionListItem {
   repositories?: SessionListRepository[];
   pullRequestSummary?: PullRequestSummary;
   readState: SessionReadState;
+  canManageLifecycle: boolean;
 }
 
 export const sessionInboxCategorySchema = z.enum(["needs_attention", "in_progress", "finished"]);

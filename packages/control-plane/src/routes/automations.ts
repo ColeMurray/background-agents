@@ -62,8 +62,9 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
-  handlerAuthorized,
+  requireAutomation,
   requirePermission,
+  type AutomationRouteAdmission,
 } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
@@ -79,17 +80,13 @@ import {
 
 const logger = createLogger("router:automations");
 
-async function authorizeAutomationMutation(
+function rebuildAutomationAuthorizationGuard(
   ctx: RequestContext,
-  automation: AutomationRow,
-  operation: "manage" | "trigger",
-  requiredPermissions: readonly PermissionId[] = []
-): Promise<{ authorizationGuard: SqlStatement | null } | Response> {
-  if (ctx.principal?.kind !== "user") return { authorizationGuard: null };
+  admission: AutomationRouteAdmission,
+  requiredPermissions: readonly PermissionId[]
+): Response | null {
   const authorization = ctx.authorization;
   if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-  const anyPermission = `automations.${operation}.any` as const;
-  const ownPermission = `automations.${operation}.own` as const;
   const missingPermission = requiredPermissions.find(
     (permission) => !authorization.permissions.includes(permission)
   );
@@ -99,22 +96,19 @@ async function authorizeAutomationMutation(
       403
     );
   }
-  if (
-    authorization.permissions.includes(anyPermission) ||
-    (authorization.permissions.includes(ownPermission) &&
-      automation.user_id === ctx.principal.userId)
-  ) {
-    return {
-      authorizationGuard: bindAutomationAuthorizationGuard(
-        ctx.db,
-        automation.id,
-        authorization,
-        operation,
-        requiredPermissions
-      ),
-    };
-  }
-  return json({ error: "Forbidden", code: "permission_required", permission: ownPermission }, 403);
+  admission.authorizationGuard = bindAutomationAuthorizationGuard(
+    ctx.db,
+    admission.automation.id,
+    authorization,
+    "manage",
+    requiredPermissions
+  );
+  return null;
+}
+
+function admittedAutomation(ctx: RequestContext): AutomationRouteAdmission {
+  if (!ctx.automationAdmission) throw new Error("Missing automation route admission");
+  return ctx.automationAdmission;
 }
 
 async function runAuthorizedAutomationBatch(
@@ -881,10 +875,8 @@ async function handleUpdateAutomation(
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
-  const existing = await store.getById(id);
-  if (!existing) return error("Automation not found", 404);
-  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (admission instanceof Response) return admission;
+  const admission = admittedAutomation(ctx);
+  const { automation: existing } = admission;
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
@@ -988,14 +980,12 @@ async function handleUpdateAutomation(
     ...(environmentSelection.kind === "replace" ? (["environments.use"] as const) : []),
   ];
   if (requiredTargetPermissions.length > 0) {
-    const targetAdmission = await authorizeAutomationMutation(
+    const targetAuthorizationError = rebuildAutomationAuthorizationGuard(
       ctx,
-      existing,
-      "manage",
+      admission,
       requiredTargetPermissions
     );
-    if (targetAdmission instanceof Response) return targetAdmission;
-    admission.authorizationGuard = targetAdmission.authorizationGuard;
+    if (targetAuthorizationError) return targetAuthorizationError;
   }
 
   // The count rules span both selections, so when EITHER is replaced they are
@@ -1192,17 +1182,10 @@ async function handleDeleteAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const existing = await store.getById(id);
-  if (!existing) return error("Automation not found", 404);
-  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (admission instanceof Response) return admission;
-  const result = await runAuthorizedAutomationBatch(
-    ctx,
-    existing,
-    "manage",
-    admission.authorizationGuard,
-    [store.bindSoftDelete(id)]
-  );
+  const { automation: existing, authorizationGuard } = admittedAutomation(ctx);
+  const result = await runAuthorizedAutomationBatch(ctx, existing, "manage", authorizationGuard, [
+    store.bindSoftDelete(id),
+  ]);
   if (result instanceof Response) return result;
   const deleted = result.at(-1)?.meta.changes === 1;
   if (!deleted) return error("Automation not found", 404);
@@ -1227,17 +1210,10 @@ async function handlePauseAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const existing = await store.getById(id);
-  if (!existing) return error("Automation not found", 404);
-  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (admission instanceof Response) return admission;
-  const result = await runAuthorizedAutomationBatch(
-    ctx,
-    existing,
-    "manage",
-    admission.authorizationGuard,
-    [store.bindPause(id)]
-  );
+  const { automation: existing, authorizationGuard } = admittedAutomation(ctx);
+  const result = await runAuthorizedAutomationBatch(ctx, existing, "manage", authorizationGuard, [
+    store.bindPause(id),
+  ]);
   if (result instanceof Response) return result;
   const paused = result.at(-1)?.meta.changes === 1;
   if (!paused) return error("Automation not found", 404);
@@ -1265,10 +1241,7 @@ async function handleResumeAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const existing = await store.getById(id);
-  if (!existing) return error("Automation not found", 404);
-  const admission = await authorizeAutomationMutation(ctx, existing, "manage");
-  if (admission instanceof Response) return admission;
+  const { automation: existing, authorizationGuard } = admittedAutomation(ctx);
 
   // For schedule automations, compute the next run time.
   // For event-driven automations, resume with null next_run_at.
@@ -1282,13 +1255,9 @@ async function handleResumeAutomation(
     nextRunAt = null;
   }
 
-  const result = await runAuthorizedAutomationBatch(
-    ctx,
-    existing,
-    "manage",
-    admission.authorizationGuard,
-    [store.bindResume(id, nextRunAt)]
-  );
+  const result = await runAuthorizedAutomationBatch(ctx, existing, "manage", authorizationGuard, [
+    store.bindResume(id, nextRunAt),
+  ]);
   if (result instanceof Response) return result;
   const resumed = result.at(-1)?.meta.changes === 1;
   if (!resumed) return error("Automation not found", 404);
@@ -1316,18 +1285,14 @@ async function handleTriggerAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(ctx.db);
-  const automation = await store.getById(id);
-  if (!automation) return error("Automation not found", 404);
-  const admission = await authorizeAutomationMutation(ctx, automation, "trigger");
-  if (admission instanceof Response) return admission;
+  const { authorizationGuard } = admittedAutomation(ctx);
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
     triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
       id,
-      admission.authorizationGuard ?? undefined
+      authorizationGuard
     );
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
@@ -1419,10 +1384,7 @@ async function handleRegenerateKey(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const automation = await store.getById(id);
-  if (!automation) return error("Automation not found", 404);
-  const admission = await authorizeAutomationMutation(ctx, automation, "manage");
-  if (admission instanceof Response) return admission;
+  const { automation, authorizationGuard } = admittedAutomation(ctx);
 
   const workerUrl = env.WORKER_URL || "";
 
@@ -1444,14 +1406,16 @@ async function handleRegenerateKey(
     const statement = store.bindAutomationUpdate(id, {
       trigger_auth_data: encrypted,
     } as Record<string, unknown>);
+    if (!statement) return error("Automation not found", 404);
     const result = await runAuthorizedAutomationBatch(
       ctx,
       automation,
       "manage",
-      admission.authorizationGuard,
-      statement ? [statement] : []
+      authorizationGuard,
+      [statement]
     );
     if (result instanceof Response) return result;
+    if ((result.at(-1)?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 
     logger.info("automation.secret_updated", {
       event: "automation.secret_updated",
@@ -1476,14 +1440,12 @@ async function handleRegenerateKey(
   const statement = store.bindAutomationUpdate(id, {
     trigger_auth_data: hash,
   } as Record<string, unknown>);
-  const result = await runAuthorizedAutomationBatch(
-    ctx,
-    automation,
-    "manage",
-    admission.authorizationGuard,
-    statement ? [statement] : []
-  );
+  if (!statement) return error("Automation not found", 404);
+  const result = await runAuthorizedAutomationBatch(ctx, automation, "manage", authorizationGuard, [
+    statement,
+  ]);
   if (result instanceof Response) return result;
+  if ((result.at(-1)?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 
   logger.info("automation.key_regenerated", {
     event: "automation.key_regenerated",
@@ -1587,31 +1549,31 @@ export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROU
   {
     method: "PUT",
     pattern: parsePattern("/automations/:id"),
-    authorization: handlerAuthorized(),
+    authorization: requireAutomation("manage"),
     handler: handleUpdateAutomation,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/automations/:id"),
-    authorization: handlerAuthorized(),
+    authorization: requireAutomation("manage"),
     handler: handleDeleteAutomation,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/pause"),
-    authorization: handlerAuthorized(),
+    authorization: requireAutomation("manage"),
     handler: handlePauseAutomation,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/resume"),
-    authorization: handlerAuthorized(),
+    authorization: requireAutomation("manage"),
     handler: handleResumeAutomation,
   },
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/trigger"),
-    authorization: handlerAuthorized(),
+    authorization: requireAutomation("trigger"),
     handler: handleTriggerAutomation,
   },
   {
@@ -1629,7 +1591,7 @@ export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROU
   {
     method: "POST",
     pattern: parsePattern("/automations/:id/regenerate-key"),
-    authorization: handlerAuthorized(),
+    authorization: requireAutomation("manage"),
     handler: handleRegenerateKey,
   },
 ]);

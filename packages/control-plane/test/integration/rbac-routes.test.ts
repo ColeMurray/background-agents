@@ -293,7 +293,7 @@ describe("RBAC routes", () => {
     });
 
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({ code: "session_access_required" });
+    await expect(response.json()).resolves.toMatchObject({ code: "creator_required" });
   });
 
   it("does not let the last unsuspended Owner be suspended", async () => {
@@ -347,6 +347,32 @@ describe("RBAC routes", () => {
     expect(
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.member_status_updated'"
+      ).first()
+    ).toEqual({ count: 1 });
+  });
+
+  it("lets an Owner demote themselves when another unsuspended Owner exists", async () => {
+    const ownerId = await seedOwner();
+    const otherOwner = await new UserStore(sqlDatabase(env.DB)).createUser({
+      displayName: "Other Owner",
+    });
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = ?"
+    )
+      .bind(otherOwner.id)
+      .run();
+
+    const response = await serviceFetch(`https://cp.test/members/${ownerId}/role`, {
+      method: "PUT",
+      body: JSON.stringify({ roleId: "role_builtin_administrator" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ role: { key: "administrator" } });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.member_role_updated'"
       ).first()
     ).toEqual({ count: 1 });
   });
@@ -410,6 +436,35 @@ describe("RBAC routes", () => {
     ).rejects.toThrow("Resolve conflicting user roles before merging");
   });
 
+  it("returns role_not_found only when the role replacement target is missing", async () => {
+    await seedOwner();
+    const replacement = {
+      name: "Replacement",
+      permissions: ["repositories.read"],
+    };
+
+    const missing = await serviceFetch("https://cp.test/roles/role_missing", {
+      method: "PUT",
+      body: JSON.stringify(replacement),
+      headers: { "Content-Type": "application/json", "If-Match": '"1"' },
+    });
+    const builtIn = await serviceFetch("https://cp.test/roles/role_builtin_member", {
+      method: "PUT",
+      body: JSON.stringify(replacement),
+      headers: { "Content-Type": "application/json", "If-Match": '"1"' },
+    });
+
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ code: "role_not_found" });
+    expect(builtIn.status).toBe(409);
+    await expect(builtIn.json()).resolves.toMatchObject({ code: "rbac_conflict" });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.role_updated'"
+      ).first()
+    ).toEqual({ count: 0 });
+  });
+
   it("manages custom roles and member assignments without authorization versions", async () => {
     await seedOwner();
 
@@ -440,16 +495,27 @@ describe("RBAC routes", () => {
 
     const stale = await serviceFetch(`https://cp.test/roles/${encodeURIComponent(role.id)}`, {
       method: "PUT",
-      body: JSON.stringify({ name: "Stale", permissions: ["repositories.read"] }),
+      body: JSON.stringify({ name: "Stale", permissions: ["sessions.create"] }),
       headers: { "Content-Type": "application/json", "If-Match": '"1"' },
     });
     expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toEqual({
+      error: "Role revision, name, or editability conflict",
+      code: "rbac_conflict",
+    });
     expect(
       await env.DB.prepare(
         `SELECT COUNT(*) AS count
          FROM authorization_audit_events WHERE action = 'workspace.role_updated'`
       ).first()
     ).toEqual({ count: 1 });
+    expect(
+      await env.DB.prepare(
+        "SELECT permission_id FROM role_permissions WHERE role_id = ? ORDER BY permission_id"
+      )
+        .bind(role.id)
+        .all()
+    ).toMatchObject({ results: [{ permission_id: "repositories.read" }] });
 
     const member = await new UserStore(sqlDatabase(env.DB)).createUser({
       displayName: "Member",
@@ -486,6 +552,37 @@ describe("RBAC routes", () => {
     await expect(restore.json()).resolves.toMatchObject({ suspendedAt: null });
   });
 
+  it("atomically applies a role edit that removes the actor's own manage permission", async () => {
+    const ownerId = await seedOwner();
+    const service = new AuthorizationService(sqlDatabase(env.DB));
+    const role = await service.createRole(
+      {
+        name: "Self Editor",
+        permissions: ["workspace.roles.manage", "repositories.read"],
+      },
+      ownerId,
+      "create-self-editor"
+    );
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind(role.id, ownerId)
+      .run();
+
+    const updated = await service.replaceRole(
+      role.id,
+      role.revision,
+      { name: role.name, permissions: ["repositories.read"] },
+      ownerId,
+      "remove-own-role-manage"
+    );
+
+    expect(updated).toMatchObject({ revision: 2, permissions: ["repositories.read"] });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE request_id = 'remove-own-role-manage'"
+      ).first()
+    ).toEqual({ count: 1 });
+  });
+
   it("rejects privileged mutations when the actor authorization changes", async () => {
     const ownerId = await seedOwner();
     const member = await new UserStore(sqlDatabase(env.DB)).createUser({
@@ -508,6 +605,7 @@ describe("RBAC routes", () => {
       env.DB.prepare(
         "UPDATE user_role_assignments SET role_id = 'role_builtin_member' WHERE user_id = ?"
       ).bind(ownerId),
+      env.DB.prepare("UPDATE roles SET revision = revision + 1 WHERE id = ?").bind(editableRole.id),
     ]);
 
     await expect(
@@ -524,6 +622,15 @@ describe("RBAC routes", () => {
         { name: "Edited By Stale Actor", permissions: ["repositories.read"] },
         ownerId,
         "stale-role-edit"
+      )
+    ).rejects.toThrow("Actor authorization changed");
+    await expect(
+      service.replaceRole(
+        "role_missing",
+        1,
+        { name: "Missing Role", permissions: ["repositories.read"] },
+        ownerId,
+        "stale-actor-missing-role"
       )
     ).rejects.toThrow("Actor authorization changed");
     await expect(
@@ -559,6 +666,16 @@ describe("RBAC routes", () => {
     expect(
       await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(member.id).first()
     ).toEqual({ suspended_at: null });
+    expect(
+      await env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM authorization_audit_events
+         WHERE request_id IN (
+           'stale-role-request', 'stale-role-edit', 'stale-role-delete',
+           'stale-member-role-request', 'stale-member-request',
+           'stale-actor-missing-role'
+         )`
+      ).first()
+    ).toEqual({ count: 0 });
   });
 
   it("returns a conflict for duplicate normalized role names", async () => {
@@ -578,6 +695,44 @@ describe("RBAC routes", () => {
       error: "Role name already exists",
       code: "rbac_conflict",
     });
+  });
+
+  it("returns authorization unavailable for an unexpected mutation database failure", async () => {
+    await seedOwner();
+    await env.DB.prepare(
+      `CREATE TRIGGER fail_role_audit
+       BEFORE INSERT ON authorization_audit_events
+       WHEN NEW.action = 'workspace.role_created'
+       BEGIN
+         SELECT RAISE(ABORT, 'forced database failure');
+       END`
+    ).run();
+
+    try {
+      const response = await serviceFetch("https://cp.test/roles", {
+        method: "POST",
+        body: JSON.stringify({ name: "Must Roll Back", permissions: ["repositories.read"] }),
+        headers: { "Content-Type": "application/json" },
+      });
+
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: "Authorization unavailable",
+        code: "authorization_unavailable",
+      });
+      expect(
+        await env.DB.prepare(
+          "SELECT id FROM roles WHERE normalized_name = 'must roll back'"
+        ).first()
+      ).toBeNull();
+      expect(
+        await env.DB.prepare(
+          "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.role_created'"
+        ).first()
+      ).toEqual({ count: 0 });
+    } finally {
+      await env.DB.prepare("DROP TRIGGER fail_role_audit").run();
+    }
   });
 
   it("rejects suspended users at the backend after reauthentication", async () => {

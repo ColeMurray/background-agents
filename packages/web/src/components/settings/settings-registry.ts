@@ -14,6 +14,40 @@ import {
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { matchesSearchTerms } from "@/lib/search";
+import { lazy, type ComponentType, type LazyExoticComponent } from "react";
+
+type SettingsPermissionPredicate = PermissionId | { allOf: readonly PermissionId[] };
+type SettingsVisibility = { public: true } | { anyOf: readonly SettingsPermissionPredicate[] };
+
+interface SettingsItemDefinition {
+  id: string;
+  label: string;
+  description: string;
+  keywords: string;
+  icon: ComponentType<{ className?: string }>;
+  visibility: SettingsVisibility;
+  panel: LazyExoticComponent<ComponentType>;
+  requiresRepoImages?: boolean;
+}
+
+interface SettingsGroupDefinition {
+  label: string;
+  items: readonly SettingsItemDefinition[];
+}
+
+const publicSettings = { public: true } as const;
+
+function allOf(...permissions: PermissionId[]): SettingsPermissionPredicate {
+  return { allOf: permissions };
+}
+
+function anyOf(...predicates: SettingsPermissionPredicate[]): SettingsVisibility {
+  return { anyOf: predicates };
+}
+
+function lazyPanel(load: () => Promise<ComponentType>): LazyExoticComponent<ComponentType> {
+  return lazy(async () => ({ default: await load() }));
+}
 
 export const SETTINGS_GROUPS = [
   {
@@ -25,6 +59,10 @@ export const SETTINGS_GROUPS = [
         description: "Theme and code highlighting",
         keywords: "theme dark light syntax",
         icon: AppearanceIcon,
+        visibility: publicSettings,
+        panel: lazyPanel(() =>
+          import("./appearance-settings").then(({ AppearanceSettings }) => AppearanceSettings)
+        ),
       },
       {
         id: "keyboard-shortcuts",
@@ -32,6 +70,12 @@ export const SETTINGS_GROUPS = [
         description: "Customize keyboard shortcuts",
         keywords: "keys commands hotkeys",
         icon: KeyboardIcon,
+        visibility: publicSettings,
+        panel: lazyPanel(() =>
+          import("./keyboard-shortcuts-settings").then(
+            ({ KeyboardShortcutsSettings }) => KeyboardShortcutsSettings
+          )
+        ),
       },
     ],
   },
@@ -44,6 +88,10 @@ export const SETTINGS_GROUPS = [
         description: "Choose models available to agents",
         keywords: "claude openai reasoning",
         icon: ModelIcon,
+        visibility: anyOf("models.preferences.manage"),
+        panel: lazyPanel(() =>
+          import("./models-settings").then(({ ModelsSettings }) => ModelsSettings)
+        ),
       },
       {
         id: "provider-accounts",
@@ -51,6 +99,12 @@ export const SETTINGS_GROUPS = [
         description: "Connect model provider subscriptions",
         keywords: "provider authentication credentials",
         icon: KeyIcon,
+        visibility: anyOf("provider_accounts.read"),
+        panel: lazyPanel(() =>
+          import("./provider-accounts-settings").then(
+            ({ ProviderAccountsSettings }) => ProviderAccountsSettings
+          )
+        ),
       },
       {
         id: "skills",
@@ -58,6 +112,10 @@ export const SETTINGS_GROUPS = [
         description: "Manage shared skills and profiles",
         keywords: "agent instructions profiles",
         icon: SparkleIcon,
+        visibility: anyOf("skills.read"),
+        panel: lazyPanel(() =>
+          import("./skills-settings").then(({ SkillsSettings }) => SkillsSettings)
+        ),
       },
     ],
   },
@@ -70,6 +128,10 @@ export const SETTINGS_GROUPS = [
         description: "Manage members and roles",
         keywords: "rbac permissions users access",
         icon: DataControlsIcon,
+        visibility: anyOf("workspace.members.read", "workspace.roles.read"),
+        panel: lazyPanel(() =>
+          import("./workspace-settings").then(({ WorkspaceSettings }) => WorkspaceSettings)
+        ),
       },
       {
         id: "environments",
@@ -77,6 +139,10 @@ export const SETTINGS_GROUPS = [
         description: "Configure reusable repository setups",
         keywords: "repositories branches prebuild",
         icon: FolderIcon,
+        visibility: anyOf("environments.read"),
+        panel: lazyPanel(() =>
+          import("./environments-settings").then(({ EnvironmentsSettings }) => EnvironmentsSettings)
+        ),
       },
       {
         id: "secrets",
@@ -84,6 +150,13 @@ export const SETTINGS_GROUPS = [
         description: "Manage global and repository secrets",
         keywords: "environment variables credentials",
         icon: KeyIcon,
+        visibility: anyOf(
+          "global_secrets.manage",
+          allOf("repositories.secrets.manage", "repositories.read")
+        ),
+        panel: lazyPanel(() =>
+          import("./secrets-settings").then(({ SecretsSettings }) => SecretsSettings)
+        ),
       },
       {
         id: "scm",
@@ -91,6 +164,10 @@ export const SETTINGS_GROUPS = [
         description: "Configure pull request behavior",
         keywords: "scm git pull request merge draft",
         icon: GitPrIcon,
+        visibility: anyOf("integrations.read"),
+        panel: lazyPanel(() =>
+          import("./scm-settings").then(({ ScmSettingsPage }) => ScmSettingsPage)
+        ),
       },
     ],
   },
@@ -103,6 +180,10 @@ export const SETTINGS_GROUPS = [
         description: "Set runtime resources and access",
         keywords: "terminal ports cpu memory timeout",
         icon: TerminalIcon,
+        visibility: anyOf("integrations.read"),
+        panel: lazyPanel(() =>
+          import("./sandbox-settings").then(({ SandboxSettingsPage }) => SandboxSettingsPage)
+        ),
       },
       {
         id: "images",
@@ -111,6 +192,10 @@ export const SETTINGS_GROUPS = [
         keywords: "prebuild containers",
         icon: BoxIcon,
         requiresRepoImages: true,
+        visibility: anyOf("image_builds.read"),
+        panel: lazyPanel(() =>
+          import("./images-settings").then(({ ImagesSettings }) => ImagesSettings)
+        ),
       },
       {
         id: "integrations",
@@ -118,6 +203,10 @@ export const SETTINGS_GROUPS = [
         description: "Connect external tools and services",
         keywords: "github slack linear vnc code server",
         icon: IntegrationsIcon,
+        visibility: anyOf("integrations.read"),
+        panel: lazyPanel(() =>
+          import("./integrations-settings").then(({ IntegrationsSettings }) => IntegrationsSettings)
+        ),
       },
       {
         id: "mcp-servers",
@@ -125,6 +214,10 @@ export const SETTINGS_GROUPS = [
         description: "Configure local and remote MCP servers",
         keywords: "tools protocol command url",
         icon: TerminalIcon,
+        visibility: anyOf("mcp_servers.read"),
+        panel: lazyPanel(() =>
+          import("./mcp-servers-settings").then(({ McpServersSettings }) => McpServersSettings)
+        ),
       },
       {
         id: "data-controls",
@@ -132,10 +225,16 @@ export const SETTINGS_GROUPS = [
         description: "Review and restore archived sessions",
         keywords: "archive restore retention",
         icon: DataControlsIcon,
+        visibility: anyOf("sessions.read.any", "sessions.read.own"),
+        panel: lazyPanel(() =>
+          import("./data-controls-settings").then(
+            ({ DataControlsSettings }) => DataControlsSettings
+          )
+        ),
       },
     ],
   },
-] as const;
+] as const satisfies readonly SettingsGroupDefinition[];
 
 type SettingsItem = (typeof SETTINGS_GROUPS)[number]["items"][number];
 export type SettingsCategory = SettingsItem["id"];
@@ -146,33 +245,15 @@ export function canViewSettingsCategory(
   category: SettingsCategory,
   hasPermission: (permission: PermissionId) => boolean
 ): boolean {
-  switch (category) {
-    case "workspace":
-      return hasPermission("workspace.members.read") || hasPermission("workspace.roles.read");
-    case "secrets":
-      return hasPermission("global_secrets.manage");
-    case "environments":
-      return hasPermission("environments.read");
-    case "models":
-      return hasPermission("models.preferences.manage");
-    case "provider-accounts":
-      return hasPermission("provider_accounts.read");
-    case "images":
-      return hasPermission("image_builds.read");
-    case "sandbox":
-      return hasPermission("integrations.read");
-    case "scm":
-    case "integrations":
-      return hasPermission("integrations.read");
-    case "skills":
-      return hasPermission("skills.read");
-    case "mcp-servers":
-      return hasPermission("mcp_servers.read");
-    case "data-controls":
-      return hasPermission("sessions.read.any") || hasPermission("sessions.read.own");
-    default:
-      return true;
-  }
+  const visibility = getSettingsItem(category).visibility;
+  return (
+    "public" in visibility ||
+    visibility.anyOf.some((predicate) =>
+      typeof predicate === "string"
+        ? hasPermission(predicate)
+        : predicate.allOf.every(hasPermission)
+    )
+  );
 }
 
 export function resolveSettingsCategory(
@@ -209,26 +290,28 @@ function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean)
 export function getSettingsGroups({
   query = DEFAULT_SETTINGS_QUERY,
   repoImagesEnabled = supportsRepoImages(),
+  hasPermission,
 }: {
   query?: string;
   repoImagesEnabled?: boolean;
-} = {}) {
+  hasPermission: (permission: PermissionId) => boolean;
+}) {
   return SETTINGS_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
       if (!isSettingsItemAvailable(item, repoImagesEnabled)) return false;
+      if (!canViewSettingsCategory(item.id, hasPermission)) return false;
       return matchesSearchTerms(`${item.label} ${item.description} ${item.keywords}`, query);
     }),
   })).filter((group) => group.items.length > 0);
 }
 
 export function getSettingsCategoryLabel(category: SettingsCategory): string {
-  for (const group of SETTINGS_GROUPS) {
-    for (const item of group.items) {
-      if (item.id === category) return item.label;
-    }
-  }
-  return category;
+  return getSettingsItem(category).label;
+}
+
+export function getSettingsPanel(category: SettingsCategory): LazyExoticComponent<ComponentType> {
+  return getSettingsItem(category).panel;
 }
 
 export function isSettingsCategory(
@@ -241,4 +324,13 @@ export function isSettingsCategory(
       (item) => item.id === value && isSettingsItemAvailable(item, repoImagesEnabled)
     )
   );
+}
+
+function getSettingsItem(category: SettingsCategory): SettingsItem {
+  for (const group of SETTINGS_GROUPS) {
+    for (const item of group.items) {
+      if (item.id === category) return item;
+    }
+  }
+  throw new Error(`Unknown settings category: ${category}`);
 }

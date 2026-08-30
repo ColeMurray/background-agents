@@ -8,8 +8,9 @@ import {
   isAutomationExecutionAuthorized,
 } from "./authorization-guard";
 
-function recordingDb(): { db: SqlDatabase; bindings: unknown[][] } {
+function recordingDb(): { db: SqlDatabase; bindings: unknown[][]; queries: string[] } {
   const bindings: unknown[][] = [];
+  const queries: string[] = [];
   const statement = {
     bind(...values: unknown[]) {
       bindings.push(values);
@@ -17,7 +18,16 @@ function recordingDb(): { db: SqlDatabase; bindings: unknown[][] } {
     },
     first: async () => ({}),
   };
-  return { db: { prepare: () => statement } as unknown as SqlDatabase, bindings };
+  return {
+    db: {
+      prepare: (query: string) => {
+        queries.push(query);
+        return statement;
+      },
+    } as unknown as SqlDatabase,
+    bindings,
+    queries,
+  };
 }
 
 const authorization: EffectiveAuthorization = {
@@ -45,5 +55,13 @@ describe("automation authorization guards", () => {
     expect(bindings).toHaveLength(4);
     expect(bindings[0]).toEqual(bindings[1]);
     expect(bindings[2]).toEqual(bindings[3]);
+  });
+
+  it("requires the target automation to remain non-deleted", () => {
+    const { db, queries } = recordingDb();
+
+    bindAutomationAuthorizationGuard(db, "automation-1", authorization, "manage");
+
+    expect(queries[0]).toContain("a.id = ? AND a.deleted_at IS NULL");
   });
 });

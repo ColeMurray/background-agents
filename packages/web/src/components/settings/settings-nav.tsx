@@ -7,11 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useSettingsIsMobile } from "./settings-viewport-context";
-import {
-  canViewSettingsCategory,
-  getSettingsGroups,
-  type SettingsCategory,
-} from "./settings-registry";
+import { getSettingsGroups, type SettingsCategory } from "./settings-registry";
 
 export {
   DEFAULT_SETTINGS_CATEGORY,
@@ -47,12 +43,7 @@ export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
   const isMobile = useSettingsIsMobile();
   const [query, setQuery] = useState("");
   const { hasPermission } = useCurrentUserAuthorization();
-  const groups = getSettingsGroups({ query })
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => canViewSettingsCategory(item.id, hasPermission)),
-    }))
-    .filter((group) => group.items.length > 0);
+  const groups = getSettingsGroups({ query, hasPermission });
 
   const navigation = (
     <div className="space-y-6">

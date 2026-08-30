@@ -13,6 +13,8 @@ import type { BackgroundTasks } from "../platform-ports";
 import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
 import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
+import type { AutomationRow } from "../db/automation-store";
+import type { SqlStatement } from "../db/sql-database";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -48,7 +50,14 @@ export type RequestContext = CorrelationContext & {
   authentication?: AuthenticationContext;
   /** Effective human authorization loaded once by the router for this request. */
   authorization?: EffectiveAuthorization;
+  /** Resource admission populated by the router for automation mutation routes. */
+  automationAdmission?: AutomationRouteAdmission;
 };
+
+export interface AutomationRouteAdmission {
+  automation: AutomationRow;
+  authorizationGuard: SqlStatement;
+}
 
 /**
  * Route configuration.
@@ -71,7 +80,12 @@ export type SessionAuthorizationOperation =
 
 export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
-  | { kind: "session"; operation: SessionAuthorizationOperation; sessionIdParam: string };
+  | { kind: "session"; operation: SessionAuthorizationOperation; sessionIdParam: string }
+  | {
+      kind: "automation";
+      operation: "manage" | "trigger";
+      automationIdParam: string;
+    };
 
 type BotServiceName = Exclude<ServiceName, "web">;
 
@@ -139,6 +153,17 @@ export function requireSession(
     kind: "active-user",
     allOf: [sessionRequirement(operation, sessionIdParam)],
     service: { kind: "actor" },
+  };
+}
+
+export function requireAutomation(
+  operation: "manage" | "trigger",
+  automationIdParam = "id"
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [{ kind: "automation", operation, automationIdParam }],
+    service: { kind: "deny" },
   };
 }
 

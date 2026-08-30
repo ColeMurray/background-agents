@@ -32,6 +32,10 @@ import {
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import {
+  sessionAccessPredicate,
+  type SessionPermissionScope,
+} from "../authorization/session-authorization-policy";
 
 export type {
   ListSessionInboxOptions,
@@ -100,6 +104,8 @@ export interface SessionEntry {
    */
   pullRequestSummary?: PullRequestSummary;
   readState?: SessionReadState;
+  /** Whether the current viewer may rename, archive, or unarchive this row. */
+  canManageLifecycle?: boolean;
   /** Resolved manifest to persist atomically with a new top-level session. */
   skillManifest?: SessionSkillManifestInput;
   /** Parent manifest to copy atomically for an agent-spawned child. */
@@ -149,18 +155,21 @@ export interface ListSessionsOptions {
   repoOwner?: string;
   repoName?: string;
   createdByUserIds?: readonly string[];
-  accessUserId?: string;
   limit?: number;
   offset?: number;
   viewerUserId?: string;
+  readScope?: SessionPermissionScope;
+  lifecycleScope?: SessionPermissionScope | null;
 }
 
 export interface ListSessionsResult {
-  sessions: SessionEntry[];
+  sessions: Array<SessionEntry & { canManageLifecycle: boolean }>;
   hasMore: boolean;
 }
 
-interface ViewerSessionRow extends SessionRow, ViewerReadStateRow {}
+interface ViewerSessionRow extends SessionRow, ViewerReadStateRow {
+  can_manage_lifecycle: number;
+}
 
 function toEntry(row: SessionRow): SessionEntry {
   return {
@@ -525,10 +534,11 @@ export class SessionIndexStore {
       repoOwner,
       repoName,
       createdByUserIds,
-      accessUserId,
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
+      readScope,
+      lifecycleScope,
     } = options;
 
     const conditions: string[] = [];
@@ -581,19 +591,21 @@ export class SessionIndexStore {
       conditions.push(`user_id IN (${createdByUserIds.map(() => "?").join(", ")})`);
       params.push(...createdByUserIds);
     }
-    if (accessUserId) {
-      conditions.push(
-        `EXISTS (
-          SELECT 1 FROM session_access access
-          WHERE access.session_id = sessions.id AND access.user_id = ?
-        )`
-      );
-      params.push(accessUserId);
+    if (viewerUserId && readScope) {
+      const access = sessionAccessPredicate("sessions", viewerUserId, readScope);
+      conditions.push(access.sql);
+      params.push(...access.params);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    const lifecycleCapability =
+      viewerUserId && lifecycleScope
+        ? sessionAccessPredicate("sessions", viewerUserId, lifecycleScope)
+        : { sql: "0", params: [] };
+    const pageSql = `SELECT sessions.*, ${lifecycleCapability.sql} AS can_manage_lifecycle
+                     FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    const pageParams = [...lifecycleCapability.params, ...params, limit + 1, offset];
     const result = viewerUserId
       ? await this.db
           .prepare(
@@ -607,11 +619,11 @@ export class SessionIndexStore {
               AND read_state.user_id = viewer.id
              ORDER BY paged_sessions.updated_at DESC`
           )
-          .bind(...params, limit + 1, offset, viewerUserId)
+          .bind(...pageParams, viewerUserId)
           .all<ViewerSessionRow>()
       : await this.db
           .prepare(pageSql)
-          .bind(...params, limit + 1, offset)
+          .bind(...pageParams)
           .all<SessionRow>();
 
     const rows = result.results || [];
@@ -619,6 +631,7 @@ export class SessionIndexStore {
       rows.slice(0, limit).map((row) => ({
         ...toEntry(row),
         ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
+        canManageLifecycle: (row as ViewerSessionRow).can_manage_lifecycle === 1,
       }))
     );
 
@@ -675,11 +688,6 @@ export class SessionIndexStore {
       )
       .run();
     return (result.meta.changes ?? 0) > 0;
-  }
-
-  /** Current single-tenant visibility boundary; future grants belong here. */
-  async getVisibleForUser(sessionId: string, _userId: string): Promise<SessionEntry | null> {
-    return this.get(sessionId);
   }
 
   async updateReadState(

@@ -10,7 +10,11 @@ import {
   type RoleSummary,
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
-import { AuthorizationStore, type AuthorizationRoleRecord } from "../db/authorization-store";
+import {
+  AuthorizationStore,
+  type AuthorizationMutationOutcome,
+  type AuthorizationRoleRecord,
+} from "../db/authorization-store";
 import type { SqlDatabase } from "../db/sql-database";
 
 export class AuthorizationError extends Error {
@@ -82,7 +86,7 @@ export class AuthorizationService {
   async createRole(input: unknown, actorUserId: string, requestId: string): Promise<RoleSummary> {
     const parsed = createRoleInputSchema.parse(input);
     const roleId = `role_${crypto.randomUUID()}`;
-    try {
+    this.requireApplied(
       await this.store.createRole({
         roleId,
         name: parsed.name,
@@ -92,10 +96,9 @@ export class AuthorizationService {
         actorUserId,
         requestId,
         now: Date.now(),
-      });
-    } catch (cause) {
-      await this.rethrowMutationFailure(cause, actorUserId, ["workspace.roles.manage"]);
-    }
+      }),
+      "Role name already exists"
+    );
     return (await this.getRole(roleId))!;
   }
 
@@ -107,14 +110,7 @@ export class AuthorizationService {
     requestId: string
   ): Promise<RoleSummary> {
     const parsed = replaceRoleInputSchema.parse(input);
-    const existing = await this.getRole(roleId);
-    if (!existing) throw new AuthorizationError(404, "role_not_found");
-    if (existing.isSystem) throw new RbacConflictError("Built-in roles cannot be edited");
-    if (existing.revision !== expectedRevision) {
-      throw new RbacConflictError("Role revision conflict");
-    }
-
-    try {
+    this.requireApplied(
       await this.store.replaceRole({
         roleId,
         expectedRevision,
@@ -125,39 +121,17 @@ export class AuthorizationService {
         actorUserId,
         requestId,
         now: Date.now(),
-      });
-    } catch (cause) {
-      await this.rethrowMutationFailure(
-        cause,
-        actorUserId,
-        ["workspace.roles.manage"],
-        async () => {
-          const current = await this.getRole(roleId);
-          return !current || current.isSystem || current.revision !== expectedRevision;
-        }
-      );
-    }
+      }),
+      "Role revision, name, or editability conflict"
+    );
     return (await this.getRole(roleId))!;
   }
 
   async deleteRole(roleId: string, actorUserId: string, requestId: string): Promise<void> {
-    const existing = await this.getRole(roleId);
-    if (!existing || existing.isSystem || existing.assignmentCount > 0) {
-      throw new RbacConflictError("Role is built-in, assigned, or missing");
-    }
-    try {
-      await this.store.deleteRole({ roleId, actorUserId, requestId, now: Date.now() });
-    } catch (cause) {
-      await this.rethrowMutationFailure(
-        cause,
-        actorUserId,
-        ["workspace.roles.manage"],
-        async () => {
-          const current = await this.getRole(roleId);
-          return !current || current.isSystem || current.assignmentCount > 0;
-        }
-      );
-    }
+    this.requireApplied(
+      await this.store.deleteRole({ roleId, actorUserId, requestId, now: Date.now() }),
+      "Role is built-in, assigned, or missing"
+    );
   }
 
   async listMembers(): Promise<WorkspaceMember[]> {
@@ -170,46 +144,16 @@ export class AuthorizationService {
     actorUserId: string;
     requestId: string;
   }): Promise<void> {
-    const [target, role] = await Promise.all([
-      this.getEffectiveAuthorization(input.targetUserId),
-      this.getRole(input.roleId),
-    ]);
-    if (!role) throw new AuthorizationError(404, "role_not_found");
-    const ownerSensitive = target.role.key === "owner" || role.key === "owner";
-    if (ownerSensitive) {
-      await this.requirePermission(input.actorUserId, "workspace.transfer_ownership");
-    }
-    try {
+    this.requireApplied(
       await this.store.replaceMemberRole({
         targetUserId: input.targetUserId,
         roleId: input.roleId,
         actorUserId: input.actorUserId,
         requestId: input.requestId,
         now: Date.now(),
-      });
-    } catch (cause) {
-      await this.rethrowMutationFailure(
-        cause,
-        input.actorUserId,
-        ownerSensitive
-          ? ["workspace.members.manage", "workspace.transfer_ownership"]
-          : ["workspace.members.manage"],
-        async () => {
-          const [currentTarget, currentRole] = await Promise.all([
-            this.getEffectiveAuthorization(input.targetUserId),
-            this.getRole(input.roleId),
-          ]);
-          return (
-            !currentRole ||
-            (!ownerSensitive &&
-              (currentTarget.role.key === "owner" || currentRole.key === "owner")) ||
-            (currentTarget.role.key === "owner" &&
-              currentRole.key !== "owner" &&
-              !(await this.store.hasAnotherUnsuspendedOwner(input.targetUserId)))
-          );
-        }
-      );
-    }
+      }),
+      "Member role precondition conflict"
+    );
   }
 
   async replaceMemberStatus(input: {
@@ -218,38 +162,16 @@ export class AuthorizationService {
     actorUserId: string;
     requestId: string;
   }): Promise<void> {
-    const target = await this.getEffectiveAuthorization(input.targetUserId);
-    const ownerSensitive = target.role.key === "owner";
-    if (ownerSensitive) {
-      await this.requirePermission(input.actorUserId, "workspace.transfer_ownership");
-    }
-    try {
+    this.requireApplied(
       await this.store.replaceMemberStatus({
         targetUserId: input.targetUserId,
         suspended: input.suspended,
         actorUserId: input.actorUserId,
         requestId: input.requestId,
         now: Date.now(),
-      });
-    } catch (cause) {
-      await this.rethrowMutationFailure(
-        cause,
-        input.actorUserId,
-        ownerSensitive
-          ? ["workspace.members.manage", "workspace.transfer_ownership"]
-          : ["workspace.members.manage"],
-        async () => {
-          const currentIsOwner =
-            (await this.getEffectiveAuthorization(input.targetUserId)).role.key === "owner";
-          return (
-            (!ownerSensitive && currentIsOwner) ||
-            (input.suspended &&
-              currentIsOwner &&
-              !(await this.store.hasAnotherUnsuspendedOwner(input.targetUserId)))
-          );
-        }
-      );
-    }
+      }),
+      "Member status precondition conflict"
+    );
   }
 
   private async loadRolePermissions(
@@ -269,25 +191,15 @@ export class AuthorizationService {
     };
   }
 
-  private async rethrowMutationFailure(
-    cause: unknown,
-    actorUserId: string,
-    permissions: PermissionId[],
-    expectedConflict?: () => Promise<boolean>
-  ): Promise<never> {
-    try {
-      for (const permission of permissions) {
-        await this.requirePermission(actorUserId, permission);
-      }
-    } catch (actorCause) {
-      if (actorCause instanceof AuthorizationError) {
-        throw new RbacConflictError("Actor authorization changed");
-      }
-      throw cause;
+  private requireApplied(outcome: AuthorizationMutationOutcome, conflictMessage: string): void {
+    if (outcome.status === "actor_authorization_changed") {
+      throw new RbacConflictError("Actor authorization changed");
     }
-    if (expectedConflict && (await expectedConflict())) {
-      throw new RbacConflictError("RBAC precondition conflict");
+    if (outcome.status === "not_found") {
+      throw new AuthorizationError(404, "role_not_found");
     }
-    throw cause;
+    if (outcome.status === "conflict") {
+      throw new RbacConflictError(conflictMessage);
+    }
   }
 }

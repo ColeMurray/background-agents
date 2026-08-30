@@ -11,6 +11,7 @@ import { BranchIcon, PlusIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
 import { APP_DESTINATIONS } from "@/components/app-destinations";
 import { getSettingsGroups } from "@/components/settings/settings-registry";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   Command,
   CommandDialog,
@@ -80,11 +81,12 @@ export function GlobalCommandMenu({
   sessions,
 }: GlobalCommandMenuProps) {
   const { labels } = useKeyboardShortcuts();
+  const { hasPermission } = useCurrentUserAuthorization();
   const searchableSessions = useMemo(
     () => sessions.filter((session) => session.status !== "archived"),
     [sessions]
   );
-  const settingsGroups = getSettingsGroups();
+  const settingsGroups = getSettingsGroups({ hasPermission });
 
   const handleSelect = (callback: () => void) => {
     onOpenChange(false);

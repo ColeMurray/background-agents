@@ -28,6 +28,7 @@ import {
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
+import { sessionPermissionScope } from "../authorization/session-authorization-policy";
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
@@ -74,7 +75,8 @@ async function handleListSessions(
         ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
         : undefined;
   const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
-  let accessUserId: string | undefined;
+  let readScope: "any" | "own" | undefined;
+  let lifecycleScope: "any" | "own" | null | undefined;
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
@@ -82,9 +84,8 @@ async function handleListSessions(
   if (viewerUserId) {
     const authorization = ctx.authorization;
     if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-    const canReadAny = authorization.permissions.includes("sessions.read.any");
-    const canReadOwn = authorization.permissions.includes("sessions.read.own");
-    if (!canReadAny && !canReadOwn) {
+    const resolvedReadScope = sessionPermissionScope(authorization, "read");
+    if (!resolvedReadScope) {
       return json(
         {
           error: "Forbidden",
@@ -94,9 +95,9 @@ async function handleListSessions(
         403
       );
     }
-    if (ctx.principal?.kind === "service" || !canReadAny) {
-      accessUserId = viewerUserId;
-    }
+    readScope = ctx.principal?.kind === "service" ? "own" : resolvedReadScope;
+    lifecycleScope = sessionPermissionScope(authorization, "lifecycle");
+    if (ctx.principal?.kind === "service" && lifecycleScope) lifecycleScope = "own";
   }
 
   const store = new SessionIndexStore(ctx.db);
@@ -109,7 +110,8 @@ async function handleListSessions(
     limit,
     offset,
     viewerUserId,
-    accessUserId,
+    ...(readScope ? { readScope } : {}),
+    ...(lifecycleScope !== undefined ? { lifecycleScope } : {}),
   });
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
@@ -154,22 +156,20 @@ async function handleListSessionInbox(
   const store = new SessionIndexStore(ctx.db);
   const authorization = ctx.authorization;
   if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-  if (
-    !authorization.permissions.includes("sessions.read.any") &&
-    !authorization.permissions.includes("sessions.read.own")
-  ) {
+  const readScope = sessionPermissionScope(authorization, "read");
+  if (!readScope) {
     return json(
       { error: "Forbidden", code: "permission_required", permission: "sessions.read.own" },
       403
     );
   }
-  const ownOnly = !authorization.permissions.includes("sessions.read.any");
   const commonOptions = {
     limit: SESSION_INBOX_LIMIT,
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
-    accessUserId: ownOnly ? ctx.principal.userId : undefined,
     excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
+    readScope,
+    lifecycleScope: sessionPermissionScope(authorization, "lifecycle"),
   };
 
   if (category === null) {
@@ -239,9 +239,6 @@ async function handlePatchReadState(
   const body = parsedBody.data;
 
   const store = new SessionIndexStore(ctx.db);
-  const visibleSession = await store.getVisibleForUser(sessionId, ctx.principal.userId);
-  if (!visibleSession) return error("Session not found", 404);
-
   const result = await store.updateReadState(ctx.principal.userId, sessionId, body);
   if (!result) return error("Session not found", 404);
 

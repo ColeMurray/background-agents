@@ -18,7 +18,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function session(id: string, overrides: Partial<Session> = {}): Session {
+function session(
+  id: string,
+  overrides: Partial<Session & { canManageLifecycle: boolean }> = {}
+): Session & { canManageLifecycle: boolean } {
   return {
     id,
     title: id.toUpperCase(),
@@ -35,6 +38,7 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
     spawnDepth: 0,
     createdAt: 1000,
     updatedAt: 2000,
+    canManageLifecycle: true,
     ...overrides,
   };
 }

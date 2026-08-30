@@ -44,6 +44,7 @@ function item(id: string) {
       createdAt: 1,
       updatedAt: 2,
       readState: { latestMessageId: null, unread: false as const },
+      canManageLifecycle: true,
     },
     descendantSessions: [],
   };

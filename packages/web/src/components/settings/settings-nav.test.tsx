@@ -120,6 +120,23 @@ describe("SettingsNav", () => {
     expect(screen.queryByRole("button", { name: "Workspace access" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["global secret management", ["global_secrets.manage"]],
+    ["repository read and secret management", ["repositories.read", "repositories.secrets.manage"]],
+  ])("shows secrets with %s", (_description, permissions) => {
+    mocks.allowedPermissions = new Set(permissions);
+    renderSettingsNav({ activeCategory: "secrets" });
+
+    expect(screen.getByRole("button", { name: "Secrets" })).toBeInTheDocument();
+  });
+
+  it("hides secrets from repository secret managers without repository read access", () => {
+    mocks.allowedPermissions = new Set(["repositories.secrets.manage"]);
+    renderSettingsNav({ activeCategory: "appearance" });
+
+    expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+  });
+
   it("keeps read-level sandbox and environment panels visible", () => {
     mocks.allowedPermissions = new Set(["environments.read", "integrations.read"]);
     renderSettingsNav({ activeCategory: "environments" });

@@ -320,6 +320,99 @@ describe("mergeUsers", () => {
     });
   });
 
+  it("keeps preview and execution counts aligned for newer user-owned records", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    const authorizationId = "c".repeat(64);
+    const attemptId = "d".repeat(64);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO model_provider_account_authorizations (
+             id, user_id, provider, operation, display_name, next_poll_at,
+             expires_at, state, created_at, updated_at
+           ) VALUES (?, ?, 'openai', 'create', 'Personal', ?, ?, 'initiating', ?, ?)`
+      ).bind(authorizationId, LOSER, SEED_NOW_MS, SEED_NOW_MS + 60_000, SEED_NOW_MS, SEED_NOW_MS),
+      env.DB.prepare(
+        `INSERT INTO model_provider_account_authorization_attempts
+             (id, user_id, attempted_at) VALUES (?, ?, ?)`
+      ).bind(attemptId, LOSER, SEED_NOW_MS),
+      env.DB.prepare(
+        `INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at)
+           VALUES (?, '{}', ?)`
+      ).bind(LOSER, SEED_NOW_MS),
+    ]);
+
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+
+    expect(preview.counts).toMatchObject({
+      providerAccountAuthorizationsRepointed: 1,
+      providerAccountAuthorizationAttemptsRepointed: 1,
+      keyboardShortcutPreferencesDeduped: 0,
+      keyboardShortcutPreferencesRepointed: 1,
+    });
+    expect(
+      await env.DB.prepare(`SELECT user_id FROM model_provider_account_authorizations WHERE id = ?`)
+        .bind(authorizationId)
+        .first()
+    ).toEqual({ user_id: LOSER });
+
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(result.counts).toEqual(preview.counts);
+    expect(
+      await env.DB.prepare(`SELECT user_id FROM model_provider_account_authorizations WHERE id = ?`)
+        .bind(authorizationId)
+        .first()
+    ).toEqual({ user_id: SURVIVOR });
+    expect(
+      await env.DB.prepare(
+        `SELECT user_id FROM model_provider_account_authorization_attempts WHERE id = ?`
+      )
+        .bind(attemptId)
+        .first()
+    ).toEqual({ user_id: SURVIVOR });
+    expect(
+      await env.DB.prepare(`SELECT shortcuts FROM keyboard_shortcut_preferences WHERE user_id = ?`)
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ shortcuts: "{}" });
+  });
+
+  it("keeps keyboard preference collision preview and execution counts aligned", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at)
+           VALUES (?, '{"survivor":true}', ?)`
+      ).bind(SURVIVOR, SEED_NOW_MS),
+      env.DB.prepare(
+        `INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at)
+           VALUES (?, '{"loser":true}', ?)`
+      ).bind(LOSER, SEED_NOW_MS),
+    ]);
+
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(preview.counts.keyboardShortcutPreferencesDeduped).toBe(1);
+    expect(preview.counts.keyboardShortcutPreferencesRepointed).toBe(0);
+    expect(result.counts).toEqual(preview.counts);
+    expect(
+      await env.DB.prepare(`SELECT shortcuts FROM keyboard_shortcut_preferences WHERE user_id = ?`)
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ shortcuts: '{"survivor":true}' });
+  });
+
   it("is idempotent: re-running after a completed merge is a zero-count no-op", async () => {
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
     await insertCanonicalUser({ id: LOSER, email: null });

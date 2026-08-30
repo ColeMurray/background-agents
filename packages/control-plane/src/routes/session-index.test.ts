@@ -9,7 +9,6 @@ import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 const mockSessionIndexStore = {
   list: vi.fn(),
   delete: vi.fn(),
-  getVisibleForUser: vi.fn(),
   updateReadState: vi.fn(),
 };
 
@@ -105,7 +104,6 @@ describe("session index routes", () => {
       sessions: [],
       hasMore: false,
     });
-    mockSessionIndexStore.getVisibleForUser.mockResolvedValue({ id: "session-1" });
     mockSessionIndexStore.updateReadState.mockResolvedValue({
       sessionId: "session-1",
       outcome: "marked_read",
@@ -194,6 +192,8 @@ describe("session index routes", () => {
       limit: 50,
       offset: 0,
       viewerUserId: "0123456789abcdef0123456789abcdef",
+      readScope: "any",
+      lifecycleScope: null,
     });
   });
 
@@ -314,18 +314,6 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
   });
 
-  it("does not expose invisible sessions through read-state mutations", async () => {
-    mockSessionIndexStore.getVisibleForUser.mockResolvedValue(null);
-
-    const response = await patchReadState(JSON.stringify({ action: "mark_latest_message_read" }), {
-      kind: "user",
-      userId: "user-1",
-    });
-
-    expect(response.status).toBe(404);
-    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
-  });
-
   it.each([
     [
       JSON.stringify({ action: "mark_latest_message_read" }),
@@ -346,7 +334,6 @@ describe("session index routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(mockSessionIndexStore.getVisibleForUser).toHaveBeenCalledWith("session-1", "user-1");
     expect(mockSessionIndexStore.updateReadState).toHaveBeenCalledWith(
       "user-1",
       "session-1",

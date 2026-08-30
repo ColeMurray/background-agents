@@ -9,7 +9,6 @@ import {
   AuthorizationService,
   RbacConflictError,
 } from "../authorization/service";
-import { isUniqueConstraintError } from "../db/errors";
 import type { Route } from "./shared";
 import {
   AUTHENTICATED_USER,
@@ -41,9 +40,6 @@ function rbacErrorResponse(cause: unknown): Response {
   }
   if (cause instanceof RbacConflictError) {
     return json({ error: cause.message, code: "rbac_conflict" }, 409);
-  }
-  if (isUniqueConstraintError(cause)) {
-    return json({ error: "Role name already exists", code: "rbac_conflict" }, 409);
   }
   if (cause instanceof ZodError) return error("Invalid request body", 400);
   return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
