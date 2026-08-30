@@ -10,7 +10,7 @@ export interface WsClientMappingResult {
   scm_login: string | null;
   /** Dormant legacy column may still be present on older mapping fixtures. */
   auth_name?: string | null;
-  authorization_expires_at: number | null;
+  authorization_expires_at: number;
 }
 
 /** Data for a WS client mapping. */
@@ -71,10 +71,7 @@ export class WsClientMappingRepository {
 
   getNextAuthorizationExpiry(): number | null {
     const rows = this.sql
-      .exec(
-        `SELECT MIN(authorization_expires_at) AS expires_at
-         FROM ws_client_mapping WHERE authorization_expires_at IS NOT NULL`
-      )
+      .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)
       .toArray() as Array<{ expires_at: number | null }>;
     return rows[0]?.expires_at ?? null;
   }

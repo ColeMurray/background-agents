@@ -8,10 +8,6 @@ CREATE TABLE roles (
   description TEXT,
   is_system INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
   revision INTEGER NOT NULL DEFAULT 1,
-  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
   CHECK (
     (is_system = 1 AND key IN ('owner', 'administrator', 'member', 'viewer'))
     OR (is_system = 0 AND key IS NULL)
@@ -27,65 +23,50 @@ CREATE TABLE role_permissions (
 
 CREATE TABLE user_role_assignments (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE RESTRICT,
-  role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
-  assigned_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-  assigned_at INTEGER NOT NULL
+  role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT
 );
 
 CREATE TABLE authorization_audit_events (
   id TEXT PRIMARY KEY,
   occurred_at INTEGER NOT NULL,
   request_id TEXT NOT NULL,
-  policy_id TEXT NOT NULL,
   principal_kind TEXT NOT NULL,
   actor_user_id_snapshot TEXT,
   actor_service_snapshot TEXT,
-  actor_provider_snapshot TEXT,
-  actor_provider_user_id_snapshot TEXT,
   action TEXT NOT NULL,
   resource_type TEXT NOT NULL,
   resource_id TEXT,
   target_user_id_snapshot TEXT,
-  decision_outcome TEXT NOT NULL CHECK (decision_outcome IN ('allowed', 'denied')),
-  operation_result TEXT CHECK (operation_result IN ('pending', 'succeeded', 'failed')),
-  reason_code TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))
+  reason_code TEXT NOT NULL
 );
 
 CREATE TABLE session_access (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   relation TEXT NOT NULL CHECK (relation IN ('creator', 'participant')),
-  state TEXT NOT NULL CHECK (state IN ('pending_add', 'active', 'revoking')),
-  generation INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, user_id)
 );
 
 CREATE INDEX idx_role_assignments_role ON user_role_assignments(role_id, user_id);
-CREATE INDEX idx_authorization_audit_time
-  ON authorization_audit_events(occurred_at DESC, id DESC);
-CREATE INDEX idx_authorization_audit_actor
-  ON authorization_audit_events(actor_user_id_snapshot, occurred_at DESC);
 CREATE INDEX idx_session_access_user
-  ON session_access(user_id, state, session_id);
+  ON session_access(user_id, session_id);
 
 INSERT INTO roles (
-  id, key, name, normalized_name, description, is_system, revision, created_at, updated_at
+  id, key, name, normalized_name, description, is_system, revision
 ) VALUES
-  ('role_builtin_owner', 'owner', 'Owner', 'owner', 'Full workspace control', 1, 1, unixepoch() * 1000, unixepoch() * 1000),
-  ('role_builtin_administrator', 'administrator', 'Administrator', 'administrator', 'Operational administration without ownership transfer', 1, 1, unixepoch() * 1000, unixepoch() * 1000),
-  ('role_builtin_member', 'member', 'Member', 'member', 'Session and automation collaboration', 1, 1, unixepoch() * 1000, unixepoch() * 1000),
-  ('role_builtin_viewer', 'viewer', 'Viewer', 'viewer', 'Read-only workspace visibility', 1, 1, unixepoch() * 1000, unixepoch() * 1000);
+  ('role_builtin_owner', 'owner', 'Owner', 'owner', 'Full workspace control', 1, 1),
+  ('role_builtin_administrator', 'administrator', 'Administrator', 'administrator', 'Operational administration without ownership transfer', 1, 1),
+  ('role_builtin_member', 'member', 'Member', 'member', 'Session and automation collaboration', 1, 1),
+  ('role_builtin_viewer', 'viewer', 'Viewer', 'viewer', 'Read-only workspace visibility', 1, 1);
 
-INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
-SELECT id, 'role_builtin_administrator', NULL, unixepoch() * 1000 FROM users;
+INSERT INTO user_role_assignments (user_id, role_id)
+SELECT id, 'role_builtin_administrator' FROM users;
 
 CREATE TRIGGER assign_default_role_after_user_insert
 AFTER INSERT ON users
 BEGIN
-  INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
-  VALUES (NEW.id, 'role_builtin_member', NULL, unixepoch() * 1000)
+  INSERT INTO user_role_assignments (user_id, role_id)
+  VALUES (NEW.id, 'role_builtin_member')
   ON CONFLICT(user_id) DO NOTHING;
 END;
 
@@ -99,8 +80,8 @@ SET user_id = (
 WHERE user_id IS NULL
   AND created_by <> 'anonymous';
 
-INSERT INTO session_access (session_id, user_id, relation, state, generation, created_at)
-SELECT id, user_id, 'creator', 'active', 1, created_at
+INSERT INTO session_access (session_id, user_id, relation)
+SELECT id, user_id, 'creator'
 FROM sessions
 WHERE user_id IS NOT NULL
   AND EXISTS (SELECT 1 FROM users WHERE users.id = sessions.user_id);

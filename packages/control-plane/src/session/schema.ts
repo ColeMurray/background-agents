@@ -626,7 +626,7 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: (sql) => {
       runMigration(
         sql,
-        `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER`
+        `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0`
       );
     },
   },

@@ -279,7 +279,11 @@ describe("applyMigrations", () => {
     run(mock.sql);
     expect(
       mock.calls.filter(({ query }) => query.includes("ALTER TABLE")).map(({ query }) => query)
-    ).toEqual([expect.stringContaining("ws_client_mapping ADD COLUMN authorization_expires_at")]);
+    ).toEqual([
+      expect.stringContaining(
+        "ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0"
+      ),
+    ]);
   });
 
   it("keeps repository context consistent at the session table boundary", () => {

@@ -304,36 +304,17 @@ export async function mergeUsers(
     db
       .prepare(
         `UPDATE session_access AS survivor_access
-         SET (relation, state, generation, created_at) = (
-           SELECT loser_access.relation, loser_access.state,
-                  loser_access.generation, loser_access.created_at
-           FROM session_access AS loser_access
-           WHERE loser_access.user_id = ?
-             AND loser_access.session_id = survivor_access.session_id
-         )
+         SET relation = 'creator'
          WHERE survivor_access.user_id = ?
+           AND survivor_access.relation = 'participant'
            AND EXISTS (
              SELECT 1 FROM session_access AS loser_access
              WHERE loser_access.user_id = ?
                AND loser_access.session_id = survivor_access.session_id
-               AND (
-                 (loser_access.relation = 'creator' AND survivor_access.relation <> 'creator')
-                 OR (
-                   loser_access.relation = 'participant'
-                   AND survivor_access.relation = 'participant'
-                   AND (
-                     loser_access.generation > survivor_access.generation
-                     OR (
-                       loser_access.generation = survivor_access.generation
-                       AND loser_access.state = 'active'
-                       AND survivor_access.state <> 'active'
-                     )
-                   )
-                 )
-               )
+               AND loser_access.relation = 'creator'
            )`
       )
-      .bind(loserId, survivorId, loserId)
+      .bind(survivorId, loserId)
   );
   add(
     "sessionAccessDeduped",
@@ -386,12 +367,11 @@ export async function mergeUsers(
     db
       .prepare(
         `INSERT INTO authorization_audit_events
-           (id, occurred_at, request_id, policy_id, principal_kind,
-            actor_service_snapshot, action, resource_type, resource_id,
-            target_user_id_snapshot, decision_outcome, operation_result, reason_code, metadata_json)
-          VALUES (?, ?, 'user-merge', 'workspace.user_merged', 'service', 'control-plane',
-                  'workspace.user_merged', 'user', ?, ?, 'allowed', 'succeeded',
-                  'operator_merge', '{}')`
+            (id, occurred_at, request_id, principal_kind,
+             actor_service_snapshot, action, resource_type, resource_id,
+             target_user_id_snapshot, reason_code)
+           VALUES (?, ?, 'user-merge', 'service', 'control-plane',
+                   'workspace.user_merged', 'user', ?, ?, 'operator_merge')`
       )
       .bind(crypto.randomUUID(), Date.now(), survivorId, loserId)
   );
@@ -549,22 +529,12 @@ async function previewCounts(
       .prepare(
         `SELECT COUNT(*) AS count FROM session_access AS survivor_access
          WHERE survivor_access.user_id = ?
+           AND survivor_access.relation = 'participant'
            AND EXISTS (
              SELECT 1 FROM session_access AS loser_access
              WHERE loser_access.user_id = ?
                AND loser_access.session_id = survivor_access.session_id
-               AND (
-                 (loser_access.relation = 'creator' AND survivor_access.relation <> 'creator')
-                 OR (
-                   loser_access.relation = 'participant'
-                   AND survivor_access.relation = 'participant'
-                   AND (
-                     loser_access.generation > survivor_access.generation
-                     OR (loser_access.generation = survivor_access.generation
-                       AND loser_access.state = 'active' AND survivor_access.state <> 'active')
-                   )
-                 )
-               )
+               AND loser_access.relation = 'creator'
            )`
       )
       .bind(survivorId, loserId),

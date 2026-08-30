@@ -479,11 +479,7 @@ describe("session runtime proxy routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(statement.bind).toHaveBeenCalledWith(
-      "session-1",
-      "11111111111111111111111111111111",
-      expect.any(Number)
-    );
+    expect(statement.bind).toHaveBeenCalledWith("session-1", "11111111111111111111111111111111");
     expect(run).toHaveBeenCalledOnce();
   });
 

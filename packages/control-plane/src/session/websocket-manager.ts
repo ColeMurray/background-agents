@@ -269,11 +269,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     const parsed = this.classify(ws);
     if (parsed.kind !== "client" || !parsed.wsId) return null;
     const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
-    if (
-      !mapping ||
-      typeof mapping.authorization_expires_at !== "number" ||
-      mapping.authorization_expires_at <= Date.now()
-    ) {
+    if (!mapping || mapping.authorization_expires_at <= Date.now()) {
       if (mapping) this.rejectExpiredAuthorization(ws, parsed);
       return null;
     }
@@ -300,7 +296,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       const parsed = this.classify(ws);
       if (parsed.kind !== "client") continue;
       const expiresAt = this.authorizationExpiry(ws, parsed);
-      if (expiresAt === "invalid" || (typeof expiresAt === "number" && expiresAt <= now)) {
+      if (expiresAt !== null && expiresAt <= now) {
         this.rejectExpiredAuthorization(ws, parsed);
       }
     }
@@ -379,27 +375,17 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private isAuthenticated(ws: WebSocket, parsed: ConnectionClassification): boolean {
     const expiresAt = this.authorizationExpiry(ws, parsed);
     if (expiresAt === null) return false;
-    if (expiresAt === "invalid") {
-      this.rejectExpiredAuthorization(ws, parsed);
-      return false;
-    }
     if (expiresAt > Date.now()) return true;
     this.rejectExpiredAuthorization(ws, parsed);
     return false;
   }
 
-  private authorizationExpiry(
-    ws: WebSocket,
-    parsed: ConnectionClassification
-  ): number | "invalid" | null {
+  private authorizationExpiry(ws: WebSocket, parsed: ConnectionClassification): number | null {
     const client = this.clients.get(ws);
     if (client) return client.authorizationExpiresAt;
     if (parsed.kind !== "client" || !parsed.wsId) return null;
     const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
-    if (!mapping) return null;
-    return typeof mapping.authorization_expires_at === "number"
-      ? mapping.authorization_expires_at
-      : "invalid";
+    return mapping?.authorization_expires_at ?? null;
   }
 
   private rejectExpiredAuthorization(ws: WebSocket, parsed: ConnectionClassification): void {

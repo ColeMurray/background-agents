@@ -262,12 +262,12 @@ export class SessionInboxStore {
     }
     if (options.accessUserId) {
       conditions.push(
-        `(sessions.user_id = ? OR EXISTS (
+        `EXISTS (
           SELECT 1 FROM session_access access
-          WHERE access.session_id = sessions.id AND access.user_id = ? AND access.state = 'active'
-        ))`
+          WHERE access.session_id = sessions.id AND access.user_id = ?
+        )`
       );
-      params.push(options.accessUserId, options.accessUserId);
+      params.push(options.accessUserId);
     }
     return { conditions, params };
   }

@@ -23,7 +23,7 @@ function recordingDb(): { db: SqlDatabase; bindings: unknown[][] } {
 const authorization: EffectiveAuthorization = {
   userId: "11111111111111111111111111111111",
   suspendedAt: null,
-  role: null,
+  role: { id: "role_builtin_member", key: "member", name: "Member" },
   permissions: [],
 };
 

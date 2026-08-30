@@ -252,15 +252,13 @@ describe("mergeUsers", () => {
     await insertSession("shared-session", LOSER);
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO session_access
-          (session_id, user_id, relation, state, generation, created_at)
-         VALUES ('shared-session', ?, 'participant', 'pending_add', 7, ?)`
-      ).bind(SURVIVOR, SEED_NOW_MS + 1),
+        `INSERT INTO session_access (session_id, user_id, relation)
+         VALUES ('shared-session', ?, 'participant')`
+      ).bind(SURVIVOR),
       env.DB.prepare(
-        `INSERT INTO session_access
-          (session_id, user_id, relation, state, generation, created_at)
-         VALUES ('shared-session', ?, 'creator', 'active', 1, ?)`
-      ).bind(LOSER, SEED_NOW_MS),
+        `INSERT INTO session_access (session_id, user_id, relation)
+         VALUES ('shared-session', ?, 'creator')`
+      ).bind(LOSER),
     ]);
 
     const preview = await mergeUsers(env.DB, {
@@ -276,32 +274,28 @@ describe("mergeUsers", () => {
 
     expect(
       await env.DB.prepare(
-        `SELECT user_id, relation, state, generation FROM session_access
+        `SELECT user_id, relation FROM session_access
          WHERE session_id = 'shared-session'`
       ).first()
     ).toEqual({
       user_id: SURVIVOR,
       relation: "creator",
-      state: "active",
-      generation: 1,
     });
   });
 
-  it("preserves the newest participant generation during an access collision", async () => {
+  it("deduplicates participant access collisions without an update", async () => {
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
     await insertCanonicalUser({ id: LOSER, email: null });
     await insertSession("participant-session", SURVIVOR);
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO session_access
-          (session_id, user_id, relation, state, generation, created_at)
-         VALUES ('participant-session', ?, 'participant', 'active', 2, ?)`
-      ).bind(SURVIVOR, SEED_NOW_MS),
+        `INSERT INTO session_access (session_id, user_id, relation)
+         VALUES ('participant-session', ?, 'participant')`
+      ).bind(SURVIVOR),
       env.DB.prepare(
-        `INSERT INTO session_access
-          (session_id, user_id, relation, state, generation, created_at)
-         VALUES ('participant-session', ?, 'participant', 'revoking', 3, ?)`
-      ).bind(LOSER, SEED_NOW_MS + 1),
+        `INSERT INTO session_access (session_id, user_id, relation)
+         VALUES ('participant-session', ?, 'participant')`
+      ).bind(LOSER),
     ]);
 
     const preview = await mergeUsers(env.DB, {
@@ -311,19 +305,18 @@ describe("mergeUsers", () => {
     });
     const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
 
-    expect(preview.counts.sessionAccessCollisionsUpdated).toBe(1);
+    expect(preview.counts.sessionAccessCollisionsUpdated).toBe(0);
+    expect(preview.counts.sessionAccessDeduped).toBe(1);
     expect(result.counts).toEqual(preview.counts);
 
     expect(
       await env.DB.prepare(
-        `SELECT user_id, relation, state, generation FROM session_access
+        `SELECT user_id, relation FROM session_access
          WHERE session_id = 'participant-session'`
       ).first()
     ).toEqual({
       user_id: SURVIVOR,
       relation: "participant",
-      state: "revoking",
-      generation: 3,
     });
   });
 

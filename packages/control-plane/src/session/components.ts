@@ -705,13 +705,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         const relationship = await db
           .prepare(
             `SELECT 1 AS allowed FROM session_access
-             WHERE session_id = ? AND user_id = ? AND state = 'active'
-               AND relation IN ('creator', 'participant')
-             UNION ALL
-             SELECT 1 AS allowed FROM sessions WHERE id = ? AND user_id = ?
-             LIMIT 1`
+             WHERE session_id = ? AND user_id = ?`
           )
-          .bind(sessionId, userId, sessionId, userId)
+          .bind(sessionId, userId)
           .first<{ allowed: number }>();
         return relationship ? "valid" : "rejected";
       } catch (error) {

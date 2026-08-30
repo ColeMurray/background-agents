@@ -175,7 +175,7 @@ export class AuthorizationService {
       this.getRole(input.roleId),
     ]);
     if (!role) throw new AuthorizationError(404, "role_not_found");
-    const ownerSensitive = target.role?.key === "owner" || role.key === "owner";
+    const ownerSensitive = target.role.key === "owner" || role.key === "owner";
     if (ownerSensitive) {
       await this.requirePermission(input.actorUserId, "workspace.transfer_ownership");
     }
@@ -202,8 +202,8 @@ export class AuthorizationService {
           return (
             !currentRole ||
             (!ownerSensitive &&
-              (currentTarget.role?.key === "owner" || currentRole.key === "owner")) ||
-            (currentTarget.role?.key === "owner" &&
+              (currentTarget.role.key === "owner" || currentRole.key === "owner")) ||
+            (currentTarget.role.key === "owner" &&
               currentRole.key !== "owner" &&
               !(await this.store.hasAnotherUnsuspendedOwner(input.targetUserId)))
           );
@@ -219,7 +219,7 @@ export class AuthorizationService {
     requestId: string;
   }): Promise<void> {
     const target = await this.getEffectiveAuthorization(input.targetUserId);
-    const ownerSensitive = target.role?.key === "owner";
+    const ownerSensitive = target.role.key === "owner";
     if (ownerSensitive) {
       await this.requirePermission(input.actorUserId, "workspace.transfer_ownership");
     }
@@ -240,7 +240,7 @@ export class AuthorizationService {
           : ["workspace.members.manage"],
         async () => {
           const currentIsOwner =
-            (await this.getEffectiveAuthorization(input.targetUserId)).role?.key === "owner";
+            (await this.getEffectiveAuthorization(input.targetUserId)).role.key === "owner";
           return (
             (!ownerSensitive && currentIsOwner) ||
             (input.suspended &&
@@ -267,12 +267,6 @@ export class AuthorizationService {
       ...role,
       permissions: await this.loadRolePermissions(role.id, role.key),
     };
-  }
-
-  private async requireAnotherUnsuspendedOwner(excludedUserId: string): Promise<void> {
-    if (!(await this.store.hasAnotherUnsuspendedOwner(excludedUserId))) {
-      throw new RbacConflictError("At least one unsuspended Owner is required");
-    }
   }
 
   private async rethrowMutationFailure(

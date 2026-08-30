@@ -36,10 +36,8 @@ describe("WorkspaceSettings", () => {
           userId: "11111111111111111111111111111111",
           displayName: "Ada",
           email: "ada@example.com",
-          avatarUrl: null,
           suspendedAt: null,
           role: { id: "role_release", key: null, name: "Release Managers" },
-          createdAt: 1,
         },
       ],
       roles: [],
@@ -71,10 +69,8 @@ describe("WorkspaceSettings", () => {
           userId: "11111111111111111111111111111111",
           displayName: "Owner",
           email: "owner@example.com",
-          avatarUrl: null,
           suspendedAt: null,
           role: { id: "role_builtin_owner", key: "owner", name: "Owner" },
-          createdAt: 1,
         },
       ],
       roles: [
@@ -107,10 +103,8 @@ describe("WorkspaceSettings", () => {
       userId: "11111111111111111111111111111111",
       displayName: "Ada",
       email: "ada@example.com",
-      avatarUrl: null,
       suspendedAt: 100,
       role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
-      createdAt: 1,
     };
     vi.mocked(useCurrentUserAuthorization).mockReturnValue({
       authorization: null,

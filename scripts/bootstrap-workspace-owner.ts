@@ -96,26 +96,18 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
     WHERE assignment.role_id = ${ownerRoleId}
       AND owner.suspended_at IS NULL AND owner.id <> ${userId}
   )`;
-  const successfulBootstrap = `EXISTS (
-    SELECT 1 FROM authorization_audit_events
-    WHERE action = 'workspace.owner_bootstrapped'
-      AND principal_kind = 'service'
-      AND actor_service_snapshot = 'operator-cli'
-      AND decision_outcome = 'allowed'
-      AND operation_result = 'succeeded'
-  )`;
   const schemaReady = `(SELECT COUNT(*) FROM pragma_table_info('users')
     WHERE name IN ('id', 'suspended_at')) = 2
   AND (SELECT COUNT(*) FROM pragma_table_info('roles')
     WHERE name IN ('id', 'key', 'is_system')) = 3
   AND (SELECT COUNT(*) FROM pragma_table_info('user_role_assignments')
-    WHERE name IN ('user_id', 'role_id', 'assigned_by', 'assigned_at')) = 4
+    WHERE name IN ('user_id', 'role_id')) = 2
   AND (SELECT COUNT(*) FROM pragma_table_info('authorization_audit_events')
     WHERE name IN (
-      'id', 'occurred_at', 'request_id', 'policy_id', 'principal_kind',
-      'actor_service_snapshot', 'action', 'resource_type',
-      'target_user_id_snapshot', 'decision_outcome', 'operation_result', 'reason_code', 'metadata_json'
-    )) = 13`;
+      'id', 'occurred_at', 'request_id', 'principal_kind',
+      'actor_user_id_snapshot', 'actor_service_snapshot', 'action', 'resource_type',
+      'resource_id', 'target_user_id_snapshot', 'reason_code'
+    )) = 11`;
   const commonPreconditions = `${schemaReady}
   AND (SELECT COUNT(*) FROM users WHERE id = ${userId}) = 1
   AND (SELECT COUNT(*) FROM user_role_assignments WHERE user_id = ${userId}) = 1
@@ -128,14 +120,26 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
   )`;
   const ready = `${commonPreconditions}
   AND NOT (${targetIsOwner})
-  AND NOT (${anotherUnsuspendedOwner})
-  AND NOT (${successfulBootstrap})`;
+  AND NOT (${anotherUnsuspendedOwner})`;
   const noOp = `${commonPreconditions}
   AND ${targetIsOwner}
-  AND NOT (${anotherUnsuspendedOwner})
-  AND ${successfulBootstrap}`;
+  AND NOT (${anotherUnsuspendedOwner})`;
   const executableState = `((${ready}) OR (${noOp}))
   AND NOT EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ${auditId})`;
+  const exactAudit = `EXISTS (
+    SELECT 1 FROM authorization_audit_events
+    WHERE id = ${auditId}
+      AND occurred_at = ${now}
+      AND request_id = ${requestId}
+      AND principal_kind = 'service'
+      AND actor_user_id_snapshot IS NULL
+      AND actor_service_snapshot = 'operator-cli'
+      AND action = 'workspace.owner_bootstrapped'
+      AND resource_type = 'workspace'
+      AND resource_id IS NULL
+      AND target_user_id_snapshot = ${userId}
+      AND reason_code = 'operator_cli'
+  )`;
 
   const preflight = `SELECT 'preflight' AS report,
   CASE
@@ -147,9 +151,7 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
       SELECT 1 FROM roles WHERE id = ${ownerRoleId} AND key = 'owner' AND is_system = 1
     ) THEN 'refused'
     WHEN ${anotherUnsuspendedOwner} THEN 'refused'
-    WHEN ${successfulBootstrap} AND NOT (${targetIsOwner}) THEN 'refused'
-    WHEN ${targetIsOwner} AND NOT (${successfulBootstrap}) THEN 'refused'
-    WHEN ${targetIsOwner} AND ${successfulBootstrap} THEN 'no-op'
+    WHEN ${targetIsOwner} THEN 'no-op'
     ELSE 'ready'
   END AS status,
   CASE
@@ -161,15 +163,12 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
       SELECT 1 FROM roles WHERE id = ${ownerRoleId} AND key = 'owner' AND is_system = 1
     ) THEN 'built-in Owner role is missing or inconsistent'
     WHEN ${anotherUnsuspendedOwner} THEN 'another unsuspended Owner already exists'
-    WHEN ${successfulBootstrap} AND NOT (${targetIsOwner}) THEN 'successful bootstrap history exists without the target as current Owner'
-    WHEN ${targetIsOwner} AND NOT (${successfulBootstrap}) THEN 'target is Owner without successful bootstrap history'
-    WHEN ${targetIsOwner} AND ${successfulBootstrap} THEN 'selected user is the current unsuspended Owner with bootstrap history'
+    WHEN ${targetIsOwner} THEN 'selected user is already the current unsuspended Owner'
     ELSE 'selected user can be bootstrapped'
   END AS detail,
   ${userId} AS user_id,
   (SELECT suspended_at FROM users WHERE id = ${userId}) AS suspended_at,
-  (SELECT role_id FROM user_role_assignments WHERE user_id = ${userId}) AS role_id,
-  ${successfulBootstrap} AS successful_bootstrap_history;`;
+  (SELECT role_id FROM user_role_assignments WHERE user_id = ${userId}) AS role_id;`;
 
   if (!options.execute) return `${preflight}\n`;
 
@@ -180,41 +179,27 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
 SELECT CASE WHEN ${executableState}
   THEN 1 ELSE abs(-9223372036854775808) END AS precondition_guard;
 
-UPDATE user_role_assignments
-SET role_id = ${ownerRoleId}, assigned_by = NULL, assigned_at = ${now}
-WHERE user_id = ${userId}
-  AND (${ready});
-
 INSERT INTO authorization_audit_events
-  (id, occurred_at, request_id, policy_id, principal_kind,
+  (id, occurred_at, request_id, principal_kind,
    actor_service_snapshot, action, resource_type,
-   target_user_id_snapshot, decision_outcome, operation_result, reason_code, metadata_json)
-SELECT ${auditId}, ${now}, ${requestId}, 'workspace.owner_bootstrapped', 'service',
+   target_user_id_snapshot, reason_code)
+SELECT ${auditId}, ${now}, ${requestId}, 'service',
        'operator-cli', 'workspace.owner_bootstrapped', 'workspace',
-       ${userId}, 'allowed', 'succeeded', 'operator_cli', '{}'
-WHERE EXISTS (
-    SELECT 1 FROM user_role_assignments
-    WHERE user_id = ${userId} AND role_id = ${ownerRoleId}
-      AND assigned_by IS NULL AND assigned_at = ${now}
-  )
-  AND NOT (${successfulBootstrap});
+       ${userId}, 'operator_cli'
+WHERE ${ready};
+
+UPDATE user_role_assignments
+SET role_id = ${ownerRoleId}
+WHERE user_id = ${userId} AND ${exactAudit};
 
 -- The last statement before reporting fails the entire atomic file if any
 -- write was incomplete. A true idempotent no-op also satisfies this state.
 SELECT CASE WHEN ${commonPreconditions}
   AND ${targetIsOwner}
   AND NOT (${anotherUnsuspendedOwner})
-  AND ${successfulBootstrap}
-  AND ((
-    EXISTS (
-      SELECT 1 FROM authorization_audit_events
-      WHERE id = ${auditId} AND target_user_id_snapshot = ${userId}
-        AND action = 'workspace.owner_bootstrapped'
-        AND principal_kind = 'service' AND actor_service_snapshot = 'operator-cli'
-        AND decision_outcome = 'allowed' AND operation_result = 'succeeded'
-        AND metadata_json = '{}'
-    )
-  ) OR NOT EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}))
+  AND (${exactAudit} OR NOT EXISTS (
+    SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}
+  ))
   THEN 1 ELSE abs(-9223372036854775808) END AS postcondition_guard;
 
 SELECT 'postcondition' AS report,
@@ -294,7 +279,9 @@ export async function run(options: BootstrapCliOptions): Promise<void> {
   if (preflight(options.database, options.userId) !== "no-op") {
     throw new Error("Owner bootstrap postcondition verification failed");
   }
-  console.error("Owner bootstrap command completed; verify /health reports an unsuspended Owner.");
+  console.error(
+    "Owner bootstrap command completed; verify /health reports ownerAssignment=present."
+  );
 }
 
 async function main(): Promise<void> {

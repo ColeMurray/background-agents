@@ -108,10 +108,9 @@ describe("automation invocations (D1 integration)", () => {
       ).bind(ownerId),
       env.DB.prepare(
         `INSERT INTO roles
-          (id, key, name, normalized_name, description, is_system, revision,
-           created_by, updated_by, created_at, updated_at)
-         VALUES (?, NULL, 'Execution Test', 'execution test', NULL, 0, 1, ?, ?, 1, 1)`
-      ).bind(roleId, ownerId, ownerId),
+          (id, key, name, normalized_name, description, is_system, revision)
+         VALUES (?, NULL, 'Execution Test', 'execution test', NULL, 0, 1)`
+      ).bind(roleId),
       env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
         roleId,
         ownerId

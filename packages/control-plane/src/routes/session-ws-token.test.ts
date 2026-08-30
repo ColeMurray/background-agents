@@ -107,7 +107,7 @@ describe("session ws-token route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(access.statement.bind).toHaveBeenCalledWith("session-1", "user-1", expect.any(Number));
+    expect(access.statement.bind).toHaveBeenCalledWith("session-1", "user-1");
     expect(access.run).toHaveBeenCalledOnce();
   });
 

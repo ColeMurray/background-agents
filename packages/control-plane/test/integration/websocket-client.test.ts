@@ -15,13 +15,12 @@ import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 
 async function grantOwnCollaboration(userId: string): Promise<void> {
   const roleId = `role-ws-own-${crypto.randomUUID()}`;
-  const now = Date.now();
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO roles
-        (id, key, name, normalized_name, is_system, revision, created_at, updated_at)
-       VALUES (?, NULL, ?, ?, 0, 1, ?, ?)`
-    ).bind(roleId, roleId, roleId, now, now),
+        (id, key, name, normalized_name, is_system, revision)
+       VALUES (?, NULL, ?, ?, 0, 1)`
+    ).bind(roleId, roleId, roleId),
     env.DB.prepare(
       "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate.own')"
     ).bind(roleId),

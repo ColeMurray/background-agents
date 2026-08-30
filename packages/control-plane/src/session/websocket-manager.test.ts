@@ -130,13 +130,13 @@ function createMockRepository() {
     deleteWsClientMapping: (wsId: string) => mappings.delete(wsId),
     deleteExpiredMappings: (now: number) => {
       for (const [wsId, mapping] of mappings) {
-        if ((mapping.authorization_expires_at ?? 0) <= now) mappings.delete(wsId);
+        if (mapping.authorization_expires_at <= now) mappings.delete(wsId);
       }
     },
     getNextAuthorizationExpiry: () => {
-      const expiries = Array.from(mappings.values())
-        .map((mapping) => mapping.authorization_expires_at)
-        .filter((expiry): expiry is number => typeof expiry === "number");
+      const expiries = Array.from(mappings.values()).map(
+        (mapping) => mapping.authorization_expires_at
+      );
       return expiries.length > 0 ? Math.min(...expiries) : null;
     },
   } as unknown as SandboxRepository;
@@ -148,15 +148,8 @@ function createMockRepository() {
     setSandbox: (row: SandboxRow | null) => {
       sandboxRow = row;
     },
-    addMapping: (
-      wsId: string,
-      mapping: Omit<WsClientMappingResult, "authorization_expires_at"> &
-        Partial<Pick<WsClientMappingResult, "authorization_expires_at">>
-    ) => {
-      mappings.set(wsId, {
-        authorization_expires_at: Date.now() + 300_000,
-        ...mapping,
-      });
+    addMapping: (wsId: string, mapping: WsClientMappingResult) => {
+      mappings.set(wsId, mapping);
     },
   };
 }
@@ -654,6 +647,7 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
       expect(manager.hasPersistedMapping("ws-1")).toBe(true);
@@ -775,6 +769,7 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
       const called: WebSocket[] = [];
@@ -846,6 +841,7 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
       // Unauthenticated client (connected but never subscribed)
@@ -909,23 +905,6 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.expireAuthorizationLeases(2_000)).toBe(3_000);
       expect(expired.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
     });
-
-    it("closes a legacy mapping without authorization lease state", () => {
-      const { manager, sockets, mockRepo } = createManager();
-      const legacy = createFakeWebSocket();
-      sockets.set(legacy, ["wsid:legacy"]);
-      mockRepo.addMapping("legacy", {
-        participant_id: "p-1",
-        client_id: "c-1",
-        user_id: "u-1",
-        scm_name: null,
-        scm_login: null,
-        authorization_expires_at: null,
-      });
-
-      expect(manager.expireAuthorizationLeases(2_000)).toBeNull();
-      expect(legacy.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
-    });
   });
 
   describe("enforceAuthTimeout", () => {
@@ -953,6 +932,7 @@ describe("SessionWebSocketManagerImpl", () => {
         scm_name: null,
         auth_name: null,
         scm_login: null,
+        authorization_expires_at: Date.now() + 300_000,
       });
 
       await manager.enforceAuthTimeout(ws, "ws-1");

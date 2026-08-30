@@ -321,7 +321,7 @@ describe("route policy dispatch ordering", () => {
     await expect(response.json()).resolves.toEqual({
       status: "healthy",
       service: "open-inspect-control-plane",
-      rbac: { ownerBootstrap: "unknown" },
+      rbac: { ownerAssignment: "unknown" },
     });
   });
 

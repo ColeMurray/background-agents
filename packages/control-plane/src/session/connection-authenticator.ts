@@ -402,11 +402,6 @@ export class SessionConnectionAuthenticator {
       wsManager.close(ws, 4002, "Session expired, please reconnect");
       return null;
     }
-    if (typeof mapping.authorization_expires_at !== "number") {
-      wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
-      return null;
-    }
-
     // 3. Build ClientInfo
     log.info("Recovered client info from DB", { user_id: mapping.user_id });
     const clientInfo: ClientInfo = {

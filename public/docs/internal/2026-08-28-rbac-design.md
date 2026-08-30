@@ -115,19 +115,11 @@ checks.
 
 ### Permission registry
 
-Permissions are exported from `@open-inspect/shared` as a literal registry containing:
-
-- stable identifier;
-- display label and description;
-- category used by the role editor;
-- sensitivity classification;
-- validation metadata.
-
-The registry defines valid identifiers, editor metadata, and the permission sets for protected
-built-in roles. Built-in policy changes deploy with code and do not require a data migration.
-Persisted `role_permissions` rows are the runtime authority only for workspace-defined custom roles.
-Unknown identifiers fail role validation and are ignored during effective-permission resolution.
-Permission IDs are never reused for different semantics.
+Permissions are exported from `@open-inspect/shared` as stable identifiers and protected built-in
+role sets. Built-in policy changes deploy with code and do not require a data migration. Persisted
+`role_permissions` rows are the runtime authority only for workspace-defined custom roles. Unknown
+identifiers fail role validation and are ignored during effective-permission resolution. Permission
+IDs are never reused for different semantics.
 
 ### Permission catalog
 
@@ -135,13 +127,11 @@ Permission IDs are never reused for different semantics.
 
 | Permission                     | Actions                                                               |
 | ------------------------------ | --------------------------------------------------------------------- |
-| `workspace.read`               | View workspace metadata and own effective role.                       |
 | `workspace.members.read`       | List users, identities, roles, and assignment state.                  |
 | `workspace.members.manage`     | Assign roles other than Owner; suspend or restore application access. |
 | `workspace.roles.read`         | List role definitions and permission catalog.                         |
 | `workspace.roles.manage`       | Create, update, and delete custom roles.                              |
 | `workspace.transfer_ownership` | Assign/remove Owner while preserving at least one Owner.              |
-| `audit.read`                   | Read durable authorization and privileged-action audit events.        |
 
 #### Repositories and environments
 
@@ -266,10 +256,6 @@ CREATE TABLE roles (
   description  TEXT,
   is_system    INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
   revision     INTEGER NOT NULL DEFAULT 1,
-  created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
-  updated_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
-  created_at   INTEGER NOT NULL,
-  updated_at   INTEGER NOT NULL,
   CHECK ((is_system = 1 AND key IN ('owner', 'administrator', 'member', 'viewer'))
       OR (is_system = 0 AND key IS NULL))
 );
@@ -282,36 +268,24 @@ CREATE TABLE role_permissions (
 
 CREATE TABLE user_role_assignments (
   user_id       TEXT PRIMARY KEY REFERENCES users(id) ON DELETE RESTRICT,
-  role_id       TEXT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
-  assigned_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
-  assigned_at   INTEGER NOT NULL
+  role_id       TEXT NOT NULL REFERENCES roles(id) ON DELETE RESTRICT
 );
 
 CREATE TABLE authorization_audit_events (
   id             TEXT PRIMARY KEY,
   occurred_at    INTEGER NOT NULL,
   request_id     TEXT NOT NULL,
-  policy_id      TEXT NOT NULL,
   principal_kind TEXT NOT NULL,
   actor_user_id_snapshot TEXT,
   actor_service_snapshot TEXT,
-  actor_provider_snapshot TEXT,
-  actor_provider_user_id_snapshot TEXT,
   action         TEXT NOT NULL,
   resource_type  TEXT NOT NULL,
   resource_id    TEXT,
   target_user_id_snapshot TEXT,
-  decision_outcome TEXT NOT NULL CHECK (decision_outcome IN ('allowed', 'denied')),
-  operation_result TEXT CHECK (operation_result IN ('pending', 'succeeded', 'failed')),
-  reason_code    TEXT NOT NULL,
-  metadata_json  TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))
+  reason_code    TEXT NOT NULL
 );
 
 CREATE INDEX idx_role_assignments_role ON user_role_assignments(role_id, user_id);
-CREATE INDEX idx_authorization_audit_time
-  ON authorization_audit_events(occurred_at DESC, id DESC);
-CREATE INDEX idx_authorization_audit_actor
-  ON authorization_audit_events(actor_user_id_snapshot, occurred_at DESC);
 ```
 
 Built-in roles have stable `key` values: `owner`, `administrator`, `member`, and `viewer`; their
@@ -340,22 +314,20 @@ repair authorization corruption implicitly.
 Initial ownership is assigned only by the root operator CLI after the intended Owner has signed in
 once. The operator supplies the canonical user ID, not an email or browser credential. One temporary
 SQL file and one Wrangler D1 execution validate the RBAC schema, unsuspended user, exact assignment,
-absence of another unsuspended Owner, and absence of successful bootstrap history before atomically
-assigning `role_builtin_owner` and writing a redacted `operator-cli` audit event. A successful
-`workspace.owner_bootstrapped` event from the `operator-cli` service is immutable, workspace-global
-historical provenance; the current unsuspended Owner assignment is the actual readiness state. The
-final SQL guard verifies the exact generated audit ID and aborts the operation if the resulting
-state is inconsistent. Re-running for the current unsuspended Owner is a no-op only when that
-successful history exists. Ownership changes after initialization use the authenticated member API.
+and absence of another unsuspended Owner before atomically writing a redacted `operator-cli` audit
+event and assigning `role_builtin_owner`. The final SQL guard verifies the exact generated audit ID
+and aborts the operation if the resulting state is inconsistent. Re-running for the current
+unsuspended Owner is a no-op and writes nothing. Ownership changes after initialization use the
+authenticated member API.
 
 ### Storage ownership
 
 - D1 is the source of truth for roles, assignments, status, custom-role grants, and audit events.
 - Shared code defines the permission catalog and built-in role grants; persisted permission rows are
   the runtime grant authority for custom roles.
-- Session creator attribution remains in D1.
-- Canonical session memberships and participant attribution remain in the Session Durable Object; a
-  generation-guarded D1 projection supports lists.
+- Session creator attribution and canonical access relationships remain in D1.
+- Participant attribution remains in the Session Durable Object; the D1 access projection supports
+  authorization and lists.
 - No role or permission set is copied into sessions, automations, or provider accounts.
 
 ## Policy Engine
@@ -435,19 +407,16 @@ an executing sandbox, but they can remove human access to its session and contro
 
 Session checks use facts from both D1 and the Session Durable Object:
 
-- creator: D1 `sessions.user_id`;
-- member: a canonical-user session membership record in the DO, independent of provider-specific
-  message-attribution participants;
-- participant aliases: web, Slack, GitHub, and Linear participant rows linked to canonical
-  membership for attribution, presence, and SCM metadata;
+- creator: a D1 `session_access` row with `relation = 'creator'`;
+- participant: a D1 `session_access` row with `relation = 'participant'`;
+- participant aliases: web, Slack, GitHub, and Linear participant rows linked to canonical users for
+  attribution, presence, and SCM metadata;
 - target: session repository/environment snapshot, used to validate target-use permission at create
   time rather than on every read.
 
-The Session DO adds `session_memberships(canonical_user_id PRIMARY KEY, generation, created_at)` and
-adds nullable `canonical_membership_user_id` to attribution participants. A data migration links
-rows with a canonical ID, collapses duplicate provider aliases into one membership, and leaves
-unlinked historical participants attribution-only. Message history keeps original participant IDs.
-Membership has no local owner role; the immutable D1 creator remains the only creator relationship.
+Participant aliases do not confer access by themselves. A successful participant activation writes
+the canonical D1 relationship, while message history keeps its original participant IDs. The Session
+DO has no local owner role; the D1 creator row remains the only creator relationship.
 
 Creating a WebSocket token or sending a prompt first requires an applicable collaborate permission.
 Built-in Members can collaborate across the workspace; a successful WebSocket-token request records
@@ -569,26 +538,21 @@ CREATE TABLE session_access (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   relation   TEXT NOT NULL CHECK (relation IN ('creator', 'participant')),
-  state      TEXT NOT NULL CHECK (state IN ('pending_add', 'active', 'revoking')),
-  generation INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, user_id)
 );
 
 CREATE INDEX idx_session_access_user
-  ON session_access(user_id, state, session_id);
+  ON session_access(user_id, session_id);
 ```
 
 Creator access is inserted with the D1 session index. Participant addition calls the DO's idempotent
-canonical-user upsert first, then upserts the D1 row to `active`. If D1 activation fails after the
+canonical-user upsert first, then inserts the D1 participant row. If D1 activation fails after the
 DO write, authorization remains fail-closed and retry repeats the idempotent DO operation before
-activating D1. A rejected DO operation never downgrades existing D1 access. D1 is authoritative for
-coarse list and participant access; the DO remains authoritative for live attribution aliases.
+inserting D1 access. A rejected DO operation never changes existing D1 access. D1 is authoritative
+for coarse list and participant access; the DO remains authoritative for live attribution aliases.
 
-Creator rows are separate from the participant saga despite sharing the primary key. A creator row
-always keeps `relation = 'creator'`, `state = 'active'`, and generation 1. Adding that creator as a
-participant only creates DO attribution aliases and never replaces the D1 creator row; participant
-removal cannot remove creator visibility or creator-only rights.
+Creator and participant rows share the primary key. Participant activation uses
+`ON CONFLICT DO NOTHING`, so adding a creator as a participant never replaces the D1 creator row.
 
 ## API Contracts
 
@@ -611,7 +575,7 @@ This endpoint is available only to the current browser user. Responses are priva
 
 | Method   | Path         | Permission               | Purpose                                                     |
 | -------- | ------------ | ------------------------ | ----------------------------------------------------------- |
-| `GET`    | `/roles`     | `workspace.roles.read`   | List roles, counts, and registry metadata.                  |
+| `GET`    | `/roles`     | `workspace.roles.read`   | List roles, counts, and permissions.                        |
 | `POST`   | `/roles`     | `workspace.roles.manage` | Create a custom role.                                       |
 | `GET`    | `/roles/:id` | `workspace.roles.read`   | Read one role and permissions.                              |
 | `PUT`    | `/roles/:id` | `workspace.roles.manage` | Conditionally replace custom role metadata and permissions. |
@@ -633,12 +597,6 @@ unsuspended Owner remains in the same D1 batch. User deletion is blocked by assi
 User merge requires an explicit surviving assignment, merges canonical session memberships, and
 preserves both immutable audit snapshots.
 
-If corruption or external operator action leaves no reachable Owner, recovery uses an operator-only
-CLI with direct D1 deployment credentials. It requires an explicit canonical browser user, verifies
-that identity can authenticate, repairs one Owner assignment transactionally, and writes an
-immutable `workspace.owner_recovered` audit event. There is no unauthenticated HTTP recovery
-endpoint.
-
 Role `PUT` requires the current `revision` through `If-Match` and increments it atomically.
 Assignment and status updates use guarded SQL that rechecks authorization and Owner invariants in
 the same D1 batch as the mutation.
@@ -658,11 +616,6 @@ Forbidden API responses use:
 Relationship denials use codes such as `session_access_required`, `creator_required`,
 `active_user_required`, and `service_capability_required`. Responses do not disclose another user's
 role or whether a hidden session exists.
-
-The control plane adds a structured HTTP error type and central serializer for `code`, safe details,
-and request ID. Hidden-resource policies serialize as a generic `404` and redact permission/resource
-details; logs retain the internal denial reason. Existing plain `HttpError` behavior remains for
-non-authorization errors.
 
 ## Web Experience
 
@@ -755,11 +708,9 @@ The migration is additive and preserves current capability for every canonical u
    created through Slack, GitHub, or Linear.
 4. Create the unconditional default-role trigger. Identity provisioning after this point assigns
    Member.
-5. Backfill non-null session creators that still reference a user into `session_access` as active
-   `creator`; report nullable, missing, and otherwise unattributed rows.
-6. Backfill canonicalizable Durable Object participants through the generation-guarded saga.
-   Existing aliases without canonical IDs remain attribution-only until explicitly repaired.
-7. Unattributed sessions require `sessions.read.any`; they never satisfy an own relationship.
+5. Backfill non-null session creators that still reference a canonical user into `session_access` as
+   `creator`.
+6. Unattributed sessions require `sessions.read.any`; they never satisfy an own relationship.
 
 No route switches to enforcement until every existing canonical user has an Administrator assignment
 and built-in role reconciliation succeeds. Administrators may continue using the application before
@@ -775,12 +726,11 @@ operational behavior, while Member becomes the default for newly admitted users.
 Terraform exports the D1 database name but does not configure an Owner identity. The supported
 sequence is deploy, have the intended Owner sign in once, obtain the canonical ID from the browser
 session, run `npm run rbac:bootstrap-owner -- --database <name> --user <id>`, review the dry-run
-preflight, rerun with `--execute`, and verify `/health` reports `ownerBootstrap=complete`.
+preflight, rerun with `--execute`, and verify `/health` reports `rbac.ownerAssignment=present`.
 
-When no unsuspended Owner assignment exists, operator health reports `owner_bootstrap_pending`.
-Health derives from that current assignment state, not historical bootstrap provenance.
-Administrators and Members can use their existing capabilities, but no one can exercise Owner-only
-actions.
+When an unsuspended Owner assignment exists, `/health` reports `rbac.ownerAssignment=present`; when
+none exists, it reports `missing`. Administrators and Members can use their existing capabilities,
+but no one can exercise Owner-only actions.
 
 ## Failure Handling
 
@@ -790,13 +740,9 @@ actions.
 - Missing user assignment denies shared application routes but permits sign-out and own identity
   discovery so an administrator can repair access.
 - Audit-write failure aborts transactional D1 administration.
-- Session projection failure leaves a deny-by-default pending/revoking saga state for idempotent
-  retry; no cross-store atomicity is assumed.
+- Participant projection failure leaves D1 access absent for an idempotent retry; no cross-store
+  atomicity is assumed.
 - Web authorization metadata failure renders an unavailable state rather than the unrestricted app.
-
-Observation mode is fail-open only for the policy family explicitly configured as observe and emits
-lookup/error telemetry. Already enforced families remain fail-closed. Mixed observe/enforce states
-never let an observed route invoke an enforced sensitive sub-operation without its normal check.
 
 ## Security Invariants
 
@@ -846,8 +792,8 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 - Owner can assign roles without removing the last unsuspended Owner.
 - Secret/settings/provider-account/skill/MCP/image routes enforce individual permissions.
 - Lists filter sessions and automations in SQL.
-- Session access projection follows participant addition/removal and repairs drift.
-- Projection failures at each saga boundary cannot activate stale generations or leak visibility.
+- Session access projection follows successful participant activation.
+- Missing projection rows fail closed and cannot leak visibility.
 - Role changes are enforced when idle, active, hibernated, and multi-tab WebSocket authorization
   leases expire.
 - Suspended browser sessions and bot actors are denied.
@@ -856,8 +802,6 @@ never let an observed route invoke an enforced sensitive sub-operation without i
   principal after owner suspension, demotion, role edit, and target-access loss.
 - Sentry, GitHub, Slack, and Linear trigger tests assert session owner, initiator audit fields,
   owner guard, service ceiling, actor permission intersection, and credential/profile source.
-- External-effect audit intents recover idempotently after failures before and after the side
-  effect.
 
 ### Web
 
@@ -865,7 +809,7 @@ never let an observed route invoke an enforced sensitive sub-operation without i
   unavailable states.
 - Direct URL access remains denied when navigation is hidden.
 - Session server rendering does not fetch unauthorized snapshots.
-- Members/roles forms enforce API invariants and render concurrent-update errors.
+- Workspace member controls enforce API invariants.
 - Generic forbidden responses do not trigger sign-in flows.
 
 ### Bots
@@ -885,37 +829,13 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 - Every canonical user receives exactly one assignment.
 - Session creator projection is idempotent and reports every unattributed row.
 - Built-in role reconciliation is idempotent and rejects incompatible registry drift.
-- Exact migration SQL executes under workerd/D1, including indexes and JSON checks.
+- Exact migration SQL executes under workerd/D1, including indexes and constraints.
 - Better Auth or bot identity creation followed by assignment failure cannot enter business routes
   and retries Member assignment idempotently.
 - Owner bootstrap requires an existing unsuspended canonical user with exactly one assignment and
-  refuses another unsuspended Owner or inconsistent assignment/history state.
-- CLI bootstrap is atomic and idempotent, writes exactly one redacted operator audit event, and uses
-  the current unsuspended Owner assignment rather than historical provenance for operator health.
-
-## Rollout
-
-1. Ship shared permission registry, additive schema, built-in roles, assignments, audit storage, and
-   observation-only human and service decisions.
-2. Assign every pre-migration user Administrator, enable default Member assignment, backfill session
-   creator access, and reconcile canonical participant projection.
-3. Add default Member provisioning, explicit Owner bootstrap, role/member administration, and
-   current-user authorization APIs.
-4. Add the complete principal-specific route matrix and tests while comparing observed decisions
-   with current behavior.
-5. Enforce named service ceilings, actor requirements, and exact actorless endpoint allowances
-   before or atomically with each corresponding route family.
-6. Enable workspace administration and sensitive settings enforcement.
-7. Enable repository/environment, automation execution, analytics, and extensibility enforcement.
-8. Enable session list, detail, collaboration, lifecycle, deletion, participant saga, and WebSocket
-   leases.
-9. Enable web navigation/control gating only after backend enforcement for each resource family.
-10. Remove observation compatibility paths after denial, missing-assignment, projection, and
-    authorization-error metrics remain clean.
-
-Each enforcement group has a deployment flag that selects observe or enforce. Observe mode records
-the decision but retains current behavior; it never changes authentication or resource identity.
-Flags are removed after full enforcement so authorization cannot remain accidentally permissive.
+  refuses another unsuspended Owner.
+- CLI bootstrap is atomic and idempotent, writes exactly one redacted operator audit event on a
+  ready transition, and writes nothing when the target is already the current Owner.
 
 ## Alternatives Considered
 

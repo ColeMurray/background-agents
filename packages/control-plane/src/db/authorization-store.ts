@@ -31,9 +31,7 @@ interface MemberRow {
   user_id: string;
   display_name: string | null;
   email: string | null;
-  avatar_url: string | null;
   suspended_at: number | null;
-  created_at: number;
   role_id: string;
   role_key: BuiltInRoleKey | null;
   role_name: string;
@@ -94,10 +92,8 @@ function toMember(row: MemberRow): WorkspaceMember {
     userId: row.user_id,
     displayName: row.display_name,
     email: row.email,
-    avatarUrl: row.avatar_url,
     suspendedAt: row.suspended_at,
     role: { id: row.role_id, key: row.role_key, name: row.role_name },
-    createdAt: row.created_at,
   };
 }
 
@@ -172,20 +168,10 @@ export class AuthorizationStore {
       this.db
         .prepare(
           `INSERT INTO roles
-            (id, key, name, normalized_name, description, is_system, revision,
-             created_by, updated_by, created_at, updated_at)
-           VALUES (?, NULL, ?, ?, ?, 0, 1, ?, ?, ?, ?)`
+            (id, key, name, normalized_name, description, is_system, revision)
+           VALUES (?, NULL, ?, ?, ?, 0, 1)`
         )
-        .bind(
-          input.roleId,
-          input.name,
-          input.normalizedName,
-          input.description,
-          input.actorUserId,
-          input.actorUserId,
-          input.now,
-          input.now
-        ),
+        .bind(input.roleId, input.name, input.normalizedName, input.description),
       ...input.permissions.map((permission) =>
         this.db
           .prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)")
@@ -222,17 +208,10 @@ export class AuthorizationStore {
       this.db
         .prepare(
           `UPDATE roles SET name = ?, normalized_name = ?, description = ?,
-             revision = revision + 1, updated_by = ?, updated_at = ?
+             revision = revision + 1
            WHERE id = ?`
         )
-        .bind(
-          input.name,
-          input.normalizedName,
-          input.description,
-          input.actorUserId,
-          input.now,
-          input.roleId
-        ),
+        .bind(input.name, input.normalizedName, input.description, input.roleId),
       this.db.prepare("DELETE FROM role_permissions WHERE role_id = ?").bind(input.roleId),
       ...input.permissions.map((permission) =>
         this.db
@@ -281,8 +260,8 @@ export class AuthorizationStore {
   async listMembers(): Promise<WorkspaceMember[]> {
     const result = await this.db
       .prepare(
-        `SELECT u.id AS user_id, u.display_name, u.email, u.avatar_url, u.suspended_at,
-                u.created_at, r.id AS role_id, r.key AS role_key, r.name AS role_name
+        `SELECT u.id AS user_id, u.display_name, u.email, u.suspended_at,
+                r.id AS role_id, r.key AS role_key, r.name AS role_name
          FROM users u
          JOIN user_role_assignments ura ON ura.user_id = u.id
          JOIN roles r ON r.id = ura.role_id
@@ -344,11 +323,8 @@ export class AuthorizationStore {
         }
       ),
       this.db
-        .prepare(
-          `UPDATE user_role_assignments SET role_id = ?, assigned_by = ?, assigned_at = ?
-           WHERE user_id = ?`
-        )
-        .bind(input.roleId, input.actorUserId, input.now, input.targetUserId),
+        .prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+        .bind(input.roleId, input.targetUserId),
       this.db
         .prepare("UPDATE users SET updated_at = ? WHERE id = ?")
         .bind(input.now, input.targetUserId),
@@ -479,16 +455,15 @@ export class AuthorizationStore {
     return this.db
       .prepare(
         `INSERT INTO authorization_audit_events
-          (id, occurred_at, request_id, policy_id, principal_kind,
+          (id, occurred_at, request_id, principal_kind,
            actor_user_id_snapshot, action, resource_type, resource_id,
-           target_user_id_snapshot, decision_outcome, operation_result, reason_code, metadata_json)
-         VALUES (?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, 'allowed', 'succeeded', ?, '{}')`
+           target_user_id_snapshot, reason_code)
+         VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         crypto.randomUUID(),
         input.occurredAt,
         input.requestId,
-        input.action,
         input.actorUserId,
         input.action,
         input.resourceType,

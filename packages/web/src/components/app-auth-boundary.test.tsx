@@ -21,7 +21,7 @@ const activeAuthorization = {
   userId: "11111111111111111111111111111111",
   suspendedAt: null,
   role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
-  permissions: ["workspace.read" as const],
+  permissions: ["repositories.read" as const],
 };
 
 afterEach(() => {

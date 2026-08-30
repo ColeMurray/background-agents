@@ -157,10 +157,9 @@ describe("RBAC routes", () => {
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO roles
-          (id, key, name, normalized_name, description, is_system, revision,
-           created_by, updated_by, created_at, updated_at)
-         VALUES (?, NULL, 'Child Collaborator', 'child collaborator', NULL, 0, 1, ?, ?, 1, 1)`
-      ).bind(roleId, user!.id, user!.id),
+          (id, key, name, normalized_name, description, is_system, revision)
+         VALUES (?, NULL, 'Child Collaborator', 'child collaborator', NULL, 0, 1)`
+      ).bind(roleId),
       env.DB.prepare(
         "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate.any')"
       ).bind(roleId),
@@ -249,9 +248,12 @@ describe("RBAC routes", () => {
          VALUES ('unjoined-session', 'acme', 'app', 'completed', 3, 3, ?)`
       ).bind(other.id),
       env.DB.prepare(
-        `INSERT INTO session_access
-          (session_id, user_id, relation, state, generation, created_at)
-         VALUES ('other-session', ?, 'participant', 'active', 1, 2)`
+        `INSERT INTO session_access (session_id, user_id, relation)
+         VALUES ('member-session', ?, 'creator')`
+      ).bind(member!.id),
+      env.DB.prepare(
+        `INSERT INTO session_access (session_id, user_id, relation)
+         VALUES ('other-session', ?, 'participant')`
       ).bind(member!.id),
     ]);
 
@@ -272,6 +274,26 @@ describe("RBAC routes", () => {
     expect(
       await env.DB.prepare("SELECT id FROM sessions WHERE id = 'other-session'").first()
     ).toEqual({ id: "other-session" });
+  });
+
+  it("does not authorize an own-session operation from sessions.user_id without a projection", async () => {
+    await serviceFetch("https://cp.test/me/authorization", { initialUserRole: "member" });
+    const member = await env.DB.prepare(
+      "SELECT id FROM users WHERE email = 'browser@test.local'"
+    ).first<{ id: string }>();
+    await env.DB.prepare(
+      `INSERT INTO sessions (id, repo_owner, repo_name, status, created_at, updated_at, user_id)
+       VALUES ('missing-projection', 'acme', 'app', 'completed', 1, 1, ?)`
+    )
+      .bind(member!.id)
+      .run();
+
+    const response = await serviceFetch("https://cp.test/sessions/missing-projection", {
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "session_access_required" });
   });
 
   it("does not let the last unsuspended Owner be suspended", async () => {
@@ -352,19 +374,19 @@ describe("RBAC routes", () => {
   it("derives Owner bootstrap health from an unsuspended Owner assignment", async () => {
     const pending = await SELF.fetch("https://cp.test/health");
     await expect(pending.json()).resolves.toMatchObject({
-      rbac: { ownerBootstrap: "owner_bootstrap_pending" },
+      rbac: { ownerAssignment: "missing" },
     });
 
     const ownerId = await seedOwner();
     const complete = await SELF.fetch("https://cp.test/health");
     await expect(complete.json()).resolves.toMatchObject({
-      rbac: { ownerBootstrap: "complete" },
+      rbac: { ownerAssignment: "present" },
     });
 
     await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(ownerId).run();
     const suspended = await SELF.fetch("https://cp.test/health");
     await expect(suspended.json()).resolves.toMatchObject({
-      rbac: { ownerBootstrap: "owner_bootstrap_pending" },
+      rbac: { ownerAssignment: "missing" },
     });
   });
 
@@ -396,7 +418,7 @@ describe("RBAC routes", () => {
       body: JSON.stringify({
         name: "Release Managers",
         description: "Can inspect and launch sessions",
-        permissions: ["workspace.read", "repositories.read", "sessions.create"],
+        permissions: ["repositories.read", "sessions.create"],
       }),
       headers: { "Content-Type": "application/json" },
     });
@@ -409,7 +431,7 @@ describe("RBAC routes", () => {
       body: JSON.stringify({
         name: "Release Operators",
         description: null,
-        permissions: ["workspace.read", "repositories.read"],
+        permissions: ["repositories.read"],
       }),
       headers: { "Content-Type": "application/json", "If-Match": '"1"' },
     });
@@ -418,7 +440,7 @@ describe("RBAC routes", () => {
 
     const stale = await serviceFetch(`https://cp.test/roles/${encodeURIComponent(role.id)}`, {
       method: "PUT",
-      body: JSON.stringify({ name: "Stale", permissions: ["workspace.read"] }),
+      body: JSON.stringify({ name: "Stale", permissions: ["repositories.read"] }),
       headers: { "Content-Type": "application/json", "If-Match": '"1"' },
     });
     expect(stale.status).toBe(409);
@@ -472,12 +494,12 @@ describe("RBAC routes", () => {
     const service = new AuthorizationService(sqlDatabase(env.DB));
     await service.requirePermission(ownerId, "workspace.roles.manage");
     const editableRole = await service.createRole(
-      { name: "Editable Role", permissions: ["workspace.read"] },
+      { name: "Editable Role", permissions: ["repositories.read"] },
       ownerId,
       "setup-editable-role"
     );
     const deletableRole = await service.createRole(
-      { name: "Deletable Role", permissions: ["workspace.read"] },
+      { name: "Deletable Role", permissions: ["repositories.read"] },
       ownerId,
       "setup-deletable-role"
     );
@@ -490,7 +512,7 @@ describe("RBAC routes", () => {
 
     await expect(
       service.createRole(
-        { name: "Stale Actor Role", permissions: ["workspace.read"] },
+        { name: "Stale Actor Role", permissions: ["repositories.read"] },
         ownerId,
         "stale-role-request"
       )
@@ -499,7 +521,7 @@ describe("RBAC routes", () => {
       service.replaceRole(
         editableRole.id,
         editableRole.revision,
-        { name: "Edited By Stale Actor", permissions: ["workspace.read"] },
+        { name: "Edited By Stale Actor", permissions: ["repositories.read"] },
         ownerId,
         "stale-role-edit"
       )
@@ -544,7 +566,7 @@ describe("RBAC routes", () => {
     const createRole = (name: string) =>
       serviceFetch("https://cp.test/roles", {
         method: "POST",
-        body: JSON.stringify({ name, permissions: ["workspace.read"] }),
+        body: JSON.stringify({ name, permissions: ["repositories.read"] }),
         headers: { "Content-Type": "application/json" },
       });
 

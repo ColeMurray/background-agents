@@ -745,8 +745,7 @@ npm run rbac:bootstrap-owner -- \
 ```
 
 5. Confirm the preflight result is `ready` (or `no-op` when the target is already the current
-   unsuspended Owner and successful bootstrap provenance exists), then execute the same command with
-   `--execute`:
+   unsuspended Owner), then execute the same command with `--execute`:
 
 ```bash
 npm run rbac:bootstrap-owner -- \
@@ -757,20 +756,18 @@ npm run rbac:bootstrap-owner -- \
 
 The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or
 `wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
-assignment, another unsuspended Owner, an Owner assignment without successful bootstrap provenance,
-or successful bootstrap provenance without the target as the current Owner. There is no force
-option. Execution is one atomic Wrangler SQL file: it replaces the target's assignment and writes
-one redacted `workspace.owner_bootstrapped` service audit event. The successful audit event is
-immutable workspace-global provenance, so its target snapshot may retain a pre-merge user ID.
+assignment, or another unsuspended Owner. There is no force option. Execution is one atomic Wrangler
+SQL file: it writes one redacted `workspace.owner_bootstrapped` service audit event and replaces the
+target's assignment. A no-op writes nothing.
 
-6. Verify the control-plane health response contains `"rbac":{"ownerBootstrap":"complete"}`:
+6. Verify the control-plane health response contains `"rbac":{"ownerAssignment":"present"}`:
 
 ```bash
 curl "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health"
 ```
 
-This health value reports the actual current state: `complete` means at least one Owner assignment
-belongs to an unsuspended user. It does not derive readiness from historical bootstrap provenance.
+This health value reports current state: `present` means at least one Owner assignment belongs to an
+unsuspended user.
 
 ---
 

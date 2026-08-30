@@ -12,31 +12,23 @@ import {
 } from "./rbac";
 
 describe("RBAC registry", () => {
-  it("defines stable built-in role identities and metadata", () => {
+  it("defines stable built-in role identities", () => {
     expect(BUILT_IN_ROLE_REGISTRY).toEqual({
       owner: {
         id: "role_builtin_owner",
         key: "owner",
-        name: "Owner",
-        description: "Full workspace control",
       },
       administrator: {
         id: "role_builtin_administrator",
         key: "administrator",
-        name: "Administrator",
-        description: "Operational administration without ownership transfer",
       },
       member: {
         id: "role_builtin_member",
         key: "member",
-        name: "Member",
-        description: "Session and automation collaboration",
       },
       viewer: {
         id: "role_builtin_viewer",
         key: "viewer",
-        name: "Viewer",
-        description: "Read-only workspace visibility",
       },
     });
     expect(BUILT_IN_ROLE_KEYS).toEqual(
@@ -48,7 +40,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(52);
+    expect(PERMISSION_IDS).toHaveLength(50);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -93,15 +85,23 @@ describe("RBAC registry", () => {
     ).toThrow();
   });
 
-  it("uses suspension timestamps without authorization versions in public contracts", () => {
+  it("requires an assigned role and uses suspension timestamps in public contracts", () => {
     expect(
+      effectiveAuthorizationSchema.parse({
+        userId: "11111111111111111111111111111111",
+        suspendedAt: null,
+        role: { id: "role_builtin_member", key: "member", name: "Member" },
+        permissions: [],
+      })
+    ).toMatchObject({ suspendedAt: null });
+    expect(() =>
       effectiveAuthorizationSchema.parse({
         userId: "11111111111111111111111111111111",
         suspendedAt: null,
         role: null,
         permissions: [],
       })
-    ).toMatchObject({ suspendedAt: null });
+    ).toThrow();
     expect(replaceMemberRoleInputSchema.parse({ roleId: "role_custom" })).toEqual({
       roleId: "role_custom",
     });

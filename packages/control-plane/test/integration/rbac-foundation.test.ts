@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
 describe("RBAC foundation migration", () => {
   it("seeds built-in roles without persisting their code-owned permissions", async () => {
     const roles = await env.DB.prepare(
-      "SELECT id, key, name, description FROM roles WHERE is_system = 1 ORDER BY key"
-    ).all<{ id: string; key: string; name: string; description: string }>();
+      "SELECT id, key FROM roles WHERE is_system = 1 ORDER BY key"
+    ).all<{ id: string; key: string }>();
 
     expect(roles.results).toEqual(
       Object.values(BUILT_IN_ROLE_REGISTRY).sort((left, right) => left.key.localeCompare(right.key))

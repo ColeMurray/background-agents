@@ -5,26 +5,18 @@ export const BUILT_IN_ROLE_REGISTRY = {
   owner: {
     id: "role_builtin_owner",
     key: "owner",
-    name: "Owner",
-    description: "Full workspace control",
   },
   administrator: {
     id: "role_builtin_administrator",
     key: "administrator",
-    name: "Administrator",
-    description: "Operational administration without ownership transfer",
   },
   member: {
     id: "role_builtin_member",
     key: "member",
-    name: "Member",
-    description: "Session and automation collaboration",
   },
   viewer: {
     id: "role_builtin_viewer",
     key: "viewer",
-    name: "Viewer",
-    description: "Read-only workspace visibility",
   },
 } as const;
 
@@ -33,7 +25,6 @@ export const BUILT_IN_ROLE_KEYS = Object.keys(BUILT_IN_ROLE_REGISTRY) as BuiltIn
 
 export const PERMISSION_IDS = [
   "analytics.read",
-  "audit.read",
   "automations.create",
   "automations.manage.any",
   "automations.manage.own",
@@ -80,31 +71,12 @@ export const PERMISSION_IDS = [
   "skills.read",
   "workspace.members.manage",
   "workspace.members.read",
-  "workspace.read",
   "workspace.roles.manage",
   "workspace.roles.read",
   "workspace.transfer_ownership",
 ] as const;
 
 export type PermissionId = (typeof PERMISSION_IDS)[number];
-export type PermissionCategory =
-  | "workspace"
-  | "repositories"
-  | "sessions"
-  | "automations"
-  | "configuration"
-  | "extensibility";
-export type PermissionSensitivity = "standard" | "sensitive" | "critical";
-
-export interface PermissionDefinition {
-  id: PermissionId;
-  label: string;
-  description: string;
-  category: PermissionCategory;
-  sensitivity: PermissionSensitivity;
-  builtInRoles: readonly BuiltInRoleKey[];
-}
-
 const MEMBER_PERMISSIONS = new Set<PermissionId>([
   "automations.create",
   "automations.manage.own",
@@ -125,7 +97,6 @@ const MEMBER_PERMISSIONS = new Set<PermissionId>([
   "sessions.sandbox_access.own",
   "skill_profiles.manage_own",
   "skills.read",
-  "workspace.read",
 ]);
 
 const VIEWER_PERMISSIONS = new Set<PermissionId>([
@@ -137,87 +108,22 @@ const VIEWER_PERMISSIONS = new Set<PermissionId>([
   "sessions.read.any",
   "skill_profiles.manage_own",
   "skills.read",
-  "workspace.read",
 ]);
-
-const SENSITIVE_PERMISSIONS = new Set<PermissionId>([
-  "commit_signing.manage",
-  "environments.secrets.manage",
-  "global_secrets.manage",
-  "integrations.manage",
-  "mcp_servers.manage",
-  "provider_accounts.manage",
-  "repositories.secrets.manage",
-  "scm_settings.manage",
-  "skills.manage",
-  "workspace.members.manage",
-  "workspace.roles.manage",
-]);
-
-function categoryFor(permission: PermissionId): PermissionCategory {
-  if (permission.startsWith("workspace.") || permission === "audit.read") return "workspace";
-  if (permission.startsWith("repositories.") || permission.startsWith("environments.")) {
-    return "repositories";
-  }
-  if (permission.startsWith("sessions.")) return "sessions";
-  if (permission.startsWith("automations.") || permission === "analytics.read") {
-    return "automations";
-  }
-  if (
-    permission.startsWith("skills.") ||
-    permission.startsWith("skill_profiles.") ||
-    permission.startsWith("mcp_servers.")
-  ) {
-    return "extensibility";
-  }
-  return "configuration";
-}
-
-function builtInRolesFor(permission: PermissionId): readonly BuiltInRoleKey[] {
-  const roles: BuiltInRoleKey[] = ["owner"];
-  if (permission !== "workspace.transfer_ownership") roles.push("administrator");
-  if (MEMBER_PERMISSIONS.has(permission)) roles.push("member");
-  if (VIEWER_PERMISSIONS.has(permission)) roles.push("viewer");
-  return roles;
-}
-
-function displayPermission(permission: PermissionId): string {
-  return permission
-    .split(/[._]/)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-export const PERMISSION_REGISTRY = Object.fromEntries(
-  PERMISSION_IDS.map((permission) => [
-    permission,
-    {
-      id: permission,
-      label: displayPermission(permission),
-      description: `Allows ${permission.replaceAll("_", " ").replaceAll(".", " ")}.`,
-      category: categoryFor(permission),
-      sensitivity:
-        permission === "workspace.transfer_ownership"
-          ? "critical"
-          : SENSITIVE_PERMISSIONS.has(permission)
-            ? "sensitive"
-            : "standard",
-      builtInRoles: builtInRolesFor(permission),
-    },
-  ])
-) as Readonly<Record<PermissionId, PermissionDefinition>>;
 
 export const permissionIdSchema = z.enum(PERMISSION_IDS);
 export const builtInRoleKeySchema = z.enum(BUILT_IN_ROLE_KEYS);
 
 export function permissionsForBuiltInRole(role: BuiltInRoleKey): PermissionId[] {
-  return PERMISSION_IDS.filter((permission) =>
-    PERMISSION_REGISTRY[permission].builtInRoles.includes(role)
-  );
+  if (role === "owner") return [...PERMISSION_IDS];
+  if (role === "administrator") {
+    return PERMISSION_IDS.filter((permission) => permission !== "workspace.transfer_ownership");
+  }
+  const permissions = role === "member" ? MEMBER_PERMISSIONS : VIEWER_PERMISSIONS;
+  return PERMISSION_IDS.filter((permission) => permissions.has(permission));
 }
 
 export function isRegisteredPermission(value: string): value is PermissionId {
-  return Object.hasOwn(PERMISSION_REGISTRY, value);
+  return (PERMISSION_IDS as readonly string[]).includes(value);
 }
 
 export function normalizeRoleName(value: string): string {
@@ -253,7 +159,7 @@ export const effectiveAuthorizationSchema = z
   .object({
     userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID"),
     suspendedAt: z.number().int().nonnegative().nullable(),
-    role: roleReferenceSchema.nullable(),
+    role: roleReferenceSchema,
     permissions: z.array(permissionIdSchema),
   })
   .strict();
@@ -263,10 +169,8 @@ export const workspaceMemberSchema = z
     userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID"),
     displayName: z.string().nullable(),
     email: z.string().nullable(),
-    avatarUrl: z.string().nullable(),
     suspendedAt: z.number().int().nonnegative().nullable(),
     role: roleReferenceSchema,
-    createdAt: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -299,9 +203,6 @@ export const replaceMemberStatusInputSchema = z
   })
   .strict();
 
-export type RoleReference = z.infer<typeof roleReferenceSchema>;
 export type RoleSummary = z.infer<typeof roleSummarySchema>;
 export type EffectiveAuthorization = z.infer<typeof effectiveAuthorizationSchema>;
 export type WorkspaceMember = z.infer<typeof workspaceMemberSchema>;
-export type CreateRoleInput = z.infer<typeof createRoleInputSchema>;
-export type ReplaceRoleInput = z.infer<typeof replaceRoleInputSchema>;

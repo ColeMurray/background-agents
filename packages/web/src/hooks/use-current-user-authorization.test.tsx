@@ -22,7 +22,7 @@ const authorizations = {
     userId: "22222222222222222222222222222222",
     suspendedAt: null,
     role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
-    permissions: ["workspace.read" as const],
+    permissions: ["repositories.read" as const],
   },
 };
 
@@ -45,12 +45,12 @@ describe("useCurrentUserAuthorization", () => {
       <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>{children}</SWRConfig>
     );
     const { result, rerender } = renderHook(useCurrentUserAuthorization, { wrapper });
-    await waitFor(() => expect(result.current.authorization?.role?.key).toBe("owner"));
+    await waitFor(() => expect(result.current.authorization?.role.key).toBe("owner"));
 
     currentUser = "member";
     rerender();
 
-    await waitFor(() => expect(result.current.authorization?.role?.key).toBe("member"));
+    await waitFor(() => expect(result.current.authorization?.role.key).toBe("member"));
     expect(result.current.hasPermission("workspace.transfer_ownership")).toBe(false);
   });
 });

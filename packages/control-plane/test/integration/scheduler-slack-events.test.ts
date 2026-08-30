@@ -227,10 +227,9 @@ describe("Scheduler slack event handling (integration)", () => {
         await env.DB.batch([
           env.DB.prepare(
             `INSERT INTO roles
-            (id, key, name, normalized_name, description, is_system, revision,
-             created_by, updated_by, created_at, updated_at)
+            (id, key, name, normalized_name, description, is_system, revision)
            VALUES ('role_no_collaboration', NULL, 'No Collaboration', 'no collaboration',
-             NULL, 0, 1, 'user-1', 'user-1', 1, 1)`
+              NULL, 0, 1)`
           ),
           env.DB.prepare(
             `INSERT INTO role_permissions (role_id, permission_id)

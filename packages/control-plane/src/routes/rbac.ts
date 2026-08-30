@@ -72,7 +72,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     handler: async (_request, _env, _match, ctx) => {
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.roles.read");
         return json(await service.listRoles());
       } catch (cause) {
         return rbacErrorResponse(cause);
@@ -89,7 +88,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.roles.manage");
         const role = await service.createRole(body, ctx.principal.userId, ctx.request_id);
         return json(role, 201);
       } catch (cause) {
@@ -105,7 +103,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     handler: async (_request, _env, match, ctx) => {
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.roles.read");
         const role = await service.getRole(decodeURIComponent(match.groups!.id));
         return role ? json(role) : error("Role not found", 404);
       } catch (cause) {
@@ -125,7 +122,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.roles.manage");
         return json(
           await service.replaceRole(
             decodeURIComponent(match.groups!.id),
@@ -148,7 +144,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     handler: async (_request, _env, match, ctx) => {
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.roles.manage");
         await service.deleteRole(
           decodeURIComponent(match.groups!.id),
           ctx.principal.userId,
@@ -168,7 +163,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     handler: async (_request, _env, _match, ctx) => {
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.members.read");
         return json(await service.listMembers());
       } catch (cause) {
         return rbacErrorResponse(cause);
@@ -187,7 +181,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.members.manage");
         const parsed = replaceMemberRoleInputSchema.parse(body);
         await service.replaceMemberRole({
           targetUserId,
@@ -213,7 +206,6 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
       if (body instanceof Response) return body;
       const service = new AuthorizationService(ctx.db);
       try {
-        await service.requirePermission(ctx.principal.userId, "workspace.members.manage");
         const parsed = replaceMemberStatusInputSchema.parse(body);
         await service.replaceMemberStatus({
           targetUserId,

@@ -8,13 +8,13 @@ const migration = () => {
   return entry;
 };
 
-async function userColumns(): Promise<string[]> {
-  const result = await env.DB.prepare("PRAGMA table_info(users)").all<{ name: string }>();
+async function tableColumns(table: string): Promise<string[]> {
+  const result = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
   return result.results.map((column) => column.name);
 }
 
 async function restoreMigration(): Promise<void> {
-  if (!(await userColumns()).includes("suspended_at")) {
+  if (!(await tableColumns("users")).includes("suspended_at")) {
     await env.DB.batch(migration().queries.map((query) => env.DB.prepare(query)));
   }
 }
@@ -96,9 +96,6 @@ describe("migration 0071: RBAC foundation", () => {
           session_id: "existing-session",
           user_id: "11111111111111111111111111111111",
           relation: "creator",
-          state: "active",
-          generation: 1,
-          created_at: 300,
         },
       ],
     });
@@ -107,6 +104,35 @@ describe("migration 0071: RBAC foundation", () => {
         "SELECT user_id FROM automations WHERE id = 'existing-automation'"
       ).first()
     ).toEqual({ user_id: "11111111111111111111111111111111" });
+    expect(await tableColumns("roles")).toEqual([
+      "id",
+      "key",
+      "name",
+      "normalized_name",
+      "description",
+      "is_system",
+      "revision",
+    ]);
+    expect(await tableColumns("user_role_assignments")).toEqual(["user_id", "role_id"]);
+    expect(await tableColumns("session_access")).toEqual(["session_id", "user_id", "relation"]);
+    expect(
+      (
+        await env.DB.prepare("PRAGMA index_info(idx_session_access_user)").all<{ name: string }>()
+      ).results.map((column) => column.name)
+    ).toEqual(["user_id", "session_id"]);
+    expect(await tableColumns("authorization_audit_events")).toEqual([
+      "id",
+      "occurred_at",
+      "request_id",
+      "principal_kind",
+      "actor_user_id_snapshot",
+      "actor_service_snapshot",
+      "action",
+      "resource_type",
+      "resource_id",
+      "target_user_id_snapshot",
+      "reason_code",
+    ]);
 
     await env.DB.prepare(
       `INSERT INTO users

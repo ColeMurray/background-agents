@@ -456,22 +456,15 @@ async function enforceSessionRequirement(
     const relationship = await ctx.db
       .prepare(
         `SELECT relation FROM session_access
-         WHERE session_id = ? AND user_id = ? AND state = 'active'
-         UNION ALL
-         SELECT 'creator' AS relation FROM sessions
-         WHERE id = ? AND user_id = ?
-         LIMIT 1`
+         WHERE session_id = ? AND user_id = ?`
       )
-      .bind(sessionId, userId, sessionId, userId)
+      .bind(sessionId, userId)
       .first<{ relation: "creator" | "participant" }>();
     const creatorRequired =
       requirement.operation === "delete" || requirement.operation === "participants.manage";
     if (relationship && (!creatorRequired || relationship.relation === "creator")) return null;
     return json({ error: "Forbidden", code: "session_access_required" }, 403);
-  } catch (cause) {
-    if (cause instanceof AuthorizationError) {
-      return json({ error: "Forbidden", code: cause.code }, cause.status);
-    }
+  } catch {
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
   }
 }
@@ -513,7 +506,7 @@ export const routes: Route[] = [
     pattern: parsePattern("/health"),
     authorization: NO_AUTHORIZATION,
     handler: async (_request, _env, _match, ctx) => {
-      let ownerBootstrap: "complete" | "owner_bootstrap_pending" | "unknown";
+      let ownerAssignment: "present" | "missing" | "unknown";
       try {
         const owner = await ctx.db
           .prepare(
@@ -524,14 +517,14 @@ export const routes: Route[] = [
              LIMIT 1`
           )
           .first();
-        ownerBootstrap = owner ? "complete" : "owner_bootstrap_pending";
+        ownerAssignment = owner ? "present" : "missing";
       } catch {
-        ownerBootstrap = "unknown";
+        ownerAssignment = "unknown";
       }
       return json({
         status: "healthy",
         service: "open-inspect-control-plane",
-        rbac: { ownerBootstrap },
+        rbac: { ownerAssignment },
       });
     },
   },

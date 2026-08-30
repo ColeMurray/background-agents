@@ -341,11 +341,10 @@ export class SessionIndexStore {
     const creatorAccessStmt = session.userId
       ? this.db
           .prepare(
-            `INSERT INTO session_access
-               (session_id, user_id, relation, state, generation, created_at)
-             SELECT ?, id, 'creator', 'active', 1, ? FROM users WHERE id = ?`
+            `INSERT INTO session_access (session_id, user_id, relation)
+             SELECT ?, id, 'creator' FROM users WHERE id = ?`
           )
-          .bind(session.id, session.createdAt, session.userId)
+          .bind(session.id, session.userId)
       : null;
     const results = await this.db.batch([
       sessionStmt,
@@ -584,12 +583,12 @@ export class SessionIndexStore {
     }
     if (accessUserId) {
       conditions.push(
-        `(sessions.user_id = ? OR EXISTS (
+        `EXISTS (
           SELECT 1 FROM session_access access
-          WHERE access.session_id = sessions.id AND access.user_id = ? AND access.state = 'active'
-        ))`
+          WHERE access.session_id = sessions.id AND access.user_id = ?
+        )`
       );
-      params.push(accessUserId, accessUserId);
+      params.push(accessUserId);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { activateSessionParticipantAccess } from "../../src/db/session-access";
 import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { cleanD1Tables } from "./cleanup";
@@ -62,11 +63,50 @@ describe("D1 SessionIndexStore", () => {
 
     expect(
       await env.DB.prepare(
-        "SELECT relation, state, generation, created_at FROM session_access WHERE session_id = ? AND user_id = ?"
+        "SELECT relation FROM session_access WHERE session_id = ? AND user_id = ?"
       )
         .bind("session-with-creator", userId)
         .first()
-    ).toEqual({ relation: "creator", state: "active", generation: 1, created_at: 10 });
+    ).toEqual({ relation: "creator" });
+
+    await activateSessionParticipantAccess(env.DB, "session-with-creator", userId);
+    expect(
+      await env.DB.prepare(
+        "SELECT relation FROM session_access WHERE session_id = ? AND user_id = ?"
+      )
+        .bind("session-with-creator", userId)
+        .first()
+    ).toEqual({ relation: "creator" });
+  });
+
+  it("fails closed when a creator projection is missing from an access-filtered list", async () => {
+    const userId = "11111111111111111111111111111111";
+    await env.DB.prepare(
+      `INSERT INTO users
+        (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+       VALUES (?, 'Session Creator', NULL, 0, NULL, 1, 1)`
+    )
+      .bind(userId)
+      .run();
+    const store = new SessionIndexStore(env.DB);
+    await store.create({
+      id: "session-without-projection",
+      title: "Missing projection",
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      userId,
+      createdAt: 10,
+      updatedAt: 10,
+    });
+    await env.DB.prepare("DELETE FROM session_access WHERE session_id = ?")
+      .bind("session-without-projection")
+      .run();
+
+    await expect(store.list({ accessUserId: userId })).resolves.toMatchObject({ sessions: [] });
   });
 
   it("atomically snapshots provider auth with the session", async () => {
