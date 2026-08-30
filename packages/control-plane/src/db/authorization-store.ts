@@ -69,6 +69,30 @@ interface SqlCondition {
   values: unknown[];
 }
 
+function userHasBuiltInRole(userId: string, role: BuiltInRoleKey): SqlCondition {
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM user_role_assignments assignment
+      JOIN roles assigned_role ON assigned_role.id = assignment.role_id
+      WHERE assignment.user_id = ? AND assigned_role.key = ?
+    )`,
+    values: [userId, role],
+  };
+}
+
+function anotherUnsuspendedOwner(targetUserId: string): SqlCondition {
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM users other_user
+      JOIN user_role_assignments other_assignment ON other_assignment.user_id = other_user.id
+      JOIN roles other_role ON other_role.id = other_assignment.role_id
+      WHERE other_role.key = 'owner' AND other_user.suspended_at IS NULL
+        AND other_user.id <> ?
+    )`,
+    values: [targetUserId],
+  };
+}
+
 export type AuthorizationMutationOutcome =
   | { status: "applied" }
   | { status: "actor_authorization_changed" }
@@ -344,6 +368,8 @@ export class AuthorizationStore {
     now: number;
   }): Promise<AuthorizationMutationOutcome> {
     const transferGuard = rolePermissionPredicate("workspace.transfer_ownership");
+    const targetIsOwner = userHasBuiltInRole(input.targetUserId, "owner");
+    const otherOwnerExists = anotherUnsuspendedOwner(input.targetUserId);
     const mutation = this.mutationConditions(
       input.actorUserId,
       ["workspace.members.manage"],
@@ -352,39 +378,25 @@ export class AuthorizationStore {
             AND EXISTS (SELECT 1 FROM user_role_assignments WHERE user_id = ?)
             AND (
               ? = ?
-              OR NOT EXISTS (
-                SELECT 1 FROM user_role_assignments current_assignment
-                JOIN roles current_role ON current_role.id = current_assignment.role_id
-                WHERE current_assignment.user_id = ? AND current_role.key = 'owner'
-              )
-              OR EXISTS (
-                SELECT 1 FROM users other_user
-                JOIN user_role_assignments other_assignment ON other_assignment.user_id = other_user.id
-                JOIN roles other_role ON other_role.id = other_assignment.role_id
-                WHERE other_role.key = 'owner' AND other_user.suspended_at IS NULL
-                  AND other_user.id <> ?
-              )
+              OR NOT (${targetIsOwner.sql})
+              OR (${otherOwnerExists.sql})
             )`,
         values: [
           input.roleId,
           input.targetUserId,
           input.roleId,
           OWNER_ROLE_ID,
-          input.targetUserId,
-          input.targetUserId,
+          ...targetIsOwner.values,
+          ...otherOwnerExists.values,
         ],
       },
       {
         actor: {
           sql: `(
             NOT EXISTS (SELECT 1 FROM roles WHERE id = ? AND key = 'owner')
-            AND NOT EXISTS (
-              SELECT 1 FROM user_role_assignments current_assignment
-              JOIN roles current_role ON current_role.id = current_assignment.role_id
-              WHERE current_assignment.user_id = ? AND current_role.key = 'owner'
-            )
+            AND NOT (${targetIsOwner.sql})
           ) OR ${transferGuard.sql}`,
-          values: [input.roleId, input.targetUserId, ...transferGuard.values],
+          values: [input.roleId, ...targetIsOwner.values, ...transferGuard.values],
         },
       }
     );
@@ -425,6 +437,8 @@ export class AuthorizationStore {
     now: number;
   }): Promise<AuthorizationMutationOutcome> {
     const transferGuard = rolePermissionPredicate("workspace.transfer_ownership");
+    const targetIsOwner = userHasBuiltInRole(input.targetUserId, "owner");
+    const otherOwnerExists = anotherUnsuspendedOwner(input.targetUserId);
     const mutation = this.mutationConditions(
       input.actorUserId,
       ["workspace.members.manage"],
@@ -436,34 +450,20 @@ export class AuthorizationStore {
           )
           AND (
             ? = 0
-            OR NOT EXISTS (
-              SELECT 1 FROM user_role_assignments current_assignment
-              JOIN roles current_role ON current_role.id = current_assignment.role_id
-              WHERE current_assignment.user_id = ? AND current_role.key = 'owner'
-            )
-            OR EXISTS (
-              SELECT 1 FROM users other_user
-              JOIN user_role_assignments other_assignment ON other_assignment.user_id = other_user.id
-              JOIN roles other_role ON other_role.id = other_assignment.role_id
-              WHERE other_role.key = 'owner' AND other_user.suspended_at IS NULL
-                AND other_user.id <> ?
-            )
+            OR NOT (${targetIsOwner.sql})
+            OR (${otherOwnerExists.sql})
           )`,
         values: [
           input.targetUserId,
           input.suspended ? 1 : 0,
-          input.targetUserId,
-          input.targetUserId,
+          ...targetIsOwner.values,
+          ...otherOwnerExists.values,
         ],
       },
       {
         actor: {
-          sql: `NOT EXISTS (
-          SELECT 1 FROM user_role_assignments target_assignment
-          JOIN roles target_role ON target_role.id = target_assignment.role_id
-          WHERE target_assignment.user_id = ? AND target_role.key = 'owner'
-        ) OR ${transferGuard.sql}`,
-          values: [input.targetUserId, ...transferGuard.values],
+          sql: `NOT (${targetIsOwner.sql}) OR ${transferGuard.sql}`,
+          values: [...targetIsOwner.values, ...transferGuard.values],
         },
       }
     );

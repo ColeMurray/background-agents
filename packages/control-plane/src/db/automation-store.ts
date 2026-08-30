@@ -20,8 +20,9 @@ import {
   toProviderSelections,
   type AutomationModelProviderAuthRow,
 } from "./automation-model-provider-auth";
+import { runGuardedBatch, type GuardedWrite } from "./guarded-write";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import { bindAutomationExecutionGuard } from "../automation/authorization-guard";
+import { automationExecutionGuard } from "../automation/authorization-guard";
 import type { AutomationListCursor } from "./automation-list-cursor";
 
 function escapeLikePattern(value: string): string {
@@ -914,18 +915,17 @@ export class AutomationStore {
     children: AutomationRunRow[];
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
-    authorizationGuard?: SqlStatement;
+    authorizationGuard?: GuardedWrite;
     enforceExecutionAuthorization?: boolean;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
-    const statements: SqlStatement[] = [];
-
-    if (params.authorizationGuard) statements.push(params.authorizationGuard);
+    const guards: GuardedWrite[] = [];
+    if (params.authorizationGuard) guards.push(params.authorizationGuard);
     if (params.enforceExecutionAuthorization) {
-      statements.push(bindAutomationExecutionGuard(this.db, invocation.automation_id));
+      guards.push(automationExecutionGuard(invocation.automation_id));
     }
-    const invocationStatementIndex = statements.length;
+    const statements: SqlStatement[] = [];
     statements.push(
       this.db
         .prepare(
@@ -1000,8 +1000,8 @@ export class AutomationStore {
       );
     }
 
-    const results = await this.db.batch(statements);
-    return { inserted: (results[invocationStatementIndex]?.meta?.changes ?? 0) > 0 };
+    const results = await runGuardedBatch(this.db, guards, statements);
+    return { inserted: (results[0]?.meta?.changes ?? 0) > 0 };
   }
 
   /**

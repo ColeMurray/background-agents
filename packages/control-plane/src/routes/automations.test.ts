@@ -15,6 +15,11 @@ import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import { AutomationTriggerBlockedError } from "../scheduler/scheduler";
 import { PERMISSION_IDS, type PermissionId } from "@open-inspect/shared/rbac";
+import {
+  AUTOMATION_EXECUTION_GUARD,
+  AUTOMATION_REQUEST_GUARD,
+} from "../automation/authorization-guard";
+import { GuardedWriteConflictError } from "../db/guarded-write";
 
 const mockProviderAdapterGet = vi.hoisted(() => vi.fn());
 
@@ -178,18 +183,7 @@ function createCtx(
 ): RequestContext {
   const statement = {
     bind: vi.fn(() => statement),
-    first: vi.fn(async () =>
-      authorizationCurrent
-        ? {
-            active: 1,
-            user_id: "user-1",
-            suspended_at: null,
-            role_id: "role_builtin_owner",
-            role_key: "owner",
-            role_name: "Owner",
-          }
-        : null
-    ),
+    first: vi.fn(async () => ({ satisfied: authorizationCurrent ? 1 : 0 })),
     all: vi.fn(async () => ({ results: [] })),
   };
   return {
@@ -259,7 +253,10 @@ async function callRoute(
       return new Response(JSON.stringify({ error: "Automation not found" }), { status: 404 });
     ctx.automationAdmission = {
       automation,
-      authorizationGuard: { sql: "automation-authorization-guard" } as never,
+      authorizationGuard: {
+        name: "automation_request_authorization",
+        predicate: { sql: "1 = 1", values: [] },
+      },
     };
   }
   return route.handler(new Request(url, init), createEnv(), match, ctx);
@@ -312,7 +309,10 @@ describe("automation route handlers", () => {
     mockStore.bindReplaceEnvironments.mockReturnValue([{ sql: "replace-environments" }]);
     mockProviderAuthStore.bindInserts.mockReturnValue([{ sql: "insert-provider-auth" }]);
     mockProviderAuthStore.bindReplace.mockReturnValue([{ sql: "replace-provider-auth" }]);
-    mockBatch.mockResolvedValue([{ meta: { changes: 1 }, results: [] }]);
+    mockBatch.mockResolvedValue([
+      { meta: { changes: 0 }, results: [] },
+      { meta: { changes: 1 }, results: [] },
+    ]);
     mockSchedulerTrigger.mockResolvedValue({
       invocationId: "inv-1",
       runs: [{ id: "run-1" }],
@@ -1758,6 +1758,33 @@ describe("automation route handlers", () => {
       expect(await res.json()).toEqual({
         error: "A run is already active for this automation",
       });
+    });
+
+    it("returns 409 when request authorization changes during the guarded insert", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockSchedulerTrigger.mockRejectedValue(
+        new GuardedWriteConflictError([AUTOMATION_REQUEST_GUARD], new Error("integer overflow"))
+      );
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "Authorization changed",
+        code: "authorization_conflict",
+      });
+    });
+
+    it("returns 403 when execution authorization changes during the guarded insert", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockSchedulerTrigger.mockRejectedValue(
+        new GuardedWriteConflictError([AUTOMATION_EXECUTION_GUARD], new Error("integer overflow"))
+      );
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger");
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "Execution authorization required" });
     });
 
     it("returns 500 when the scheduler cannot launch the automation", async () => {

@@ -19,7 +19,7 @@ import { UserStore } from "./db/user-store";
 import { AutomationStore } from "./db/automation-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
-import { bindAutomationAuthorizationGuard } from "./automation/authorization-guard";
+import { automationAuthorizationGuard } from "./automation/authorization-guard";
 import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
 import {
   getSessionRelation,
@@ -526,8 +526,7 @@ async function enforceAutomationRequirement(
 
     ctx.automationAdmission = {
       automation,
-      authorizationGuard: bindAutomationAuthorizationGuard(
-        ctx.db,
+      authorizationGuard: automationAuthorizationGuard(
         automation.id,
         authorization,
         requirement.operation

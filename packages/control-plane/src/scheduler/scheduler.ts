@@ -60,7 +60,8 @@ import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
-import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import type { SqlDatabase } from "../db/sql-database";
+import type { GuardedWrite } from "../db/guarded-write";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
 import type { SessionInitInput } from "../session/initialize";
@@ -205,7 +206,7 @@ interface StartInvocationParams {
   repositories?: AutomationRepositoryInsert[];
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
-  authorizationGuard?: SqlStatement;
+  authorizationGuard?: GuardedWrite;
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
   instructionsOverride?: string;
   /**
@@ -1070,7 +1071,7 @@ export class Scheduler {
 
   async trigger(
     automationId: string,
-    authorizationGuard?: SqlStatement
+    authorizationGuard?: GuardedWrite
   ): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);

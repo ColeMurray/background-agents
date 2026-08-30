@@ -16,6 +16,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { guardSql } from "../packages/control-plane/src/db/guarded-write.ts";
 
 const CANONICAL_USER_ID = /^[0-9a-f]{32}$/;
 const OWNER_ROLE_ID = "role_builtin_owner";
@@ -174,10 +175,7 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
 
   return `${preflight}
 
--- Deliberately overflow on any failed precondition. Wrangler executes a D1
--- SQL file atomically, so this aborts before mutation and rolls back the file.
-SELECT CASE WHEN ${executableState}
-  THEN 1 ELSE abs(-9223372036854775808) END AS precondition_guard;
+${guardSql("precondition_guard", executableState)};
 
 INSERT INTO authorization_audit_events
   (id, occurred_at, request_id, principal_kind,
@@ -192,15 +190,15 @@ UPDATE user_role_assignments
 SET role_id = ${ownerRoleId}
 WHERE user_id = ${userId} AND ${exactAudit};
 
--- The last statement before reporting fails the entire atomic file if any
--- write was incomplete. A true idempotent no-op also satisfies this state.
-SELECT CASE WHEN ${commonPreconditions}
+${guardSql(
+  "postcondition_guard",
+  `${commonPreconditions}
   AND ${targetIsOwner}
   AND NOT (${anotherUnsuspendedOwner})
   AND (${exactAudit} OR NOT EXISTS (
     SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}
-  ))
-  THEN 1 ELSE abs(-9223372036854775808) END AS postcondition_guard;
+  ))`
+)};
 
 SELECT 'postcondition' AS report,
   CASE WHEN EXISTS (

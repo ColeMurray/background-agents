@@ -71,12 +71,12 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import {
-  bindAutomationAuthorizationGuard,
-  bindPermissionSetGuard,
-  isAutomationAuthorizationCurrent,
-  isAutomationExecutionAuthorized,
-  type AutomationAuthorizationOperation,
+  AUTOMATION_EXECUTION_GUARD,
+  AUTOMATION_REQUEST_GUARD,
+  automationAuthorizationGuard,
+  permissionSetGuard,
 } from "../automation/authorization-guard";
+import { GuardedWriteConflictError, runGuardedBatch, type GuardedWrite } from "../db/guarded-write";
 
 const logger = createLogger("router:automations");
 
@@ -96,8 +96,7 @@ function rebuildAutomationAuthorizationGuard(
       403
     );
   }
-  admission.authorizationGuard = bindAutomationAuthorizationGuard(
-    ctx.db,
+  admission.authorizationGuard = automationAuthorizationGuard(
     admission.automation.id,
     authorization,
     "manage",
@@ -113,27 +112,17 @@ function admittedAutomation(ctx: RequestContext): AutomationRouteAdmission {
 
 async function runAuthorizedAutomationBatch(
   ctx: RequestContext,
-  automation: AutomationRow,
-  operation: AutomationAuthorizationOperation,
-  authorizationGuard: SqlStatement | null,
-  statements: SqlStatement[],
-  requiredPermissions: readonly PermissionId[] = []
+  authorizationGuard: GuardedWrite | null,
+  statements: SqlStatement[]
 ): Promise<SqlResult[] | Response> {
   try {
-    return await ctx.db.batch(
-      authorizationGuard ? [authorizationGuard, ...statements] : statements
+    return await runGuardedBatch(
+      ctx.db,
+      authorizationGuard ? [authorizationGuard] : [],
+      statements
     );
   } catch (cause) {
-    if (
-      ctx.authorization &&
-      !(await isAutomationAuthorizationCurrent(
-        ctx.db,
-        automation.id,
-        ctx.authorization,
-        operation,
-        requiredPermissions
-      ))
-    ) {
+    if (cause instanceof GuardedWriteConflictError) {
       return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
     }
     throw cause;
@@ -637,7 +626,7 @@ async function handleCreateAutomation(
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
-  let createAuthorizationGuard: SqlStatement | null = null;
+  let createAuthorizationGuard: GuardedWrite | null = null;
   if (ctx.principal?.kind === "user") {
     const authorization = ctx.authorization;
     if (!authorization) return json({ error: "Authorization unavailable" }, 503);
@@ -650,7 +639,7 @@ async function handleCreateAutomation(
         403
       );
     }
-    createAuthorizationGuard = bindPermissionSetGuard(ctx.db, authorization, [
+    createAuthorizationGuard = permissionSetGuard(authorization, [
       "automations.create",
       ...(requestedRepositories.length > 0 ? (["repositories.use"] as const) : []),
       ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
@@ -806,9 +795,12 @@ async function handleCreateAutomation(
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
     );
   }
-  await db.batch(
-    createAuthorizationGuard ? [createAuthorizationGuard, ...createStatements] : createStatements
+  const createResult = await runAuthorizedAutomationBatch(
+    ctx,
+    createAuthorizationGuard,
+    createStatements
   );
+  if (createResult instanceof Response) return createResult;
 
   const automation = await hydrateAutomation(db, (await store.getById(id))!);
 
@@ -1151,11 +1143,8 @@ async function handleUpdateAutomation(
   if (statements.length > 0) {
     const result = await runAuthorizedAutomationBatch(
       ctx,
-      existing,
-      "manage",
       admission.authorizationGuard,
-      statements,
-      requiredTargetPermissions
+      statements
     );
     if (result instanceof Response) return result;
   }
@@ -1182,8 +1171,8 @@ async function handleDeleteAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const { automation: existing, authorizationGuard } = admittedAutomation(ctx);
-  const result = await runAuthorizedAutomationBatch(ctx, existing, "manage", authorizationGuard, [
+  const { authorizationGuard } = admittedAutomation(ctx);
+  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [
     store.bindSoftDelete(id),
   ]);
   if (result instanceof Response) return result;
@@ -1210,10 +1199,8 @@ async function handlePauseAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const { automation: existing, authorizationGuard } = admittedAutomation(ctx);
-  const result = await runAuthorizedAutomationBatch(ctx, existing, "manage", authorizationGuard, [
-    store.bindPause(id),
-  ]);
+  const { authorizationGuard } = admittedAutomation(ctx);
+  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [store.bindPause(id)]);
   if (result instanceof Response) return result;
   const paused = result.at(-1)?.meta.changes === 1;
   if (!paused) return error("Automation not found", 404);
@@ -1255,7 +1242,7 @@ async function handleResumeAutomation(
     nextRunAt = null;
   }
 
-  const result = await runAuthorizedAutomationBatch(ctx, existing, "manage", authorizationGuard, [
+  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [
     store.bindResume(id, nextRunAt),
   ]);
   if (result instanceof Response) return result;
@@ -1306,12 +1293,15 @@ async function handleTriggerAutomation(
       return error("A run is already active for this automation", 409);
     }
     if (
-      ctx.authorization &&
-      !(await isAutomationAuthorizationCurrent(ctx.db, id, ctx.authorization, "trigger"))
+      triggerError instanceof GuardedWriteConflictError &&
+      triggerError.has(AUTOMATION_REQUEST_GUARD)
     ) {
       return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
     }
-    if (!(await isAutomationExecutionAuthorized(ctx.db, id))) {
+    if (
+      triggerError instanceof GuardedWriteConflictError &&
+      triggerError.has(AUTOMATION_EXECUTION_GUARD)
+    ) {
       return json({ error: "Execution authorization required" }, 403);
     }
     return error("Failed to trigger automation", 500);
@@ -1407,13 +1397,7 @@ async function handleRegenerateKey(
       trigger_auth_data: encrypted,
     } as Record<string, unknown>);
     if (!statement) return error("Automation not found", 404);
-    const result = await runAuthorizedAutomationBatch(
-      ctx,
-      automation,
-      "manage",
-      authorizationGuard,
-      [statement]
-    );
+    const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [statement]);
     if (result instanceof Response) return result;
     if ((result.at(-1)?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 
@@ -1441,9 +1425,7 @@ async function handleRegenerateKey(
     trigger_auth_data: hash,
   } as Record<string, unknown>);
   if (!statement) return error("Automation not found", 404);
-  const result = await runAuthorizedAutomationBatch(ctx, automation, "manage", authorizationGuard, [
-    statement,
-  ]);
+  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [statement]);
   if (result instanceof Response) return result;
   if ((result.at(-1)?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 

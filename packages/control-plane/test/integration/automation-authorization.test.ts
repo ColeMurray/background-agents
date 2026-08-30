@@ -1,8 +1,9 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthorizationService } from "../../src/authorization/service";
-import { bindAutomationAuthorizationGuard } from "../../src/automation/authorization-guard";
+import { automationAuthorizationGuard } from "../../src/automation/authorization-guard";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { runGuardedBatch } from "../../src/db/guarded-write";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
@@ -179,10 +180,11 @@ describe("automation transactional authorization", () => {
     await store.softDelete("deleted-race");
 
     await expect(
-      db.batch([
-        bindAutomationAuthorizationGuard(db, "deleted-race", authorization, "manage"),
-        db.prepare("UPDATE automations SET name = 'stale-write' WHERE id = 'deleted-race'"),
-      ])
+      runGuardedBatch(
+        db,
+        [automationAuthorizationGuard("deleted-race", authorization, "manage")],
+        [db.prepare("UPDATE automations SET name = 'stale-write' WHERE id = 'deleted-race'")]
+      )
     ).rejects.toThrow();
 
     expect(
@@ -204,10 +206,11 @@ describe("automation transactional authorization", () => {
       .run();
 
     await expect(
-      db.batch([
-        bindAutomationAuthorizationGuard(db, "ownership-race", authorization, "manage"),
-        db.prepare("UPDATE automations SET name = 'stale-write' WHERE id = 'ownership-race'"),
-      ])
+      runGuardedBatch(
+        db,
+        [automationAuthorizationGuard("ownership-race", authorization, "manage")],
+        [db.prepare("UPDATE automations SET name = 'stale-write' WHERE id = 'ownership-race'")]
+      )
     ).rejects.toThrow();
 
     expect((await store.getById("ownership-race"))?.name).toBe("ownership-race");
@@ -242,16 +245,21 @@ describe("automation transactional authorization", () => {
     ]);
 
     await expect(
-      db.batch([
-        bindAutomationAuthorizationGuard(db, "permission-race", authorization, "manage", [
-          "repositories.use",
-        ]),
-        ...store.bindReplaceRepositories(
-          "permission-race",
-          [{ repo_owner: "acme", repo_name: "new", repo_id: 2, base_branch: "main" }],
-          2
-        ),
-      ])
+      runGuardedBatch(
+        db,
+        [
+          automationAuthorizationGuard("permission-race", authorization, "manage", [
+            "repositories.use",
+          ]),
+        ],
+        [
+          ...store.bindReplaceRepositories(
+            "permission-race",
+            [{ repo_owner: "acme", repo_name: "new", repo_id: 2, base_branch: "main" }],
+            2
+          ),
+        ]
+      )
     ).rejects.toThrow();
 
     await expect(store.getRepositoriesForAutomation("permission-race")).resolves.toMatchObject([

@@ -1,4 +1,5 @@
-import type { SqlDatabase, SqlStatement } from "./sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
+import { GuardedWriteConflictError, runGuardedBatch, type GuardedWrite } from "./guarded-write";
 
 /**
  * Split-merge primitive: converge a loser canonical user's entire graph onto
@@ -286,28 +287,23 @@ export async function mergeUsers(
     };
   }
 
+  const mergeGuard: GuardedWrite = {
+    name: "user_merge_state",
+    predicate: {
+      sql: `EXISTS (
+          SELECT 1 FROM users u
+          JOIN user_role_assignments ura ON ura.user_id = u.id
+          WHERE u.id = ? AND u.suspended_at IS ? AND ura.role_id = ?
+        )
+        AND EXISTS (
+          SELECT 1 FROM users u
+          JOIN user_role_assignments ura ON ura.user_id = u.id
+          WHERE u.id = ? AND ura.role_id = ?
+        )`,
+      values: [survivorId, survivor.suspended_at, survivorRole.role_id, loserId, loserRole.role_id],
+    },
+  };
   const statements: SqlStatement[] = [];
-  // Force the whole batch to roll back if role/status state changed after the
-  // preflight. abs(MIN_INT64) is a deterministic SQLite error used only on the
-  // false branch because RAISE() is unavailable outside triggers.
-  statements.push(
-    db
-      .prepare(
-        `SELECT CASE WHEN
-           EXISTS (
-             SELECT 1 FROM users u
-             JOIN user_role_assignments ura ON ura.user_id = u.id
-              WHERE u.id = ? AND u.suspended_at IS ? AND ura.role_id = ?
-           )
-           AND EXISTS (
-             SELECT 1 FROM users u
-             JOIN user_role_assignments ura ON ura.user_id = u.id
-              WHERE u.id = ? AND ura.role_id = ?
-           )
-         THEN 1 ELSE abs(-9223372036854775808) END AS merge_guard`
-      )
-      .bind(survivorId, survivor.suspended_at, survivorRole.role_id, loserId, loserRole.role_id)
-  );
   const track: Partial<Record<UserMergeCountKey, number>> = {};
   const add = (key: UserMergeCountKey, statement: SqlStatement) => {
     track[key] = statements.length;
@@ -402,7 +398,15 @@ export async function mergeUsers(
     );
   }
 
-  const results = await db.batch(statements);
+  let results: SqlResult[];
+  try {
+    results = await runGuardedBatch(db, [mergeGuard], statements);
+  } catch (cause) {
+    if (cause instanceof GuardedWriteConflictError) {
+      throw new UserMergeError("User role or status changed during merge");
+    }
+    throw cause;
+  }
 
   const counts = emptyCounts();
   for (const [key, index] of Object.entries(track) as [UserMergeCountKey, number][]) {

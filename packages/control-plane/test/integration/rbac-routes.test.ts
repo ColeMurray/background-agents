@@ -5,7 +5,8 @@ import { UserStore } from "../../src/db/user-store";
 import { mergeUsers } from "../../src/db/user-merge";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
-import { bindPermissionSetGuard } from "../../src/automation/authorization-guard";
+import { permissionSetGuard } from "../../src/automation/authorization-guard";
+import { runGuardedBatch } from "../../src/db/guarded-write";
 
 describe("RBAC routes", () => {
   beforeEach(cleanD1Tables);
@@ -193,10 +194,11 @@ describe("RBAC routes", () => {
       .run();
 
     await expect(
-      db.batch([
-        bindPermissionSetGuard(db, authorization, ["automations.create"]),
-        db.prepare("UPDATE users SET display_name = 'stale-write' WHERE id = ?").bind(ownerId),
-      ])
+      runGuardedBatch(
+        db,
+        [permissionSetGuard(authorization, ["automations.create"])],
+        [db.prepare("UPDATE users SET display_name = 'stale-write' WHERE id = ?").bind(ownerId)]
+      )
     ).rejects.toThrow();
 
     expect(
