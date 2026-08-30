@@ -69,7 +69,7 @@ describe("SessionHeader", () => {
     expect(hideButton).toHaveClass("hidden", "lg:block");
     expect(hideButton).toHaveAttribute("aria-controls", "session-details-sidebar");
     expect(hideButton).toHaveAttribute("aria-expanded", "true");
-    expect(hideButton.querySelector('line[x1="15"][x2="15"]')).toBeInTheDocument();
+    expect(hideButton.querySelector('path[fill="currentColor"]')).toBeInTheDocument();
     expect(
       connectedStatus.compareDocumentPosition(hideButton) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
@@ -95,10 +95,10 @@ describe("SessionHeader", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Show session details" })).toHaveAttribute(
-      "aria-expanded",
-      "false"
-    );
+    const showButton = screen.getByRole("button", { name: "Show session details" });
+    expect(showButton).toHaveAttribute("aria-expanded", "false");
+    expect(showButton.querySelector('line[x1="15"][x2="15"]')).toBeInTheDocument();
+    expect(showButton.querySelector('path[fill="currentColor"]')).not.toBeInTheDocument();
   });
 
   it("hides the desktop details toggle while changes own the right-hand surface", () => {
