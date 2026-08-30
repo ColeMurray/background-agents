@@ -60,6 +60,76 @@ describe("sig1 service-credential authentication", () => {
     }
   });
 
+  it.each([
+    ["slack-bot", "/repos", 200],
+    ["linear-bot", "/repos", 200],
+    ["github-bot", "/repos/acme/widgets/metadata", 200],
+    ["slack-bot", "/environments", 200],
+    ["linear-bot", "/environments", 200],
+    ["github-bot", "/environments/missing", 404],
+    ["slack-bot", "/integration-settings/slack", 200],
+    ["slack-bot", "/integration-settings/slack/watched-channels", 200],
+    ["slack-bot", "/model-preferences", 200],
+  ] as const)(
+    "allows actorless %s metadata/config read %s",
+    async (service, path, expectedStatus) => {
+      if (path === "/repos") {
+        await env.REPOS_CACHE.put(
+          "repos:list:v2",
+          JSON.stringify({
+            repos: [],
+            cachedAt: new Date().toISOString(),
+            freshUntil: Date.now() + 60_000,
+          })
+        );
+      }
+      const response = await signedFetch({
+        service,
+        method: "GET",
+        url: `https://test.local${path}`,
+      });
+      expect(response.status).toBe(expectedStatus);
+    }
+  );
+
+  it("denies an actorless service without the route's exact grant", async () => {
+    const response = await signedFetch({
+      service: "linear-bot",
+      method: "GET",
+      url: "https://test.local/integration-settings/slack",
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+  });
+
+  it("denies actorless resolved settings for the wrong integration", async () => {
+    const response = await signedFetch({
+      service: "github-bot",
+      method: "GET",
+      url: "https://test.local/integration-settings/linear/resolved/acme/widgets",
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+  });
+
+  it.each([
+    ["github-bot", "github"],
+    ["linear-bot", "linear"],
+  ] as const)(
+    "authorizes actorless %s only for matching resolved settings",
+    async (service, id) => {
+      const response = await signedFetch({
+        service,
+        method: "GET",
+        url: `https://test.local/integration-settings/${id}/resolved/missing/repository`,
+      });
+
+      expect(response.status).not.toBe(403);
+    }
+  );
+
   it("requires a browser session in addition to the web service channel", async () => {
     const response = await signedFetch({
       service: "web",

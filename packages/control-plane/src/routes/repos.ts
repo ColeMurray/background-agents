@@ -330,7 +330,9 @@ export const reposRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
     pattern: parsePattern("/repos"),
-    authorization: requirePermission("repositories.read"),
+    authorization: requirePermission("repositories.read", {
+      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+    }),
     handler: handleListRepos,
   },
   {
@@ -342,7 +344,9 @@ export const reposRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
     pattern: parsePattern("/repos/:owner/:name/metadata"),
-    authorization: requirePermission("repositories.read"),
+    authorization: requirePermission("repositories.read", {
+      actorlessGrants: [{ service: "github-bot" }],
+    }),
     handler: handleGetRepoMetadata,
   },
   {

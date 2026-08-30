@@ -47,8 +47,63 @@ describe("route policy table", () => {
             expect(route.pattern.source).toContain(`?<${requirement.sessionIdParam}>`);
           }
         }
+        if (authorization.service.kind === "actor") {
+          for (const grant of authorization.service.actorlessGrants ?? []) {
+            for (const pathParam of Object.keys(grant.pathParams ?? {})) {
+              expect(route.pattern.source).toContain(`?<${pathParam}>`);
+            }
+          }
+        }
       }
     }
+  });
+
+  it.each([
+    ["GET", "/repos", [{ service: "slack-bot" }, { service: "linear-bot" }]],
+    ["GET", "/repos/acme/widgets/metadata", [{ service: "github-bot" }]],
+    ["GET", "/environments", [{ service: "slack-bot" }, { service: "linear-bot" }]],
+    ["GET", "/environments/env-1", [{ service: "github-bot" }]],
+    ["GET", "/integration-settings/slack", [{ service: "slack-bot", pathParams: { id: "slack" } }]],
+    [
+      "GET",
+      "/integration-settings/github/resolved/acme/widgets",
+      [
+        { service: "github-bot", pathParams: { id: "github" } },
+        { service: "linear-bot", pathParams: { id: "linear" } },
+      ],
+    ],
+    ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
+    ["GET", "/model-preferences", [{ service: "slack-bot" }]],
+  ])("declares the exact actorless grants for %s %s", (method, path, expected) => {
+    const authorization = routeFor(method, path)?.authorization;
+    expect(authorization?.kind).toBe("active-user");
+    if (authorization?.kind === "active-user") {
+      expect(authorization.service.kind).toBe("actor");
+      if (authorization.service.kind === "actor") {
+        expect(authorization.service.actorlessGrants).toEqual(expected);
+      }
+    }
+  });
+
+  it("does not declare actorless grants on other routes", () => {
+    const expected = new Set([
+      routeFor("GET", "/repos"),
+      routeFor("GET", "/repos/acme/widgets/metadata"),
+      routeFor("GET", "/environments"),
+      routeFor("GET", "/environments/env-1"),
+      routeFor("GET", "/integration-settings/slack"),
+      routeFor("GET", "/integration-settings/github/resolved/acme/widgets"),
+      routeFor("GET", "/integration-settings/slack/watched-channels"),
+      routeFor("GET", "/model-preferences"),
+    ]);
+    const granted = routes.filter(
+      (route) =>
+        route.authorization.kind === "active-user" &&
+        route.authorization.service.kind === "actor" &&
+        (route.authorization.service.actorlessGrants?.length ?? 0) > 0
+    );
+
+    expect(new Set(granted)).toEqual(expected);
   });
 
   it("keeps contextual route requirements explicit", () => {

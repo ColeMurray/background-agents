@@ -1555,7 +1555,9 @@ export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROU
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/slack/watched-channels"),
-    authorization: requirePermission("automations.read"),
+    authorization: requirePermission("automations.read", {
+      actorlessGrants: [{ service: "slack-bot" }],
+    }),
     handler: handleGetWatchedSlackChannels,
   },
   {

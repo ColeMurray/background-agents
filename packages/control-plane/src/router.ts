@@ -21,6 +21,7 @@ import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
+  type ActorlessServiceGrant,
   type Route,
   type RouteAuthentication,
   type RouteAuthorizationRequirement,
@@ -350,7 +351,28 @@ function authorizationUserId(ctx: RequestContext): string | null {
   return null;
 }
 
-function enforceServiceRouteAuthorization(route: Route, ctx: RequestContext): Response | null {
+function actorlessGrantMatches(
+  grant: ActorlessServiceGrant,
+  service: string,
+  match: RegExpMatchArray
+): boolean {
+  if (grant.service !== service) return false;
+  return Object.entries(grant.pathParams ?? {}).every(([name, expected]) => {
+    const value = match.groups?.[name];
+    if (value === undefined) return false;
+    try {
+      return decodeURIComponent(value) === expected;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function enforceServiceRouteAuthorization(
+  route: Route,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Response | null {
   const principal = ctx.principal;
   if (principal?.kind !== "service") return null;
   if (route.authentication.kind === "web-service" && principal.service === "web") return null;
@@ -368,7 +390,11 @@ function enforceServiceRouteAuthorization(route: Route, ctx: RequestContext): Re
   if (authorization.kind !== "active-user" || authorization.service.kind === "deny") {
     return json({ error: "Forbidden", code: "service_capability_required" }, 403);
   }
-  return principal.actor ? null : json({ error: "Forbidden", code: "service_actor_required" }, 403);
+  if (principal.actor) return null;
+  const granted = authorization.service.actorlessGrants?.some((grant) =>
+    actorlessGrantMatches(grant, principal.service, match)
+  );
+  return granted ? null : json({ error: "Forbidden", code: "service_actor_required" }, 403);
 }
 
 async function enforcePermissionRequirement(
@@ -698,7 +724,11 @@ export async function handleRequest(
     }
   }
 
-  const serviceAccessError = enforceServiceRouteAuthorization(matchedRoute.route, ctx);
+  const serviceAccessError = enforceServiceRouteAuthorization(
+    matchedRoute.route,
+    matchedRoute.match,
+    ctx
+  );
   if (serviceAccessError) {
     logRequest(serviceAccessError, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(

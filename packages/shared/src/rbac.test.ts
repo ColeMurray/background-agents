@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILT_IN_ROLE_KEYS,
+  BUILT_IN_ROLE_REGISTRY,
   PERMISSION_IDS,
   createRoleInputSchema,
   normalizeRoleName,
@@ -8,6 +9,41 @@ import {
 } from "./rbac";
 
 describe("RBAC registry", () => {
+  it("defines stable built-in role identities and metadata", () => {
+    expect(BUILT_IN_ROLE_REGISTRY).toEqual({
+      owner: {
+        id: "role_builtin_owner",
+        key: "owner",
+        name: "Owner",
+        description: "Full workspace control",
+      },
+      administrator: {
+        id: "role_builtin_administrator",
+        key: "administrator",
+        name: "Administrator",
+        description: "Operational administration without ownership transfer",
+      },
+      member: {
+        id: "role_builtin_member",
+        key: "member",
+        name: "Member",
+        description: "Session and automation collaboration",
+      },
+      viewer: {
+        id: "role_builtin_viewer",
+        key: "viewer",
+        name: "Viewer",
+        description: "Read-only workspace visibility",
+      },
+    });
+    expect(BUILT_IN_ROLE_KEYS).toEqual(
+      Object.values(BUILT_IN_ROLE_REGISTRY).map((role) => role.key)
+    );
+    expect(new Set(Object.values(BUILT_IN_ROLE_REGISTRY).map((role) => role.id)).size).toBe(
+      BUILT_IN_ROLE_KEYS.length
+    );
+  });
+
   it("contains unique, sorted permission identifiers", () => {
     expect(PERMISSION_IDS).toHaveLength(52);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);

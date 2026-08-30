@@ -76,7 +76,7 @@ async function handleCreateSession(
       );
     }
     if (
-      (repositoryContext || body.repositories || body.environmentId) &&
+      (repositoryContext || body.repositories) &&
       !authorization.permissions.includes("repositories.use")
     ) {
       return json(

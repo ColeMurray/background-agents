@@ -12,6 +12,7 @@ import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
 import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
 import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -72,7 +73,20 @@ export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
   | { kind: "session"; operation: SessionAuthorizationOperation; sessionIdParam: string };
 
-type ServiceAuthorization = { kind: "deny" } | { kind: "actor"; ceiling?: PermissionId };
+type BotServiceName = Exclude<ServiceName, "web">;
+
+export interface ActorlessServiceGrant {
+  service: BotServiceName;
+  pathParams?: Readonly<Record<string, string>>;
+}
+
+type ServiceAuthorization =
+  | { kind: "deny" }
+  | {
+      kind: "actor";
+      ceiling?: PermissionId;
+      actorlessGrants?: readonly ActorlessServiceGrant[];
+    };
 
 export type RouteAuthorization =
   | { kind: "none" }
@@ -85,7 +99,7 @@ export type RouteAuthorization =
     }
   | {
       kind: "service";
-      services: readonly ("github-bot" | "slack-bot" | "linear-bot")[];
+      services: readonly BotServiceName[];
       actor: "required" | "optional";
       additionalHandlerChecks?: boolean;
     };
@@ -106,11 +120,14 @@ export function sessionRequirement(
   return { kind: "session", operation, sessionIdParam };
 }
 
-export function requirePermission(permission: PermissionId): RouteAuthorization {
+export function requirePermission(
+  permission: PermissionId,
+  options?: { actorlessGrants?: readonly ActorlessServiceGrant[] }
+): RouteAuthorization {
   return {
     kind: "active-user",
     allOf: [permissionRequirement(permission)],
-    service: { kind: "actor" },
+    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
   };
 }
 
@@ -132,20 +149,25 @@ export function requireAll(...allOf: readonly RouteAuthorizationRequirement[]): 
 export function handlerAuthorized(options?: {
   service?: "deny" | "actor";
   serviceCeiling?: PermissionId;
+  actorlessGrants?: readonly ActorlessServiceGrant[];
 }): RouteAuthorization {
   return {
     kind: "active-user",
     allOf: [],
     service:
       options?.service === "actor"
-        ? { kind: "actor", ceiling: options.serviceCeiling }
+        ? {
+            kind: "actor",
+            ceiling: options.serviceCeiling,
+            actorlessGrants: options.actorlessGrants,
+          }
         : { kind: "deny" },
     additionalHandlerChecks: true,
   };
 }
 
 export function serviceAuthorized(
-  service: "github-bot" | "slack-bot" | "linear-bot",
+  service: BotServiceName,
   actor: "required" | "optional" = "optional"
 ): RouteAuthorization {
   return { kind: "service", services: [service], actor, additionalHandlerChecks: true };

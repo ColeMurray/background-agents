@@ -493,7 +493,9 @@ export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SE
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id"),
-    authorization: requirePermission("integrations.read"),
+    authorization: requirePermission("integrations.read", {
+      actorlessGrants: [{ service: "slack-bot", pathParams: { id: "slack" } }],
+    }),
     handler: handleGetIntegrationSettings,
   },
   {
@@ -557,7 +559,12 @@ export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SE
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/resolved/:owner/:name"),
-    authorization: requirePermission("integrations.read"),
+    authorization: requirePermission("integrations.read", {
+      actorlessGrants: [
+        { service: "github-bot", pathParams: { id: "github" } },
+        { service: "linear-bot", pathParams: { id: "linear" } },
+      ],
+    }),
     handler: handleGetResolvedConfig,
   },
 ]);

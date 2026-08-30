@@ -14,6 +14,7 @@ import { SessionInternalPaths } from "./session/contracts";
 import { resolveManagedSkills } from "./session/skill-resolution";
 import { resolveSessionProviderAuth } from "./session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "./model-provider-accounts/selection-policy";
+import { resolveEnvironmentTarget, resolveSessionRepositories } from "./repos/resolve";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -44,6 +45,15 @@ vi.mock("./routes/shared", async (importOriginal) => {
   };
 });
 
+vi.mock("./repos/resolve", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    resolveEnvironmentTarget: vi.fn(),
+    resolveSessionRepositories: vi.fn(),
+  };
+});
+
 describe("handleCreateSession D1 ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -62,6 +72,16 @@ describe("handleCreateSession D1 ordering", () => {
       repoId: 12345,
       defaultBranch: "main",
     } as never);
+    vi.mocked(resolveEnvironmentTarget).mockResolvedValue([
+      { repoOwner: "acme", repoName: "environment-repo", baseBranch: "main" },
+    ]);
+    vi.mocked(resolveSessionRepositories).mockImplementation(async (_env, repositories) =>
+      repositories.map((repository, index) => ({
+        ...repository,
+        repoId: 12345 + index,
+        baseBranch: repository.baseBranch ?? "main",
+      }))
+    );
     // Default identity fixture: the slack-bot's asserted actor resolves to an
     // already-known canonical user with no linked GitHub identity.
     vi.mocked(UserStore).mockImplementation(function () {
@@ -113,7 +133,10 @@ describe("handleCreateSession D1 ordering", () => {
     );
   }
 
-  function createEnv(initFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  function createEnv(
+    initFetch: ReturnType<typeof vi.fn>,
+    permissions = ["sessions.create", "repositories.use", "environments.use"]
+  ): Record<string, unknown> {
     const statement = {
       bind: vi.fn(() => statement),
       first: vi
@@ -141,8 +164,8 @@ describe("handleCreateSession D1 ordering", () => {
                 access_status: "active",
                 authorization_version: 1,
                 role_id: "role-1",
-                role_key: "member",
-                role_name: "Member",
+                role_key: null,
+                role_name: "Test Role",
               })),
               all: vi.fn(async () => ({ results: [] })),
             };
@@ -153,11 +176,7 @@ describe("handleCreateSession D1 ordering", () => {
               bind: vi.fn(() => permissionStatement),
               first: vi.fn(async () => null),
               all: vi.fn(async () => ({
-                results: [
-                  { permission_id: "sessions.create" },
-                  { permission_id: "repositories.use" },
-                  { permission_id: "environments.use" },
-                ],
+                results: permissions.map((permission_id) => ({ permission_id })),
               })),
             };
             return permissionStatement;
@@ -174,6 +193,76 @@ describe("handleCreateSession D1 ordering", () => {
       },
     };
   }
+
+  it.each([
+    {
+      target: "environment",
+      body: { environmentId: "env_1" },
+      permissions: ["sessions.create", "environments.use"],
+      status: 201,
+      deniedPermission: null,
+    },
+    {
+      target: "environment",
+      body: { environmentId: "env_1" },
+      permissions: ["sessions.create", "repositories.use"],
+      status: 403,
+      deniedPermission: "environments.use",
+    },
+    {
+      target: "scalar repository",
+      body: { repoOwner: "acme", repoName: "widgets" },
+      permissions: ["sessions.create", "repositories.use"],
+      status: 201,
+      deniedPermission: null,
+    },
+    {
+      target: "scalar repository",
+      body: { repoOwner: "acme", repoName: "widgets" },
+      permissions: ["sessions.create", "environments.use"],
+      status: 403,
+      deniedPermission: "repositories.use",
+    },
+    {
+      target: "repository list",
+      body: { repositories: [{ repoOwner: "acme", repoName: "widgets" }] },
+      permissions: ["sessions.create", "repositories.use"],
+      status: 201,
+      deniedPermission: null,
+    },
+    {
+      target: "repository list",
+      body: { repositories: [{ repoOwner: "acme", repoName: "widgets" }] },
+      permissions: ["sessions.create", "environments.use"],
+      status: 403,
+      deniedPermission: "repositories.use",
+    },
+  ])(
+    "enforces the permission matrix for $target targets",
+    async ({ body, permissions, status, deniedPermission }) => {
+      const create = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return { create } as never;
+      });
+      const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+
+      const response = await createSessionRequestWithBody(createEnv(initFetch, permissions), {
+        ...body,
+        title: "Permission matrix",
+      });
+
+      expect(response.status).toBe(status);
+      if (deniedPermission) {
+        await expect(response.json()).resolves.toMatchObject({
+          code: "permission_required",
+          permission: deniedPermission,
+        });
+        expect(create).not.toHaveBeenCalled();
+      } else {
+        expect(create).toHaveBeenCalledOnce();
+      }
+    }
+  );
 
   it("does not initialize the SessionDO when D1 session index creation fails", async () => {
     const create = vi.fn().mockRejectedValue(new Error("D1 unavailable"));

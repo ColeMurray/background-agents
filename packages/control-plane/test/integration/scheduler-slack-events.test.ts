@@ -177,7 +177,7 @@ describe("Scheduler slack event handling (integration)", () => {
     expect(JSON.parse(invocationRow!.trigger_metadata!).channel).toBe("C1");
   });
 
-  it("steers the running session on a follow-up reply instead of dropping it", async () => {
+  it("steers the running session when the automation owner remains authorized", async () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
@@ -205,6 +205,76 @@ describe("Scheduler slack event handling (integration)", () => {
       invocations.find((invocation) => invocation.skipReason === "concurrent_run_active")
     ).toBeUndefined();
   });
+
+  it.each([
+    [
+      "suspended",
+      async () => {
+        await env.DB.prepare("UPDATE users SET access_status = 'suspended' WHERE id = ?")
+          .bind("user-1")
+          .run();
+      },
+    ],
+    [
+      "revoked",
+      async () => {
+        await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+          .bind("role_builtin_viewer", "user-1")
+          .run();
+      },
+    ],
+    [
+      "missing collaboration permission",
+      async () => {
+        await env.DB.batch([
+          env.DB.prepare(
+            `INSERT INTO roles
+            (id, key, name, normalized_name, description, is_system, revision,
+             created_by, updated_by, created_at, updated_at)
+           VALUES ('role_no_collaboration', NULL, 'No Collaboration', 'no collaboration',
+             NULL, 0, 1, 'user-1', 'user-1', 1, 1)`
+          ),
+          env.DB.prepare(
+            `INSERT INTO role_permissions (role_id, permission_id)
+           VALUES ('role_no_collaboration', 'sessions.create')`
+          ),
+          env.DB.prepare(
+            "UPDATE user_role_assignments SET role_id = 'role_no_collaboration' WHERE user_id = 'user-1'"
+          ),
+        ]);
+      },
+    ],
+  ])(
+    "does not steer when the automation owner's execution authority is %s",
+    async (authorityState, revoke) => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store);
+      const concurrencyKey = `slack:C1:thread-${authorityState}`;
+      expect(
+        await sendEvent(
+          makeSlackEvent({
+            text: "deploy the api",
+            concurrencyKey,
+            triggerKey: `slack:msg:C1:root-${authorityState}`,
+          })
+        )
+      ).toMatchObject({ triggered: 1 });
+
+      await revoke();
+
+      expect(
+        await sendEvent(
+          makeSlackEvent({
+            text: "also update the changelog",
+            concurrencyKey,
+            triggerKey: `slack:msg:C1:reply-${authorityState}`,
+          })
+        )
+      ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(await fetchRuns(id)).toHaveLength(1);
+      expect(await fetchInvocations(store, id)).toHaveLength(1);
+    }
+  );
 
   it("continues the same session on a reply after the run has completed", async () => {
     const store = new AutomationStore(env.DB);

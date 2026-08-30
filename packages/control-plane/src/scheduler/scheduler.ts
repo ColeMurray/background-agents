@@ -70,6 +70,7 @@ import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
 
@@ -943,9 +944,33 @@ export class Scheduler {
           event.concurrencyKey,
           now - SLACK_THREAD_CONTINUITY_WINDOW_MS
         );
-        if (steerable?.session_id && (await this.steerSession(steerable, automation, event))) {
-          steered++;
-          continue;
+        if (steerable?.session_id) {
+          let ownerAuthorized: boolean;
+          try {
+            ownerAuthorized = await isAutomationExecutionAuthorized(this.db, automation.id, [
+              "sessions.collaborate.any",
+              "sessions.collaborate.own",
+            ]);
+          } catch (error) {
+            this.log.warn("Failed to authorize automation owner for slack steering", {
+              event: "scheduler.slack_steer_authorization_failed",
+              automation_id: automation.id,
+              error: error instanceof Error ? error : new Error(String(error)),
+            });
+            continue;
+          }
+          if (!ownerAuthorized) {
+            this.log.warn("Blocked slack steering for unauthorized automation owner", {
+              event: "scheduler.slack_steer_unauthorized",
+              automation_id: automation.id,
+              session_id: steerable.session_id,
+            });
+            continue;
+          }
+          if (await this.steerSession(steerable, automation, event)) {
+            steered++;
+            continue;
+          }
         }
         // No steerable session (outside the window, no session yet, or a rare
         // enqueue error) → fall through. Like the @mention path's stale-session

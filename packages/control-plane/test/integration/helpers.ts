@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
+import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
@@ -42,6 +43,7 @@ export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
+type InitialUserRole = Exclude<BuiltInRoleKey, "viewer">;
 const DEFAULT_INITIAL_USER_ROLE = "owner" as const;
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
@@ -79,9 +81,7 @@ async function signCookieValue(value: string, secret: string): Promise<string> {
  * web request must carry the same compound credential as production. Direct
  * service-auth tests intentionally build their own bare sig1 requests.
  */
-async function testBrowserSessionCookie(
-  initialRole: "owner" | "administrator" | "member"
-): Promise<string> {
+async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<string> {
   const secret = env.BROWSER_AUTH_SECRET;
   if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
 
@@ -138,7 +138,7 @@ async function testBrowserSessionCookie(
   ]);
   if (initialRole !== "member" && !existingUser) {
     await env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`)
-      .bind(`role_builtin_${initialRole}`, TEST_BROWSER_USER_ID)
+      .bind(BUILT_IN_ROLE_REGISTRY[initialRole].id, TEST_BROWSER_USER_ID)
       .run();
   }
 
@@ -160,7 +160,7 @@ export async function serviceFetch(
     headers?: Record<string, string>;
     service?: ServiceName;
     actor?: string;
-    initialUserRole?: "owner" | "administrator" | "member";
+    initialUserRole?: InitialUserRole;
   }
 ): Promise<Response> {
   const method = init?.method ?? "GET";
@@ -447,6 +447,44 @@ interface OpenClientWsOpts {
   scmName?: string;
 }
 
+export async function issueClientWsToken(
+  sessionName: string,
+  opts: Omit<OpenClientWsOpts, "subscribe"> = {}
+): Promise<{ token: string; participantId: string }> {
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionName));
+  const canonicalUserId = opts.canonicalUserId ?? opts.userId ?? "user-1";
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO users (id, display_name, created_at, updated_at)
+     VALUES (?, ?, ?, ?)`
+  )
+    .bind(canonicalUserId, "WebSocket Test User", now, now)
+    .run();
+  await env.DB.prepare(
+    `INSERT INTO session_access (session_id, user_id, relation, state, generation, created_at)
+     VALUES (?, ?, 'participant', 'active', 1, ?)
+     ON CONFLICT(session_id, user_id) DO UPDATE SET state = 'active'`
+  )
+    .bind(sessionName, canonicalUserId, now)
+    .run();
+  const authorization = await env.DB.prepare("SELECT authorization_version FROM users WHERE id = ?")
+    .bind(canonicalUserId)
+    .first<{ authorization_version: number }>();
+  const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: opts.userId ?? "user-1",
+      canonicalUserId,
+      authorizationVersion: authorization?.authorization_version ?? 1,
+      scmLogin: opts.scmLogin,
+      scmName: opts.scmName,
+    }),
+  });
+  if (!tokenRes.ok) throw new Error(`Token issuance failed: ${tokenRes.status}`);
+  return tokenRes.json<{ token: string; participantId: string }>();
+}
+
 // Overloaded on the `subscribe` discriminant: a subscribed socket always
 // resolves its token, participant, and replay messages; a bare socket never
 // carries them.
@@ -481,23 +519,7 @@ export async function openClientWs(sessionName: string, opts?: OpenClientWsOpts)
     return { ws };
   }
 
-  // Generate a WS token via the DO
-  const id = env.SESSION.idFromName(sessionName);
-  const stub = env.SESSION.get(id);
-  const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId: opts.userId ?? "user-1",
-      canonicalUserId: opts.canonicalUserId,
-      scmLogin: opts.scmLogin,
-      scmName: opts.scmName,
-    }),
-  });
-  const { token, participantId } = await tokenRes.json<{
-    token: string;
-    participantId: string;
-  }>();
+  const { token, participantId } = await issueClientWsToken(sessionName, opts);
 
   // Start collecting BEFORE sending subscribe to avoid race.
   // The subscribed message now includes batched replay data, so we terminate on it

@@ -1,8 +1,35 @@
 import { z } from "zod";
 import { isCanonicalUserId } from "./user-id";
 
-export const BUILT_IN_ROLE_KEYS = ["owner", "administrator", "member", "viewer"] as const;
-export type BuiltInRoleKey = (typeof BUILT_IN_ROLE_KEYS)[number];
+export const BUILT_IN_ROLE_REGISTRY = {
+  owner: {
+    id: "role_builtin_owner",
+    key: "owner",
+    name: "Owner",
+    description: "Full workspace control",
+  },
+  administrator: {
+    id: "role_builtin_administrator",
+    key: "administrator",
+    name: "Administrator",
+    description: "Operational administration without ownership transfer",
+  },
+  member: {
+    id: "role_builtin_member",
+    key: "member",
+    name: "Member",
+    description: "Session and automation collaboration",
+  },
+  viewer: {
+    id: "role_builtin_viewer",
+    key: "viewer",
+    name: "Viewer",
+    description: "Read-only workspace visibility",
+  },
+} as const;
+
+export type BuiltInRoleKey = keyof typeof BUILT_IN_ROLE_REGISTRY;
+export const BUILT_IN_ROLE_KEYS = Object.keys(BUILT_IN_ROLE_REGISTRY) as BuiltInRoleKey[];
 
 export const PERMISSION_IDS = [
   "analytics.read",

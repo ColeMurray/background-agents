@@ -37,11 +37,13 @@ export function bindAutomationExecutionGuard(db: SqlDatabase, automationId: stri
 
 export async function isAutomationExecutionAuthorized(
   db: SqlDatabase,
-  automationId: string
+  automationId: string,
+  requiredAnyOf: readonly PermissionId[] = []
 ): Promise<boolean> {
   const createGuard = rolePermissionPredicate("sessions.create");
   const repositoryGuard = rolePermissionPredicate("repositories.use");
   const environmentGuard = rolePermissionPredicate("environments.use");
+  const additionalGuards = requiredAnyOf.map(rolePermissionPredicate);
   const row = await db
     .prepare(
       `SELECT 1 AS authorized FROM automations a
@@ -55,16 +57,18 @@ export async function isAutomationExecutionAuthorized(
            OR ${repositoryGuard.sql}
          )
          AND (
-           NOT EXISTS (SELECT 1 FROM automation_environments ae WHERE ae.automation_id = a.id)
-           OR ${environmentGuard.sql}
-         )
-       LIMIT 1`
+            NOT EXISTS (SELECT 1 FROM automation_environments ae WHERE ae.automation_id = a.id)
+            OR ${environmentGuard.sql}
+          )
+          ${additionalGuards.length > 0 ? `AND (${additionalGuards.map((guard) => guard.sql).join(" OR ")})` : ""}
+        LIMIT 1`
     )
     .bind(
       automationId,
       ...createGuard.values,
       ...repositoryGuard.values,
-      ...environmentGuard.values
+      ...environmentGuard.values,
+      ...additionalGuards.flatMap((guard) => guard.values)
     )
     .first();
   return row !== null;

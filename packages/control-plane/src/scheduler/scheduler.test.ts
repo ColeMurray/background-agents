@@ -20,6 +20,7 @@ const mockResolveSessionProviderAuth = vi.hoisted(() =>
     { provider: "xai", authMode: "api_key", selectionSource: "unattended_policy" },
   ])
 );
+const mockIsAutomationExecutionAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 vi.mock("../source-control", () => ({
   createSourceControlProviderFromEnv: vi.fn(() => ({
@@ -30,6 +31,14 @@ vi.mock("../source-control", () => ({
 vi.mock("../session/provider-account-resolution", () => ({
   resolveSessionProviderAuth: mockResolveSessionProviderAuth,
 }));
+
+vi.mock("../automation/authorization-guard", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    isAutomationExecutionAuthorized: mockIsAutomationExecutionAuthorized,
+  };
+});
 
 vi.mock("../session/skill-resolution", () => ({
   resolveManagedSkills: vi.fn(async () => ({
@@ -476,6 +485,7 @@ describe("Scheduler", () => {
       { provider: "xai", authMode: "api_key", selectionSource: "unattended_policy" },
     ]);
     mockProviderAuthList.mockResolvedValue([]);
+    mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
     capturedInvocationParams = [];
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);

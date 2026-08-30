@@ -267,7 +267,9 @@ export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_RO
   {
     method: "GET",
     pattern: parsePattern("/environments"),
-    authorization: requirePermission("environments.read"),
+    authorization: requirePermission("environments.read", {
+      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+    }),
     handler: handleListEnvironments,
   },
   {
@@ -279,7 +281,9 @@ export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_RO
   {
     method: "GET",
     pattern: parsePattern("/environments/:id"),
-    authorization: requirePermission("environments.read"),
+    authorization: requirePermission("environments.read", {
+      actorlessGrants: [{ service: "github-bot" }],
+    }),
     handler: handleGetEnvironment,
   },
   {

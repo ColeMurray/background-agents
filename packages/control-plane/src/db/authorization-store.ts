@@ -1,15 +1,16 @@
-import type {
-  BuiltInRoleKey,
-  PermissionId,
-  WorkspaceAccessStatus,
-  WorkspaceMember,
+import {
+  BUILT_IN_ROLE_REGISTRY,
+  type BuiltInRoleKey,
+  type PermissionId,
+  type WorkspaceAccessStatus,
+  type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const ACTOR_GUARD_SQL =
   "EXISTS (SELECT 1 FROM users WHERE id = ? AND last_authorization_mutation_id = ?)";
-const OWNER_ROLE_ID = "role_builtin_owner";
+const OWNER_ROLE_ID = BUILT_IN_ROLE_REGISTRY.owner.id;
 
 interface EffectiveRow {
   user_id: string;
