@@ -293,11 +293,6 @@ CREATE TABLE workspace_bootstrap (
   claimed_at     INTEGER NOT NULL
 );
 
-CREATE TABLE rbac_migration_state (
-  singleton                INTEGER PRIMARY KEY CHECK (singleton = 1),
-  assignments_completed_at INTEGER NOT NULL
-);
-
 CREATE TABLE authorization_audit_events (
   id             TEXT PRIMARY KEY,
   occurred_at    INTEGER NOT NULL,
@@ -319,26 +314,11 @@ CREATE TABLE authorization_audit_events (
   metadata_json  TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))
 );
 
-CREATE TABLE privileged_operation_outbox (
-  id              TEXT PRIMARY KEY,
-  idempotency_key TEXT NOT NULL UNIQUE,
-  operation_type  TEXT NOT NULL,
-  state           TEXT NOT NULL CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
-  effect_json     TEXT NOT NULL CHECK (json_valid(effect_json)),
-  attempts        INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at INTEGER NOT NULL,
-  last_error_code TEXT,
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL
-);
-
 CREATE INDEX idx_role_assignments_role ON user_role_assignments(role_id, user_id);
 CREATE INDEX idx_authorization_audit_time
   ON authorization_audit_events(occurred_at DESC, id DESC);
 CREATE INDEX idx_authorization_audit_actor
   ON authorization_audit_events(actor_user_id_snapshot, occurred_at DESC);
-CREATE INDEX idx_privileged_outbox_due
-  ON privileged_operation_outbox(state, next_attempt_at);
 ```
 
 Built-in roles have stable `key` values: `owner`, `administrator`, `member`, and `viewer`; their
@@ -360,12 +340,12 @@ Suspension blocks application requests without deleting identities or historical
 `authorization_version` changes whenever the user's assignment, assigned role permissions, or access
 status changes. It binds short-lived browser authorization leases to current policy.
 
-Every canonical identity is an active workspace member unless suspended. The RBAC migration assigns
-Administrator to every canonical user present at the migration boundary and then writes
-`rbac_migration_state`. Every identity created after that marker receives Member, including
-identities first observed through a bot. Identity creation and default role assignment are one
-database-triggered workflow. Authorization denies a missing assignment; ordinary sign-in and
-identity resolution never repair authorization corruption implicitly.
+Every canonical identity is an active workspace member unless suspended. The RBAC migration seeds
+the built-in roles, assigns Administrator to every existing canonical user, and then creates the
+default-role trigger. Every identity created afterward receives Member, including identities first
+observed through a bot. Identity creation and default role assignment are one database-triggered
+workflow. Authorization denies a missing assignment; ordinary sign-in and identity resolution never
+repair authorization corruption implicitly.
 
 Initial ownership is assigned only by the root operator CLI after the intended Owner has signed in
 once. The operator supplies the canonical user ID, not an email or browser credential. One temporary
@@ -746,14 +726,7 @@ Durable audit events are required for:
 - session participant changes and cross-user session deletion;
 - allowed and denied role-management operations.
 
-Pure D1 mutations write the audit event in the same D1 batch. Operations with a Durable Object,
-provider API, queue, or other external side effect first persist an idempotent audit/outbox intent,
-then perform the effect, then mark the operation succeeded or failed. Recovery retries pending
-intents by idempotency key. Provider calls use native idempotency keys where available; otherwise
-recovery first reads provider state using the persisted effect identity and completes the record
-without repeating an observed effect. An operation that cannot be safely observed or retried
-transitions to `failed` for operator reconciliation rather than replaying blindly. It never claims
-that a post-effect audit write can roll back an external action.
+Pure D1 mutations write the audit event in the same D1 batch.
 
 High-volume ordinary reads and successful session messages remain in structured request logs rather
 than D1 audit storage. Every authorization denial logs principal kind, actor user ID when known,
@@ -792,19 +765,19 @@ The migration is additive and preserves current capability for every canonical u
 2. Insert protected built-in role records; their permission sets remain code-owned.
 3. Assign Administrator to every canonical user present in `users`, including identities originally
    created through Slack, GitHub, or Linear.
-4. Write the singleton `rbac_migration_state` marker in the same migration transaction. Identity
-   provisioning after this marker assigns Member.
+4. Create the unconditional default-role trigger. Identity provisioning after this point assigns
+   Member.
 5. Backfill non-null session creators that still reference a user into `session_access` as active
    `creator`; report nullable, missing, and otherwise unattributed rows.
 6. Backfill canonicalizable Durable Object participants through the generation-guarded saga.
    Existing aliases without canonical IDs remain attribution-only until explicitly repaired.
 7. Unattributed sessions require `sessions.read.any`; they never satisfy an own relationship.
 
-No route switches to enforcement until every existing canonical user has an Administrator
-assignment, the migration marker exists, and built-in role reconciliation succeeds. Administrators
-may continue using the application before Owner bootstrap. After deployment, the intended Owner
-signs in once to create a canonical user and assignment. An operator then dry-runs and executes the
-root CLI against that canonical ID. Sign-in and bot identity creation never assign Owner.
+No route switches to enforcement until every existing canonical user has an Administrator assignment
+and built-in role reconciliation succeeds. Administrators may continue using the application before
+Owner bootstrap. After deployment, the intended Owner signs in once to create a canonical user and
+assignment. An operator then dry-runs and executes the root CLI against that canonical ID. Sign-in
+and bot identity creation never assign Owner.
 
 Deployment documentation will state that Administrator preserves the previous installation-wide
 operational behavior, while Member becomes the default for newly admitted users.
@@ -826,8 +799,7 @@ Members can use their existing capabilities, but no one can exercise Owner-only 
 - Missing or unknown role permissions deny and emit a reconciliation error.
 - Missing user assignment denies shared application routes but permits sign-out and own identity
   discovery so an administrator can repair access.
-- Audit-write failure aborts transactional D1 administration. External workflows do not begin their
-  side effect until their durable audit/outbox intent exists.
+- Audit-write failure aborts transactional D1 administration.
 - Session projection failure leaves a deny-by-default pending/revoking saga state for idempotent
   retry; no cross-store atomicity is assumed.
 - Web authorization metadata failure renders an unavailable state rather than the unrestricted app.
@@ -921,7 +893,7 @@ never let an observed route invoke an enforced sensitive sub-operation without i
   bootstrap for the initial Owner.
 - Existing installation assigns every pre-migration canonical user Administrator, including bot-only
   identities, then requires the same explicit operator bootstrap.
-- Every canonical user receives exactly one assignment; migration-boundary races repair to Member.
+- Every canonical user receives exactly one assignment.
 - Session creator projection is idempotent and reports every unattributed row.
 - Built-in role reconciliation is idempotent and rejects incompatible registry drift.
 - Exact migration SQL executes under workerd/D1, including indexes and JSON checks.
@@ -936,7 +908,7 @@ never let an observed route invoke an enforced sensitive sub-operation without i
 
 1. Ship shared permission registry, additive schema, built-in roles, assignments, audit storage, and
    observation-only human and service decisions.
-2. Assign every pre-migration user Administrator, write the migration marker, backfill session
+2. Assign every pre-migration user Administrator, enable default Member assignment, backfill session
    creator access, and reconcile canonical participant projection.
 3. Add default Member provisioning, explicit Owner bootstrap, role/member administration, and
    current-user authorization APIs.

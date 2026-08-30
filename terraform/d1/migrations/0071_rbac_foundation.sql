@@ -43,11 +43,6 @@ CREATE TABLE workspace_bootstrap (
   assignment_completed_at INTEGER
 );
 
-CREATE TABLE rbac_migration_state (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  assignments_completed_at INTEGER NOT NULL
-);
-
 CREATE TABLE authorization_audit_events (
   id TEXT PRIMARY KEY,
   occurred_at INTEGER NOT NULL,
@@ -69,19 +64,6 @@ CREATE TABLE authorization_audit_events (
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))
 );
 
-CREATE TABLE privileged_operation_outbox (
-  id TEXT PRIMARY KEY,
-  idempotency_key TEXT NOT NULL UNIQUE,
-  operation_type TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'succeeded', 'failed')),
-  effect_json TEXT NOT NULL CHECK (json_valid(effect_json)),
-  attempts INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at INTEGER NOT NULL,
-  last_error_code TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-
 CREATE TABLE session_access (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -97,19 +79,8 @@ CREATE INDEX idx_authorization_audit_time
   ON authorization_audit_events(occurred_at DESC, id DESC);
 CREATE INDEX idx_authorization_audit_actor
   ON authorization_audit_events(actor_user_id_snapshot, occurred_at DESC);
-CREATE INDEX idx_privileged_outbox_due
-  ON privileged_operation_outbox(state, next_attempt_at);
 CREATE INDEX idx_session_access_user
   ON session_access(user_id, state, session_id);
-
-CREATE TRIGGER assign_default_role_after_user_insert
-AFTER INSERT ON users
-WHEN EXISTS (SELECT 1 FROM rbac_migration_state WHERE singleton = 1)
-BEGIN
-  INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
-  VALUES (NEW.id, 'role_builtin_member', NULL, unixepoch() * 1000)
-  ON CONFLICT(user_id) DO NOTHING;
-END;
 
 INSERT INTO roles (
   id, key, name, normalized_name, description, is_system, revision, created_at, updated_at
@@ -121,6 +92,14 @@ INSERT INTO roles (
 
 INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
 SELECT id, 'role_builtin_administrator', NULL, unixepoch() * 1000 FROM users;
+
+CREATE TRIGGER assign_default_role_after_user_insert
+AFTER INSERT ON users
+BEGIN
+  INSERT INTO user_role_assignments (user_id, role_id, assigned_by, assigned_at)
+  VALUES (NEW.id, 'role_builtin_member', NULL, unixepoch() * 1000)
+  ON CONFLICT(user_id) DO NOTHING;
+END;
 
 UPDATE automations
 SET user_id = (
@@ -137,6 +116,3 @@ SELECT id, user_id, 'creator', 'active', 1, created_at
 FROM sessions
 WHERE user_id IS NOT NULL
   AND EXISTS (SELECT 1 FROM users WHERE users.id = sessions.user_id);
-
-INSERT INTO rbac_migration_state (singleton, assignments_completed_at)
-VALUES (1, unixepoch() * 1000);

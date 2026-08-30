@@ -24,13 +24,4 @@ describe("RBAC foundation migration", () => {
     ).toEqual({ count: 0 });
     expect(permissionsForBuiltInRole("owner")).toHaveLength(PERMISSION_IDS.length);
   });
-
-  it("records the completed assignment migration boundary", async () => {
-    const marker = await env.DB.prepare(
-      "SELECT singleton, assignments_completed_at FROM rbac_migration_state WHERE singleton = 1"
-    ).first<{ singleton: number; assignments_completed_at: number }>();
-
-    expect(marker?.singleton).toBe(1);
-    expect(marker?.assignments_completed_at).toBeGreaterThan(0);
-  });
 });

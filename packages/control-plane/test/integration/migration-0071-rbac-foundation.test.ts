@@ -30,13 +30,11 @@ describe("migration 0071: RBAC foundation", () => {
     await env.DB.exec(`
       DROP TRIGGER assign_default_role_after_user_insert;
       DROP TABLE session_access;
-      DROP TABLE privileged_operation_outbox;
       DROP TABLE authorization_audit_events;
       DROP TABLE workspace_bootstrap;
       DROP TABLE user_role_assignments;
       DROP TABLE role_permissions;
       DROP TABLE roles;
-      DROP TABLE rbac_migration_state;
       ALTER TABLE users DROP COLUMN last_authorization_mutation_id;
       ALTER TABLE users DROP COLUMN authorization_version;
       ALTER TABLE users DROP COLUMN access_status;
