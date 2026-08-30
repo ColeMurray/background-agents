@@ -35,12 +35,14 @@ interface MemberRow {
   role_name: string;
 }
 
+/** Persistence view of a user's assignment and suspension state before grants are resolved. */
 export interface EffectiveAuthorizationRecord {
   userId: string;
   suspendedAt: number | null;
   role: { id: string; key: BuiltInRoleKey | null; name: string } | null;
 }
 
+/** Persistence view of a role and the number of users currently assigned to it. */
 export interface AuthorizationRoleRecord {
   id: string;
   key: BuiltInRoleKey | null;
@@ -87,6 +89,7 @@ function anotherUnsuspendedOwner(targetUserId: string): SqlCondition {
   };
 }
 
+/** Result of an atomic RBAC mutation after authorization and invariant checks. */
 export type AuthorizationMutationOutcome =
   | { status: "applied" }
   | { status: "actor_authorization_changed" }
@@ -124,9 +127,12 @@ function toMember(row: MemberRow): WorkspaceMember {
   };
 }
 
+/** Persists RBAC reads and authorization-guarded, audited member mutations. */
 export class AuthorizationStore {
+  /** Creates a store using the workspace's SQL database. */
   constructor(private readonly db: SqlDatabase) {}
 
+  /** Loads assignment and suspension state without resolving the role's permissions. */
   async getEffectiveAuthorization(userId: string): Promise<EffectiveAuthorizationRecord | null> {
     const row = await this.db
       .prepare(
@@ -142,6 +148,7 @@ export class AuthorizationStore {
     return row ? toEffectiveAuthorizationRecord(row) : null;
   }
 
+  /** Loads raw custom-role grants for policy-layer validation against the registry. */
   async getCustomRolePermissions(roleId: string): Promise<string[]> {
     const result = await this.db
       .prepare(
@@ -152,6 +159,7 @@ export class AuthorizationStore {
     return result.results.map((row) => row.permission_id);
   }
 
+  /** Lists built-in and custom roles with current assignment counts. */
   async listRoles(): Promise<AuthorizationRoleRecord[]> {
     const result = await this.db
       .prepare(
@@ -166,6 +174,7 @@ export class AuthorizationStore {
     return result.results.map(toRoleRecord);
   }
 
+  /** Loads a role and its assignment count, or null when absent. */
   async getRole(roleId: string): Promise<AuthorizationRoleRecord | null> {
     const row = await this.db
       .prepare(
@@ -180,6 +189,7 @@ export class AuthorizationStore {
     return row ? toRoleRecord(row) : null;
   }
 
+  /** Lists users with role assignments; unassigned users are intentionally excluded. */
   async listMembers(): Promise<WorkspaceMember[]> {
     const result = await this.db
       .prepare(
@@ -194,6 +204,7 @@ export class AuthorizationStore {
     return result.results.map(toMember);
   }
 
+  /** Atomically revalidates the actor, preserves owner invariants, updates the role, and audits. */
   async replaceMemberRole(input: {
     targetUserId: string;
     roleId: string;
@@ -260,6 +271,7 @@ export class AuthorizationStore {
     return this.readMutationOutcome(results[0]);
   }
 
+  /** Atomically revalidates the actor, preserves owner invariants, changes status, and audits. */
   async replaceMemberStatus(input: {
     targetUserId: string;
     suspended: boolean;

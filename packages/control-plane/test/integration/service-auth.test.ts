@@ -302,9 +302,7 @@ describe("sig1 service-credential authentication", () => {
     });
     expect(collaboratorList.status).toBe(200);
     await expect(collaboratorList.json()).resolves.toMatchObject({
-      sessions: [
-        expect.objectContaining({ title: "Slack-owned session", canManageLifecycle: true }),
-      ],
+      sessions: [expect.objectContaining({ title: "Slack-owned session" })],
     });
 
     const collaborator = await signedFetch({

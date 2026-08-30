@@ -29,6 +29,7 @@ export class WsTokenHandler {
     private readonly now: () => number = Date.now
   ) {}
 
+  /** Mint a token for a participant bound to the authenticated canonical user. */
   async generateWsToken(request: Request, log: Logger): Promise<Response> {
     let raw: unknown;
     try {

@@ -39,6 +39,9 @@ function SettingsSearch({ value, onChange }: { value: string; onChange: (value: 
   );
 }
 
+/**
+ * Renders searchable settings navigation containing only categories the current user may access.
+ */
 export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
   const isMobile = useSettingsIsMobile();
   const [query, setQuery] = useState("");

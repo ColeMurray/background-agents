@@ -71,6 +71,9 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+/**
+ * Renders global and repository enablement settings with each scope editable only by authorized users.
+ */
 export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegrationCopy }) {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("integrations.manage");

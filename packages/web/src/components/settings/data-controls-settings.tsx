@@ -17,6 +17,7 @@ import {
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const PAGE_SIZE = 20;
 const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
@@ -25,7 +26,12 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
   offset: 0,
 });
 
+/**
+ * Lists archived sessions and derives lifecycle actions from the current user's workspace permissions.
+ */
 export function DataControlsSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageLifecycle = hasPermission("sessions.lifecycle");
   const archivedSessionsKey = ARCHIVED_SESSIONS_KEY;
   const [extraSessions, setExtraSessions] = useState<SessionListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -133,6 +139,7 @@ export function DataControlsSettings() {
               <ArchivedSessionRow
                 key={session.id}
                 session={session}
+                canManageLifecycle={canManageLifecycle}
                 onUnarchive={handleUnarchive}
               />
             ))}
@@ -157,9 +164,11 @@ export function DataControlsSettings() {
 
 function ArchivedSessionRow({
   session,
+  canManageLifecycle,
   onUnarchive,
 }: {
   session: SessionListItem;
+  canManageLifecycle: boolean;
   onUnarchive: (id: string) => void;
 }) {
   const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
@@ -176,7 +185,7 @@ function ArchivedSessionRow({
           <span className="truncate">{repoInfo}</span>
         </div>
       </Link>
-      {session.canManageLifecycle && (
+      {canManageLifecycle && (
         <Button
           variant="outline"
           size="xs"

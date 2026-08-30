@@ -30,6 +30,7 @@ export interface WebSocketManagerConfig {
 // Interface
 // ---------------------------------------------------------------------------
 
+/** Manages session sockets, client identity, and expiring authorization leases. */
 export interface SessionWebSocketManager {
   /** Create the client/server WebSocket pair for an upgrade response. */
   createUpgradeSockets(): { client: WebSocket; server: WebSocket };
@@ -75,6 +76,7 @@ export interface SessionWebSocketManager {
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
   isClientSynchronizing(ws: WebSocket): boolean;
+  /** Return whether the client has an unexpired authorization lease. */
   isClientAuthenticated(ws: WebSocket): boolean;
 
   /** Check if a wsId has a persisted mapping (used by auth timeout). */
@@ -83,6 +85,7 @@ export interface SessionWebSocketManager {
   send(ws: WebSocket, message: string | object): boolean;
   close(ws: WebSocket, code: number, reason: string): void;
 
+  /** Visit client sockets, optionally limiting the visit to unexpired authorization leases. */
   forEachClientSocket(
     mode: "all_clients" | "authenticated_only",
     fn: (ws: WebSocket) => void
@@ -93,6 +96,7 @@ export interface SessionWebSocketManager {
   getConnectedClientCount(): number;
 }
 
+/** Result of resolving a client while enforcing its authorization lease. */
 export type ClientLookup =
   | { kind: "cached"; client: ClientInfo }
   | { kind: "recovered"; mapping: WsClientMappingResult }
@@ -103,11 +107,13 @@ export type ClientLookup =
 // Implementation
 // ---------------------------------------------------------------------------
 
+/** Durable Object WebSocket manager with persisted authorization leases. */
 export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private clients = new Map<WebSocket, ClientInfo>();
   private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
 
+  /** Create a WebSocket manager backed by Durable Object state and persisted client mappings. */
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly sandboxRepository: SandboxRepository,
@@ -259,6 +265,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Hibernation recovery for client identity
   // -------------------------------------------------------------------------
 
+  /** Return cached or persisted client state, closing the socket if its lease expired. */
   lookupClient(ws: WebSocket): ClientLookup {
     const client = this.clients.get(ws);
     if (client) {
@@ -280,6 +287,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return { kind: "recovered", mapping };
   }
 
+  /** Persist a new authorization lease and schedule its expiration deadline. */
   async grantLease(ws: WebSocket, participantId: string, clientId: string): Promise<number> {
     const parsed = this.classify(ws);
     if (parsed.kind !== "client" || !parsed.wsId) {
@@ -301,6 +309,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return expiresAt;
   }
 
+  /** Close and remove expired client leases, then schedule the next deadline. */
   async expireAuthorizationLeases(now: number): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) {
       const parsed = this.classify(ws);
@@ -324,6 +333,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return this.synchronizingClients.has(ws);
   }
 
+  /** Return whether the client has an unexpired authorization lease. */
   isClientAuthenticated(ws: WebSocket): boolean {
     return this.isAuthenticated(ws, this.classify(ws));
   }
@@ -363,6 +373,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Broadcast
   // -------------------------------------------------------------------------
 
+  /** Visit client sockets, optionally limiting the visit to unexpired authorization leases. */
   forEachClientSocket(
     mode: "all_clients" | "authenticated_only",
     fn: (ws: WebSocket) => void

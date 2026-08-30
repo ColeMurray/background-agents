@@ -218,6 +218,9 @@ function useSandboxSettingsScope(
   };
 }
 
+/**
+ * Edits inherited sandbox settings for one scope, becoming read-only without that scope's management permission.
+ */
 export function SandboxSettingsEditor({
   scope,
   owner,

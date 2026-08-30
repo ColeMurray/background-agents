@@ -190,7 +190,9 @@ export class AutomationTriggerBlockedError extends Error {
   }
 }
 
+/** Raised when an automation's execution principal lacks required authorization. */
 export class AutomationExecutionUnauthorizedError extends Error {
+  /** Create an error for an unauthorized automation execution principal. */
   constructor() {
     super("Automation execution principal is not authorized");
     this.name = "AutomationExecutionUnauthorizedError";
@@ -272,6 +274,7 @@ export function composeAutomationPrompt(contextBlock: string, instructions: stri
   return `${instructions}\n---\n\n${contextBlock}`;
 }
 
+/** Coordinates authorized automation scheduling, dispatch, and completion handling. */
 export class Scheduler {
   private readonly log: Logger;
 
@@ -916,7 +919,7 @@ export class Scheduler {
 
   // ─── Event handler ───────────────────────────────────────────────────────
 
-  /** Match an inbound event to automations and start or steer their invocations. */
+  /** Match an inbound event to authorized automations and start or steer their invocations. */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
 
@@ -1104,6 +1107,7 @@ export class Scheduler {
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
+  /** Manually trigger an automation under the requesting user's authority. */
   async trigger(
     automationId: string,
     requesterUserId: string,

@@ -35,29 +35,6 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.status).toBe("created");
   });
 
-  it("derives lifecycle capability from the workspace permission", async () => {
-    const store = new SessionIndexStore(env.DB);
-    await store.create({
-      id: "session-capability",
-      title: "Lifecycle capability",
-      repoOwner: null,
-      repoName: null,
-      model: "anthropic/claude-haiku-4-5",
-      reasoningEffort: null,
-      baseBranch: null,
-      status: "created",
-      createdAt: 10,
-      updatedAt: 10,
-    });
-
-    await expect(store.list({ canManageLifecycle: false })).resolves.toMatchObject({
-      sessions: [{ canManageLifecycle: false }],
-    });
-    await expect(store.list({ canManageLifecycle: true })).resolves.toMatchObject({
-      sessions: [{ canManageLifecycle: true }],
-    });
-  });
-
   it("atomically snapshots provider auth with the session", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();

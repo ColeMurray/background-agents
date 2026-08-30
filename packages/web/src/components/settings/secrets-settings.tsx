@@ -9,6 +9,9 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 
 const GLOBAL_SCOPE = "__global__";
 
+/**
+ * Exposes global and repository secret editors only for scopes the user is authorized to manage.
+ */
 export function SecretsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("global_secrets.manage");

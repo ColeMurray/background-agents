@@ -37,6 +37,7 @@ const sandboxErrorRequestSchema = z.object({
  * credential/token refresh routes the in-sandbox tooling calls.
  */
 export class SandboxHandler {
+  /** Create the sandbox HTTP handler with its repositories and service dependencies. */
   constructor(
     private readonly messageRepository: MessageRepository,
     private readonly eventRepository: EventRepository,

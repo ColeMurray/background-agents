@@ -211,8 +211,10 @@ Because Member and Viewer use `read.any`, their ordinary lists are workspace-wid
 is separate: it filters `sessions.user_id`, which is creator attribution rather than an
 authorization relationship.
 
-Lists also compute `canManageLifecycle` from the caller's lifecycle scope and relationship. This
-field is display metadata; lifecycle endpoints perform their own request admission.
+At the time of this research, lists also computed `canManageLifecycle` from the caller's lifecycle
+scope and relationship. The workspace-wide authorization implementation later removed that response
+field; the web client now derives lifecycle-control visibility from current-user permissions, while
+lifecycle endpoints perform their own request admission.
 
 ### Services and bots
 

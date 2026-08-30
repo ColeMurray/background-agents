@@ -22,12 +22,14 @@ const OWNER_ROLE_ID = "role_builtin_owner";
 const VALUE_OPTIONS = new Set(["database", "user"]);
 const FLAG_OPTIONS = new Set(["execute"]);
 
+/** Validated command-line options for the Owner bootstrap operation. */
 export interface BootstrapCliOptions {
   database: string;
   userId: string;
   execute: boolean;
 }
 
+/** Inputs used to build an Owner bootstrap preflight or execution script. */
 export interface BootstrapSqlOptions {
   userId: string;
   execute: boolean;
@@ -35,6 +37,7 @@ export interface BootstrapSqlOptions {
   now: number;
 }
 
+/** Parse and validate Owner bootstrap command-line arguments. */
 export function parseArgs(argv: string[]): BootstrapCliOptions {
   const values = new Map<string, string>();
   const flags = new Set<string>();
@@ -80,6 +83,7 @@ function sqlLiteral(value: string | number): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+/** Build guarded SQL for an Owner bootstrap preflight or execution. */
 export function buildBootstrapSql(options: BootstrapSqlOptions): string {
   const userId = sqlLiteral(options.userId);
   const auditId = sqlLiteral(options.auditId);
@@ -230,6 +234,7 @@ function preflight(database: string, userId: string): string {
   return status;
 }
 
+/** Run the remote Owner bootstrap workflow and verify its postcondition. */
 export async function run(options: BootstrapCliOptions): Promise<void> {
   console.error(`${options.execute ? "Executing" : "Dry-running"} Owner bootstrap on remote D1...`);
   const status = preflight(options.database, options.userId);

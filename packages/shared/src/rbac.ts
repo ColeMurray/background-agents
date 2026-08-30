@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isCanonicalUserId } from "./user-id";
 
+/** Stable identities for system-defined roles that cannot be replaced by custom roles. */
 export const BUILT_IN_ROLE_REGISTRY = {
   owner: {
     id: "role_builtin_owner",
@@ -20,9 +21,12 @@ export const BUILT_IN_ROLE_REGISTRY = {
   },
 } as const;
 
+/** A key identifying one of the workspace's system-defined roles. */
 export type BuiltInRoleKey = keyof typeof BUILT_IN_ROLE_REGISTRY;
+/** Built-in role keys in canonical registry order. */
 export const BUILT_IN_ROLE_KEYS = Object.keys(BUILT_IN_ROLE_REGISTRY) as BuiltInRoleKey[];
 
+/** Canonical permission identifiers accepted by the RBAC policy and persistence layers. */
 export const PERMISSION_IDS = [
   "analytics.read",
   "automations.create",
@@ -68,8 +72,10 @@ export const PERMISSION_IDS = [
   "workspace.transfer_ownership",
 ] as const;
 
+/** A permission identifier recognized by the RBAC policy. */
 export type PermissionId = (typeof PERMISSION_IDS)[number];
 
+/** Maps ownership-sensitive capabilities to their workspace-wide and owner-only grants. */
 export const SCOPED_PERMISSION_PAIRS = {
   "automations.manage": {
     any: "automations.manage.any",
@@ -81,9 +87,12 @@ export const SCOPED_PERMISSION_PAIRS = {
   },
 } as const satisfies Record<string, { any: PermissionId; own: PermissionId }>;
 
+/** A capability whose effective grant depends on resource ownership. */
 export type ScopedPermissionStem = keyof typeof SCOPED_PERMISSION_PAIRS;
+/** The resource ownership boundary granted for a scoped capability. */
 export type PermissionScope = "any" | "own";
 
+/** Resolves the strongest granted scope for a capability, preferring workspace-wide access. */
 export function resolveScopedPermission(
   stem: ScopedPermissionStem,
   permissions: readonly PermissionId[]
@@ -126,9 +135,12 @@ const VIEWER_PERMISSIONS = new Set<PermissionId>([
   "skills.read",
 ]);
 
+/** Validates permission identifiers at API and storage boundaries. */
 export const permissionIdSchema = z.enum(PERMISSION_IDS);
+/** Validates keys for system-defined roles. */
 export const builtInRoleKeySchema = z.enum(BUILT_IN_ROLE_KEYS);
 
+/** Returns the canonical effective grants for a system-defined role. */
 export function permissionsForBuiltInRole(role: BuiltInRoleKey): PermissionId[] {
   if (role === "owner") return [...PERMISSION_IDS];
   if (role === "administrator") {
@@ -138,14 +150,17 @@ export function permissionsForBuiltInRole(role: BuiltInRoleKey): PermissionId[] 
   return PERMISSION_IDS.filter((permission) => permissions.has(permission));
 }
 
+/** Narrows untrusted permission text to the canonical permission registry. */
 export function isRegisteredPermission(value: string): value is PermissionId {
   return (PERMISSION_IDS as readonly string[]).includes(value);
 }
 
+/** Reports whether a permission may be delegated through a custom role. */
 export function isCustomRolePermission(permission: PermissionId): boolean {
   return permission !== "workspace.transfer_ownership";
 }
 
+/** Validates the role identity embedded in authorization responses. */
 export const roleReferenceSchema = z
   .object({
     id: z.string().min(1),
@@ -154,12 +169,14 @@ export const roleReferenceSchema = z
   })
   .strict();
 
+/** Validates an administrative role view with effective grants and assignment count. */
 export const roleSummarySchema = roleReferenceSchema.extend({
   description: z.string().nullable(),
   permissions: z.array(permissionIdSchema),
   assignmentCount: z.number().int().nonnegative(),
 });
 
+/** Validates a user's role, suspension state, and currently effective permissions. */
 export const effectiveAuthorizationSchema = z
   .object({
     userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID"),
@@ -169,6 +186,7 @@ export const effectiveAuthorizationSchema = z
   })
   .strict();
 
+/** Validates the member record exposed by workspace administration APIs. */
 export const workspaceMemberSchema = z
   .object({
     userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID"),
@@ -179,21 +197,28 @@ export const workspaceMemberSchema = z
   })
   .strict();
 
+/** Validates the complete role-list response. */
 export const roleListResponseSchema = z.array(roleSummarySchema);
+/** Validates the complete workspace-member-list response. */
 export const workspaceMemberListResponseSchema = z.array(workspaceMemberSchema);
 
+/** Validates a request to atomically replace a member's assigned role. */
 export const replaceMemberRoleInputSchema = z
   .object({
     roleId: z.string().min(1),
   })
   .strict();
 
+/** Validates a request to suspend or reactivate a workspace member. */
 export const replaceMemberStatusInputSchema = z
   .object({
     suspended: z.boolean(),
   })
   .strict();
 
+/** Administrative role data with effective grants and current assignment count. */
 export type RoleSummary = z.infer<typeof roleSummarySchema>;
+/** The authorization state used to make permission decisions for a user. */
 export type EffectiveAuthorization = z.infer<typeof effectiveAuthorizationSchema>;
+/** A workspace member and their current RBAC assignment state. */
 export type WorkspaceMember = z.infer<typeof workspaceMemberSchema>;

@@ -192,7 +192,6 @@ describe("session index routes", () => {
       limit: 50,
       offset: 0,
       viewerUserId: "0123456789abcdef0123456789abcdef",
-      canManageLifecycle: true,
     });
   });
 

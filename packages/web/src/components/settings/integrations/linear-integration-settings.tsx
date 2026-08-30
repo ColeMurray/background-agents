@@ -68,6 +68,9 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+/**
+ * Displays Linear integration settings with global and repository edits gated by their respective permissions.
+ */
 export function LinearIntegrationSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("integrations.manage");

@@ -28,6 +28,9 @@ type View =
   | { mode: "create" }
   | { mode: "edit"; environmentId: string; tab: "configuration" | "secrets" | "overrides" };
 
+/**
+ * Presents environments with configuration, secrets, settings, and image actions gated independently by permission.
+ */
 export function EnvironmentsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("environments.manage");

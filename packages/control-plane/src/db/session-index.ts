@@ -56,6 +56,7 @@ const MAX_DESCENDANT_DEPTH = 10;
  */
 type SessionIndexRepository = SessionListRepository;
 
+/** Persisted session metadata with optional viewer-specific read state. */
 export interface SessionEntry {
   id: string;
   title: string | null;
@@ -94,8 +95,6 @@ export interface SessionEntry {
    */
   pullRequestSummary?: PullRequestSummary;
   readState?: SessionReadState;
-  /** Whether the current viewer may rename, archive, or unarchive this row. */
-  canManageLifecycle?: boolean;
   /** Resolved manifest to persist atomically with a new top-level session. */
   skillManifest?: SessionSkillManifestInput;
   /** Parent manifest to copy atomically for an agent-spawned child. */
@@ -138,6 +137,7 @@ interface SessionModelProviderAuthRow {
   inherited_from_session_id: string | null;
 }
 
+/** Filters, pagination, and viewer read state for a session list query. */
 export interface ListSessionsOptions {
   status?: SessionStatus;
   excludeStatus?: SessionStatus;
@@ -146,17 +146,15 @@ export interface ListSessionsOptions {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
-  canManageLifecycle?: boolean;
 }
 
+/** Paginated session index entries. */
 export interface ListSessionsResult {
-  sessions: Array<SessionEntry & { canManageLifecycle: boolean }>;
+  sessions: SessionEntry[];
   hasMore: boolean;
 }
 
-interface ViewerSessionRow extends SessionRow, ViewerReadStateRow {
-  can_manage_lifecycle: number;
-}
+type ViewerSessionRow = SessionRow & ViewerReadStateRow;
 
 function toEntry(row: SessionRow): SessionEntry {
   return {
@@ -233,6 +231,7 @@ function normalizeSessionRepositoryFields(session: SessionEntry): {
   };
 }
 
+/** D1-backed session index and viewer-specific list projection. */
 export class SessionIndexStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -504,6 +503,7 @@ export class SessionIndexStore {
     return row !== null;
   }
 
+  /** List sessions with optional viewer-specific read state. */
   async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
     const {
       status,
@@ -513,7 +513,6 @@ export class SessionIndexStore {
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
-      canManageLifecycle = false,
     } = options;
 
     const conditions: string[] = [];
@@ -543,8 +542,7 @@ export class SessionIndexStore {
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const pageSql = `SELECT sessions.*, ${canManageLifecycle ? 1 : 0} AS can_manage_lifecycle
-                     FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
     const pageParams = [...params, limit + 1, offset];
     const result = viewerUserId
       ? await this.db
@@ -571,7 +569,6 @@ export class SessionIndexStore {
       rows.slice(0, limit).map((row) => ({
         ...toEntry(row),
         ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
-        canManageLifecycle: (row as ViewerSessionRow).can_manage_lifecycle === 1,
       }))
     );
 
@@ -581,10 +578,12 @@ export class SessionIndexStore {
     };
   }
 
+  /** List one inbox category with viewer-specific read state. */
   async listInbox(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     return new SessionInboxStore(this.db).list(options);
   }
 
+  /** List the first page of every inbox category with viewer-specific read state. */
   async listInboxSnapshot(
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {

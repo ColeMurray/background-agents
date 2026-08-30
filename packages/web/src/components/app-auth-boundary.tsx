@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
+/**
+ * Renders application children only for authenticated, active workspace users after authorization resolves.
+ */
 export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
   const { status } = useAuthSession();
   const { authorization, loading: authorizationLoading, error } = useCurrentUserAuthorization();

@@ -9,8 +9,14 @@ import useSWR, { SWRConfig, mutate as globalMutate } from "swr";
 import { DataControlsSettings } from "./data-controls-settings";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
+const authorizationMocks = vi.hoisted(() => ({
+  allowedPermissions: new Set<string>(["sessions.lifecycle"]),
+}));
+
 vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) => authorizationMocks.allowedPermissions.has(permission),
+  }),
 }));
 
 expect.extend(matchers);
@@ -53,7 +59,6 @@ function createArchivedSession(index: number, overrides: Record<string, unknown>
     status: "archived",
     createdAt: 1000 + index,
     updatedAt: 2000 + index,
-    canManageLifecycle: true,
     ...overrides,
   };
 }
@@ -146,14 +151,16 @@ afterEach(async () => {
   // Clear SWR's global cache between tests so cache state doesn't leak.
   await globalMutate(() => true, undefined, { revalidate: false });
   vi.restoreAllMocks();
+  authorizationMocks.allowedPermissions = new Set(["sessions.lifecycle"]);
   toastMock.success.mockReset();
   toastMock.error.mockReset();
 });
 
 describe("DataControlsSettings — unarchive flow", () => {
-  it("hides unarchive when the row lacks lifecycle capability", async () => {
+  it("hides unarchive when sessions.lifecycle is denied", async () => {
+    authorizationMocks.allowedPermissions = new Set();
     installFetch({
-      archivedSessions: [createArchivedSession(1, { canManageLifecycle: false })],
+      archivedSessions: [createArchivedSession(1)],
     });
 
     renderComponent();

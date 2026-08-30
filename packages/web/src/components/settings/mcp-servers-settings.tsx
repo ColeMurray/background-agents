@@ -439,6 +439,9 @@ function McpServerForm({
   );
 }
 
+/**
+ * Lists workspace MCP servers and exposes create, edit, and delete controls only to authorized users.
+ */
 export function McpServersSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("mcp_servers.manage");

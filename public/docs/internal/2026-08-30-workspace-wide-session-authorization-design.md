@@ -136,8 +136,9 @@ and unarchive follow the same workspace permission policy as stop, retry, and re
 Session lists are not filtered by authorization relationships. Query filters such as creator and
 status remain supported.
 
-`canManageLifecycle` is derived from the caller's workspace `sessions.lifecycle` permission and the
-session's current state. It is presentation metadata; lifecycle endpoints remain authoritative.
+The web client derives lifecycle-control visibility from the current user's workspace
+`sessions.lifecycle` permission. Session list and inbox responses contain session data, not
+authorization presentation metadata; lifecycle endpoints remain authoritative.
 
 ## Removed Model
 

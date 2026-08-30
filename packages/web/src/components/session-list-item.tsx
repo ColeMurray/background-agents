@@ -10,6 +10,7 @@ import { formatRelativeTime } from "@/lib/time";
 import { MoreIcon, ArchiveIcon, BranchIcon, BoxIcon } from "@/components/ui/icons";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { useSessionRename } from "@/hooks/use-session-rename";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,9 @@ import { buildSessionHref } from "@/lib/session-list";
 export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 
+/**
+ * Displays a session and derives lifecycle controls from the current user's workspace permissions.
+ */
 export function SessionListItem({
   session,
   environmentName,
@@ -39,6 +43,8 @@ export function SessionListItem({
   onSessionSelect?: () => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageLifecycle = hasPermission("sessions.lifecycle");
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const repoInfo = formatSessionRepositoriesLabel(
@@ -73,7 +79,7 @@ export function SessionListItem({
   }, [displayTitle, isRenaming]);
 
   const handleStartRename = () => {
-    if (!session.canManageLifecycle) return;
+    if (!canManageLifecycle) return;
     isStartingRenameRef.current = true;
     setIsActionsOpen(false);
     setTitle(displayTitle);
@@ -97,7 +103,7 @@ export function SessionListItem({
   };
 
   const handleStartArchive = () => {
-    if (!session.canManageLifecycle) return;
+    if (!canManageLifecycle) return;
     setIsActionsOpen(false);
     setShowArchiveDialog(true);
   };
@@ -163,12 +169,12 @@ export function SessionListItem({
       touchStartRef.current = { x: touch.clientX, y: touch.clientY };
       clearLongPressTimer();
       longPressTimerRef.current = window.setTimeout(() => {
-        if (!session.canManageLifecycle && !session.readState.unread) return;
+        if (!canManageLifecycle && !session.readState.unread) return;
         longPressTriggeredRef.current = true;
         setIsActionsOpen(true);
       }, MOBILE_LONG_PRESS_MS);
     },
-    [clearLongPressTimer, isMobile, session.canManageLifecycle, session.readState.unread]
+    [canManageLifecycle, clearLongPressTimer, isMobile, session.readState.unread]
   );
 
   const handleTouchMove = useCallback(
@@ -306,7 +312,7 @@ export function SessionListItem({
           </Link>
         )}
 
-        {(session.canManageLifecycle || session.readState.unread) && (
+        {(canManageLifecycle || session.readState.unread) && (
           <div className="absolute inset-y-0 right-2 flex items-center">
             <DropdownMenu open={isActionsOpen} onOpenChange={setIsActionsOpen}>
               <DropdownMenuTrigger asChild>
@@ -335,7 +341,7 @@ export function SessionListItem({
                   }
                 }}
               >
-                {session.canManageLifecycle && (
+                {canManageLifecycle && (
                   <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
                 )}
                 {session.readState.unread && (
@@ -346,7 +352,7 @@ export function SessionListItem({
                     Mark as read
                   </DropdownMenuItem>
                 )}
-                {session.canManageLifecycle && (
+                {canManageLifecycle && (
                   <DropdownMenuItem onClick={handleStartArchive} disabled={isArchiving}>
                     <ArchiveIcon className="w-4 h-4" />
                     Archive
@@ -358,7 +364,7 @@ export function SessionListItem({
         )}
       </div>
 
-      {session.canManageLifecycle && (
+      {canManageLifecycle && (
         <ArchiveSessionDialog
           open={showArchiveDialog}
           onOpenChange={setShowArchiveDialog}

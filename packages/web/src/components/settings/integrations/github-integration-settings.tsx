@@ -29,6 +29,9 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+/**
+ * Displays GitHub integration settings with global and repository edits gated by their respective permissions.
+ */
 export function GitHubIntegrationSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("integrations.manage");

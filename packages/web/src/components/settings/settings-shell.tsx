@@ -9,6 +9,9 @@ import { SettingsNav } from "@/components/settings/settings-nav";
 import { resolveSettingsCategory } from "@/components/settings/settings-registry";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
+/**
+ * Hosts responsive settings content and redirects routes whose category is unavailable to the current user.
+ */
 export function SettingsShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();

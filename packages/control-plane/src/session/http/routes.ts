@@ -19,6 +19,7 @@ export interface SessionInternalRoute {
   handler: SessionInternalRouteHandler;
 }
 
+/** Handlers required to serve every internal SessionDO HTTP route. */
 export interface SessionInternalRouteHandlers {
   init: SessionInternalRouteHandler;
   state: SessionInternalRouteHandler;

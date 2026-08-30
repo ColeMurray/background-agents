@@ -45,6 +45,17 @@ function executionPredicate(
   };
 }
 
+/**
+ * Revalidates that an automation's execution principal may create its session and use its targets.
+ *
+ * Scheduled and event runs default to the automation owner; manual runs pass the requester as
+ * `executionUserId`. `requiredAnyOf` adds source-specific execution requirements, such as session
+ * collaboration for Slack thread steering. Missing users, roles, automations, or suspended users
+ * fail closed.
+ *
+ * This does not decide whether a caller may manage or manually trigger the automation. The route's
+ * ownership-scoped authorization performs that admission before execution begins.
+ */
 export async function isAutomationExecutionAuthorized(
   db: SqlDatabase,
   automationId: string,

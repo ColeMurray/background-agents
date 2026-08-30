@@ -175,6 +175,9 @@ function LegacyReconnectForm({
   );
 }
 
+/**
+ * Displays provider accounts while restricting connection and account-management actions by permission.
+ */
 export function ProviderAccountsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("provider_accounts.manage");

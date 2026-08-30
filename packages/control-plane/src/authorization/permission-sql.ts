@@ -5,6 +5,7 @@ import {
   type PermissionId,
 } from "@open-inspect/shared/rbac";
 
+/** Builds a parameterized role predicate that enforces built-in and custom-role grant rules. */
 export function rolePermissionPredicate(permission: PermissionId): {
   sql: string;
   values: string[];

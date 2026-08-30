@@ -29,6 +29,7 @@ import {
  */
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+/** Dependencies for authenticating sockets and validating browser authorization. */
 export interface SessionConnectionAuthenticatorDeps {
   wsManager: SessionWebSocketManager;
   sessionCoreRepository: SessionCoreRepository;
@@ -42,6 +43,7 @@ export interface SessionConnectionAuthenticatorDeps {
   snapshotReader: SessionSnapshotReader;
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
+  /** Revalidate a user's session-collaboration permission before granting a lease. */
   verifyAuthorization: (userId: string) => Promise<"valid" | "rejected" | "unavailable">;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
@@ -50,8 +52,8 @@ export interface SessionConnectionAuthenticatorDeps {
 /**
  * Admits connections to the session: sandbox WebSocket upgrades (token +
  * lifecycle-state guards, re-checked after the non-storage token-hash await),
- * client subscriptions (token TTL, snapshot handoff), and post-hibernation
- * client identity recovery.
+ * client subscriptions (token TTL, permission checks, authorization leases,
+ * snapshot handoff), and post-hibernation client identity recovery.
  */
 export class SessionConnectionAuthenticator {
   constructor(private readonly deps: SessionConnectionAuthenticatorDeps) {}
@@ -215,9 +217,7 @@ export class SessionConnectionAuthenticator {
     }
   }
 
-  /**
-   * Handle client subscription with token validation.
-   */
+  /** Validate the client token and current permission before granting an authorization lease. */
   async handleSubscribe(
     ws: WebSocket,
     data: {
@@ -365,9 +365,7 @@ export class SessionConnectionAuthenticator {
     return true;
   }
 
-  /**
-   * Get client info for a WebSocket, reconstructing from storage if needed after hibernation.
-   */
+  /** Return authorized client state, recovering an unexpired lease after hibernation. */
   getClientInfo(ws: WebSocket): ClientInfo | null {
     const { wsManager, log } = this.deps;
     const lookup = wsManager.lookupClient(ws);

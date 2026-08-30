@@ -26,9 +26,7 @@ import {
   type SourceControlProviderName,
 } from "../source-control";
 
-/**
- * Request context with correlation IDs and per-request metrics.
- */
+/** Request-scoped dependencies, identity, and resolved authorization state. */
 export type RequestContext = CorrelationContext & {
   metrics: RequestMetrics;
   /**
@@ -57,21 +55,22 @@ export type RequestContext = CorrelationContext & {
   automationAdmission?: AutomationRouteAdmission;
 };
 
+/** Automation resource admitted by the router for the current mutation. */
 export interface AutomationRouteAdmission {
   automation: AutomationRow;
 }
 
-/**
- * Route configuration.
- */
+/** Route matching, authorization, and handler configuration. */
 export interface RouteDefinition<Context extends RequestContext = RequestContext> {
   method: string;
   pattern: RegExp;
+  /** Authorization policy enforced before the handler runs. */
   authorization: RouteAuthorization;
   cacheControl?: "no-store" | "private, no-store";
   handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
 }
 
+/** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
   | { kind: "scoped-permission"; stem: ScopedPermissionStem }
@@ -83,6 +82,7 @@ export type RouteAuthorizationRequirement =
 
 type BotServiceName = Exclude<ServiceName, "web">;
 
+/** Narrow route grant for a trusted service without an acting user. */
 export interface ActorlessServiceGrant {
   service: BotServiceName;
   pathParams?: Readonly<Record<string, string>>;
@@ -95,6 +95,7 @@ type ServiceAuthorization =
       actorlessGrants?: readonly ActorlessServiceGrant[];
     };
 
+/** Declarative authorization policy enforced by the router. */
 export type RouteAuthorization =
   | { kind: "none" }
   | { kind: "authenticated" }
@@ -111,16 +112,27 @@ export type RouteAuthorization =
       actor: "required" | "optional";
     };
 
+/**
+ * Skips router-level permission checks after route authentication.
+ *
+ * The route may still require a service signature, a session-bound sandbox token, or credentials
+ * verified by its handler. Only routes whose authentication policy is `public` are publicly
+ * accessible.
+ */
 export const NO_AUTHORIZATION = { kind: "none" } as const satisfies RouteAuthorization;
+/** Policy requiring any authenticated principal. */
 export const AUTHENTICATED_USER = {
   kind: "authenticated",
 } as const satisfies RouteAuthorization;
+/** Policy requiring an active user to access their own account resource. */
 export const ACTIVE_SELF = { kind: "active-self" } as const satisfies RouteAuthorization;
 
+/** Build a global permission requirement for composition with other requirements. */
 export function permissionRequirement(permission: PermissionId): RouteAuthorizationRequirement {
   return { kind: "permission", permission };
 }
 
+/** Require an active user with a global permission, optionally allowing service actors. */
 export function requirePermission(
   permission: PermissionId,
   options?: { service?: "actor" | "deny"; actorlessGrants?: readonly ActorlessServiceGrant[] }
@@ -135,6 +147,7 @@ export function requirePermission(
   };
 }
 
+/** Require an active user with at least one permission under a scoped stem. */
 export function requireScopedPermission(
   stem: ScopedPermissionStem,
   options?: { service?: "actor" }
@@ -146,6 +159,7 @@ export function requireScopedPermission(
   };
 }
 
+/** Require admission to manage or trigger the automation identified by a path parameter. */
 export function requireAutomation(
   operation: "manage" | "trigger",
   automationIdParam = "id"
@@ -157,10 +171,12 @@ export function requireAutomation(
   };
 }
 
+/** Require an active user to satisfy every supplied authorization requirement. */
 export function requireAll(...allOf: readonly RouteAuthorizationRequirement[]): RouteAuthorization {
   return { kind: "active-user", allOf, service: { kind: "actor" } };
 }
 
+/** Require any active user, with optional actorless service grants. */
 export function activeGlobal(options?: {
   actorlessGrants?: readonly ActorlessServiceGrant[];
 }): RouteAuthorization {
@@ -170,6 +186,7 @@ export function activeGlobal(options?: {
   };
 }
 
+/** Restrict a route to one trusted service, with optional actor identity. */
 export function serviceAuthorized(
   service: BotServiceName,
   actor: "required" | "optional" = "optional"

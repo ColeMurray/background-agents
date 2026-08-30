@@ -20,7 +20,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createSession(title: string, id = "session-1"): Session & { canManageLifecycle: boolean } {
+function createSession(title: string, id = "session-1"): Session {
   return {
     id,
     title,
@@ -38,7 +38,6 @@ function createSession(title: string, id = "session-1"): Session & { canManageLi
     createdAt: 1,
     updatedAt: 1,
     repositories: [],
-    canManageLifecycle: true,
   };
 }
 

@@ -204,7 +204,6 @@ describe("GlobalCommandMenu", () => {
         status: "active",
         createdAt: 1,
         updatedAt: 2,
-        canManageLifecycle: true,
       },
     ]);
 

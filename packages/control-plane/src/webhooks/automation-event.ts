@@ -125,6 +125,7 @@ export async function forwardAutomationEventToScheduler(
   return json({ ok: true, ...result });
 }
 
+/** Create an authenticated route for a normalized automation event source. */
 export function createAutomationEventRoute(opts: {
   path: string;
   source: AutomationEventSource;

@@ -16,6 +16,9 @@ import { SkillEditor } from "./skill-editor";
 import { SkillImport } from "./skill-import";
 import { errorMessage } from "./utils";
 
+/**
+ * Displays the shared skill catalog and exposes catalog mutations only when `canManage` is true.
+ */
 export function SkillsCatalog({ canManage }: { canManage: boolean }) {
   const [cursorHistory, setCursorHistory] = useState<string[]>([]);
   const cursor = cursorHistory.at(-1) ?? null;

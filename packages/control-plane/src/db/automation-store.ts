@@ -314,6 +314,7 @@ function toAutomationInvocation(
 
 // ─── Store ───────────────────────────────────────────────────────────────────
 
+/** Persists automations, invocations, runs, and composable lifecycle mutations. */
 export class AutomationStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -512,6 +513,7 @@ export class AutomationStore {
     return this.getById(id);
   }
 
+  /** Build a soft-delete statement for composition in an atomic batch. */
   bindSoftDelete(id: string, now = Date.now()): SqlStatement {
     return this.db
       .prepare(
@@ -520,11 +522,13 @@ export class AutomationStore {
       .bind(now, now, id);
   }
 
+  /** Soft-delete an automation and report whether a live row changed. */
   async softDelete(id: string): Promise<boolean> {
     const result = await this.bindSoftDelete(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /** Build a pause statement for composition in an atomic batch. */
   bindPause(id: string, now = Date.now()): SqlStatement {
     return this.db
       .prepare(
@@ -533,11 +537,13 @@ export class AutomationStore {
       .bind(now, id);
   }
 
+  /** Pause an automation and report whether a live row changed. */
   async pause(id: string): Promise<boolean> {
     const result = await this.bindPause(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /** Build a resume statement for composition in an atomic batch. */
   bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
     return this.db
       .prepare(
@@ -546,6 +552,7 @@ export class AutomationStore {
       .bind(nextRunAt, now, id);
   }
 
+  /** Resume an automation and report whether a live row changed. */
   async resume(id: string, nextRunAt: number | null): Promise<boolean> {
     const result = await this.bindResume(id, nextRunAt).run();
     return (result.meta?.changes ?? 0) > 0;

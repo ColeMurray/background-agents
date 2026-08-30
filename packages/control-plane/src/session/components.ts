@@ -154,7 +154,7 @@ export interface SessionRuntime {
   readonly log: Logger;
   readonly server: SessionServer<WebSocket, ClientInfo>;
   readonly alarms: {
-    /** Re-arm any persisted alarm deadline after a cold start. */
+    /** Expire stale authorization leases and re-arm persisted deadlines after a cold start. */
     rehydrate(): void;
   };
   readonly internals: SessionComponents;
@@ -208,6 +208,7 @@ function resolveExecutionTimeoutMs(
   return parseInt(env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000), 10);
 }
 
+/** Build the session runtime, including authorization verification and lease expiry handling. */
 export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
   const { ctx, sql, db } = platform;
   const durableObjectId = ctx.id.toString();

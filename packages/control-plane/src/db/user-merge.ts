@@ -198,6 +198,7 @@ const TABLE_OPERATIONS = [
   ...FINAL_REPOINT_OPERATIONS,
 ] as const;
 
+/** Counts and identities produced by a user merge or dry-run preview. */
 export interface UserMergeResult {
   readonly survivorId: string;
   readonly loserId: string;
@@ -205,6 +206,9 @@ export interface UserMergeResult {
   readonly counts: UserMergeCounts;
 }
 
+/**
+ * Merge a canonical user into a survivor after validating their RBAC assignments.
+ */
 export async function mergeUsers(
   db: SqlDatabase,
   options: UserMergeOptions

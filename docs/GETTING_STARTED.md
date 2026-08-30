@@ -302,10 +302,11 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > **Keep "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
    > the default for newly created Apps, but activate it if yours predates that default). Expiring
    > user tokens are what make GitHub return a **refresh token** at sign-in, and Open-Inspect stores
-   > that per-user credential so sessions clone, commit, and push **as the signed-in user**. With
-   > expiration deactivated — or on an **OAuth App**, which never issues a refresh token — no
-   > per-user credential is captured and sessions fall back to the shared GitHub App **bot**
-   > identity for repository access.
+   > that per-user credential for attributed GitHub operations such as pull-request creation. Clone,
+   > fetch, and push authentication still use the shared GitHub App installation. With expiration
+   > deactivated — or on an **OAuth App**, which never issues a refresh token — no per-user
+   > credential is captured, so supported attributed operations fall back to the shared GitHub App
+   > **bot** identity.
 
 5. Set **Repository permissions**:
    - Actions: **Read-only** _(required for GitHub workflow-run automations)_

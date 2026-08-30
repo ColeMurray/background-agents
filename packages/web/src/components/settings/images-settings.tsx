@@ -16,6 +16,9 @@ import { ImageBuildStatus } from "./image-build-status";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
+/**
+ * Displays repository image configuration and limits image mutations to authorized users.
+ */
 export function ImagesSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("repositories.images.manage");

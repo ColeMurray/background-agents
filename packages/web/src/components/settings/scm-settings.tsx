@@ -99,6 +99,9 @@ function isRepoListResponse(value: unknown): value is RepoListResponse {
   );
 }
 
+/**
+ * Displays source-control defaults and disables editing for users without SCM settings management permission.
+ */
 export function ScmSettingsPage() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("scm_settings.manage");

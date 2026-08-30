@@ -23,6 +23,9 @@ async function fetchRoles(): Promise<RoleSummary[]> {
   return roleListResponseSchema.parse(await response.json());
 }
 
+/**
+ * Provides the workspace members and roles the current user may read, plus authorized member updates.
+ */
 export function useWorkspaceAdministration(input: { readMembers: boolean; readRoles: boolean }) {
   const { mutate } = useSWRConfig();
   const { data: session } = useAuthSession();

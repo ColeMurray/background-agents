@@ -7,6 +7,9 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 
 type View = "skills" | "profiles";
 
+/**
+ * Switches between shared skills and personal profiles, granting each view its applicable management capability.
+ */
 export function SkillsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const [view, setView] = useState<View>("skills");

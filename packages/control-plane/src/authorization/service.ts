@@ -15,7 +15,9 @@ import {
 } from "../db/authorization-store";
 import type { SqlDatabase } from "../db/sql-database";
 
+/** Represents an authorization denial that can be translated directly to an API response. */
 export class AuthorizationError extends Error {
+  /** Creates a denial with its HTTP status, stable error code, and optional missing grant. */
   constructor(
     readonly status: number,
     readonly code: string,
@@ -26,20 +28,25 @@ export class AuthorizationError extends Error {
   }
 }
 
+/** Signals that RBAC state changed or violated an invariant during a guarded mutation. */
 export class RbacConflictError extends Error {
+  /** Creates a conflict suitable for retry or refreshed administrative state. */
   constructor(message: string) {
     super(message);
     this.name = "RbacConflictError";
   }
 }
 
+/** Resolves effective grants and coordinates invariant-preserving workspace RBAC mutations. */
 export class AuthorizationService {
   private readonly store: AuthorizationStore;
 
+  /** Creates a service backed by the workspace authorization database. */
   constructor(db: SqlDatabase) {
     this.store = new AuthorizationStore(db);
   }
 
+  /** Resolves a user's assigned role and grants, withholding all grants while suspended. */
   async getEffectiveAuthorization(userId: string): Promise<EffectiveAuthorization> {
     const record = await this.store.getEffectiveAuthorization(userId);
     if (!record?.role) throw new AuthorizationError(403, "assignment_required");
@@ -57,6 +64,7 @@ export class AuthorizationService {
     };
   }
 
+  /** Returns active authorization when the grant is present, or throws a structured denial. */
   async requirePermission(
     userId: string,
     permission: PermissionId
@@ -71,20 +79,24 @@ export class AuthorizationService {
     return authorization;
   }
 
+  /** Lists roles with their effective permissions and current assignment counts. */
   async listRoles(): Promise<RoleSummary[]> {
     const roles = await this.store.listRoles();
     return Promise.all(roles.map((role) => this.toRoleSummary(role)));
   }
 
+  /** Returns a role's effective authorization summary, or null when it does not exist. */
   async getRole(roleId: string): Promise<RoleSummary | null> {
     const role = await this.store.getRole(roleId);
     return role ? this.toRoleSummary(role) : null;
   }
 
+  /** Lists assigned workspace members with suspension and role state. */
   async listMembers(): Promise<WorkspaceMember[]> {
     return this.store.listMembers();
   }
 
+  /** Replaces a member's role under actor revalidation and ownership invariants. */
   async replaceMemberRole(input: {
     targetUserId: string;
     roleId: string;
@@ -103,6 +115,7 @@ export class AuthorizationService {
     );
   }
 
+  /** Suspends or reactivates a member while preserving an active workspace owner. */
   async replaceMemberStatus(input: {
     targetUserId: string;
     suspended: boolean;

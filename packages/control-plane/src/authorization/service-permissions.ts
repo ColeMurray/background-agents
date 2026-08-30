@@ -39,6 +39,7 @@ const SERVICE_PERMISSION_CEILINGS: Record<ServiceName, readonly PermissionId[]> 
   ],
 };
 
+/** Checks the hard permission ceiling for a trusted service, independent of user grants. */
 export function serviceAllowsPermission(service: ServiceName, permission: PermissionId): boolean {
   return SERVICE_PERMISSION_CEILINGS[service].includes(permission);
 }

@@ -9,10 +9,10 @@ import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
+/** Viewer, filtering, and pagination inputs for an inbox query. */
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
-  canManageLifecycle: boolean;
   excludeAutomatedSessions?: boolean;
   viewerUserId: string;
   limit: number;
@@ -43,7 +43,6 @@ interface InboxSessionRow extends ViewerReadStateRow {
   effective_root_session_id: string;
   latest_updated_at: number;
   category: SessionInboxCategory;
-  can_manage_lifecycle: number;
 }
 
 interface InboxPageData {
@@ -68,13 +67,14 @@ function toListItem(row: InboxSessionRow): SessionListItem {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     readState: readStateFromRow(row),
-    canManageLifecycle: row.can_manage_lifecycle === 1,
   };
 }
 
+/** Builds viewer-specific session inbox pages from the D1 session index. */
 export class SessionInboxStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /** List one inbox category with viewer-specific read state. */
   async list(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
     const result = await this.bindInboxQuery(options).all<InboxSessionRow>();
     const page = this.buildPageData(options.limit, result.results ?? []);
@@ -88,6 +88,7 @@ export class SessionInboxStore {
     );
   }
 
+  /** List every inbox category with viewer-specific read state. */
   async snapshot(
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {
@@ -189,14 +190,13 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId" | "canManageLifecycle"
+      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId"
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
     return {
       sql: `WITH RECURSIVE eligible_sessions AS (
-              SELECT sessions.*, ${unreadSql("sessions")} AS unread,
-                      ${options.canManageLifecycle ? 1 : 0} AS can_manage_lifecycle
+              SELECT sessions.*, ${unreadSql("sessions")} AS unread
               FROM sessions
               LEFT JOIN users viewer ON viewer.id = ?
               LEFT JOIN session_read_states read_state

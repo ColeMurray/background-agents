@@ -23,6 +23,9 @@ const STATUS_LABELS: Record<SigningViewStateKind, string> = {
   enabled: "Configured",
 };
 
+/**
+ * Displays commit-signing settings and makes the configuration read-only without management permission.
+ */
 export function CommitSigningSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("commit_signing.manage");

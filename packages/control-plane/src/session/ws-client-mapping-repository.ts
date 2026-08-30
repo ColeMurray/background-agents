@@ -10,6 +10,7 @@ export interface WsClientMappingResult {
   scm_login: string | null;
   /** Dormant legacy column may still be present on older mapping fixtures. */
   auth_name?: string | null;
+  /** Wall-clock time when the persisted authorization lease expires. */
   authorization_expires_at: number;
 }
 
@@ -19,6 +20,7 @@ export interface WsClientMappingData {
   participantId: string;
   clientId: string;
   createdAt: number;
+  /** Wall-clock time when the persisted authorization lease expires. */
   authorizationExpiresAt: number;
 }
 
@@ -26,6 +28,7 @@ export interface WsClientMappingData {
 export class WsClientMappingRepository {
   constructor(private readonly sql: SqlStorage) {}
 
+  /** Persist a client mapping and its authorization expiration. */
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
       `INSERT OR REPLACE INTO ws_client_mapping
@@ -39,6 +42,7 @@ export class WsClientMappingRepository {
     );
   }
 
+  /** Load client identity and authorization expiration for hibernation recovery. */
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     // Keep this indexed JOIN in one query: both tables share the session-local store,
     // and this read is on the hibernation-recovery hot path.
@@ -61,14 +65,17 @@ export class WsClientMappingRepository {
     return result.toArray().length > 0;
   }
 
+  /** Delete one persisted client mapping. */
   deleteWsClientMapping(wsId: string): void {
     this.sql.exec(`DELETE FROM ws_client_mapping WHERE ws_id = ?`, wsId);
   }
 
+  /** Delete all authorization mappings expired at or before the given time. */
   deleteExpiredMappings(now: number): void {
     this.sql.exec(`DELETE FROM ws_client_mapping WHERE authorization_expires_at <= ?`, now);
   }
 
+  /** Return the earliest persisted authorization expiration, if any. */
   getNextAuthorizationExpiry(): number | null {
     const rows = this.sql
       .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)

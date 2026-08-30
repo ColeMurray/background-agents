@@ -10,8 +10,10 @@ import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useCallback } from "react";
 
+/** Endpoint key for the signed-in user's effective workspace authorization. */
 export const CURRENT_USER_AUTHORIZATION_KEY = "/api/me/authorization" as const;
 
+/** Returns the user-scoped cache key for effective workspace authorization. */
 export function currentUserAuthorizationKey(userId: string) {
   return [CURRENT_USER_AUTHORIZATION_KEY, userId] as const;
 }
@@ -22,6 +24,9 @@ async function fetchAuthorization(): Promise<EffectiveAuthorization> {
   return effectiveAuthorizationSchema.parse(await response.json());
 }
 
+/**
+ * Provides the signed-in user's effective permissions, denying permission checks until they load.
+ */
 export function useCurrentUserAuthorization(): {
   authorization: EffectiveAuthorization | null;
   loading: boolean;

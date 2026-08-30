@@ -15,6 +15,9 @@ interface ReposResponse {
   repos: Repo[];
 }
 
+/**
+ * Loads repositories for an authenticated user when enabled, allowing callers to suppress unauthorized requests.
+ */
 export function useRepos(enabled = true) {
   const { data: session, status } = useAuthSession();
 

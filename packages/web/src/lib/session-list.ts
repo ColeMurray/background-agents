@@ -48,7 +48,6 @@ const sessionListItemSchema = z.object({
       z.object({ latestMessageId: z.string(), unread: z.boolean() }),
     ])
     .optional(),
-  canManageLifecycle: z.boolean(),
 });
 
 export type SessionListItem = z.infer<typeof sessionListItemSchema>;

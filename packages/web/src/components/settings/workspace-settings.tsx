@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
 
+/**
+ * Shows workspace members and roles, exposing member controls only when the user may manage them.
+ */
 export function WorkspaceSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canReadMembers = hasPermission("workspace.members.read");

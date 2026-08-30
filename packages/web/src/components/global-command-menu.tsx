@@ -73,6 +73,9 @@ function CommandMenuFooter() {
   );
 }
 
+/**
+ * Provides global navigation and search while exposing only settings destinations the user may access.
+ */
 export function GlobalCommandMenu({
   open,
   onOpenChange,

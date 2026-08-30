@@ -47,6 +47,7 @@ type TitleUpdateBody = z.infer<typeof titleUpdateBodySchema>;
  * updates, archive/unarchive, draft expiry, and cancellation.
  */
 export class SessionLifecycleHandler {
+  /** Create the session lifecycle HTTP handler with its persistence and lifecycle services. */
   constructor(
     private readonly sessionCoreRepository: SessionCoreRepository,
     private readonly sandboxRepository: SandboxRepository,
@@ -93,6 +94,7 @@ export class SessionLifecycleHandler {
     });
   }
 
+  /** Update the title after route-level lifecycle authorization has succeeded. */
   async updateTitle(request: Request): Promise<Response> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
@@ -128,6 +130,7 @@ export class SessionLifecycleHandler {
     return Response.json({ title: result.title });
   }
 
+  /** Archive the session after route-level lifecycle authorization has succeeded. */
   async archive(): Promise<Response> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
@@ -199,6 +202,7 @@ export class SessionLifecycleHandler {
     return Response.json({ outcome: "archived", status: "archived" });
   }
 
+  /** Restore the session after route-level lifecycle authorization has succeeded. */
   async unarchive(): Promise<Response> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {

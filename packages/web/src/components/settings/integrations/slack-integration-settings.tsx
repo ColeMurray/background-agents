@@ -115,6 +115,9 @@ function mergedGlobalDefaults(
   return defaults;
 }
 
+/**
+ * Displays Slack integration settings with global and repository edits gated by their respective permissions.
+ */
 export function SlackIntegrationSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManageGlobal = hasPermission("integrations.manage");

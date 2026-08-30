@@ -27,7 +27,6 @@ import {
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
-import { serviceAllowsPermission } from "../authorization/service-permissions";
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
@@ -74,18 +73,9 @@ async function handleListSessions(
         ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
         : undefined;
   const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
-  let canManageLifecycle = false;
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
-  }
-  if (viewerUserId) {
-    const authorization = ctx.authorization;
-    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-    canManageLifecycle =
-      authorization.permissions.includes("sessions.lifecycle") &&
-      (ctx.principal?.kind !== "service" ||
-        serviceAllowsPermission(ctx.principal.service, "sessions.lifecycle"));
   }
 
   const store = new SessionIndexStore(ctx.db);
@@ -97,7 +87,7 @@ async function handleListSessions(
     createdByUserIds,
     limit,
     offset,
-    ...(viewerUserId ? { viewerUserId, canManageLifecycle } : {}),
+    ...(viewerUserId ? { viewerUserId } : {}),
   });
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
@@ -140,14 +130,11 @@ async function handleListSessionInbox(
 
   const startedAt = Date.now();
   const store = new SessionIndexStore(ctx.db);
-  const authorization = ctx.authorization;
-  if (!authorization) return json({ error: "Authorization unavailable" }, 503);
   const commonOptions = {
     limit: SESSION_INBOX_LIMIT,
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
     excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
-    canManageLifecycle: authorization.permissions.includes("sessions.lifecycle"),
   };
 
   if (category === null) {

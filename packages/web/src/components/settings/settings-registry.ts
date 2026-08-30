@@ -49,6 +49,7 @@ function lazyPanel(load: () => Promise<ComponentType>): LazyExoticComponent<Comp
   return lazy(async () => ({ default: await load() }));
 }
 
+/** Settings categories and the permissions required for users to see them. */
 export const SETTINGS_GROUPS = [
   {
     label: "Personal",
@@ -237,10 +238,12 @@ export const SETTINGS_GROUPS = [
 ] as const satisfies readonly SettingsGroupDefinition[];
 
 type SettingsItem = (typeof SETTINGS_GROUPS)[number]["items"][number];
+/** Identifier for a registered settings category. */
 export type SettingsCategory = SettingsItem["id"];
 export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = "secrets";
 export const DEFAULT_SETTINGS_QUERY = "";
 
+/** Returns whether the user's effective permissions make a settings category visible. */
 export function canViewSettingsCategory(
   category: SettingsCategory,
   hasPermission: (permission: PermissionId) => boolean
@@ -256,6 +259,7 @@ export function canViewSettingsCategory(
   );
 }
 
+/** Selects the requested visible category, or a category the user is allowed to view. */
 export function resolveSettingsCategory(
   requested: string | null,
   repoImagesEnabled: boolean,
@@ -287,6 +291,7 @@ function isSettingsItemAvailable(item: SettingsItem, repoImagesEnabled: boolean)
   return !("requiresRepoImages" in item) || repoImagesEnabled;
 }
 
+/** Returns settings groups filtered to categories the user may view and the current search. */
 export function getSettingsGroups({
   query = DEFAULT_SETTINGS_QUERY,
   repoImagesEnabled = supportsRepoImages(),
@@ -306,10 +311,12 @@ export function getSettingsGroups({
   })).filter((group) => group.items.length > 0);
 }
 
+/** Returns the user-facing label for a settings category. */
 export function getSettingsCategoryLabel(category: SettingsCategory): string {
   return getSettingsItem(category).label;
 }
 
+/** Returns the panel shown for an authorized settings category. */
 export function getSettingsPanel(category: SettingsCategory): LazyExoticComponent<ComponentType> {
   return getSettingsItem(category).panel;
 }

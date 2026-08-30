@@ -136,6 +136,9 @@ export function ProfileForm({
   );
 }
 
+/**
+ * Lists the user's skill profiles and exposes profile mutations only when `canManage` is true.
+ */
 export function Profiles({ canManage }: { canManage: boolean }) {
   const { profiles, loading, error, mutate } = useSkillProfiles();
   const { skills, loading: skillsLoading, error: skillsError } = useSkills();

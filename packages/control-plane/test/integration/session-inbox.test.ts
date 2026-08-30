@@ -67,16 +67,12 @@ describe("session inbox", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     const body = (await response.json()) as {
       items: Array<{
-        rootSession: { id: string; canManageLifecycle: boolean };
-        descendantSessions: Array<{ id: string; canManageLifecycle: boolean }>;
+        rootSession: { id: string };
+        descendantSessions: Array<{ id: string }>;
       }>;
     };
     expect(body.items).toHaveLength(1);
     expect(body.items[0].rootSession.id).toBe(parent.id);
-    expect(body.items[0].rootSession.canManageLifecycle).toBe(true);
-    expect(
-      body.items[0].descendantSessions.every(({ canManageLifecycle }) => canManageLifecycle)
-    ).toBe(true);
     expect(body.items[0].descendantSessions.map(({ id }) => id)).toEqual([child.id, grandchild.id]);
   });
 
