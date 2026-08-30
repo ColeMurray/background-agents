@@ -50,6 +50,20 @@ describe("session budget BFF", () => {
     }
   );
 
+  it("uses the route error response for malformed JSON", async () => {
+    const response = await PATCH(
+      new Request("http://localhost/api/sessions/session-1/budget", {
+        method: "PATCH",
+        body: "{",
+      }) as never,
+      { params: Promise.resolve({ id: "session-1" }) }
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: "Failed to update session budget" });
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects unauthenticated requests", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue(null);
     const response = await PATCH(

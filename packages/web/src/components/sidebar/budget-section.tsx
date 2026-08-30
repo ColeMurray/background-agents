@@ -12,11 +12,13 @@ interface BudgetSectionProps {
   canManageBudget: boolean;
 }
 
+const DEFAULT_COST_TRACKING_UNAVAILABLE = false;
+
 export function BudgetSection({
   sessionId,
   totalCost,
   maxSessionCostUsd,
-  costTrackingUnavailable = false,
+  costTrackingUnavailable = DEFAULT_COST_TRACKING_UNAVAILABLE,
   canManageBudget,
 }: BudgetSectionProps) {
   const [editing, setEditing] = useState(false);
