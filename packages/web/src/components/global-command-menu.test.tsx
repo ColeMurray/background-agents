@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionListItem } from "@/lib/session-list";
 import { GlobalCommandMenu } from "./global-command-menu";
 
 expect.extend(matchers);
@@ -41,14 +42,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderMenu() {
+function renderMenu(sessions: SessionListItem[] = []) {
   const onOpenChange = vi.fn();
   const onNavigate = vi.fn();
   const props = {
     onOpenChange,
     onNavigate,
     onNewSession: vi.fn(),
-    sessions: [],
+    sessions,
   };
   const view = render(<GlobalCommandMenu open {...props} />);
   return { ...view, onNavigate, onOpenChange, props };
@@ -112,5 +113,27 @@ describe("GlobalCommandMenu", () => {
     renderMenu();
 
     expect(screen.queryByText("Images")).not.toBeInTheDocument();
+  });
+
+  it("preserves order-independent session search", async () => {
+    const user = userEvent.setup();
+    renderMenu([
+      {
+        id: "session-1",
+        title: "Investigate command search",
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ]);
+
+    await user.type(
+      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      "background investigate"
+    );
+
+    await waitFor(() => expect(screen.getByText("Investigate command search")).toBeInTheDocument());
   });
 });

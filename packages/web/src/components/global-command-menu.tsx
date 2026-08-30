@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { formatRelativeTime } from "@/lib/time";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
 import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
-import { DEFAULT_SETTINGS_QUERY, getSettingsGroups } from "@/components/settings/settings-registry";
+import { getSettingsGroups } from "@/components/settings/settings-registry";
 import {
   Command,
   CommandDialog,
@@ -44,6 +44,12 @@ function buildSessionUrl(session: SessionListItem): string {
   return query ? `/session/${session.id}?${query}` : `/session/${session.id}`;
 }
 
+function filterCommandItem(value: string, search: string, keywords?: string[]): number {
+  const searchText = `${value} ${keywords?.join(" ") ?? ""}`.toLowerCase();
+  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return terms.every((term) => searchText.includes(term)) ? 1 : 0;
+}
+
 export function GlobalCommandMenu({
   open,
   onOpenChange,
@@ -52,16 +58,11 @@ export function GlobalCommandMenu({
   sessions,
 }: GlobalCommandMenuProps) {
   const { labels } = useKeyboardShortcuts();
-  const [query, setQuery] = useState(DEFAULT_SETTINGS_QUERY);
   const searchableSessions = useMemo(
     () => sessions.filter((session) => session.status !== "archived"),
     [sessions]
   );
-  const settingsGroups = getSettingsGroups({ query, includeGlobalAliases: true });
-
-  useEffect(() => {
-    if (!open) setQuery(DEFAULT_SETTINGS_QUERY);
-  }, [open]);
+  const settingsGroups = getSettingsGroups({ includeGlobalAliases: true });
 
   const handleSelect = (callback: () => void) => {
     onOpenChange(false);
@@ -74,11 +75,8 @@ export function GlobalCommandMenu({
       <DialogDescription className="sr-only">
         Search and jump to sessions, settings, automations, and other destinations.
       </DialogDescription>
-      <Command>
-        <CommandInput
-          placeholder="Search sessions, settings, and commands..."
-          onValueChange={setQuery}
-        />
+      <Command filter={filterCommandItem}>
+        <CommandInput placeholder="Search sessions, settings, and commands..." />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
 
@@ -110,7 +108,6 @@ export function GlobalCommandMenu({
                 return (
                   <CommandItem
                     key={item.id}
-                    forceMount
                     value={`settings ${group.label} ${item.label} ${item.description} ${item.keywords}`}
                     onSelect={() => handleSelect(() => onNavigate(`/settings?tab=${item.id}`))}
                     className="items-start"
