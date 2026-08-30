@@ -5,8 +5,6 @@ import { UserStore } from "../../src/db/user-store";
 import { mergeUsers } from "../../src/db/user-merge";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
-import { permissionSetGuard } from "../../src/automation/authorization-guard";
-import { runGuardedBatch } from "../../src/db/guarded-write";
 
 describe("RBAC routes", () => {
   beforeEach(cleanD1Tables);
@@ -210,29 +208,6 @@ describe("RBAC routes", () => {
       code: "permission_required",
       permission: "sessions.create",
     });
-  });
-
-  it("rolls back a command when the actor loses live permission", async () => {
-    const ownerId = await seedOwner();
-    const db = sqlDatabase(env.DB);
-    const authorization = await new AuthorizationService(db).getEffectiveAuthorization(ownerId);
-    await env.DB.prepare(
-      "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
-    )
-      .bind(ownerId)
-      .run();
-
-    await expect(
-      runGuardedBatch(
-        db,
-        [permissionSetGuard(authorization, ["automations.create"])],
-        [db.prepare("UPDATE users SET display_name = 'stale-write' WHERE id = ?").bind(ownerId)]
-      )
-    ).rejects.toThrow();
-
-    expect(
-      await env.DB.prepare("SELECT display_name FROM users WHERE id = ?").bind(ownerId).first()
-    ).not.toEqual({ display_name: "stale-write" });
   });
 
   it("denies sensitive business mutations to Viewer", async () => {

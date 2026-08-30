@@ -19,7 +19,6 @@ import { UserStore } from "./db/user-store";
 import { AutomationStore } from "./db/automation-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
-import { automationAuthorizationGuard } from "./automation/authorization-guard";
 import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
 import {
   sessionPermissionStem,
@@ -542,14 +541,7 @@ async function enforceAutomationRequirement(
       );
     }
 
-    ctx.automationAdmission = {
-      automation,
-      authorizationGuard: automationAuthorizationGuard(
-        automation.id,
-        authorization,
-        requirement.operation
-      ),
-    };
+    ctx.automationAdmission = { automation };
     return null;
   } catch {
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);

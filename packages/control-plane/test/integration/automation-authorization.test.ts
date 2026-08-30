@@ -1,9 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AuthorizationService } from "../../src/authorization/service";
-import { automationAuthorizationGuard } from "../../src/automation/authorization-guard";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
-import { runGuardedBatch } from "../../src/db/guarded-write";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
@@ -162,108 +159,5 @@ describe("automation router authorization", () => {
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ code: "service_capability_required" });
     expect(await new AutomationStore(env.DB).getById("service-target")).not.toBeNull();
-  });
-});
-
-describe("automation transactional authorization", () => {
-  beforeEach(cleanD1Tables);
-  afterEach(cleanD1Tables);
-
-  it("rolls back a write when the automation was deleted after admission", async () => {
-    await seedBrowser("owner");
-    const db = sqlDatabase(env.DB);
-    const store = new AutomationStore(db);
-    await store.create(automation("deleted-race", BROWSER_USER_ID));
-    const authorization = await new AuthorizationService(db).getEffectiveAuthorization(
-      BROWSER_USER_ID
-    );
-    await store.softDelete("deleted-race");
-
-    await expect(
-      runGuardedBatch(
-        db,
-        [automationAuthorizationGuard("deleted-race", authorization, "manage")],
-        [db.prepare("UPDATE automations SET name = 'stale-write' WHERE id = 'deleted-race'")]
-      )
-    ).rejects.toThrow();
-
-    expect(
-      await env.DB.prepare("SELECT name FROM automations WHERE id = 'deleted-race'").first()
-    ).toEqual({ name: "deleted-race" });
-  });
-
-  it("rolls back a write when ownership changes after admission", async () => {
-    await seedBrowser("member");
-    const db = sqlDatabase(env.DB);
-    const store = new AutomationStore(db);
-    const other = await new UserStore(db).createUser({ displayName: "Other" });
-    await store.create(automation("ownership-race", BROWSER_USER_ID));
-    const authorization = await new AuthorizationService(db).getEffectiveAuthorization(
-      BROWSER_USER_ID
-    );
-    await env.DB.prepare("UPDATE automations SET user_id = ? WHERE id = ?")
-      .bind(other.id, "ownership-race")
-      .run();
-
-    await expect(
-      runGuardedBatch(
-        db,
-        [automationAuthorizationGuard("ownership-race", authorization, "manage")],
-        [db.prepare("UPDATE automations SET name = 'stale-write' WHERE id = 'ownership-race'")]
-      )
-    ).rejects.toThrow();
-
-    expect((await store.getById("ownership-race"))?.name).toBe("ownership-race");
-  });
-
-  it("retains associations when target permission is revoked after admission", async () => {
-    await seedBrowser("member");
-    const db = sqlDatabase(env.DB);
-    const store = new AutomationStore(db);
-    await store.create(automation("permission-race", BROWSER_USER_ID));
-    await env.DB.prepare(
-      `INSERT INTO automation_repositories
-        (automation_id, repo_owner, repo_name, repo_id, base_branch, created_at, updated_at)
-       VALUES ('permission-race', 'acme', 'old', 1, 'main', 1, 1)`
-    ).run();
-    const authorization = await new AuthorizationService(db).getEffectiveAuthorization(
-      BROWSER_USER_ID
-    );
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO roles
-          (id, key, name, normalized_name, description, is_system)
-         VALUES ('role_manage_own', NULL, 'Manage Own', 'manage own', NULL, 0)`
-      ),
-      env.DB.prepare(
-        `INSERT INTO role_permissions (role_id, permission_id)
-         VALUES ('role_manage_own', 'automations.manage.own')`
-      ),
-      env.DB.prepare(
-        "UPDATE user_role_assignments SET role_id = 'role_manage_own' WHERE user_id = ?"
-      ).bind(BROWSER_USER_ID),
-    ]);
-
-    await expect(
-      runGuardedBatch(
-        db,
-        [
-          automationAuthorizationGuard("permission-race", authorization, "manage", [
-            "repositories.use",
-          ]),
-        ],
-        [
-          ...store.bindReplaceRepositories(
-            "permission-race",
-            [{ repo_owner: "acme", repo_name: "new", repo_id: 2, base_branch: "main" }],
-            2
-          ),
-        ]
-      )
-    ).rejects.toThrow();
-
-    await expect(store.getRepositoriesForAutomation("permission-race")).resolves.toMatchObject([
-      { repo_name: "old" },
-    ]);
   });
 });

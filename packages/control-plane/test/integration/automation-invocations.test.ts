@@ -8,6 +8,7 @@ import {
   type AutomationRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
+import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { cleanD1Tables } from "./cleanup";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -104,13 +105,11 @@ describe("automation invocations (D1 integration)", () => {
     ]);
   });
 
-  it("reauthorizes the owner and target-use permissions at invocation admission", async () => {
+  it("checks owner and target-use permissions for unattended execution", async () => {
     const ownerId = "11111111111111111111111111111111";
     const roleId = "role_execution_test";
     const store = new AutomationStore(env.DB);
     const automation = makeAutomation({ user_id: ownerId, created_by: ownerId });
-    const invocation = makeInvocation(automation.id);
-    const child = makeChild(automation.id, { invocation_id: invocation.id });
 
     await env.DB.batch([
       env.DB.prepare(
@@ -140,25 +139,19 @@ describe("automation invocations (D1 integration)", () => {
       ].map((statement) => statement.run())
     );
 
-    const admit = () =>
-      store.insertInvocationGuarded({
-        invocation,
-        children: [child],
-        overlapScope: { kind: "automation" },
-      });
+    const authorized = () => isAutomationExecutionAuthorized(env.DB, automation.id);
     const grant = (permission: string) =>
       env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)")
         .bind(roleId, permission)
         .run();
 
-    await expect(admit()).rejects.toThrow();
+    await expect(authorized()).resolves.toBe(false);
     await grant("sessions.create");
-    await expect(admit()).rejects.toThrow();
+    await expect(authorized()).resolves.toBe(false);
     await grant("repositories.use");
-    await expect(admit()).rejects.toThrow();
+    await expect(authorized()).resolves.toBe(false);
     await grant("environments.use");
-    await expect(admit()).resolves.toEqual({ inserted: true });
-    expect(await countRows("automation_invocations")).toBe(1);
+    await expect(authorized()).resolves.toBe(true);
   });
 
   // ─── Derived status ────────────────────────────────────────────────────────

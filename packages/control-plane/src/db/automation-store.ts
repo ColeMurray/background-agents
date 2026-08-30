@@ -20,9 +20,7 @@ import {
   toProviderSelections,
   type AutomationModelProviderAuthRow,
 } from "./automation-model-provider-auth";
-import { runGuardedBatch, type GuardedWrite } from "./guarded-write";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import { automationExecutionGuard } from "../automation/authorization-guard";
 import type { AutomationListCursor } from "./automation-list-cursor";
 
 function escapeLikePattern(value: string): string {
@@ -863,7 +861,7 @@ export class AutomationStore {
 
   /**
    * Per-source overlap predicate, used both as the cheap pre-check and inside
-   * the guarded insert (same SQL, one definition). Schedule/manual firings
+   * the conditional insert (same SQL, one definition). Schedule/manual firings
    * block on ANY active run of the automation (main parity with
    * getActiveRunForAutomation); event firings block per concurrency key only —
    * an automation-wide guard would serialize unrelated events.
@@ -915,13 +913,9 @@ export class AutomationStore {
     children: AutomationRunRow[];
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
-    authorizationGuard?: GuardedWrite;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
-    const guards: GuardedWrite[] = [];
-    if (params.authorizationGuard) guards.push(params.authorizationGuard);
-    guards.push(automationExecutionGuard(invocation.automation_id));
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -997,7 +991,7 @@ export class AutomationStore {
       );
     }
 
-    const results = await runGuardedBatch(this.db, guards, statements);
+    const results = await this.db.batch(statements);
     return { inserted: (results[0]?.meta?.changes ?? 0) > 0 };
   }
 

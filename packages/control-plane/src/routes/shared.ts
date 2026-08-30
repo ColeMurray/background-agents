@@ -18,7 +18,6 @@ import type {
 } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { AutomationRow } from "../db/automation-store";
-import type { GuardedWrite } from "../db/guarded-write";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -60,7 +59,6 @@ export type RequestContext = CorrelationContext & {
 
 export interface AutomationRouteAdmission {
   automation: AutomationRow;
-  authorizationGuard: GuardedWrite;
 }
 
 /**

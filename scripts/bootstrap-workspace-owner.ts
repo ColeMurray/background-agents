@@ -16,7 +16,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { guardAssertionSql } from "../packages/control-plane/src/db/guarded-write.ts";
 
 const CANONICAL_USER_ID = /^[0-9a-f]{32}$/;
 const OWNER_ROLE_ID = "role_builtin_owner";
@@ -108,9 +107,7 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
       'id', 'occurred_at', 'request_id', 'principal_kind',
       'actor_user_id_snapshot', 'actor_service_snapshot', 'action', 'resource_type',
       'resource_id', 'target_user_id_snapshot', 'reason_code'
-    )) = 11
-  AND (SELECT COUNT(*) FROM pragma_table_info('guarded_write_assertion')
-    WHERE name IN ('singleton', 'satisfied')) = 2`;
+    )) = 11`;
   const commonPreconditions = `${schemaReady}
   AND (SELECT COUNT(*) FROM users WHERE id = ${userId}) = 1
   AND (SELECT COUNT(*) FROM user_role_assignments WHERE user_id = ${userId}) = 1
@@ -124,11 +121,6 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
   const ready = `${commonPreconditions}
   AND NOT (${targetIsOwner})
   AND NOT (${anotherUnsuspendedOwner})`;
-  const noOp = `${commonPreconditions}
-  AND ${targetIsOwner}
-  AND NOT (${anotherUnsuspendedOwner})`;
-  const executableState = `((${ready}) OR (${noOp}))
-  AND NOT EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ${auditId})`;
   const exactAudit = `EXISTS (
     SELECT 1 FROM authorization_audit_events
     WHERE id = ${auditId}
@@ -177,8 +169,6 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
 
   return `${preflight}
 
-${guardAssertionSql(executableState)};
-
 INSERT INTO authorization_audit_events
   (id, occurred_at, request_id, principal_kind,
    actor_service_snapshot, action, resource_type,
@@ -190,19 +180,14 @@ WHERE ${ready};
 
 UPDATE user_role_assignments
 SET role_id = ${ownerRoleId}
-WHERE user_id = ${userId} AND ${exactAudit};
-
-${guardAssertionSql(`${commonPreconditions}
-  AND ${targetIsOwner}
-  AND NOT (${anotherUnsuspendedOwner})
-  AND (${exactAudit} OR NOT EXISTS (
-    SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}
-  ))`)};
+WHERE user_id = ${userId} AND (${ready}) AND ${exactAudit};
 
 SELECT 'postcondition' AS report,
-  CASE WHEN EXISTS (
-    SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}
-  ) THEN 'executed' ELSE 'no-op' END AS status,
+  CASE
+    WHEN (${targetIsOwner}) AND (${exactAudit}) THEN 'executed'
+    WHEN ${targetIsOwner} THEN 'no-op'
+    ELSE 'refused'
+  END AS status,
   u.id AS user_id,
   u.suspended_at,
   assignment.role_id,

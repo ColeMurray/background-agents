@@ -61,7 +61,6 @@ import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
-import type { GuardedWrite } from "../db/guarded-write";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
 import type { SessionInitInput } from "../session/initialize";
@@ -191,6 +190,13 @@ export class AutomationTriggerBlockedError extends Error {
   }
 }
 
+export class AutomationExecutionUnauthorizedError extends Error {
+  constructor() {
+    super("Automation owner is not authorized to execute");
+    this.name = "AutomationExecutionUnauthorizedError";
+  }
+}
+
 interface StartInvocationParams {
   automation: AutomationRow;
   source: AutomationInvocationSource;
@@ -206,7 +212,6 @@ interface StartInvocationParams {
   repositories?: AutomationRepositoryInsert[];
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
-  authorizationGuard?: GuardedWrite;
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
   instructionsOverride?: string;
   /**
@@ -339,6 +344,9 @@ export class Scheduler {
         automation = { ...automation, user_id: identity.userId };
       }
     }
+    if (!(await isAutomationExecutionAuthorized(this.db, automation.id))) {
+      throw new AutomationExecutionUnauthorizedError();
+    }
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
 
@@ -350,7 +358,7 @@ export class Scheduler {
         ? { kind: "concurrencyKey", concurrencyKey }
         : { kind: "automation" };
 
-    // Cheap pre-check; the guarded insert below re-applies the same predicate
+    // Cheap pre-check; the conditional insert below re-applies the same predicate
     // atomically, so a race here only costs a wasted child build.
     const activeRun =
       overlapScope.kind === "concurrencyKey"
@@ -421,7 +429,7 @@ export class Scheduler {
     const launchCandidates = children.filter((child) => child.status === "starting");
     // Resolve provider routing before admission, alongside the already-built
     // target children. Together these values are the immutable launch snapshot
-    // for this firing: edits made after the guarded insert cannot change which
+    // for this firing: edits made after the conditional insert cannot change which
     // account an admitted child uses.
     let providerAuthSnapshot:
       | { providerAuth: SessionModelProviderAuthInput[] }
@@ -462,7 +470,6 @@ export class Scheduler {
           params.advanceToNextRunAt !== undefined
             ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
             : undefined,
-        authorizationGuard: params.authorizationGuard,
       }));
     } catch (e) {
       if (isDuplicateKeyError(e)) {
@@ -1068,10 +1075,7 @@ export class Scheduler {
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
-  async trigger(
-    automationId: string,
-    authorizationGuard?: GuardedWrite
-  ): Promise<SchedulerTriggerResult> {
+  async trigger(automationId: string): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
@@ -1081,7 +1085,6 @@ export class Scheduler {
     const result = await this.startInvocation(store, {
       automation,
       source: "manual",
-      authorizationGuard,
     });
 
     if (result.outcome !== "started") {

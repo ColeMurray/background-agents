@@ -50,7 +50,7 @@ vi.mock("../session/skill-resolution", () => ({
   })),
 }));
 
-const { Scheduler } = await import("./scheduler");
+const { AutomationExecutionUnauthorizedError, Scheduler } = await import("./scheduler");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
@@ -533,6 +533,20 @@ describe("Scheduler", () => {
         expect.any(String),
         expect.any(Number)
       );
+    });
+
+    it("rejects unattended execution before invocation work when the owner is unauthorized", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockIsAutomationExecutionAuthorized.mockResolvedValue(false);
+
+      const result = await createScheduler().tick();
+
+      expect(result).toEqual({ processed: 0, skipped: 0, failed: 1 });
+      expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledWith(expect.anything(), "auto-1");
+      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(mockResolveSessionProviderAuth).not.toHaveBeenCalled();
     });
 
     it("does not enqueue a prompt when recovery wins the launch transition", async () => {
@@ -1349,6 +1363,9 @@ describe("Scheduler", () => {
       await scheduler.tick();
 
       expect(mockUserStoreGetIdentity).toHaveBeenCalledWith("github", "user-1");
+      expect(mockUserStoreGetIdentity.mock.invocationCallOrder[0]).toBeLessThan(
+        mockIsAutomationExecutionAuthorized.mock.invocationCallOrder[0]
+      );
       expect(mockSessionStoreCreate).toHaveBeenCalledWith(
         expect.objectContaining({ userId: "looked-up-user" })
       );
@@ -2032,6 +2049,18 @@ describe("Scheduler", () => {
       const scheduler = createScheduler();
       await expect(scheduler.trigger("auto-1")).rejects.toThrow("An active run already exists");
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+    });
+
+    it("rejects with a purpose-specific error when the owner cannot execute", async () => {
+      mockStore.getById.mockResolvedValue(sampleAutomation);
+      mockIsAutomationExecutionAuthorized.mockResolvedValue(false);
+
+      const scheduler = createScheduler();
+      await expect(scheduler.trigger("auto-1")).rejects.toBeInstanceOf(
+        AutomationExecutionUnauthorizedError
+      );
+      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 

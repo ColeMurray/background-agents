@@ -13,13 +13,11 @@ import type { Principal } from "../auth/principal";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
-import { AutomationTriggerBlockedError } from "../scheduler/scheduler";
-import { PERMISSION_IDS, type PermissionId } from "@open-inspect/shared/rbac";
 import {
-  AUTOMATION_EXECUTION_GUARD,
-  AUTOMATION_REQUEST_GUARD,
-} from "../automation/authorization-guard";
-import { GuardedWriteConflictError } from "../db/guarded-write";
+  AutomationExecutionUnauthorizedError,
+  AutomationTriggerBlockedError,
+} from "../scheduler/scheduler";
+import { PERMISSION_IDS, type PermissionId } from "@open-inspect/shared/rbac";
 
 const mockProviderAdapterGet = vi.hoisted(() => vi.fn());
 
@@ -94,8 +92,18 @@ const MockAutomationTriggerBlockedError = vi.hoisted(
       }
     }
 );
+const MockAutomationExecutionUnauthorizedError = vi.hoisted(
+  () =>
+    class AutomationExecutionUnauthorizedError extends Error {
+      constructor() {
+        super("Automation owner is not authorized to execute");
+        this.name = "AutomationExecutionUnauthorizedError";
+      }
+    }
+);
 
 vi.mock("../scheduler/scheduler", () => ({
+  AutomationExecutionUnauthorizedError: MockAutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError: MockAutomationTriggerBlockedError,
   Scheduler: vi.fn().mockImplementation(function () {
     return { trigger: mockSchedulerTrigger };
@@ -178,12 +186,11 @@ const SLACK_BOT_PRINCIPAL: Principal = {
 
 function createCtx(
   principal: Principal = USER_PRINCIPAL,
-  permissions: readonly PermissionId[] = PERMISSION_IDS,
-  authorizationCurrent = true
+  permissions: readonly PermissionId[] = PERMISSION_IDS
 ): RequestContext {
   const statement = {
     bind: vi.fn(() => statement),
-    first: vi.fn(async () => ({ satisfied: authorizationCurrent ? 1 : 0 })),
+    first: vi.fn(async () => ({ satisfied: 1 })),
     all: vi.fn(async () => ({ results: [] })),
   };
   return {
@@ -219,7 +226,6 @@ async function callRoute(
     query?: Record<string, string | string[]>;
     principal?: Principal;
     permissions?: readonly PermissionId[];
-    authorizationCurrent?: boolean;
   }
 ): Promise<Response> {
   const route = automationRoutes.find(
@@ -240,7 +246,7 @@ async function callRoute(
     init.headers = { "Content-Type": "application/json" };
     init.body = JSON.stringify(options.body);
   }
-  const ctx = createCtx(options?.principal, options?.permissions, options?.authorizationCurrent);
+  const ctx = createCtx(options?.principal, options?.permissions);
   const automationRequirement =
     route.authorization.kind === "active-user"
       ? route.authorization.allOf.find((requirement) => requirement.kind === "automation")
@@ -251,13 +257,7 @@ async function callRoute(
     );
     if (!automation)
       return new Response(JSON.stringify({ error: "Automation not found" }), { status: 404 });
-    ctx.automationAdmission = {
-      automation,
-      authorizationGuard: {
-        name: "automation_request_authorization",
-        predicate: { sql: "1 = 1", values: [] },
-      },
-    };
+    ctx.automationAdmission = { automation };
   }
   return route.handler(new Request(url, init), createEnv(), match, ctx);
 }
@@ -309,10 +309,7 @@ describe("automation route handlers", () => {
     mockStore.bindReplaceEnvironments.mockReturnValue([{ sql: "replace-environments" }]);
     mockProviderAuthStore.bindInserts.mockReturnValue([{ sql: "insert-provider-auth" }]);
     mockProviderAuthStore.bindReplace.mockReturnValue([{ sql: "replace-provider-auth" }]);
-    mockBatch.mockResolvedValue([
-      { meta: { changes: 0 }, results: [] },
-      { meta: { changes: 1 }, results: [] },
-    ]);
+    mockBatch.mockResolvedValue([{ meta: { changes: 1 }, results: [] }]);
     mockSchedulerTrigger.mockResolvedValue({
       invocationId: "inv-1",
       runs: [{ id: "run-1" }],
@@ -1701,30 +1698,12 @@ describe("automation route handlers", () => {
 
     it("returns 404 when the key update affects no current automation", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "webhook" });
-      mockBatch.mockResolvedValue([
-        { meta: { changes: 0 }, results: [] },
-        { meta: { changes: 0 }, results: [] },
-      ]);
+      mockBatch.mockResolvedValue([{ meta: { changes: 0 }, results: [] }]);
 
       const res = await callRoute("POST", "/automations/auto-1/regenerate-key");
 
       expect(res.status).toBe(404);
       await expect(res.json()).resolves.toEqual({ error: "Automation not found" });
-    });
-
-    it("returns 409 and does not report success when authorization changes before the batch", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "webhook" });
-      mockBatch.mockRejectedValue(new Error("authorization guard failed"));
-
-      const res = await callRoute("POST", "/automations/auto-1/regenerate-key", {
-        authorizationCurrent: false,
-      });
-
-      expect(res.status).toBe(409);
-      await expect(res.json()).resolves.toEqual({
-        error: "Authorization changed",
-        code: "authorization_conflict",
-      });
     });
   });
 
@@ -1739,6 +1718,7 @@ describe("automation route handlers", () => {
         invocationId: "inv-1",
         runs: [{ id: "run-1" }],
       });
+      expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1");
     });
 
     it("returns 404 when automation not found", async () => {
@@ -1760,32 +1740,9 @@ describe("automation route handlers", () => {
       });
     });
 
-    it("returns 409 when request authorization changes during the guarded insert", async () => {
+    it("returns 403 when the owner is unauthorized to execute", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
-      mockSchedulerTrigger.mockRejectedValue(
-        new GuardedWriteConflictError(
-          [AUTOMATION_REQUEST_GUARD],
-          new Error("CHECK constraint failed")
-        )
-      );
-
-      const res = await callRoute("POST", "/automations/auto-1/trigger");
-
-      expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({
-        error: "Authorization changed",
-        code: "authorization_conflict",
-      });
-    });
-
-    it("returns 403 when execution authorization changes during the guarded insert", async () => {
-      mockStore.getById.mockResolvedValue(sampleRow);
-      mockSchedulerTrigger.mockRejectedValue(
-        new GuardedWriteConflictError(
-          [AUTOMATION_EXECUTION_GUARD],
-          new Error("CHECK constraint failed")
-        )
-      );
+      mockSchedulerTrigger.mockRejectedValue(new AutomationExecutionUnauthorizedError());
 
       const res = await callRoute("POST", "/automations/auto-1/trigger");
 

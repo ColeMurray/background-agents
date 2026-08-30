@@ -589,10 +589,9 @@ unsuspended Owner remains in the same D1 batch. User deletion is blocked by assi
 User merge requires an explicit surviving assignment, merges canonical session memberships, and
 preserves both immutable audit snapshots.
 
-Assignment and status updates use guarded SQL that rechecks authorization and Owner invariants in
-the same D1 batch as the mutation. Dynamic guards write their boolean result through the dedicated
-`guarded_write_assertion` table; its `CHECK (satisfied = 1)` constraint explicitly aborts and rolls
-back the batch when a guard no longer holds.
+Assignment and status updates apply the request-scoped authorization decision and preserve Owner
+invariants in the same D1 batch as the mutation. Authorization changes do not retroactively revoke
+an already admitted request.
 
 ### Error contract
 

@@ -39,13 +39,6 @@ CREATE TABLE authorization_audit_events (
   reason_code TEXT NOT NULL
 );
 
--- D1 batch() is the transaction boundary for guarded writes. A false dynamic
--- predicate violates this constraint and rolls the entire batch back.
-CREATE TABLE guarded_write_assertion (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  satisfied INTEGER NOT NULL CONSTRAINT guarded_write_assertion_satisfied CHECK (satisfied = 1)
-);
-
 CREATE TABLE session_access (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

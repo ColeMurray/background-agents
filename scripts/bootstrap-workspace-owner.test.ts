@@ -36,10 +36,6 @@ function createDatabase(): DatabaseSync {
       target_user_id_snapshot TEXT,
       reason_code TEXT NOT NULL
     );
-    CREATE TABLE guarded_write_assertion (
-      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      satisfied INTEGER NOT NULL CONSTRAINT guarded_write_assertion_satisfied CHECK (satisfied = 1)
-    );
     INSERT INTO roles (id, key, is_system) VALUES
       ('role_builtin_owner', 'owner', 1),
       ('role_builtin_member', 'member', 1);
@@ -214,6 +210,28 @@ describe("Owner bootstrap SQL", () => {
     );
   });
 
+  it("cannot replay generated SQL after ownership conditions change", () => {
+    const database = createDatabase();
+    const generated = sql(true, "audit-replay", 100);
+    database.exec(generated);
+    database.exec(`
+      UPDATE user_role_assignments
+      SET role_id = 'role_builtin_member'
+      WHERE user_id = '${USER_ID}';
+      INSERT INTO users (id, suspended_at) VALUES ('${OTHER_USER_ID}', NULL);
+      INSERT INTO user_role_assignments (user_id, role_id)
+      VALUES ('${OTHER_USER_ID}', 'role_builtin_owner');
+    `);
+
+    database.exec(generated);
+
+    assert.equal(
+      database.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?").get(USER_ID)!
+        .role_id,
+      "role_builtin_member"
+    );
+  });
+
   it("refuses another unsuspended Owner without changing the selected user", () => {
     const database = createDatabase();
     database.exec(`
@@ -230,10 +248,7 @@ describe("Owner bootstrap SQL", () => {
       suspended_at: null,
       role_id: "role_builtin_member",
     });
-    assert.throws(
-      () => execute(database, "audit-refused", 100),
-      /guarded_write_assertion_satisfied/
-    );
+    execute(database, "audit-refused", 100);
     assert.equal(
       database.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?").get(USER_ID)!
         .role_id,
@@ -259,10 +274,7 @@ describe("Owner bootstrap SQL", () => {
     const suspended = createDatabase();
     suspended.exec(`UPDATE users SET suspended_at = 1 WHERE id = '${USER_ID}'`);
     assert.equal(preflight(suspended).detail, "target user is suspended");
-    assert.throws(
-      () => execute(suspended, "audit-suspended", 100),
-      /guarded_write_assertion_satisfied/
-    );
+    execute(suspended, "audit-suspended", 100);
 
     const missingAssignment = createDatabase();
     missingAssignment.exec(`DELETE FROM user_role_assignments WHERE user_id = '${USER_ID}'`);
@@ -270,10 +282,7 @@ describe("Owner bootstrap SQL", () => {
       preflight(missingAssignment).detail,
       "target must have exactly one role assignment"
     );
-    assert.throws(
-      () => execute(missingAssignment, "audit-unassigned", 100),
-      /guarded_write_assertion_satisfied/
-    );
+    execute(missingAssignment, "audit-unassigned", 100);
   });
 
   it("treats a current target Owner as a no-op without requiring audit history", () => {

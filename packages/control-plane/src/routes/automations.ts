@@ -49,7 +49,11 @@ import { generateId } from "../auth/crypto";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import { AutomationTriggerBlockedError, Scheduler } from "../scheduler/scheduler";
+import {
+  AutomationExecutionUnauthorizedError,
+  AutomationTriggerBlockedError,
+  Scheduler,
+} from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import {
@@ -67,22 +71,14 @@ import {
   type AutomationRouteAdmission,
 } from "./shared";
 import type { Env } from "../types";
-import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
+import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
-import {
-  AUTOMATION_EXECUTION_GUARD,
-  AUTOMATION_REQUEST_GUARD,
-  automationAuthorizationGuard,
-  permissionSetGuard,
-} from "../automation/authorization-guard";
-import { GuardedWriteConflictError, runGuardedBatch, type GuardedWrite } from "../db/guarded-write";
 
 const logger = createLogger("router:automations");
 
-function rebuildAutomationAuthorizationGuard(
+function requireTargetPermissions(
   ctx: RequestContext,
-  admission: AutomationRouteAdmission,
   requiredPermissions: readonly PermissionId[]
 ): Response | null {
   const authorization = ctx.authorization;
@@ -96,37 +92,12 @@ function rebuildAutomationAuthorizationGuard(
       403
     );
   }
-  admission.authorizationGuard = automationAuthorizationGuard(
-    admission.automation.id,
-    authorization,
-    "manage",
-    requiredPermissions
-  );
   return null;
 }
 
 function admittedAutomation(ctx: RequestContext): AutomationRouteAdmission {
   if (!ctx.automationAdmission) throw new Error("Missing automation route admission");
   return ctx.automationAdmission;
-}
-
-async function runAuthorizedAutomationBatch(
-  ctx: RequestContext,
-  authorizationGuard: GuardedWrite | null,
-  statements: SqlStatement[]
-): Promise<SqlResult[] | Response> {
-  try {
-    return await runGuardedBatch(
-      ctx.db,
-      authorizationGuard ? [authorizationGuard] : [],
-      statements
-    );
-  } catch (cause) {
-    if (cause instanceof GuardedWriteConflictError) {
-      return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
-    }
-    throw cause;
-  }
 }
 
 /** Minimum cron interval in minutes. */
@@ -626,33 +597,12 @@ async function handleCreateAutomation(
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
-  let createAuthorizationGuard: GuardedWrite | null = null;
   if (ctx.principal?.kind === "user") {
-    const authorization = ctx.authorization;
-    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-    if (
-      requestedRepositories.length > 0 &&
-      !authorization.permissions.includes("repositories.use")
-    ) {
-      return json(
-        { error: "Forbidden", code: "permission_required", permission: "repositories.use" },
-        403
-      );
-    }
-    createAuthorizationGuard = permissionSetGuard(authorization, [
-      "automations.create",
+    const targetAuthorizationError = requireTargetPermissions(ctx, [
       ...(requestedRepositories.length > 0 ? (["repositories.use"] as const) : []),
       ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
     ]);
-    if (
-      requestedEnvironmentIds.length > 0 &&
-      !authorization.permissions.includes("environments.use")
-    ) {
-      return json(
-        { error: "Forbidden", code: "permission_required", permission: "environments.use" },
-        403
-      );
-    }
+    if (targetAuthorizationError) return targetAuthorizationError;
   }
 
   const isSchedule = triggerType === "schedule";
@@ -795,12 +745,7 @@ async function handleCreateAutomation(
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
     );
   }
-  const createResult = await runAuthorizedAutomationBatch(
-    ctx,
-    createAuthorizationGuard,
-    createStatements
-  );
-  if (createResult instanceof Response) return createResult;
+  await ctx.db.batch(createStatements);
 
   const automation = await hydrateAutomation(db, (await store.getById(id))!);
 
@@ -972,11 +917,7 @@ async function handleUpdateAutomation(
     ...(environmentSelection.kind === "replace" ? (["environments.use"] as const) : []),
   ];
   if (requiredTargetPermissions.length > 0) {
-    const targetAuthorizationError = rebuildAutomationAuthorizationGuard(
-      ctx,
-      admission,
-      requiredTargetPermissions
-    );
+    const targetAuthorizationError = requireTargetPermissions(ctx, requiredTargetPermissions);
     if (targetAuthorizationError) return targetAuthorizationError;
   }
 
@@ -1141,12 +1082,7 @@ async function handleUpdateAutomation(
     );
   }
   if (statements.length > 0) {
-    const result = await runAuthorizedAutomationBatch(
-      ctx,
-      admission.authorizationGuard,
-      statements
-    );
-    if (result instanceof Response) return result;
+    await ctx.db.batch(statements);
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);
@@ -1171,12 +1107,9 @@ async function handleDeleteAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const { authorizationGuard } = admittedAutomation(ctx);
-  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [
-    store.bindSoftDelete(id),
-  ]);
-  if (result instanceof Response) return result;
-  const deleted = result.at(-1)?.meta.changes === 1;
+  admittedAutomation(ctx);
+  const result = await ctx.db.batch([store.bindSoftDelete(id)]);
+  const deleted = result[0]?.meta.changes === 1;
   if (!deleted) return error("Automation not found", 404);
 
   logger.info("automation.deleted", {
@@ -1199,10 +1132,9 @@ async function handlePauseAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const { authorizationGuard } = admittedAutomation(ctx);
-  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [store.bindPause(id)]);
-  if (result instanceof Response) return result;
-  const paused = result.at(-1)?.meta.changes === 1;
+  admittedAutomation(ctx);
+  const result = await ctx.db.batch([store.bindPause(id)]);
+  const paused = result[0]?.meta.changes === 1;
   if (!paused) return error("Automation not found", 404);
 
   logger.info("automation.paused", {
@@ -1228,7 +1160,7 @@ async function handleResumeAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const { automation: existing, authorizationGuard } = admittedAutomation(ctx);
+  const { automation: existing } = admittedAutomation(ctx);
 
   // For schedule automations, compute the next run time.
   // For event-driven automations, resume with null next_run_at.
@@ -1242,11 +1174,8 @@ async function handleResumeAutomation(
     nextRunAt = null;
   }
 
-  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [
-    store.bindResume(id, nextRunAt),
-  ]);
-  if (result instanceof Response) return result;
-  const resumed = result.at(-1)?.meta.changes === 1;
+  const result = await ctx.db.batch([store.bindResume(id, nextRunAt)]);
+  const resumed = result[0]?.meta.changes === 1;
   if (!resumed) return error("Automation not found", 404);
 
   logger.info("automation.resumed", {
@@ -1272,15 +1201,12 @@ async function handleTriggerAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const { authorizationGuard } = admittedAutomation(ctx);
+  admittedAutomation(ctx);
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
-    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
-      id,
-      authorizationGuard
-    );
+    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",
@@ -1292,16 +1218,7 @@ async function handleTriggerAutomation(
     if (triggerError instanceof AutomationTriggerBlockedError) {
       return error("A run is already active for this automation", 409);
     }
-    if (
-      triggerError instanceof GuardedWriteConflictError &&
-      triggerError.has(AUTOMATION_REQUEST_GUARD)
-    ) {
-      return json({ error: "Authorization changed", code: "authorization_conflict" }, 409);
-    }
-    if (
-      triggerError instanceof GuardedWriteConflictError &&
-      triggerError.has(AUTOMATION_EXECUTION_GUARD)
-    ) {
+    if (triggerError instanceof AutomationExecutionUnauthorizedError) {
       return json({ error: "Execution authorization required" }, 403);
     }
     return error("Failed to trigger automation", 500);
@@ -1374,7 +1291,7 @@ async function handleRegenerateKey(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const { automation, authorizationGuard } = admittedAutomation(ctx);
+  const { automation } = admittedAutomation(ctx);
 
   const workerUrl = env.WORKER_URL || "";
 
@@ -1397,9 +1314,8 @@ async function handleRegenerateKey(
       trigger_auth_data: encrypted,
     } as Record<string, unknown>);
     if (!statement) return error("Automation not found", 404);
-    const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [statement]);
-    if (result instanceof Response) return result;
-    if ((result.at(-1)?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
+    const result = await ctx.db.batch([statement]);
+    if ((result[0]?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 
     logger.info("automation.secret_updated", {
       event: "automation.secret_updated",
@@ -1425,9 +1341,8 @@ async function handleRegenerateKey(
     trigger_auth_data: hash,
   } as Record<string, unknown>);
   if (!statement) return error("Automation not found", 404);
-  const result = await runAuthorizedAutomationBatch(ctx, authorizationGuard, [statement]);
-  if (result instanceof Response) return result;
-  if ((result.at(-1)?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
+  const result = await ctx.db.batch([statement]);
+  if ((result[0]?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 
   logger.info("automation.key_regenerated", {
     event: "automation.key_regenerated",

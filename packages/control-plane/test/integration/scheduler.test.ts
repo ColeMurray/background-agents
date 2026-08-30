@@ -700,7 +700,7 @@ describe("Scheduler (integration)", () => {
   // ─── Invocation finalization (D2) ─────────────────────────────────────────
 
   describe("invocation finalization", () => {
-    /** Seed an invocation with N children in the given statuses via the real guarded insert. */
+    /** Seed an invocation with N children in the given statuses via the real conditional insert. */
     async function seedInvocation(
       store: AutomationStore,
       automationId: string,

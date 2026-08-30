@@ -1,5 +1,4 @@
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
-import { GuardedWriteConflictError, runGuardedBatch, type GuardedWrite } from "./guarded-write";
 
 /**
  * Split-merge primitive: converge a loser canonical user's entire graph onto
@@ -287,22 +286,6 @@ export async function mergeUsers(
     };
   }
 
-  const mergeGuard: GuardedWrite = {
-    name: "user_merge_state",
-    predicate: {
-      sql: `EXISTS (
-          SELECT 1 FROM users u
-          JOIN user_role_assignments ura ON ura.user_id = u.id
-          WHERE u.id = ? AND u.suspended_at IS ? AND ura.role_id = ?
-        )
-        AND EXISTS (
-          SELECT 1 FROM users u
-          JOIN user_role_assignments ura ON ura.user_id = u.id
-          WHERE u.id = ? AND ura.role_id = ?
-        )`,
-      values: [survivorId, survivor.suspended_at, survivorRole.role_id, loserId, loserRole.role_id],
-    },
-  };
   const statements: SqlStatement[] = [];
   const track: Partial<Record<UserMergeCountKey, number>> = {};
   const add = (key: UserMergeCountKey, statement: SqlStatement) => {
@@ -398,15 +381,7 @@ export async function mergeUsers(
     );
   }
 
-  let results: SqlResult[];
-  try {
-    results = await runGuardedBatch(db, [mergeGuard], statements);
-  } catch (cause) {
-    if (cause instanceof GuardedWriteConflictError) {
-      throw new UserMergeError("User role or status changed during merge");
-    }
-    throw cause;
-  }
+  const results: SqlResult[] = await db.batch(statements);
 
   const counts = emptyCounts();
   for (const [key, index] of Object.entries(track) as [UserMergeCountKey, number][]) {
