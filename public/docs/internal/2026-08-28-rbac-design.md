@@ -590,7 +590,9 @@ User merge requires an explicit surviving assignment, merges canonical session m
 preserves both immutable audit snapshots.
 
 Assignment and status updates use guarded SQL that rechecks authorization and Owner invariants in
-the same D1 batch as the mutation.
+the same D1 batch as the mutation. Dynamic guards write their boolean result through the dedicated
+`guarded_write_assertion` table; its `CHECK (satisfied = 1)` constraint explicitly aborts and rolls
+back the batch when a guard no longer holds.
 
 ### Error contract
 

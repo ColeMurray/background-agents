@@ -42,7 +42,7 @@ describe("automation authorization guards", () => {
     const { db, bindings } = recordingDb();
 
     const executionGuard = automationExecutionGuard("automation-1");
-    guardStatement(db, executionGuard.name, executionGuard.predicate);
+    guardStatement(db, executionGuard.predicate);
     await isAutomationExecutionAuthorized(db, "automation-1");
     const authorizationGuard = automationAuthorizationGuard(
       "automation-2",
@@ -50,7 +50,7 @@ describe("automation authorization guards", () => {
       "manage",
       ["sessions.create", "repositories.use"]
     );
-    guardStatement(db, authorizationGuard.name, authorizationGuard.predicate);
+    guardStatement(db, authorizationGuard.predicate);
     await predicateHolds(db, authorizationGuard.predicate);
 
     expect(bindings).toHaveLength(4);
@@ -66,7 +66,7 @@ describe("automation authorization guards", () => {
       authorization,
       "manage"
     );
-    guardStatement(db, authorizationGuard.name, authorizationGuard.predicate);
+    guardStatement(db, authorizationGuard.predicate);
 
     expect(queries[0]).toContain("a.id = ? AND a.deleted_at IS NULL");
   });

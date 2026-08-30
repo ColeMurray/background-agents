@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import {
   GuardedWriteConflictError,
-  guardSql,
+  guardAssertionSql,
   guardStatement,
   runGuardedBatch,
   type GuardedWrite,
@@ -49,14 +49,13 @@ const guard: GuardedWrite = {
 };
 
 describe("guarded writes", () => {
-  it("owns the SQLite batch-abort expression and bindings", () => {
+  it("uses the database assertion constraint and preserves predicate bindings", () => {
     const { db, queries, bindings } = fakeDatabase();
 
-    guardStatement(db, guard.name, guard.predicate);
+    guardStatement(db, guard.predicate);
 
-    expect(queries[0]).toBe(guardSql("authorization_guard", "user_id = ?"));
+    expect(queries[0]).toBe(guardAssertionSql("user_id = ?"));
     expect(bindings[0]).toEqual(["user-1"]);
-    expect(() => guardSql("invalid-name", "1 = 1")).toThrow("Invalid SQL guard name");
   });
 
   it("returns only mutation results after successful guards", async () => {
@@ -67,7 +66,7 @@ describe("guarded writes", () => {
   });
 
   it("rechecks the same predicates and reports failed guard names", async () => {
-    const failure = new Error("integer overflow");
+    const failure = new Error("CHECK constraint failed: guarded_write_assertion_satisfied");
     const { db } = fakeDatabase({ batchError: failure, predicateResults: [0] });
 
     await expect(runGuardedBatch(db, [guard], [])).rejects.toMatchObject({

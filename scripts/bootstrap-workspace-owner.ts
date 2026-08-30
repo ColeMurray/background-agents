@@ -16,7 +16,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { guardSql } from "../packages/control-plane/src/db/guarded-write.ts";
+import { guardAssertionSql } from "../packages/control-plane/src/db/guarded-write.ts";
 
 const CANONICAL_USER_ID = /^[0-9a-f]{32}$/;
 const OWNER_ROLE_ID = "role_builtin_owner";
@@ -108,7 +108,9 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
       'id', 'occurred_at', 'request_id', 'principal_kind',
       'actor_user_id_snapshot', 'actor_service_snapshot', 'action', 'resource_type',
       'resource_id', 'target_user_id_snapshot', 'reason_code'
-    )) = 11`;
+    )) = 11
+  AND (SELECT COUNT(*) FROM pragma_table_info('guarded_write_assertion')
+    WHERE name IN ('singleton', 'satisfied')) = 2`;
   const commonPreconditions = `${schemaReady}
   AND (SELECT COUNT(*) FROM users WHERE id = ${userId}) = 1
   AND (SELECT COUNT(*) FROM user_role_assignments WHERE user_id = ${userId}) = 1
@@ -175,7 +177,7 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
 
   return `${preflight}
 
-${guardSql("precondition_guard", executableState)};
+${guardAssertionSql(executableState)};
 
 INSERT INTO authorization_audit_events
   (id, occurred_at, request_id, principal_kind,
@@ -190,15 +192,12 @@ UPDATE user_role_assignments
 SET role_id = ${ownerRoleId}
 WHERE user_id = ${userId} AND ${exactAudit};
 
-${guardSql(
-  "postcondition_guard",
-  `${commonPreconditions}
+${guardAssertionSql(`${commonPreconditions}
   AND ${targetIsOwner}
   AND NOT (${anotherUnsuspendedOwner})
   AND (${exactAudit} OR NOT EXISTS (
     SELECT 1 FROM authorization_audit_events WHERE id = ${auditId}
-  ))`
-)};
+  ))`)};
 
 SELECT 'postcondition' AS report,
   CASE WHEN EXISTS (

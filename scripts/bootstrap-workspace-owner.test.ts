@@ -36,6 +36,10 @@ function createDatabase(): DatabaseSync {
       target_user_id_snapshot TEXT,
       reason_code TEXT NOT NULL
     );
+    CREATE TABLE guarded_write_assertion (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      satisfied INTEGER NOT NULL CONSTRAINT guarded_write_assertion_satisfied CHECK (satisfied = 1)
+    );
     INSERT INTO roles (id, key, is_system) VALUES
       ('role_builtin_owner', 'owner', 1),
       ('role_builtin_member', 'member', 1);
@@ -226,7 +230,10 @@ describe("Owner bootstrap SQL", () => {
       suspended_at: null,
       role_id: "role_builtin_member",
     });
-    assert.throws(() => execute(database, "audit-refused", 100), /integer overflow/);
+    assert.throws(
+      () => execute(database, "audit-refused", 100),
+      /guarded_write_assertion_satisfied/
+    );
     assert.equal(
       database.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?").get(USER_ID)!
         .role_id,
@@ -252,7 +259,10 @@ describe("Owner bootstrap SQL", () => {
     const suspended = createDatabase();
     suspended.exec(`UPDATE users SET suspended_at = 1 WHERE id = '${USER_ID}'`);
     assert.equal(preflight(suspended).detail, "target user is suspended");
-    assert.throws(() => execute(suspended, "audit-suspended", 100), /integer overflow/);
+    assert.throws(
+      () => execute(suspended, "audit-suspended", 100),
+      /guarded_write_assertion_satisfied/
+    );
 
     const missingAssignment = createDatabase();
     missingAssignment.exec(`DELETE FROM user_role_assignments WHERE user_id = '${USER_ID}'`);
@@ -260,7 +270,10 @@ describe("Owner bootstrap SQL", () => {
       preflight(missingAssignment).detail,
       "target must have exactly one role assignment"
     );
-    assert.throws(() => execute(missingAssignment, "audit-unassigned", 100), /integer overflow/);
+    assert.throws(
+      () => execute(missingAssignment, "audit-unassigned", 100),
+      /guarded_write_assertion_satisfied/
+    );
   });
 
   it("treats a current target Owner as a no-op without requiring audit history", () => {

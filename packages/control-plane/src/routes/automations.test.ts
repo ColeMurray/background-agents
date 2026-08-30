@@ -1763,7 +1763,10 @@ describe("automation route handlers", () => {
     it("returns 409 when request authorization changes during the guarded insert", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       mockSchedulerTrigger.mockRejectedValue(
-        new GuardedWriteConflictError([AUTOMATION_REQUEST_GUARD], new Error("integer overflow"))
+        new GuardedWriteConflictError(
+          [AUTOMATION_REQUEST_GUARD],
+          new Error("CHECK constraint failed")
+        )
       );
 
       const res = await callRoute("POST", "/automations/auto-1/trigger");
@@ -1778,7 +1781,10 @@ describe("automation route handlers", () => {
     it("returns 403 when execution authorization changes during the guarded insert", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
       mockSchedulerTrigger.mockRejectedValue(
-        new GuardedWriteConflictError([AUTOMATION_EXECUTION_GUARD], new Error("integer overflow"))
+        new GuardedWriteConflictError(
+          [AUTOMATION_EXECUTION_GUARD],
+          new Error("CHECK constraint failed")
+        )
       );
 
       const res = await callRoute("POST", "/automations/auto-1/trigger");
