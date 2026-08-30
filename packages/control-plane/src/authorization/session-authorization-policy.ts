@@ -4,16 +4,14 @@ import {
   type PermissionScope,
   type ScopedPermissionStem,
 } from "@open-inspect/shared/rbac";
-import type { SqlDatabase } from "../db/sql-database";
+import type { SessionRequiredRelation } from "../db/session-access";
 import type { SessionAuthorizationOperation } from "../routes/shared";
 
-export type SessionRelation = "creator" | "participant";
 export type SessionPermissionScope = PermissionScope;
-export type SessionRelationshipError = "creator_required" | "session_access_required";
 
 const OPERATION_DEFINITIONS: Record<
   SessionAuthorizationOperation,
-  { permissionStem: ScopedPermissionStem; requiredRelation: "access" | "creator" }
+  { permissionStem: ScopedPermissionStem; requiredRelation: SessionRequiredRelation }
 > = {
   read: { permissionStem: "sessions.read", requiredRelation: "access" },
   collaborate: { permissionStem: "sessions.collaborate", requiredRelation: "access" },
@@ -40,46 +38,8 @@ export function sessionPermissionStem(
   return OPERATION_DEFINITIONS[operation].permissionStem;
 }
 
-export function sessionRelationshipDecision(
-  operation: SessionAuthorizationOperation,
-  scope: SessionPermissionScope,
-  relation: SessionRelation | null
-): { allowed: true } | { allowed: false; code: SessionRelationshipError } {
-  if (scope === "any") return { allowed: true };
-  if (OPERATION_DEFINITIONS[operation].requiredRelation === "creator") {
-    return relation === "creator"
-      ? { allowed: true }
-      : { allowed: false, code: "creator_required" };
-  }
-  return relation ? { allowed: true } : { allowed: false, code: "session_access_required" };
-}
-
-export async function getSessionRelation(
-  db: SqlDatabase,
-  sessionId: string,
-  userId: string
-): Promise<SessionRelation | null> {
-  const row = await db
-    .prepare(
-      `SELECT relation FROM session_access
-       WHERE session_id = ? AND user_id = ?`
-    )
-    .bind(sessionId, userId)
-    .first<{ relation: SessionRelation }>();
-  return row?.relation ?? null;
-}
-
-export function sessionAccessPredicate(
-  sessionAlias: string,
-  userId: string,
-  scope: SessionPermissionScope
-): { sql: string; params: string[] } {
-  if (scope === "any") return { sql: "1 = 1", params: [] };
-  return {
-    sql: `EXISTS (
-      SELECT 1 FROM session_access access
-      WHERE access.session_id = ${sessionAlias}.id AND access.user_id = ?
-    )`,
-    params: [userId],
-  };
+export function sessionRequiredRelation(
+  operation: SessionAuthorizationOperation
+): SessionRequiredRelation {
+  return OPERATION_DEFINITIONS[operation].requiredRelation;
 }

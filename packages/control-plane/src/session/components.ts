@@ -128,11 +128,8 @@ import { SessionStatusService } from "./session-status-service";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
-import {
-  getSessionRelation,
-  sessionPermissionScope,
-  sessionRelationshipDecision,
-} from "../authorization/session-authorization-policy";
+import { sessionPermissionScope } from "../authorization/session-authorization-policy";
+import { requireSessionAccess, SessionAccessError } from "../db/session-access";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -707,12 +704,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         const session = sessionCoreRepository.getSession();
         if (!session) return "rejected";
         const sessionId = resolvePublicSessionId(session, durableObjectId);
-        const relation = scope === "own" ? await getSessionRelation(db, sessionId, userId) : null;
-        return sessionRelationshipDecision("collaborate", scope, relation).allowed
-          ? "valid"
-          : "rejected";
+        if (scope === "own") await requireSessionAccess(db, sessionId, userId, "access");
+        return "valid";
       } catch (error) {
-        if (error instanceof AuthorizationError) return "rejected";
+        if (error instanceof AuthorizationError || error instanceof SessionAccessError) {
+          return "rejected";
+        }
         log.error("WebSocket authorization verification failed", {
           user_id: userId,
           error: error instanceof Error ? error : String(error),

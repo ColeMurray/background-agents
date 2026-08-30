@@ -6,12 +6,10 @@ import type {
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
+import { sessionAccessPredicate } from "./session-access";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import {
-  sessionAccessPredicate,
-  type SessionPermissionScope,
-} from "../authorization/session-authorization-policy";
+import type { SessionPermissionScope } from "../authorization/session-authorization-policy";
 
 export interface ListSessionInboxOptions {
   category: SessionInboxCategory;

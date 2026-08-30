@@ -22,10 +22,10 @@ import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { automationAuthorizationGuard } from "./automation/authorization-guard";
 import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
 import {
-  getSessionRelation,
   sessionPermissionStem,
-  sessionRelationshipDecision,
+  sessionRequiredRelation,
 } from "./authorization/session-authorization-policy";
+import { requireSessionAccess, SessionAccessError } from "./db/session-access";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -482,10 +482,19 @@ async function enforceSessionRequirement(
     }
 
     const scope = ctx.principal?.kind === "service" ? "own" : resolvedScope;
-    const relation = scope === "own" ? await getSessionRelation(ctx.db, sessionId, userId) : null;
-    const decision = sessionRelationshipDecision(requirement.operation, scope, relation);
-    return decision.allowed ? null : json({ error: "Forbidden", code: decision.code }, 403);
-  } catch {
+    if (scope === "own") {
+      await requireSessionAccess(
+        ctx.db,
+        sessionId,
+        userId,
+        sessionRequiredRelation(requirement.operation)
+      );
+    }
+    return null;
+  } catch (error) {
+    if (error instanceof SessionAccessError) {
+      return json({ error: "Forbidden", code: error.code }, 403);
+    }
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
   }
 }

@@ -32,10 +32,8 @@ import {
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import {
-  sessionAccessPredicate,
-  type SessionPermissionScope,
-} from "../authorization/session-authorization-policy";
+import { sessionAccessPredicate } from "./session-access";
+import type { SessionPermissionScope } from "../authorization/session-authorization-policy";
 
 export type {
   ListSessionInboxOptions,
