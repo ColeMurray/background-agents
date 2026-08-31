@@ -254,6 +254,13 @@ describe("RBAC routes", () => {
       ["/sessions/viewer-session/prompt", "POST", "sessions.collaborate", { content: "Denied" }],
       ["/sessions/viewer-session/stop", "POST", "sessions.lifecycle", undefined],
       ["/sessions/viewer-session/sandbox-access", "GET", "sessions.sandbox_access", undefined],
+      ["/skill-profiles", "GET", "skill_profiles.manage_own", undefined],
+      ["/skill-profiles", "POST", "skill_profiles.manage_own", { name: "Denied", skillIds: [] }],
+      ["/skill-profiles/profile-1", "PATCH", "skill_profiles.manage_own", { name: "Denied" }],
+      ["/skill-profiles/profile-1", "DELETE", "skill_profiles.manage_own", undefined],
+      ["/model-provider-accounts", "GET", "provider_accounts.read", undefined],
+      ["/model-provider-account-defaults", "GET", "provider_accounts.read", undefined],
+      ["/model-provider-accounts/legacy-credentials", "GET", "provider_accounts.read", undefined],
     ] as const) {
       const denied = await serviceFetch(`https://cp.test${path}`, {
         method,

@@ -1,6 +1,6 @@
 import useSWR from "swr";
 import { z, type ZodType } from "zod";
-import { useAuthSession } from "@/lib/auth-session";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   modelProviderAccountDefaultsResponseSchema,
@@ -89,11 +89,12 @@ async function requestProviderResourceWithoutContent(
 }
 
 export function useProviderAccounts() {
-  const { data: session } = useAuthSession();
-  const accounts = useSWR(session ? ACCOUNTS_KEY : null, async (path) => {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canRead = hasPermission("provider_accounts.read");
+  const accounts = useSWR(canRead ? ACCOUNTS_KEY : null, async (path) => {
     return (await requestProviderResource(path, modelProviderAccountsResponseSchema)).accounts;
   });
-  const defaults = useSWR(session ? DEFAULTS_KEY : null, async (path) => {
+  const defaults = useSWR(canRead ? DEFAULTS_KEY : null, async (path) => {
     return (await requestProviderResource(path, modelProviderAccountDefaultsResponseSchema))
       .defaults;
   });
@@ -112,9 +113,10 @@ export function useProviderAccounts() {
 }
 
 export function useLegacyProviderCredentials() {
-  const { data: session } = useAuthSession();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canRead = hasPermission("provider_accounts.read");
   const result = useSWR<LegacyProviderCredentialsResponse>(
-    session ? LEGACY_CREDENTIALS_KEY : null,
+    canRead ? LEGACY_CREDENTIALS_KEY : null,
     async (path: BrowserApiPath) => {
       return requestProviderResource(path, legacyProviderCredentialsResponseSchema);
     }

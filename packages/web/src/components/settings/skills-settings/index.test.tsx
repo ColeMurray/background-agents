@@ -32,16 +32,13 @@ afterEach(() => {
   permissions.clear();
 });
 
-it("keeps Viewer personal profile actions while shared skills remain read-only", async () => {
+it("keeps Viewer skills read-only and hides personal profiles", () => {
   permissions.add("skills.read");
-  permissions.add("skill_profiles.manage_own");
-  const user = userEvent.setup();
 
   render(<SkillsSettings />);
 
   expect(screen.getByText("Shared skills are read-only")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "My profiles" }));
-  expect(screen.getByText("Personal profiles are manageable")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "My profiles" })).not.toBeInTheDocument();
 });
 
 it("keeps both mutation surfaces available to a managing role", async () => {
@@ -49,9 +46,14 @@ it("keeps both mutation surfaces available to a managing role", async () => {
   permissions.add("skill_profiles.manage_own");
   const user = userEvent.setup();
 
-  render(<SkillsSettings />);
+  const { rerender } = render(<SkillsSettings />);
 
   expect(screen.getByText("Shared skills are manageable")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "My profiles" }));
   expect(screen.getByText("Personal profiles are manageable")).toBeInTheDocument();
+
+  permissions.delete("skill_profiles.manage_own");
+  rerender(<SkillsSettings />);
+  expect(screen.queryByText("Personal profiles are manageable")).not.toBeInTheDocument();
+  expect(screen.getByText("Shared skills are manageable")).toBeInTheDocument();
 });

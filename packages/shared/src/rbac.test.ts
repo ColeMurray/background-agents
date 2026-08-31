@@ -100,6 +100,11 @@ describe("RBAC registry", () => {
     );
   });
 
+  it("reserves personal profile management for Member and above", () => {
+    expect(permissionsForBuiltInRole("member")).toContain("skill_profiles.manage_own");
+    expect(permissionsForBuiltInRole("viewer")).not.toContain("skill_profiles.manage_own");
+  });
+
   it("requires an assigned role and uses suspension timestamps in public contracts", () => {
     expect(
       effectiveAuthorizationSchema.parse({

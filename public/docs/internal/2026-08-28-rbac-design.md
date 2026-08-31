@@ -228,7 +228,8 @@ The table groups permissions for readability; the registry stores individual ide
 | Manage models/provider accounts/integrations/SCM/signing |  Yes  |      Yes      |    No    |   No   |
 | Read shared skills and MCP servers                       |  Yes  |      Yes      |   Yes    |  Yes   |
 | Manage shared skills and MCP servers                     |  Yes  |      Yes      |    No    |   No   |
-| Manage own skill profiles and personal preferences       |  Yes  |      Yes      |   Yes    |  Yes   |
+| Manage own skill profiles                                |  Yes  |      Yes      |   Yes    |   No   |
+| Manage personal preferences                              |  Yes  |      Yes      |   Yes    |  Yes   |
 
 Viewer receives `sessions.read` but no collaborate or lifecycle permission. Member receives every
 non-administrative session operation across the workspace. Administrator preserves the existing

@@ -111,7 +111,6 @@ const VIEWER_PERMISSIONS = new Set<PermissionId>([
   "mcp_servers.read",
   "repositories.read",
   "sessions.read",
-  "skill_profiles.manage_own",
   "skills.read",
 ]);
 
@@ -128,6 +127,7 @@ const MEMBER_PERMISSIONS = new Set<PermissionId>([
   "sessions.delete",
   "sessions.lifecycle",
   "sessions.sandbox_access",
+  "skill_profiles.manage_own",
 ]);
 
 /** Validates permission identifiers at API and storage boundaries. */
