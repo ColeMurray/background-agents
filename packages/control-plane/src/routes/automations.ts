@@ -19,6 +19,7 @@ import {
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { listChannels } from "@open-inspect/shared/slack";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import {
   getValidModelOrDefault,
   isValidModel,
@@ -48,7 +49,11 @@ import { generateId } from "../auth/crypto";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import { AutomationTriggerBlockedError, Scheduler } from "../scheduler/scheduler";
+import {
+  AutomationExecutionUnauthorizedError,
+  AutomationTriggerBlockedError,
+  Scheduler,
+} from "../scheduler/scheduler";
 import { hydrateAutomation } from "../automation/hydrate";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import {
@@ -63,13 +68,39 @@ import {
   resolveRepoOrError,
   requireAutomation,
   requirePermission,
+  type AutomationRouteAdmission,
 } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { z } from "zod";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
+import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 
 const logger = createLogger("router:automations");
+
+function requireTargetPermissions(
+  ctx: RequestContext,
+  requiredPermissions: readonly PermissionId[]
+): Response | null {
+  const authorization = ctx.authorization;
+  if (!authorization) return json({ error: "Authorization unavailable" }, 503);
+  const missingPermission = requiredPermissions.find(
+    (permission) => !authorization.permissions.includes(permission)
+  );
+  if (missingPermission) {
+    return json(
+      { error: "Forbidden", code: "permission_required", permission: missingPermission },
+      403
+    );
+  }
+  return null;
+}
+
+function admittedAutomation(ctx: RequestContext): AutomationRouteAdmission {
+  if (!ctx.automationAdmission) throw new Error("Missing automation route admission");
+  return ctx.automationAdmission;
+}
 
 /** Minimum cron interval in minutes. */
 const MIN_CRON_INTERVAL_MINUTES = 15;
@@ -568,6 +599,13 @@ async function handleCreateAutomation(
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
   }
+  if (ctx.principal?.kind === "user") {
+    const targetAuthorizationError = requireTargetPermissions(ctx, [
+      ...(requestedRepositories.length > 0 ? (["repositories.use"] as const) : []),
+      ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
+    ]);
+    if (targetAuthorizationError) return targetAuthorizationError;
+  }
 
   const isSchedule = triggerType === "schedule";
 
@@ -709,7 +747,7 @@ async function handleCreateAutomation(
       ...slackStore.bindChannelStatements(row.id, extractSlackChannels(body.triggerConfig))
     );
   }
-  await db.batch(createStatements);
+  await ctx.db.batch(createStatements);
 
   const automation = await hydrateAutomation(db, (await store.getById(id))!);
 
@@ -776,8 +814,8 @@ async function handleUpdateAutomation(
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
-  const existing = await store.getById(id);
-  if (!existing) return error("Automation not found", 404);
+  const admission = admittedAutomation(ctx);
+  const { automation: existing } = admission;
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
@@ -876,6 +914,14 @@ async function handleUpdateAutomation(
   // it simply applies from the next invocation.
   const selection = getRepositorySelection(body);
   const environmentSelection = getEnvironmentSelection(body);
+  const requiredTargetPermissions: PermissionId[] = [
+    ...(selection.kind === "replace" ? (["repositories.use"] as const) : []),
+    ...(environmentSelection.kind === "replace" ? (["environments.use"] as const) : []),
+  ];
+  if (requiredTargetPermissions.length > 0) {
+    const targetAuthorizationError = requireTargetPermissions(ctx, requiredTargetPermissions);
+    if (targetAuthorizationError) return targetAuthorizationError;
+  }
 
   // The count rules span both selections, so when EITHER is replaced they are
   // validated against the automation's FINAL state (the replacement plus the
@@ -1038,7 +1084,7 @@ async function handleUpdateAutomation(
     );
   }
   if (statements.length > 0) {
-    await db.batch(statements);
+    await ctx.db.batch(statements);
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);
@@ -1063,7 +1109,9 @@ async function handleDeleteAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const deleted = await store.softDelete(id);
+  admittedAutomation(ctx);
+  const result = await ctx.db.batch([store.bindSoftDelete(id)]);
+  const deleted = result[0]?.meta.changes === 1;
   if (!deleted) return error("Automation not found", 404);
 
   logger.info("automation.deleted", {
@@ -1086,7 +1134,9 @@ async function handlePauseAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const paused = await store.pause(id);
+  admittedAutomation(ctx);
+  const result = await ctx.db.batch([store.bindPause(id)]);
+  const paused = result[0]?.meta.changes === 1;
   if (!paused) return error("Automation not found", 404);
 
   logger.info("automation.paused", {
@@ -1112,8 +1162,7 @@ async function handleResumeAutomation(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const existing = await store.getById(id);
-  if (!existing) return error("Automation not found", 404);
+  const { automation: existing } = admittedAutomation(ctx);
 
   // For schedule automations, compute the next run time.
   // For event-driven automations, resume with null next_run_at.
@@ -1127,7 +1176,8 @@ async function handleResumeAutomation(
     nextRunAt = null;
   }
 
-  const resumed = await store.resume(id, nextRunAt);
+  const result = await ctx.db.batch([store.bindResume(id, nextRunAt)]);
+  const resumed = result[0]?.meta.changes === 1;
   if (!resumed) return error("Automation not found", 404);
 
   logger.info("automation.resumed", {
@@ -1145,7 +1195,7 @@ async function handleResumeAutomation(
 }
 
 async function handleTriggerAutomation(
-  _request: Request,
+  request: Request,
   env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
@@ -1153,14 +1203,37 @@ async function handleTriggerAutomation(
   const id = match.groups?.id;
   if (!id) return error("Automation ID required", 400);
 
-  const store = new AutomationStore(ctx.db);
-  const automation = await store.getById(id);
-  if (!automation) return error("Automation not found", 404);
+  admittedAutomation(ctx);
+  const requesterUserId = ctx.authorization?.userId;
+  if (!requesterUserId) return error("Authorization unavailable", 503);
+
+  let requesterEnrichment;
+  try {
+    requesterEnrichment = await resolveGitHubEnrichmentForRequest(
+      env,
+      ctx.db,
+      new UserStore(ctx.db),
+      requesterUserId,
+      await resolveGitHubCredentialAuthority(ctx, request.headers)
+    );
+  } catch (enrichmentError) {
+    logger.warn("Failed to enrich manual automation trigger with GitHub identity", {
+      error:
+        enrichmentError instanceof Error ? enrichmentError : new Error(String(enrichmentError)),
+      automation_id: id,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
-    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(id);
+    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
+      id,
+      requesterUserId,
+      requesterEnrichment ?? undefined
+    );
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",
@@ -1171,6 +1244,9 @@ async function handleTriggerAutomation(
     });
     if (triggerError instanceof AutomationTriggerBlockedError) {
       return error("A run is already active for this automation", 409);
+    }
+    if (triggerError instanceof AutomationExecutionUnauthorizedError) {
+      return json({ error: "Execution authorization required" }, 403);
     }
     return error("Failed to trigger automation", 500);
   }
@@ -1242,8 +1318,7 @@ async function handleRegenerateKey(
   if (!id) return error("Automation ID required", 400);
 
   const store = new AutomationStore(ctx.db);
-  const automation = await store.getById(id);
-  if (!automation) return error("Automation not found", 404);
+  const { automation } = admittedAutomation(ctx);
 
   const workerUrl = env.WORKER_URL || "";
 
@@ -1262,7 +1337,12 @@ async function handleRegenerateKey(
       parsedBody.data.sentryClientSecret,
       env.REPO_SECRETS_ENCRYPTION_KEY
     );
-    await store.update(id, { trigger_auth_data: encrypted } as Record<string, unknown>);
+    const statement = store.bindAutomationUpdate(id, {
+      trigger_auth_data: encrypted,
+    } as Record<string, unknown>);
+    if (!statement) return error("Automation not found", 404);
+    const result = await ctx.db.batch([statement]);
+    if ((result[0]?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 
     logger.info("automation.secret_updated", {
       event: "automation.secret_updated",
@@ -1284,7 +1364,12 @@ async function handleRegenerateKey(
   const apiKey = generateWebhookApiKey();
   const hash = await hashApiKey(apiKey);
 
-  await store.update(id, { trigger_auth_data: hash } as Record<string, unknown>);
+  const statement = store.bindAutomationUpdate(id, {
+    trigger_auth_data: hash,
+  } as Record<string, unknown>);
+  if (!statement) return error("Automation not found", 404);
+  const result = await ctx.db.batch([statement]);
+  if ((result[0]?.meta.changes ?? 0) === 0) return error("Automation not found", 404);
 
   logger.info("automation.key_regenerated", {
     event: "automation.key_regenerated",

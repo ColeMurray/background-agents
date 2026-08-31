@@ -70,8 +70,10 @@ import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
+import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
+import type { GitHubEnrichment } from "../session/identity";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -188,9 +190,20 @@ export class AutomationTriggerBlockedError extends Error {
   }
 }
 
+/** Raised when an automation's execution principal lacks required authorization. */
+export class AutomationExecutionUnauthorizedError extends Error {
+  /** Create an error for an unauthorized automation execution principal. */
+  constructor() {
+    super("Automation execution principal is not authorized");
+    this.name = "AutomationExecutionUnauthorizedError";
+  }
+}
+
 interface StartInvocationParams {
   automation: AutomationRow;
   source: AutomationInvocationSource;
+  /** Human authority used for a manual firing; unattended sources use the automation owner. */
+  executionPrincipal?: ExecutionPrincipal;
   /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
   scheduledAt?: number;
   /** Next cron slot, advanced atomically with the insert (schedule source only). */
@@ -213,6 +226,12 @@ interface StartInvocationParams {
    * `instructionsOverride` so admitted children cannot be stranded.
    */
   instructionsOverrideFactory?: () => Promise<string>;
+}
+
+interface ExecutionPrincipal {
+  platformUserId: string;
+  participantUserId: string;
+  scmEnrichment?: GitHubEnrichment;
 }
 
 type StartInvocationResult =
@@ -255,6 +274,7 @@ export function composeAutomationPrompt(contextBlock: string, instructions: stri
   return `${instructions}\n---\n\n${contextBlock}`;
 }
 
+/** Coordinates authorized automation scheduling, dispatch, and completion handling. */
 export class Scheduler {
   private readonly log: Logger;
 
@@ -323,7 +343,37 @@ export class Scheduler {
     store: AutomationStore,
     params: StartInvocationParams
   ): Promise<StartInvocationResult> {
-    const { automation, source } = params;
+    const { source } = params;
+    let automation = params.automation;
+    if (!automation.user_id && automation.created_by && automation.created_by !== "anonymous") {
+      const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
+      if (identity) {
+        await this.db
+          .prepare(`UPDATE automations SET user_id = ? WHERE id = ? AND user_id IS NULL`)
+          .bind(identity.userId, automation.id)
+          .run();
+        automation = { ...automation, user_id: identity.userId };
+      }
+    }
+    const executionPrincipal =
+      params.executionPrincipal ??
+      (automation.user_id
+        ? {
+            platformUserId: automation.user_id,
+            participantUserId: automation.created_by,
+          }
+        : null);
+    if (
+      !executionPrincipal ||
+      !(await isAutomationExecutionAuthorized(
+        this.db,
+        automation.id,
+        [],
+        executionPrincipal.platformUserId
+      ))
+    ) {
+      throw new AutomationExecutionUnauthorizedError();
+    }
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
 
@@ -335,7 +385,7 @@ export class Scheduler {
         ? { kind: "concurrencyKey", concurrencyKey }
         : { kind: "automation" };
 
-    // Cheap pre-check; the guarded insert below re-applies the same predicate
+    // Cheap pre-check; the conditional insert below re-applies the same predicate
     // atomically, so a race here only costs a wasted child build.
     const activeRun =
       overlapScope.kind === "concurrencyKey"
@@ -406,7 +456,7 @@ export class Scheduler {
     const launchCandidates = children.filter((child) => child.status === "starting");
     // Resolve provider routing before admission, alongside the already-built
     // target children. Together these values are the immutable launch snapshot
-    // for this firing: edits made after the guarded insert cannot change which
+    // for this firing: edits made after the conditional insert cannot change which
     // account an admitted child uses.
     let providerAuthSnapshot:
       | { providerAuth: SessionModelProviderAuthInput[] }
@@ -501,9 +551,16 @@ export class Scheduler {
           automation,
           child,
           providerAuthSnapshot.providerAuth,
-          sessionId
+          sessionId,
+          executionPrincipal
         );
-        await this.sendPromptToSession(sessionId, automation, child.id, instructionsOverride);
+        await this.sendPromptToSession(
+          sessionId,
+          automation,
+          child.id,
+          executionPrincipal,
+          instructionsOverride
+        );
         child.status = "running";
         child.session_id = sessionId;
       } catch (e) {
@@ -862,7 +919,7 @@ export class Scheduler {
 
   // ─── Event handler ───────────────────────────────────────────────────────
 
-  /** Match an inbound event to automations and start or steer their invocations. */
+  /** Match an inbound event to authorized automations and start or steer their invocations. */
   async event(event: AutomationEvent): Promise<SchedulerEventResult> {
     const store = new AutomationStore(this.db);
 
@@ -938,9 +995,32 @@ export class Scheduler {
           event.concurrencyKey,
           now - SLACK_THREAD_CONTINUITY_WINDOW_MS
         );
-        if (steerable?.session_id && (await this.steerSession(steerable, automation, event))) {
-          steered++;
-          continue;
+        if (steerable?.session_id) {
+          let ownerAuthorized: boolean;
+          try {
+            ownerAuthorized = await isAutomationExecutionAuthorized(this.db, automation.id, [
+              "sessions.collaborate",
+            ]);
+          } catch (error) {
+            this.log.warn("Failed to authorize automation owner for slack steering", {
+              event: "scheduler.slack_steer_authorization_failed",
+              automation_id: automation.id,
+              error: error instanceof Error ? error : new Error(String(error)),
+            });
+            continue;
+          }
+          if (!ownerAuthorized) {
+            this.log.warn("Blocked slack steering for unauthorized automation owner", {
+              event: "scheduler.slack_steer_unauthorized",
+              automation_id: automation.id,
+              session_id: steerable.session_id,
+            });
+            continue;
+          }
+          if (await this.steerSession(steerable, automation, event)) {
+            steered++;
+            continue;
+          }
         }
         // No steerable session (outside the window, no session yet, or a rare
         // enqueue error) → fall through. Like the @mention path's stale-session
@@ -1027,14 +1107,27 @@ export class Scheduler {
 
   // ─── Manual trigger ──────────────────────────────────────────────────────
 
-  async trigger(automationId: string): Promise<SchedulerTriggerResult> {
+  /** Manually trigger an automation under the requesting user's authority. */
+  async trigger(
+    automationId: string,
+    requesterUserId: string,
+    requesterEnrichment?: GitHubEnrichment
+  ): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
       throw new Error("Automation not found");
     }
 
-    const result = await this.startInvocation(store, { automation, source: "manual" });
+    const result = await this.startInvocation(store, {
+      automation,
+      source: "manual",
+      executionPrincipal: {
+        platformUserId: requesterUserId,
+        participantUserId: requesterUserId,
+        scmEnrichment: requesterEnrichment,
+      },
+    });
 
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing.
@@ -1303,28 +1396,9 @@ export class Scheduler {
     automation: AutomationRow,
     run: AutomationRunRow,
     providerAuth: SessionModelProviderAuthInput[],
-    sessionId: string
+    sessionId: string,
+    executionPrincipal: ExecutionPrincipal
   ): Promise<void> {
-    // Resolve the canonical user_id for the session index.
-    // Automations created through the web UI populate user_id at creation time
-    // (handleCreateAutomation resolves it for both GitHub and Google users), so this
-    // lookup is skipped for them. The fallback below only covers legacy rows with
-    // user_id = NULL: those predate Google login and store the GitHub numeric user ID
-    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
-    // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
-    let userId = automation.user_id;
-    if (!userId && automation.created_by && automation.created_by !== "anonymous") {
-      try {
-        const userStore = new UserStore(this.db);
-        const identity = await userStore.getIdentity("github", automation.created_by);
-        if (identity) {
-          userId = identity.userId;
-        }
-      } catch {
-        // Best-effort — proceed without user_id
-      }
-    }
-
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
       request_id: run.id,
@@ -1361,7 +1435,7 @@ export class Scheduler {
         environmentId: target.environmentId,
       },
       { mode: "all" },
-      userId
+      executionPrincipal.platformUserId
     );
 
     const sessionInput: SessionInitInput = {
@@ -1370,10 +1444,15 @@ export class Scheduler {
       title: `[Auto] ${automation.name}`,
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
-      participantUserId: automation.created_by,
-      platformUserId: userId,
-      scmTokenEncrypted: null,
-      scmRefreshTokenEncrypted: null,
+      participantUserId: executionPrincipal.participantUserId,
+      platformUserId: executionPrincipal.platformUserId,
+      scmUserId: executionPrincipal.scmEnrichment?.scmUserId,
+      scmLogin: executionPrincipal.scmEnrichment?.scmLogin,
+      scmName: executionPrincipal.scmEnrichment?.displayName,
+      scmEmail: executionPrincipal.scmEnrichment?.email,
+      scmTokenEncrypted: executionPrincipal.scmEnrichment?.accessTokenEncrypted ?? null,
+      scmRefreshTokenEncrypted: executionPrincipal.scmEnrichment?.refreshTokenEncrypted ?? null,
+      scmTokenExpiresAt: executionPrincipal.scmEnrichment?.tokenExpiresAt,
       codeServerEnabled,
       vncEnabled,
       sandboxSettings,
@@ -1392,6 +1471,7 @@ export class Scheduler {
     sessionId: string,
     automation: AutomationRow,
     runId: string,
+    executionPrincipal: ExecutionPrincipal,
     instructionsOverride?: string
   ): Promise<void> {
     const callbackContext: AutomationCallbackContext = {
@@ -1403,8 +1483,8 @@ export class Scheduler {
 
     await this.enqueueSessionPrompt(sessionId, {
       content: instructionsOverride ?? automation.instructions,
-      authorId: automation.created_by,
-      canonicalUserId: automation.user_id,
+      authorId: executionPrincipal.participantUserId,
+      canonicalUserId: executionPrincipal.platformUserId,
       source: "automation",
       callbackContext,
     });

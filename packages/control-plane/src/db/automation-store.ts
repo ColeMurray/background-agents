@@ -206,6 +206,7 @@ export function toAutomation(
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
+    userId: row.user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -314,6 +315,7 @@ function toAutomationInvocation(
 
 // ─── Store ───────────────────────────────────────────────────────────────────
 
+/** Persists automations, invocations, runs, and composable lifecycle mutations. */
 export class AutomationStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -512,36 +514,48 @@ export class AutomationStore {
     return this.getById(id);
   }
 
-  async softDelete(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a soft-delete statement for composition in an atomic batch. */
+  bindSoftDelete(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET deleted_at = ?, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, now, id)
-      .run();
+      .bind(now, now, id);
+  }
+
+  /** Soft-delete an automation and report whether a live row changed. */
+  async softDelete(id: string): Promise<boolean> {
+    const result = await this.bindSoftDelete(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async pause(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a pause statement for composition in an atomic batch. */
+  bindPause(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, id)
-      .run();
+      .bind(now, id);
+  }
+
+  /** Pause an automation and report whether a live row changed. */
+  async pause(id: string): Promise<boolean> {
+    const result = await this.bindPause(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a resume statement for composition in an atomic batch. */
+  bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(nextRunAt, now, id)
-      .run();
+      .bind(nextRunAt, now, id);
+  }
+
+  /** Resume an automation and report whether a live row changed. */
+  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
+    const result = await this.bindResume(id, nextRunAt).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
@@ -855,7 +869,7 @@ export class AutomationStore {
 
   /**
    * Per-source overlap predicate, used both as the cheap pre-check and inside
-   * the guarded insert (same SQL, one definition). Schedule/manual firings
+   * the conditional insert (same SQL, one definition). Schedule/manual firings
    * block on ANY active run of the automation (main parity with
    * getActiveRunForAutomation); event firings block per concurrency key only —
    * an automation-wide guard would serialize unrelated events.
@@ -911,7 +925,6 @@ export class AutomationStore {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
     const statements: SqlStatement[] = [];
-
     statements.push(
       this.db
         .prepare(
