@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   SETTINGS_GROUPS,
+  canUseSettingsCapability,
   canViewSettingsCategory,
   getSettingsPanel,
   type SettingsCategory,
@@ -39,5 +40,29 @@ describe("settings registry", () => {
     for (const category of publicCategories) {
       expect(canViewSettingsCategory(category, () => false)).toBe(true);
     }
+  });
+
+  it("requires repository visibility alongside image-build read access", () => {
+    expect(
+      canViewSettingsCategory("images", (permission) => permission === "image_builds.read")
+    ).toBe(false);
+    expect(
+      canViewSettingsCategory("images", (permission) =>
+        ["image_builds.read", "repositories.read"].includes(permission)
+      )
+    ).toBe(true);
+  });
+
+  it("models Data Controls viewing and unarchive capability separately", () => {
+    const readOnly = (permission: string) => permission === "sessions.read";
+    expect(canViewSettingsCategory("data-controls", readOnly)).toBe(true);
+    expect(canUseSettingsCapability("data-controls", "unarchiveSessions", readOnly)).toBe(false);
+    expect(
+      canUseSettingsCapability(
+        "data-controls",
+        "unarchiveSessions",
+        (permission) => permission === "sessions.lifecycle"
+      )
+    ).toBe(true);
   });
 });

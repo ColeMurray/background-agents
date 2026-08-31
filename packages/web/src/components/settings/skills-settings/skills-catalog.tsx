@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { PlusIcon, SparkleIcon } from "@/components/ui/icons";
 import { SkillEditor } from "./skill-editor";
 import { SkillImport } from "./skill-import";
+import { SkillDetails } from "./skill-details";
 import { errorMessage } from "./utils";
 
 /**
@@ -94,7 +95,7 @@ export function SkillsCatalog({ canManage }: { canManage: boolean }) {
       return <p className="text-sm text-destructive">Failed to load this managed skill.</p>;
     if (loadingSkill || !skill)
       return <p className="text-sm text-muted-foreground">Loading skill...</p>;
-    return (
+    return canManage ? (
       <SkillEditor
         key={`${skill.id}:${skill.currentRevisionId}`}
         skill={skill}
@@ -104,6 +105,8 @@ export function SkillsCatalog({ canManage }: { canManage: boolean }) {
           await Promise.all([revalidateSkillCatalogPage(cursor), mutateSkill()]);
         }}
       />
+    ) : (
+      <SkillDetails skill={skill} onClose={() => setSelectedId(null)} />
     );
   }
 
@@ -147,8 +150,7 @@ export function SkillsCatalog({ canManage }: { canManage: boolean }) {
             <div key={item.id} className="flex items-start gap-3 p-4">
               <button
                 type="button"
-                onClick={() => canManage && setSelectedId(item.id)}
-                disabled={!canManage}
+                onClick={() => setSelectedId(item.id)}
                 className="min-w-0 flex-1 text-left"
               >
                 <div className="flex items-center gap-2">

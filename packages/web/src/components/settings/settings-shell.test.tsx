@@ -83,4 +83,15 @@ describe("SettingsShell", () => {
     expect(mocks.replace).toHaveBeenCalledWith("/settings?tab=appearance");
     expect(screen.queryByText("Integration settings")).not.toBeInTheDocument();
   });
+
+  it("canonicalizes an unauthorized settings query to the rendered fallback", () => {
+    mocks.pathname = "/settings";
+    mocks.tab = "secrets";
+    mocks.permissions = [];
+
+    render(<SettingsShell>Secret settings</SettingsShell>);
+
+    expect(mocks.replace).toHaveBeenCalledWith("/settings?tab=appearance");
+    expect(screen.queryByText("Secret settings")).not.toBeInTheDocument();
+  });
 });

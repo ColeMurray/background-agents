@@ -4,11 +4,14 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useAuthSession } from "@/lib/auth-session";
+import { clearAuthSessionCache, useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useWorkspaceAdministration } from "./use-workspace-administration";
 
-vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: vi.fn(),
+  clearAuthSessionCache: vi.fn(),
+}));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
 const wrapper = ({ children }: { children: ReactNode }) => (
@@ -51,5 +54,23 @@ describe("useWorkspaceAdministration", () => {
       `/api/members/${member.userId}/status`,
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ suspended: true }) })
     );
+  });
+
+  it("treats self-suspension as successful and clears the authenticated session cache", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: member.userId, name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    vi.mocked(clearAuthSessionCache).mockResolvedValue(undefined);
+    const { result } = renderHook(
+      () => useWorkspaceAdministration({ readMembers: false, readRoles: false }),
+      { wrapper }
+    );
+
+    await expect(
+      act(() => result.current.updateMember(member, { kind: "status", suspended: true }))
+    ).resolves.toBeUndefined();
+
+    expect(clearAuthSessionCache).toHaveBeenCalledTimes(1);
   });
 });

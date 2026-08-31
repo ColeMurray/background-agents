@@ -126,4 +126,60 @@ describe("WorkspaceSettings", () => {
       expect(updateMember).toHaveBeenCalledWith(member, { kind: "status", suspended: false })
     );
   });
+
+  it("disables a member's role and status controls while their update is pending", async () => {
+    let finishUpdate!: () => void;
+    const updateMember = vi.fn(() => new Promise<void>((resolve) => (finishUpdate = resolve)));
+    const member = {
+      userId: "11111111111111111111111111111111",
+      displayName: "Ada",
+      email: "ada@example.com",
+      suspendedAt: null,
+      role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
+    };
+    vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+      authorization: null,
+      loading: false,
+      error: null,
+      hasPermission: (permission) =>
+        permission === "workspace.members.read" ||
+        permission === "workspace.roles.read" ||
+        permission === "workspace.members.manage",
+    });
+    vi.mocked(useWorkspaceAdministration).mockReturnValue({
+      members: [member],
+      roles: [
+        {
+          id: "role_builtin_member",
+          key: "member",
+          name: "Member",
+          description: null,
+          permissions: [],
+          assignmentCount: 1,
+        },
+        {
+          id: "role_builtin_administrator",
+          key: "administrator",
+          name: "Administrator",
+          description: null,
+          permissions: [],
+          assignmentCount: 0,
+        },
+      ],
+      loading: false,
+      error: undefined,
+      updateMember,
+    });
+
+    render(<WorkspaceSettings />);
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "role_builtin_administrator" },
+    });
+
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Suspend" })).toBeDisabled();
+
+    finishUpdate();
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeEnabled());
+  });
 });

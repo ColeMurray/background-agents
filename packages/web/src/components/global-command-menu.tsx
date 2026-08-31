@@ -116,7 +116,10 @@ export function GlobalCommandMenu({
           },
         ]
       : []),
-    ...APP_DESTINATIONS.map(({ label, description, href, icon: Icon }) => ({
+    ...APP_DESTINATIONS.filter(
+      (destination) =>
+        !("requiredPermission" in destination) || hasPermission(destination.requiredPermission)
+    ).map(({ label, description, href, icon: Icon }) => ({
       label,
       description,
       Icon,

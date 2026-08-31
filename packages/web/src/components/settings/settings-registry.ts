@@ -18,6 +18,7 @@ import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 type SettingsPermissionPredicate = PermissionId | { allOf: readonly PermissionId[] };
 type SettingsVisibility = { public: true } | { anyOf: readonly SettingsPermissionPredicate[] };
+export type SettingsCapability = "unarchiveSessions";
 
 interface SettingsItemDefinition {
   id: string;
@@ -27,6 +28,7 @@ interface SettingsItemDefinition {
   icon: ComponentType<{ className?: string }>;
   visibility: SettingsVisibility;
   panel: LazyExoticComponent<ComponentType>;
+  capabilities?: Partial<Record<SettingsCapability, SettingsPermissionPredicate>>;
   requiresRepoImages?: boolean;
 }
 
@@ -193,7 +195,7 @@ export const SETTINGS_GROUPS = [
         keywords: "prebuild containers",
         icon: BoxIcon,
         requiresRepoImages: true,
-        visibility: anyOf("image_builds.read"),
+        visibility: anyOf(allOf("image_builds.read", "repositories.read")),
         panel: lazyPanel(() =>
           import("./images-settings").then(({ ImagesSettings }) => ImagesSettings)
         ),
@@ -227,6 +229,7 @@ export const SETTINGS_GROUPS = [
         keywords: "archive restore retention",
         icon: DataControlsIcon,
         visibility: anyOf("sessions.read"),
+        capabilities: { unarchiveSessions: "sessions.lifecycle" },
         panel: lazyPanel(() =>
           import("./data-controls-settings").then(
             ({ DataControlsSettings }) => DataControlsSettings
@@ -257,6 +260,21 @@ export function canViewSettingsCategory(
         : predicate.allOf.every(hasPermission)
     )
   );
+}
+
+/** Evaluates a named panel capability from the same descriptor used by settings navigation. */
+export function canUseSettingsCapability(
+  category: SettingsCategory,
+  capability: SettingsCapability,
+  hasPermission: (permission: PermissionId) => boolean
+): boolean {
+  const item: SettingsItemDefinition = getSettingsItem(category);
+  if (!("capabilities" in item)) return false;
+  const predicate = item.capabilities?.[capability];
+  if (!predicate) return false;
+  return typeof predicate === "string"
+    ? hasPermission(predicate)
+    : predicate.allOf.every(hasPermission);
 }
 
 /** Selects the requested visible category, or a category the user is allowed to view. */

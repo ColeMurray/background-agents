@@ -40,6 +40,14 @@ function rbacErrorResponse(cause: unknown): Response {
   return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
 }
 
+function decodePathSegment(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 async function handleGetCurrentAuthorization(
   _request: Request,
   _env: Env,
@@ -76,7 +84,9 @@ async function handleGetRole(
 ): Promise<Response> {
   const service = new AuthorizationService(ctx.db);
   try {
-    const role = await service.getRole(decodeURIComponent(match.groups!.id));
+    const roleId = decodePathSegment(match.groups!.id);
+    if (roleId === null) return error("Invalid role ID", 400);
+    const role = await service.getRole(roleId);
     return role ? json(role) : error("Role not found", 404);
   } catch (cause) {
     return rbacErrorResponse(cause);
@@ -103,8 +113,10 @@ async function handleReplaceMemberRole(
   match: RegExpMatchArray,
   ctx: UserRouteContext
 ): Promise<Response> {
-  const targetUserId = decodeURIComponent(match.groups!.id);
-  if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
+  const targetUserId = decodePathSegment(match.groups!.id);
+  if (targetUserId === null || !isCanonicalUserId(targetUserId)) {
+    return error("Invalid user ID", 400);
+  }
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
   const service = new AuthorizationService(ctx.db);
@@ -116,7 +128,7 @@ async function handleReplaceMemberRole(
       actorUserId: ctx.principal.userId,
       requestId: ctx.request_id,
     });
-    return json(await service.getEffectiveAuthorization(targetUserId));
+    return new Response(null, { status: 204 });
   } catch (cause) {
     return rbacErrorResponse(cause);
   }
@@ -128,8 +140,10 @@ async function handleReplaceMemberStatus(
   match: RegExpMatchArray,
   ctx: UserRouteContext
 ): Promise<Response> {
-  const targetUserId = decodeURIComponent(match.groups!.id);
-  if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
+  const targetUserId = decodePathSegment(match.groups!.id);
+  if (targetUserId === null || !isCanonicalUserId(targetUserId)) {
+    return error("Invalid user ID", 400);
+  }
   const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
   const service = new AuthorizationService(ctx.db);
@@ -141,7 +155,7 @@ async function handleReplaceMemberStatus(
       actorUserId: ctx.principal.userId,
       requestId: ctx.request_id,
     });
-    return json(await service.getEffectiveAuthorization(targetUserId));
+    return new Response(null, { status: 204 });
   } catch (cause) {
     return rbacErrorResponse(cause);
   }

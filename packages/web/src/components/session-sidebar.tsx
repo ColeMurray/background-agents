@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
 import { UserMenu } from "@/components/sidebar-user-menu";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
@@ -72,6 +73,7 @@ export function SessionSidebar({
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
+  const { hasPermission } = useCurrentUserAuthorization();
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
@@ -202,7 +204,7 @@ export function SessionSidebar({
           <SearchSessionsButton onClick={onSearchSessions} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <NewSessionButton onClick={onNewSession} />
+          {hasPermission("sessions.create") && <NewSessionButton onClick={onNewSession} />}
           <Link
             href={SETTINGS_DESTINATION.href}
             onClick={handleNavigationSelect}
@@ -220,7 +222,9 @@ export function SessionSidebar({
 
       {/* Nav links */}
       <div className="px-3 pt-2 pb-1 flex flex-col gap-0.5">
-        {PRIMARY_APP_DESTINATIONS.map(({ href, label, icon: Icon }) => (
+        {PRIMARY_APP_DESTINATIONS.filter((destination) =>
+          hasPermission(destination.requiredPermission)
+        ).map(({ href, label, icon: Icon }) => (
           <Link
             key={href}
             href={href}

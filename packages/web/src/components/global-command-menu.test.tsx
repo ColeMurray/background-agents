@@ -91,6 +91,16 @@ describe("GlobalCommandMenu", () => {
     expect(screen.queryByText("Start a coding session")).not.toBeInTheDocument();
   });
 
+  it("omits application destinations without their read permissions", () => {
+    mocks.allowedPermissions = new Set();
+
+    renderMenu();
+
+    expect(screen.queryByText("Automations")).not.toBeInTheDocument();
+    expect(screen.queryByText("Analytics")).not.toBeInTheDocument();
+    expect(screen.getByText("Configure Open Inspect")).toBeInTheDocument();
+  });
+
   it("selects Analytics from the keyboard", async () => {
     const user = userEvent.setup();
     const { onNavigate, onOpenChange } = renderMenu();

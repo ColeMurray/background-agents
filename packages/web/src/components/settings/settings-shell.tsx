@@ -26,17 +26,17 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
     supportsRepoImages(),
     hasPermission
   );
-  const unauthorizedSubroute =
-    pathname.startsWith("/settings/integrations/") && activeCategory !== "integrations";
+  const categoryRedirectRequired =
+    requestedCategory !== null && activeCategory !== requestedCategory;
 
   useEffect(() => setIsHydrated(true), []);
   useEffect(() => {
-    if (isHydrated && !loading && unauthorizedSubroute) {
+    if (isHydrated && !loading && categoryRedirectRequired) {
       router.replace(`/settings?tab=${activeCategory}`);
     }
-  }, [activeCategory, isHydrated, loading, router, unauthorizedSubroute]);
+  }, [activeCategory, categoryRedirectRequired, isHydrated, loading, router]);
 
-  if (!isHydrated || loading || unauthorizedSubroute) {
+  if (!isHydrated || loading || categoryRedirectRequired) {
     return <main className="h-dvh overflow-hidden bg-background" aria-busy="true" />;
   }
 

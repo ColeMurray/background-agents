@@ -368,7 +368,7 @@ describe("RBAC routes", () => {
       headers: { "Content-Type": "application/json" },
     });
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(204);
     expect(
       await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(ownerId).first()
     ).toEqual({ suspended_at: expect.any(Number) });
@@ -396,8 +396,7 @@ describe("RBAC routes", () => {
       headers: { "Content-Type": "application/json" },
     });
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ role: { key: "administrator" } });
+    expect(response.status).toBe(204);
     expect(
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.member_role_updated'"
@@ -425,24 +424,23 @@ describe("RBAC routes", () => {
     ).toEqual({ key: "owner" });
   });
 
-  it("derives Owner bootstrap health from an unsuspended Owner assignment", async () => {
-    const pending = await SELF.fetch("https://cp.test/health");
-    await expect(pending.json()).resolves.toMatchObject({
-      rbac: { ownerAssignment: "missing" },
-    });
+  it.each(["role", "status"] as const)(
+    "rejects malformed percent encoding in member %s routes",
+    async (operation) => {
+      await seedOwner();
 
-    const ownerId = await seedOwner();
-    const complete = await SELF.fetch("https://cp.test/health");
-    await expect(complete.json()).resolves.toMatchObject({
-      rbac: { ownerAssignment: "present" },
-    });
+      const response = await serviceFetch(`https://cp.test/members/%/${operation}`, {
+        method: "PUT",
+        body: JSON.stringify(
+          operation === "role" ? { roleId: "role_builtin_member" } : { suspended: true }
+        ),
+        headers: { "Content-Type": "application/json" },
+      });
 
-    await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(ownerId).run();
-    const suspended = await SELF.fetch("https://cp.test/health");
-    await expect(suspended.json()).resolves.toMatchObject({
-      rbac: { ownerAssignment: "missing" },
-    });
-  });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Invalid user ID" });
+    }
+  );
 
   it("requires an explicit unsuspended Owner assignment before merging an Owner", async () => {
     const store = new UserStore(sqlDatabase(env.DB));

@@ -21,6 +21,7 @@ export function WorkspaceSettings() {
     readRoles: canReadRoles,
   });
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [pendingMemberIds, setPendingMemberIds] = useState<Set<string>>(() => new Set());
   const unsuspendedOwnerCount = members.filter(
     (member) => member.role.key === "owner" && member.suspendedAt === null
   ).length;
@@ -28,12 +29,19 @@ export function WorkspaceSettings() {
   if (loading) return <p className="text-sm text-muted-foreground">Loading workspace access...</p>;
   if (error) return <ErrorBanner>Failed to load workspace access.</ErrorBanner>;
 
-  async function mutate(action: () => Promise<void>) {
+  async function mutate(memberId: string, action: () => Promise<void>) {
     setMutationError(null);
+    setPendingMemberIds((current) => new Set(current).add(memberId));
     try {
       await action();
     } catch (cause) {
       setMutationError(cause instanceof Error ? cause.message : "Workspace update failed");
+    } finally {
+      setPendingMemberIds((current) => {
+        const next = new Set(current);
+        next.delete(memberId);
+        return next;
+      });
     }
   }
 
@@ -74,8 +82,9 @@ export function WorkspaceSettings() {
                   <select
                     aria-label={`Role for ${member.displayName ?? member.userId}`}
                     value={member.role.id}
+                    disabled={pendingMemberIds.has(member.userId)}
                     onChange={(event) =>
-                      void mutate(() =>
+                      void mutate(member.userId, () =>
                         updateMember(member, { kind: "role", roleId: event.target.value })
                       )
                     }
@@ -98,12 +107,13 @@ export function WorkspaceSettings() {
                   variant="outline"
                   disabled={
                     !canManage ||
+                    pendingMemberIds.has(member.userId) ||
                     (member.role.key === "owner" &&
                       (!canTransfer ||
                         (member.suspendedAt === null && unsuspendedOwnerCount === 1)))
                   }
                   onClick={() =>
-                    void mutate(() =>
+                    void mutate(member.userId, () =>
                       updateMember(member, {
                         kind: "status",
                         suspended: member.suspendedAt === null,
