@@ -77,12 +77,8 @@ export const PERMISSION_IDS = [
 /** A permission identifier recognized by the RBAC policy. */
 export type PermissionId = (typeof PERMISSION_IDS)[number];
 
-/** Permissions required to admit a browser WebSocket to the full session protocol. */
-export const SESSION_WEBSOCKET_PERMISSIONS = [
-  "sessions.read",
-  "sessions.collaborate",
-  "sessions.lifecycle",
-] as const satisfies readonly PermissionId[];
+/** Permission required to admit a browser WebSocket to the read synchronization protocol. */
+export const SESSION_WEBSOCKET_CONNECT_PERMISSION = "sessions.read" as const satisfies PermissionId;
 
 /** Maps ownership-sensitive capabilities to their workspace-wide and owner-only grants. */
 export const SCOPED_PERMISSION_PAIRS = {
@@ -110,6 +106,16 @@ export function resolveScopedPermission(
   if (permissions.includes(pair.any)) return "any";
   if (permissions.includes(pair.own)) return "own";
   return null;
+}
+
+/** Decides a scoped resource capability from grants plus the caller's ownership result. */
+export function hasScopedPermission(
+  stem: ScopedPermissionStem,
+  permissions: readonly PermissionId[],
+  isOwner: boolean
+): boolean {
+  const scope = resolveScopedPermission(stem, permissions);
+  return scope === "any" || (scope === "own" && isOwner);
 }
 
 const VIEWER_PERMISSIONS = new Set<PermissionId>([

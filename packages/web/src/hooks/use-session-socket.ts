@@ -4,6 +4,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 import {
   ingestLiveSandboxEvent,
   pendingToTokenEvent,
@@ -100,10 +101,7 @@ interface PendingCorrelatedRequest {
 export function useSessionSocket(
   sessionId: string,
   initialSnapshot: SessionSnapshot,
-  capabilities: { collaborate: boolean; sandboxAccess: boolean } = {
-    collaborate: true,
-    sandboxAccess: true,
-  }
+  capabilities: SessionCapabilities
 ): UseSessionSocketReturn {
   const [state, dispatch] = useReducer(
     sessionSocketReducer,
@@ -242,7 +240,7 @@ export function useSessionSocket(
       onMessage: handleMessage,
       onClose: handleClose,
     },
-    capabilities.collaborate
+    capabilities.read
   );
   const { isOpen, send, reconnect, markHealthy } = transport;
 

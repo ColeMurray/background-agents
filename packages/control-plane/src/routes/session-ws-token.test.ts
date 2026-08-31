@@ -37,7 +37,7 @@ function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
       userId: "user-1",
       suspendedAt: null,
       role: { id: "role-1", key: "member", name: "Member" },
-      permissions: ["sessions.collaborate"],
+      permissions: ["sessions.read"],
     },
     metrics: {
       d1Queries: [],

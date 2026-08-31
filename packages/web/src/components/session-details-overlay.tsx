@@ -47,9 +47,7 @@ export function SessionDetailsOverlay({
   diffLoading,
   selectedDiff,
   onOpenDiff,
-  canAccessSandbox,
-  canManageLifecycle,
-  canRetryDiff,
+  capabilities,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
@@ -178,9 +176,7 @@ export function SessionDetailsOverlay({
       diffLoading={diffLoading}
       selectedDiff={selectedDiff}
       onOpenDiff={onOpenDiff}
-      canAccessSandbox={canAccessSandbox}
-      canManageLifecycle={canManageLifecycle}
-      canRetryDiff={canRetryDiff}
+      capabilities={capabilities}
     />
   );
 

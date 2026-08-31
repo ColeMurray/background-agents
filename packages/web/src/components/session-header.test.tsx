@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { createRef } from "react";
+import { createRef, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
-import { SessionHeader } from "./session-header";
+import { SessionHeader as SessionHeaderComponent } from "./session-header";
 import type { SessionActionProps } from "./session-actions";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 expect.extend(matchers);
 
@@ -20,10 +21,27 @@ vi.mock("@/components/sidebar-layout", () => ({
 
 afterEach(cleanup);
 
+const FULL_CAPABILITIES: SessionCapabilities = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+};
+
+function SessionHeader({
+  capabilities = FULL_CAPABILITIES,
+  ...props
+}: Omit<ComponentProps<typeof SessionHeaderComponent>, "capabilities"> & {
+  capabilities?: SessionCapabilities;
+}) {
+  return <SessionHeaderComponent {...props} capabilities={capabilities} />;
+}
+
 const actions: SessionActionProps = {
   sessionId: "session-1",
   sessionStatus: "active",
   artifacts: [],
+  capabilities: FULL_CAPABILITIES,
 };
 
 function createSessionState(overrides: Partial<SessionState> = {}): SessionState {
@@ -58,10 +76,14 @@ describe("SessionHeader", () => {
         onToggleDetails={vi.fn()}
         onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
-        actions={{ ...actions, canManageLifecycle: false }}
+        actions={{ ...actions, capabilities: { ...FULL_CAPABILITIES, lifecycle: false } }}
         renameSession={vi.fn()}
-        canRename={false}
-        showConnectionStatus={false}
+        capabilities={{
+          read: false,
+          collaborate: false,
+          lifecycle: false,
+          sandboxAccess: false,
+        }}
       />
     );
 

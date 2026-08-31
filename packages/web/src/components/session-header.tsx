@@ -11,6 +11,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { getSafeExternalUrl } from "@/lib/urls";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
@@ -100,9 +101,7 @@ export type SessionHeaderProps = {
   actions: SessionActionProps;
   optimisticTitle?: string;
   renameSession: (title: string) => Promise<boolean>;
-  canRename?: boolean;
-  showConnectionStatus?: boolean;
-  canAccessSandbox?: boolean;
+  capabilities: SessionCapabilities;
 };
 
 export function SessionHeader({
@@ -122,9 +121,7 @@ export function SessionHeader({
   actions,
   optimisticTitle,
   renameSession,
-  canRename = true,
-  showConnectionStatus = true,
-  canAccessSandbox = true,
+  capabilities,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
   const hasFallbackSessionInfo =
@@ -144,7 +141,7 @@ export function SessionHeader({
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 
   const handleStartRename = () => {
-    if (!canRename) return;
+    if (!capabilities.lifecycle) return;
     setTitle(resolvedTitle);
     setIsRenaming(true);
   };
@@ -203,10 +200,10 @@ export function SessionHeader({
               <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
                 <button
                   type="button"
-                  className={`max-w-full truncate text-left ${canRename ? "cursor-text" : "cursor-default"}`}
+                  className={`max-w-full truncate text-left ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
                   onClick={handleStartRename}
-                  title={canRename ? "Click to rename" : undefined}
-                  disabled={!canRename}
+                  title={capabilities.lifecycle ? "Click to rename" : undefined}
+                  disabled={!capabilities.lifecycle}
                 >
                   {resolvedTitle}
                 </button>
@@ -234,12 +231,14 @@ export function SessionHeader({
             onOpenMedia={onOpenMobileDetails}
           />
           <div className="flex items-center gap-1">
-            {showConnectionStatus && (
+            {capabilities.read && (
               <ConnectionStatusIcon connected={connected} connecting={connecting} />
             )}
             <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
-              dashboardUrl={canAccessSandbox ? sessionState?.sandboxDashboardUrl : undefined}
+              dashboardUrl={
+                capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined
+              }
               error={sandboxError}
             />
           </div>

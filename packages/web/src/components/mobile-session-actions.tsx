@@ -44,7 +44,6 @@ export function MobileSessionActions({
     actions.primaryRepo
   );
   const controls = useSessionActionControls(actions);
-  const canManageLifecycle = actions.canManageLifecycle !== false;
 
   return (
     <>
@@ -107,8 +106,8 @@ export function MobileSessionActions({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
-            {canManageLifecycle && <DropdownMenuSeparator />}
-            {canManageLifecycle && (
+            {actions.capabilities.lifecycle && <DropdownMenuSeparator />}
+            {actions.capabilities.lifecycle && (
               <DropdownMenuItem
                 onClick={controls.handleArchiveToggle}
                 disabled={controls.isArchiving}
@@ -121,7 +120,7 @@ export function MobileSessionActions({
         </DropdownMenu>
       </div>
 
-      {canManageLifecycle && (
+      {actions.capabilities.lifecycle && (
         <ArchiveSessionDialog
           open={controls.showArchiveDialog}
           onOpenChange={controls.setShowArchiveDialog}

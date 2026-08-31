@@ -1,5 +1,5 @@
 import {
-  resolveScopedPermission,
+  hasScopedPermission,
   type EffectiveAuthorization,
   type ScopedPermissionStem,
 } from "@open-inspect/shared/rbac";
@@ -12,6 +12,9 @@ export function canAccessAutomation(
   automation: Pick<Automation, "userId">
 ): boolean {
   if (!authorization) return false;
-  const scope = resolveScopedPermission(stem, authorization.permissions);
-  return scope === "any" || (scope === "own" && automation.userId === authorization.userId);
+  return hasScopedPermission(
+    stem,
+    authorization.permissions,
+    automation.userId === authorization.userId
+  );
 }

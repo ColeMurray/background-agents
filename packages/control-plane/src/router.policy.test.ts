@@ -154,11 +154,7 @@ describe("route policy table", () => {
     });
     expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [
-        { kind: "permission", permission: "sessions.read" },
-        { kind: "permission", permission: "sessions.collaborate" },
-        { kind: "permission", permission: "sessions.lifecycle" },
-      ],
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
     });
     expect(routeFor("POST", "/sessions/session-1/stop")?.authorization).toMatchObject({
       service: { kind: "actor", actorlessGrants: [{ service: "linear-bot" }] },

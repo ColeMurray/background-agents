@@ -4,10 +4,18 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionRightSidebar } from "./session-right-sidebar";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 vi.mock("swr", () => ({ default: () => ({ data: undefined }) }));
 
 afterEach(cleanup);
+
+const FULL_CAPABILITIES: SessionCapabilities = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+};
 
 describe("SessionRightSidebar", () => {
   it("hides sandbox access controls when the capability is denied", () => {
@@ -38,7 +46,7 @@ describe("SessionRightSidebar", () => {
         events={[]}
         artifacts={[]}
         onOpenMedia={vi.fn()}
-        canAccessSandbox={false}
+        capabilities={{ ...FULL_CAPABILITIES, sandboxAccess: false }}
       />
     );
 
@@ -59,6 +67,7 @@ describe("SessionRightSidebar", () => {
         events={[]}
         artifacts={[]}
         onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
       />
     );
 

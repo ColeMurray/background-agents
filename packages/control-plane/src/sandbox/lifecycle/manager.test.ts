@@ -477,16 +477,14 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
     broadcaster.messages.filter(
       (message) => (message as { type: string }).type === "sandbox_access_changed"
     )
-  ).toHaveLength(1);
-  expect(accessAtBroadcast).toEqual([
-    {
-      code_server_url: access.codeServerUrl,
-      code_server_password: access.codeServerPassword,
-      vnc_url: access.vncAccess.url,
-      vnc_password: access.vncAccess.password,
-      tunnel_urls: JSON.stringify(access.tunnelUrls),
-    },
-  ]);
+  ).not.toHaveLength(0);
+  expect(accessAtBroadcast.at(-1)).toEqual({
+    code_server_url: access.codeServerUrl,
+    code_server_password: access.codeServerPassword,
+    vnc_url: access.vncAccess.url,
+    vnc_password: access.vncAccess.password,
+    tunnel_urls: JSON.stringify(access.tunnelUrls),
+  });
 }
 
 // ==================== Tests ====================
@@ -844,13 +842,10 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxModalObjectId:provider-obj-123");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/provider-obj-123",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("does not broadcast sandbox_dashboard_url when no builder is configured", async () => {
@@ -873,7 +868,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxModalObjectId:provider-obj-123");
       expect(
-        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_dashboard_url")
+        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_access_changed")
       ).toBe(false);
     });
 
@@ -1360,13 +1355,10 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxModalObjectId:restored-obj-456");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/restored-obj-456",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("broadcasts sandbox_dashboard_url after resume when provider object id changes", async () => {
@@ -1405,13 +1397,10 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.resumeSandbox).toHaveBeenCalled();
       expect(storage.calls).toContain("updateSandboxModalObjectId:new-provider-obj");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/new-provider-obj",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("broadcasts sandbox_dashboard_url after resume when provider object id is unchanged", async () => {
@@ -1450,13 +1439,10 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.resumeSandbox).toHaveBeenCalled();
       expect(storage.calls).not.toContain("updateSandboxModalObjectId:same-provider-obj");
       expect(
-        broadcaster.messages.filter((m) => (m as { type: string }).type === "sandbox_dashboard_url")
-      ).toEqual([
-        {
-          type: "sandbox_dashboard_url",
-          url: "https://provider.example/same-provider-obj",
-        },
-      ]);
+        broadcaster.messages.filter(
+          (m) => (m as { type: string }).type === "sandbox_access_changed"
+        )
+      ).toContainEqual({ type: "sandbox_access_changed" });
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
@@ -3540,11 +3526,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxTunnelUrls");
       expect(
-        broadcaster.messages.some(
-          (m) =>
-            (m as { type: string }).type === "tunnel_urls" &&
-            (m as { urls: Record<string, string> }).urls["3000"] === "https://tunnel.example.com"
-        )
+        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_access_changed")
       ).toBe(true);
     });
 
@@ -3644,11 +3626,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxTunnelUrls");
       expect(
-        broadcaster.messages.some(
-          (m) =>
-            (m as { type: string }).type === "tunnel_urls" &&
-            (m as { urls: Record<string, string> }).urls["3000"] === "https://tunnel.example.com"
-        )
+        broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_access_changed")
       ).toBe(true);
     });
   });

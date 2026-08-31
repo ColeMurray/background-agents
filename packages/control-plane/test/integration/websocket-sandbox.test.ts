@@ -343,6 +343,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       codeServer: { url: "https://code.test", password: "code-secret" },
       vnc: { url: "https://vnc.test", password: "vnc-secret" },
       ttyd: { url: "https://terminal.test", token: "terminal-token" },
+      tunnelUrls: null,
+      sandboxDashboardUrl: null,
     });
 
     sandboxWs!.close();

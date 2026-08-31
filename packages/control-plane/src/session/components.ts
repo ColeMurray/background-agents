@@ -22,7 +22,6 @@
  */
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
-import { SESSION_WEBSOCKET_PERMISSIONS } from "@open-inspect/shared/rbac";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -671,6 +670,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     sandboxRepository,
     repoSecretsEncryptionKey,
+    sandboxDashboardSettings,
     log,
   });
 
@@ -687,23 +687,20 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshotReader,
     schedulePullRequestRefresh,
     scmProviderName,
-    verifyAuthorization: async (userId) => {
-      if (!db) return "unavailable";
+    resolveAuthorization: async (userId) => {
+      if (!db) return { kind: "unavailable" };
       try {
         const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
-        return authorization.suspendedAt === null &&
-          SESSION_WEBSOCKET_PERMISSIONS.every((permission) =>
-            authorization.permissions.includes(permission)
-          )
-          ? "valid"
-          : "rejected";
+        return authorization.suspendedAt === null
+          ? { kind: "valid", authorization }
+          : { kind: "rejected" };
       } catch (error) {
-        if (error instanceof AuthorizationError) return "rejected";
+        if (error instanceof AuthorizationError) return { kind: "rejected" };
         log.error("WebSocket authorization verification failed", {
           user_id: userId,
           error: error instanceof Error ? error : String(error),
         });
-        return "unavailable";
+        return { kind: "unavailable" };
       }
     },
     log,

@@ -3,6 +3,10 @@ import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
 } from "@open-inspect/shared/types/sessions";
+import {
+  redactSessionSnapshotSandboxAccess,
+  sessionSnapshotSchema,
+} from "@open-inspect/shared/types/server-messages";
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
@@ -181,6 +185,29 @@ async function handleParticipantProfiles(
   return Response.json({ profiles } satisfies SessionParticipantProfilesResponse);
 }
 
+async function handleSessionSnapshot(
+  _request: Request,
+  _env: Env,
+  match: RegExpMatchArray,
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const sessionId = getSessionId(match);
+  if (sessionId instanceof Response) return sessionId;
+
+  const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.snapshot);
+  if (response.status === 404) return error("Session not found", 404);
+  if (!response.ok) return response;
+
+  const parsed = sessionSnapshotSchema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) return error("Invalid session snapshot", 502);
+  const snapshot = ctx.authorization?.permissions.includes("sessions.sandbox_access")
+    ? parsed.data
+    : redactSessionSnapshotSandboxAccess(parsed.data);
+  const headers = new Headers(response.headers);
+  headers.delete("Content-Length");
+  return Response.json(snapshot, { headers });
+}
+
 async function handleCreatePR(
   request: Request,
   _env: Env,
@@ -297,14 +324,15 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     internalPath: SessionInternalPaths.sandboxAccess,
     authorization: requirePermission("sessions.sandbox_access"),
   }),
-  simpleProxyRoute({
-    policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-    method: "GET",
-    routePath: "/sessions/:id",
-    internalPath: SessionInternalPaths.snapshot,
-    authorization: requirePermission("sessions.read"),
-    notFoundMessage: "Session not found",
-  }),
+  defineRoute(
+    SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    sessionRoute({
+      method: "GET",
+      pattern: parsePattern("/sessions/:id"),
+      authorization: requirePermission("sessions.read"),
+      handler: handleSessionSnapshot,
+    })
+  ),
   simpleProxyRoute({
     policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "POST",

@@ -52,7 +52,7 @@ interface MetadataSectionProps {
   warnings?: WarningEvent[];
   parentSessionId?: string | null;
   totalCost?: number;
-  canManageLifecycle?: boolean;
+  canManageLifecycle: boolean;
 }
 
 /**
@@ -109,7 +109,7 @@ export function MetadataSection({
   warnings = [],
   parentSessionId,
   totalCost,
-  canManageLifecycle = true,
+  canManageLifecycle,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 

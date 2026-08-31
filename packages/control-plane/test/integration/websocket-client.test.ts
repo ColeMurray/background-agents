@@ -243,7 +243,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
-  it("rejects a custom role that cannot use the complete WebSocket protocol", async () => {
+  it("rejects a custom role that cannot read the session stream", async () => {
     const suffix = Date.now();
     const name = `ws-client-partial-role-${suffix}`;
     const userId = `partial-role-user-${suffix}`;
@@ -291,7 +291,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     await expect(closed).resolves.toEqual({ code: 4010 });
   });
 
-  it("rejects a reconnect after collaborate permission is lost", async () => {
+  it("keeps the read stream after collaborate permission is lost but rejects prompts", async () => {
     const name = `ws-client-lost-permission-${Date.now()}`;
     const userId = `lost-permission-user-${Date.now()}`;
     await initNamedSession(name);
@@ -303,12 +303,34 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       .run();
 
     const { ws } = await openClientWs(name);
-    const closed = new Promise<{ code: number }>((resolve) => {
-      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    const subscribed = collectMessages(ws, {
+      until: (message) => message.type === "subscribed",
     });
     ws.send(JSON.stringify({ type: "subscribe", token, clientId: "lost-permission-client" }));
+    const snapshot = (await subscribed).find((message) => message.type === "subscribed") as Record<
+      string,
+      unknown
+    >;
 
-    await expect(closed).resolves.toEqual({ code: 4010 });
+    expect(snapshot).toBeDefined();
+    expect(snapshot.session).not.toHaveProperty("sandboxDashboardUrl");
+
+    const denied = collectMessages(ws, {
+      until: (message) => message.type === "error",
+    });
+    ws.send(
+      JSON.stringify({
+        type: "prompt",
+        clientRequestId: crypto.randomUUID(),
+        content: "not allowed",
+      })
+    );
+
+    expect((await denied).find((message) => message.type === "error")).toMatchObject({
+      code: "PERMISSION_REQUIRED",
+      message: "Permission required: sessions.collaborate",
+    });
+    ws.close();
   });
 
   it("rejects a token after its canonical user is removed", async () => {

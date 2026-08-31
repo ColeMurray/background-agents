@@ -6,6 +6,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { ActionBar } from "./action-bar";
 import { MobileSessionActions } from "./mobile-session-actions";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
+
+const FULL_CAPABILITIES = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+} satisfies SessionCapabilities;
+const NO_LIFECYCLE = { ...FULL_CAPABILITIES, lifecycle: false };
 
 expect.extend(matchers);
 
@@ -20,7 +29,7 @@ describe("ActionBar", () => {
         sessionId="session-1"
         sessionStatus="active"
         artifacts={[]}
-        canManageLifecycle={false}
+        capabilities={NO_LIFECYCLE}
       />
     );
 
@@ -33,6 +42,7 @@ describe("ActionBar", () => {
       <ActionBar
         sessionId="session-1"
         sessionStatus="active"
+        capabilities={FULL_CAPABILITIES}
         artifacts={[
           {
             id: "artifact-pr-1",
@@ -59,6 +69,7 @@ describe("ActionBar", () => {
       <ActionBar
         sessionId="session-1"
         sessionStatus="active"
+        capabilities={FULL_CAPABILITIES}
         artifacts={[
           {
             id: "artifact-shot-1",
@@ -101,7 +112,14 @@ describe("ActionBar", () => {
   });
 
   it("does not render a media count indicator when no media artifacts exist", () => {
-    render(<ActionBar sessionId="session-1" sessionStatus="active" artifacts={[]} />);
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
 
     expect(screen.queryByText(/Media/)).not.toBeInTheDocument();
   });
@@ -113,6 +131,7 @@ describe("ActionBar", () => {
       <MobileSessionActions
         sessionId="session-1"
         sessionStatus="active"
+        capabilities={FULL_CAPABILITIES}
         artifacts={[
           {
             id: "artifact-preview-1",
@@ -181,6 +200,7 @@ describe("ActionBar", () => {
       <MobileSessionActions
         sessionId="session-1"
         sessionStatus="active"
+        capabilities={FULL_CAPABILITIES}
         artifacts={[]}
         onArchive={onArchive}
         onOpenDetails={vi.fn()}
@@ -240,6 +260,7 @@ describe("multi-PR sessions", () => {
       <ActionBar
         sessionId="session-1"
         sessionStatus="active"
+        capabilities={FULL_CAPABILITIES}
         artifacts={[backendPr, webPr]}
         primaryRepo={{ repoOwner: "acme", repoName: "web" }}
       />
@@ -265,6 +286,7 @@ describe("multi-PR sessions", () => {
       <ActionBar
         sessionId="session-1"
         sessionStatus="active"
+        capabilities={FULL_CAPABILITIES}
         artifacts={[backendPr, webPr]}
         primaryRepo={{ repoOwner: "acme", repoName: "web" }}
       />
@@ -284,6 +306,7 @@ describe("multi-PR sessions", () => {
       <MobileSessionActions
         sessionId="session-1"
         sessionStatus="active"
+        capabilities={FULL_CAPABILITIES}
         artifacts={[backendPr, webPr]}
         primaryRepo={{ repoOwner: "acme", repoName: "web" }}
         onOpenDetails={vi.fn()}

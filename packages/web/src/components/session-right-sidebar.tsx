@@ -25,6 +25,7 @@ import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -41,9 +42,7 @@ interface SessionRightSidebarProps {
   diffLoading?: boolean;
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
-  canAccessSandbox?: boolean;
-  canManageLifecycle?: boolean;
-  canRetryDiff?: boolean;
+  capabilities: SessionCapabilities;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
@@ -62,9 +61,7 @@ export function SessionRightSidebarContent({
   diffLoading,
   selectedDiff,
   onOpenDiff,
-  canAccessSandbox = true,
-  canManageLifecycle = true,
-  canRetryDiff = true,
+  capabilities,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
@@ -130,12 +127,12 @@ export function SessionRightSidebarContent({
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
           totalCost={sessionState.totalCost}
-          canManageLifecycle={canManageLifecycle}
+          canManageLifecycle={capabilities.lifecycle}
         />
       </div>
 
       {/* Code Server */}
-      {canAccessSandbox && sessionState.codeServerUrl && (
+      {capabilities.sandboxAccess && sessionState.codeServerUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <CodeServerSection
             url={sessionState.codeServerUrl}
@@ -146,7 +143,7 @@ export function SessionRightSidebarContent({
       )}
 
       {/* VNC Desktop */}
-      {canAccessSandbox && sessionState.vncUrl && (
+      {capabilities.sandboxAccess && sessionState.vncUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <VncSection
             url={sessionState.vncUrl}
@@ -157,7 +154,7 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Terminal */}
-      {canAccessSandbox && sessionState.ttydUrl && terminalUrl && (
+      {capabilities.sandboxAccess && sessionState.ttydUrl && terminalUrl && (
         <div className="px-4 py-4 border-b border-border-muted">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -189,7 +186,7 @@ export function SessionRightSidebarContent({
       )}
 
       {/* Tunnel URLs */}
-      {canAccessSandbox &&
+      {capabilities.sandboxAccess &&
         sessionState.tunnelUrls &&
         Object.keys(sessionState.tunnelUrls).length > 0 && (
           <div className="px-4 py-4 border-b border-border-muted">
@@ -252,7 +249,7 @@ export function SessionRightSidebarContent({
                 sessionId={sessionId}
                 message={diffView.message ?? ""}
                 variant="inline"
-                canRetry={canRetryDiff}
+                capabilities={capabilities}
               />
             )}
           </div>
@@ -297,9 +294,7 @@ export function SessionRightSidebar({
   diffLoading,
   selectedDiff,
   onOpenDiff,
-  canAccessSandbox,
-  canManageLifecycle,
-  canRetryDiff,
+  capabilities,
 }: SessionRightSidebarProps) {
   return (
     <aside
@@ -325,9 +320,7 @@ export function SessionRightSidebar({
         diffLoading={diffLoading}
         selectedDiff={selectedDiff}
         onOpenDiff={onOpenDiff}
-        canAccessSandbox={canAccessSandbox}
-        canManageLifecycle={canManageLifecycle}
-        canRetryDiff={canRetryDiff}
+        capabilities={capabilities}
       />
     </aside>
   );

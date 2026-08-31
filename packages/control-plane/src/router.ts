@@ -19,7 +19,11 @@ import { UserStore } from "./db/user-store";
 import { AutomationStore } from "./db/automation-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
-import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
+import {
+  SCOPED_PERMISSION_PAIRS,
+  hasScopedPermission,
+  resolveScopedPermission,
+} from "@open-inspect/shared/rbac";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -478,11 +482,13 @@ async function enforceAutomationRequirement(
     const automation = await store.resolveCanonicalOwner(storedAutomation);
 
     const permissionStem = `automations.${requirement.operation}` as const;
-    const permissionScope = resolveScopedPermission(permissionStem, authorization.permissions);
     const ownPermission = SCOPED_PERMISSION_PAIRS[permissionStem].own;
     if (
-      !permissionScope ||
-      (permissionScope === "own" && automation.user_id !== ctx.principal.userId)
+      !hasScopedPermission(
+        permissionStem,
+        authorization.permissions,
+        automation.user_id === ctx.principal.userId
+      )
     ) {
       return json(
         { error: "Forbidden", code: "permission_required", permission: ownPermission },

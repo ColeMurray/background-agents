@@ -2,17 +2,18 @@
 
 import { ClockIcon, XIcon } from "@/components/ui/icons";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 export function QueuedPromptStack({
   promptQueue,
   cancellingPromptIds,
   onRemove,
-  canRemove = true,
+  capabilities,
 }: {
   promptQueue: PromptQueueItem[];
   cancellingPromptIds: ReadonlySet<string>;
   onRemove: (messageId: string) => void;
-  canRemove?: boolean;
+  capabilities: SessionCapabilities;
 }) {
   const pendingPrompts = promptQueue.filter((item) => item.status === "pending");
   if (pendingPrompts.length === 0) return null;
@@ -30,7 +31,7 @@ export function QueuedPromptStack({
               <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-secondary-foreground">
                 {prompt.content}
               </p>
-              {canRemove && (
+              {capabilities.lifecycle && (
                 <button
                   type="button"
                   onClick={() => onRemove(prompt.messageId)}

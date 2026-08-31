@@ -5,6 +5,7 @@ import {
   PERMISSION_IDS,
   SCOPED_PERMISSION_PAIRS,
   effectiveAuthorizationSchema,
+  hasScopedPermission,
   permissionsForBuiltInRole,
   resolveScopedPermission,
   replaceMemberRoleInputSchema,
@@ -81,6 +82,11 @@ describe("RBAC registry", () => {
     ).toBe("any");
     expect(resolveScopedPermission("automations.manage", ["automations.manage.own"])).toBe("own");
     expect(resolveScopedPermission("automations.manage", [])).toBeNull();
+    expect(hasScopedPermission("automations.manage", ["automations.manage.any"], false)).toBe(true);
+    expect(hasScopedPermission("automations.manage", ["automations.manage.own"], true)).toBe(true);
+    expect(hasScopedPermission("automations.manage", ["automations.manage.own"], false)).toBe(
+      false
+    );
   });
 
   it("assigns every permission explicitly to Owner", () => {

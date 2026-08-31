@@ -1,6 +1,7 @@
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { Logger } from "../logger";
 import type { SessionHistoryPage } from "./event-stream";
 import type { Clock, ConnectedClient, SocketRegistry } from "./ports";
@@ -33,6 +34,10 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
     cursor: NonNullable<FetchHistory["cursor"]>;
     limit?: number;
   }) => SessionHistoryPage;
+  authorize: (
+    client: Client,
+    permission: PermissionId
+  ) => Promise<"allowed" | "denied" | "unavailable">;
 }
 
 export interface SessionMessageRouterDeps<Connection, Client extends ConnectedClient> {
@@ -104,15 +109,19 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
 
       switch (data.type) {
         case "prompt":
+          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
           await this.deps.clientCommands.submitPrompt(connection, client, data);
           break;
         case "cancel_prompt":
+          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
           await this.deps.clientCommands.cancelPrompt(connection, data);
           break;
         case "stop":
+          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
           await this.deps.clientCommands.stopExecution();
           break;
         case "typing":
+          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
           await this.deps.clientCommands.notifyTyping();
           break;
         case "fetch_history":
@@ -135,6 +144,24 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         message: "Failed to process message",
       });
     }
+  }
+
+  private async authorizeCommand(
+    connection: Connection,
+    client: Client,
+    permission: PermissionId
+  ): Promise<boolean> {
+    const result = await this.deps.clientCommands.authorize(client, permission);
+    if (result === "allowed") return true;
+    this.deps.sockets.send(connection, {
+      type: "error",
+      code: result === "unavailable" ? "AUTHORIZATION_UNAVAILABLE" : "PERMISSION_REQUIRED",
+      message:
+        result === "unavailable"
+          ? "Authorization is temporarily unavailable"
+          : `Permission required: ${permission}`,
+    });
+    return false;
   }
 
   private handleFetchHistory(connection: Connection, client: Client, data: FetchHistory): void {

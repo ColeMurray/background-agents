@@ -23,7 +23,6 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
 const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
 const WS_CLOSE_INVALID_MESSAGE = 4004;
-const WS_CLOSE_AUTHORIZATION_REVOKED = 4010;
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -390,22 +389,39 @@ export function useSessionTransport(
     reconnectAttempts.current = 0;
   }, []);
 
-  // Connect on mount
+  // Track the actual component lifetime separately from capability changes.
   useEffect(() => {
     mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Connect while read transport is allowed. Cleanup is also the explicit
+  // enabled -> disabled transition: invalidate pending work, notify the
+  // protocol layer, and reset all transport state before a later re-enable.
+  useEffect(() => {
     if (enabled) connect();
 
     return () => {
-      mountedRef.current = false;
+      const discarded = wsRef.current;
+      const hadActiveAttempt = discarded !== null || connectingEpochRef.current !== null;
       invalidateInFlightConnect();
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
-      const discarded = wsRef.current;
       if (discarded) {
         wsRef.current = null;
         discarded.close();
       }
+      wsTokenRef.current = null;
+      reconnectAttempts.current = 0;
+      setConnected(false);
+      setConnecting(false);
+      setAuthError(null);
+      setConnectionError(null);
+      if (hadActiveAttempt) handlersRef.current.onClose?.();
     };
   }, [connect, enabled, invalidateInFlightConnect]);
 

@@ -129,6 +129,30 @@ describe("useSessionTransport", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it("resets transport state across enabled to disabled to enabled", async () => {
+    const rendered = renderHook(
+      ({ enabled }) => useSessionTransport("session-1", { onMessage, onClose }, enabled),
+      { initialProps: { enabled: true } }
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.instances[0].open());
+    await waitFor(() => expect(rendered.result.current.connected).toBe(true));
+
+    rendered.rerender({ enabled: false });
+
+    await waitFor(() => {
+      expect(rendered.result.current.connected).toBe(false);
+      expect(rendered.result.current.connecting).toBe(false);
+    });
+    expect(rendered.result.current.isOpen()).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rendered.rerender({ enabled: true });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    act(() => FakeWebSocket.instances[1].open());
+    await waitFor(() => expect(rendered.result.current.connected).toBe(true));
+  });
+
   it("forwards schema-valid messages to onMessage", async () => {
     const { socket } = await openSocket();
 

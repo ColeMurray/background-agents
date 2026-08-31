@@ -34,7 +34,7 @@ export function ActionBar({
   primaryRepo,
   onArchive,
   onUnarchive,
-  canManageLifecycle = true,
+  capabilities,
 }: ActionBarProps) {
   const { previewArtifact, previewUrl, prLinks, mediaCount } = resolveSessionActions(
     artifacts,
@@ -100,7 +100,7 @@ export function ActionBar({
         )}
 
         {/* Archive/Unarchive */}
-        {canManageLifecycle && (
+        {capabilities.lifecycle && (
           <Button
             variant="outline"
             size="sm"
@@ -143,7 +143,7 @@ export function ActionBar({
         </DropdownMenu>
       </div>
 
-      {canManageLifecycle && (
+      {capabilities.lifecycle && (
         <ArchiveSessionDialog
           open={controls.showArchiveDialog}
           onOpenChange={controls.setShowArchiveDialog}

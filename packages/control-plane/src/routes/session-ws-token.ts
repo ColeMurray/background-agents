@@ -1,5 +1,5 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
-import { SESSION_WEBSOCKET_PERMISSIONS } from "@open-inspect/shared/rbac";
+import { SESSION_WEBSOCKET_CONNECT_PERMISSION } from "@open-inspect/shared/rbac";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import type { Env } from "../types";
 import {
@@ -8,8 +8,7 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   parseJsonBody,
   parsePattern,
-  permissionRequirement,
-  requireAll,
+  requirePermission,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -60,7 +59,7 @@ export const sessionWsTokenRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/ws-token"),
-    authorization: requireAll(...SESSION_WEBSOCKET_PERMISSIONS.map(permissionRequirement)),
+    authorization: requirePermission(SESSION_WEBSOCKET_CONNECT_PERMISSION),
     handler: handleSessionWsToken,
   }),
 ]);
