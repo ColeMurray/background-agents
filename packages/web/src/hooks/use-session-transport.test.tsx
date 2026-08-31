@@ -195,6 +195,57 @@ describe("useSessionTransport", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
+  it("fetches a fresh credential and reconnects after authorization revocation", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ token: "original-token" }))
+      .mockResolvedValueOnce(Response.json({ token: "refreshed-token" }));
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const original = FakeWebSocket.instances[0];
+    act(() => {
+      original.open();
+      original.serverClose(4010, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const replacement = FakeWebSocket.instances[1];
+    act(() => replacement.open());
+    expect(replacement.sentMessages).toEqual([
+      expect.objectContaining({ token: "refreshed-token" }),
+    ]);
+    rendered.unmount();
+  });
+
+  it("retries a clean transient server failure with the cached credential", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(1011, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    act(() => FakeWebSocket.instances[1].open());
+    expect(FakeWebSocket.instances[1].sentMessages).toEqual([
+      expect.objectContaining({ token: "ws-token" }),
+    ]);
+    rendered.unmount();
+  });
+
   it("reconnects with backoff after an unclean close and reuses the cached token", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();

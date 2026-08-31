@@ -152,6 +152,14 @@ describe("route policy table", () => {
       allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "deny" },
     });
+    expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [
+        { kind: "permission", permission: "sessions.read" },
+        { kind: "permission", permission: "sessions.collaborate" },
+        { kind: "permission", permission: "sessions.lifecycle" },
+      ],
+    });
     expect(routeFor("POST", "/sessions/session-1/stop")?.authorization).toMatchObject({
       service: { kind: "actor", actorlessGrants: [{ service: "linear-bot" }] },
     });

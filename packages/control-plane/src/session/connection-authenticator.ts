@@ -1,5 +1,10 @@
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import {
+  WS_AUTHORIZATION_REVOKED_REASON,
+  WS_CLOSE_AUTHORIZATION_REVOKED,
+  WS_CLOSE_INTERNAL_ERROR,
+} from "@open-inspect/shared/types/websocket";
 import { hashToken } from "../auth/crypto";
 import type { Logger } from "../logger";
 import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
@@ -17,10 +22,7 @@ import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import {
-  WS_AUTHORIZATION_REVOKED_REASON,
-  WS_CLOSE_AUTHORIZATION_REVOKED,
-} from "./authorization-lease";
+import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -265,6 +267,9 @@ export class SessionConnectionAuthenticator {
         return;
       }
 
+      // Authorization is intentionally sampled once at the start of this
+      // subscription request. A concurrent role change takes effect when this
+      // bounded lease expires, not midway through an in-flight request.
       const authorization = await this.deps.verifyAuthorization(participant.canonical_user_id);
       if (authorization !== "valid") {
         log.warn("ws.connect", {
@@ -276,9 +281,14 @@ export class SessionConnectionAuthenticator {
           participant_id: participant.id,
           user_id: participant.canonical_user_id,
         });
-        wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
+        if (authorization === "unavailable") {
+          wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Authorization temporarily unavailable");
+        } else {
+          wsManager.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
+        }
         return;
       }
+      const authorizationExpiresAt = Date.now() + WS_AUTHORIZATION_LEASE_MS;
 
       // Reject tokens older than the TTL
       if (
@@ -298,7 +308,6 @@ export class SessionConnectionAuthenticator {
       }
 
       const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
-      const authorizationExpiresAt = await wsManager.grantLease(ws, participant.id, data.clientId);
       const clientInfo: ClientInfo = {
         participantId: participant.id,
         userId: participant.canonical_user_id ?? participant.user_id,
@@ -311,8 +320,21 @@ export class SessionConnectionAuthenticator {
         ws,
       };
 
-      if (!this.completeClientSubscription(ws, clientInfo, enrichment)) {
-        wsManager.close(ws, 4009, "Session synchronization failed");
+      try {
+        const activated = await wsManager.activateClient(ws, clientInfo, () =>
+          this.completeClientSubscription(ws, clientInfo, enrichment)
+        );
+        if (!activated) {
+          wsManager.close(ws, 4009, "Session synchronization failed");
+          return;
+        }
+      } catch (error) {
+        log.error("Failed to activate synchronized WebSocket client", {
+          participant_id: participant.id,
+          user_id: participant.user_id,
+          error: error instanceof Error ? error : String(error),
+        });
+        wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Session activation failed");
         return;
       }
       log.info("ws.connect", {
@@ -361,7 +383,6 @@ export class SessionConnectionAuthenticator {
       return false;
     }
 
-    wsManager.setClient(ws, client);
     return true;
   }
 

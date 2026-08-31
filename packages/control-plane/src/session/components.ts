@@ -22,6 +22,7 @@
  */
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
+import { SESSION_WEBSOCKET_PERMISSIONS } from "@open-inspect/shared/rbac";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -689,8 +690,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     verifyAuthorization: async (userId) => {
       if (!db) return "unavailable";
       try {
-        await new AuthorizationService(db).requirePermission(userId, "sessions.collaborate");
-        return "valid";
+        const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
+        return authorization.suspendedAt === null &&
+          SESSION_WEBSOCKET_PERMISSIONS.every((permission) =>
+            authorization.permissions.includes(permission)
+          )
+          ? "valid"
+          : "rejected";
       } catch (error) {
         if (error instanceof AuthorizationError) return "rejected";
         log.error("WebSocket authorization verification failed", {

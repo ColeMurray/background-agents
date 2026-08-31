@@ -549,16 +549,28 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
     });
 
-    it("removeClient returns and removes the client", () => {
-      const { manager } = createManager();
+    it("removeClient returns the client and removes every identity representation", () => {
+      const { manager, sockets, mockRepo } = createManager();
       const ws = createFakeWebSocket();
       const info = createClientInfo({ ws });
+      sockets.set(ws, ["wsid:ws-1"]);
+      mockRepo.addMapping("ws-1", {
+        participant_id: info.participantId,
+        client_id: info.clientId,
+        user_id: info.userId,
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: info.authorizationExpiresAt,
+      });
 
       manager.setClient(ws, info);
+      manager.setClientSynchronizing(ws, true);
       const removed = manager.removeClient(ws);
 
       expect(removed).toBe(info);
       expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
+      expect(manager.isClientSynchronizing(ws)).toBe(false);
+      expect(mockRepo.mappings.has("ws-1")).toBe(false);
     });
 
     it("removeClient returns null for unknown socket", () => {
@@ -644,15 +656,18 @@ describe("SessionWebSocketManagerImpl", () => {
     });
   });
 
-  describe("grantLease", () => {
-    it("mints, persists, and schedules one authorization deadline", async () => {
+  describe("activateClient", () => {
+    it("schedules then publishes one authorization lease", async () => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
       const { manager, alarmScheduler, mockRepo, sockets } = createManager();
       const ws = createFakeWebSocket();
       sockets.set(ws, ["wsid:ws-1"]);
+      const info = createClientInfo({ ws, authorizationExpiresAt: 301_000 });
 
-      await expect(manager.grantLease(ws, "part-1", "client-1")).resolves.toBe(301_000);
+      const synchronize = vi.fn(() => true);
+      await expect(manager.activateClient(ws, info, synchronize)).resolves.toBe(true);
       expect(alarmScheduler.schedule).toHaveBeenCalledWith(301_000);
+      expect(synchronize).toHaveBeenCalledOnce();
       expect(mockRepo.upsertCalls).toHaveLength(1);
       expect(mockRepo.upsertCalls[0]).toMatchObject({
         wsId: "ws-1",
@@ -660,7 +675,35 @@ describe("SessionWebSocketManagerImpl", () => {
         clientId: "client-1",
         authorizationExpiresAt: 301_000,
       });
+      expect(manager.lookupClient(ws)).toEqual({ kind: "cached", client: info });
       now.mockRestore();
+    });
+
+    it("does not publish client state when scheduling fails", async () => {
+      const { manager, alarmScheduler, mockRepo, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
+      alarmScheduler.schedule.mockRejectedValueOnce(new Error("alarm unavailable"));
+
+      const synchronize = vi.fn(() => true);
+      await expect(
+        manager.activateClient(ws, createClientInfo({ ws }), synchronize)
+      ).rejects.toThrow("alarm unavailable");
+      expect(synchronize).not.toHaveBeenCalled();
+      expect(mockRepo.upsertCalls).toHaveLength(0);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
+    });
+
+    it("does not publish client state when snapshot synchronization fails", async () => {
+      const { manager, mockRepo, sockets } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
+
+      await expect(manager.activateClient(ws, createClientInfo({ ws }), () => false)).resolves.toBe(
+        false
+      );
+      expect(mockRepo.upsertCalls).toHaveLength(0);
+      expect(manager.lookupClient(ws)).toEqual({ kind: "missing" });
     });
   });
 
@@ -1009,6 +1052,25 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager } = createManager();
       const clients = Array.from(manager.getAuthenticatedClients());
       expect(clients).toHaveLength(0);
+    });
+
+    it("tears down expired clients before projecting presence", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-expired"]);
+      manager.setClient(ws, createClientInfo({ ws, authorizationExpiresAt: Date.now() - 1 }));
+      mockRepo.addMapping("ws-expired", {
+        participant_id: "part-1",
+        client_id: "client-1",
+        user_id: "user-1",
+        scm_name: null,
+        scm_login: null,
+        authorization_expires_at: Date.now() - 1,
+      });
+
+      expect(Array.from(manager.getAuthenticatedClients())).toEqual([]);
+      expect(mockRepo.mappings.has("ws-expired")).toBe(false);
+      expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
     });
   });
 
