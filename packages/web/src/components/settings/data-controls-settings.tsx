@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
@@ -17,6 +17,7 @@ import {
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const PAGE_SIZE = 20;
 const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
@@ -25,14 +26,26 @@ const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
   offset: 0,
 });
 
+/**
+ * Lists archived sessions and derives lifecycle actions from the current user's workspace permissions.
+ */
 export function DataControlsSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageLifecycle = hasPermission("sessions.lifecycle");
+  const archivedSessionsKey = ARCHIVED_SESSIONS_KEY;
   const [extraSessions, setExtraSessions] = useState<SessionListItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const offsetRef = useRef(0);
 
+  useEffect(() => {
+    setExtraSessions([]);
+    setHasMore(false);
+    offsetRef.current = 0;
+  }, [archivedSessionsKey]);
+
   const { data, isLoading: loading } = useSWR<SessionListResponse>(
-    ARCHIVED_SESSIONS_KEY,
+    archivedSessionsKey,
     fetchSessionListPage,
     {
       onSuccess: (data) => {
@@ -77,7 +90,7 @@ export function DataControlsSettings() {
       }
       toast.success("Session unarchived");
       await mutate<SessionListResponse>(
-        ARCHIVED_SESSIONS_KEY,
+        archivedSessionsKey,
         (current) =>
           current
             ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
@@ -126,6 +139,7 @@ export function DataControlsSettings() {
               <ArchivedSessionRow
                 key={session.id}
                 session={session}
+                canManageLifecycle={canManageLifecycle}
                 onUnarchive={handleUnarchive}
               />
             ))}
@@ -150,9 +164,11 @@ export function DataControlsSettings() {
 
 function ArchivedSessionRow({
   session,
+  canManageLifecycle,
   onUnarchive,
 }: {
   session: SessionListItem;
+  canManageLifecycle: boolean;
   onUnarchive: (id: string) => void;
 }) {
   const repoInfo = formatRepoLabel(session.repoOwner, session.repoName);
@@ -169,14 +185,16 @@ function ArchivedSessionRow({
           <span className="truncate">{repoInfo}</span>
         </div>
       </Link>
-      <Button
-        variant="outline"
-        size="xs"
-        onClick={() => onUnarchive(session.id)}
-        className="flex-shrink-0 opacity-0 group-hover:opacity-100"
-      >
-        Unarchive
-      </Button>
+      {canManageLifecycle && (
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => onUnarchive(session.id)}
+          className="flex-shrink-0 opacity-0 group-hover:opacity-100"
+        >
+          Unarchive
+        </Button>
+      )}
     </div>
   );
 }

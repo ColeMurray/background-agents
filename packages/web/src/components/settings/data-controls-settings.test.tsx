@@ -9,6 +9,16 @@ import useSWR, { SWRConfig, mutate as globalMutate } from "swr";
 import { DataControlsSettings } from "./data-controls-settings";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
 
+const authorizationMocks = vi.hoisted(() => ({
+  allowedPermissions: new Set<string>(["sessions.lifecycle"]),
+}));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) => authorizationMocks.allowedPermissions.has(permission),
+  }),
+}));
+
 expect.extend(matchers);
 
 const { toastMock } = vi.hoisted(() => ({
@@ -141,11 +151,24 @@ afterEach(async () => {
   // Clear SWR's global cache between tests so cache state doesn't leak.
   await globalMutate(() => true, undefined, { revalidate: false });
   vi.restoreAllMocks();
+  authorizationMocks.allowedPermissions = new Set(["sessions.lifecycle"]);
   toastMock.success.mockReset();
   toastMock.error.mockReset();
 });
 
 describe("DataControlsSettings — unarchive flow", () => {
+  it("hides unarchive when sessions.lifecycle is denied", async () => {
+    authorizationMocks.allowedPermissions = new Set();
+    installFetch({
+      archivedSessions: [createArchivedSession(1)],
+    });
+
+    renderComponent();
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Unarchive" })).not.toBeInTheDocument();
+  });
+
   it("removes the row when the unarchive request succeeds", async () => {
     installFetch({
       archivedSessions: [createArchivedSession(1)],

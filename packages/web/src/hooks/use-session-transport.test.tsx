@@ -110,6 +110,25 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
+  it("does not fetch a token or open a socket when transport is disabled", async () => {
+    const { result } = renderHook(() =>
+      useSessionTransport("session-1", { onMessage, onClose }, false)
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(result.current.connected).toBe(false);
+    expect(result.current.connecting).toBe(false);
+
+    act(() => result.current.reconnect());
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it("forwards schema-valid messages to onMessage", async () => {
     const { socket } = await openSocket();
 
@@ -193,6 +212,26 @@ describe("useSessionTransport", () => {
       expect(result.current.connectionError).toBe("Session expired. Please reconnect.");
     });
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("clears the token and reconnects after authorization lease expiry", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(4010, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    rendered.unmount();
   });
 
   it("reconnects with backoff after an unclean close and reuses the cached token", async () => {

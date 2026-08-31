@@ -302,10 +302,11 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > **Keep "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
    > the default for newly created Apps, but activate it if yours predates that default). Expiring
    > user tokens are what make GitHub return a **refresh token** at sign-in, and Open-Inspect stores
-   > that per-user credential so sessions clone, commit, and push **as the signed-in user**. With
-   > expiration deactivated — or on an **OAuth App**, which never issues a refresh token — no
-   > per-user credential is captured and sessions fall back to the shared GitHub App **bot**
-   > identity for repository access.
+   > that per-user credential for attributed GitHub operations such as pull-request creation. Clone,
+   > fetch, and push authentication still use the shared GitHub App installation. With expiration
+   > deactivated — or on an **OAuth App**, which never issues a refresh token — no per-user
+   > credential is captured, so supported attributed operations fall back to the shared GitHub App
+   > **bot** identity.
 
 5. Set **Repository permissions**:
    - Actions: **Read-only** _(required for GitHub workflow-run automations)_
@@ -651,10 +652,9 @@ configurations because they authorize repository operations; they do not enable 
 
 ### Enable Google Login (Optional)
 
-Google login lets non-developer users (PMs, support agents) sign in without a GitHub account. They
-get the same flat access as everyone else; git operations still use the shared GitHub App, and their
-PRs fall back to the App bot (no personal GitHub attribution unless the same verified email is also
-a linked GitHub identity).
+Google login lets non-developer users (PMs, support agents) sign in without a GitHub account. Git
+operations still use the shared GitHub App, and their PRs fall back to the App bot (no personal
+GitHub attribution unless the same verified email is also a linked GitHub identity).
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an
    **OAuth client ID** of type **Web application**.
@@ -723,6 +723,52 @@ terraform apply
 ```
 
 Terraform will update the workers with the required bindings.
+
+---
+
+## Step 7a: Bootstrap the Workspace Owner
+
+Owner assignment is an explicit operator action. After both deployment phases complete:
+
+1. Have the intended Owner sign in to the deployed web application once. This creates their
+   canonical user and default role assignment.
+2. While signed in, open `/api/auth/get-session` on the web application origin and record the
+   32-character lowercase hexadecimal `user.id`. The bootstrap command accepts this canonical ID,
+   never an email address.
+3. Obtain the D1 database name with `terraform output -raw d1_database_name` from
+   `terraform/environments/production`.
+4. From the repository root, run the remote dry run (the default):
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>"
+```
+
+5. Confirm the preflight result is `ready` (or `no-op` when the target is already the current
+   unsuspended Owner), then execute the same command with `--execute`:
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>" \
+  --execute
+```
+
+The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or
+`wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
+assignment, or another unsuspended Owner. There is no force option. Execution is one atomic Wrangler
+SQL file: it writes one redacted `workspace.owner_bootstrapped` service audit event and replaces the
+target's assignment. A no-op writes nothing.
+
+6. Verify the control-plane health response contains `"rbac":{"ownerAssignment":"present"}`:
+
+```bash
+curl "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health"
+```
+
+This health value reports current state: `present` means at least one Owner assignment belongs to an
+unsuspended user.
 
 ---
 

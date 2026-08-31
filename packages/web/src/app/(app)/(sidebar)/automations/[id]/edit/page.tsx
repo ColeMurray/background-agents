@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, use } from "react";
+import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
@@ -12,14 +12,26 @@ import {
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { canAccessAutomation } from "@/lib/automation-authorization";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading } = useAutomation(id);
+  const { authorization, loading: authorizationLoading } = useCurrentUserAuthorization();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const canManage = automation
+    ? canAccessAutomation("automations.manage", authorization, automation)
+    : false;
+
+  useEffect(() => {
+    if (!loading && !authorizationLoading && automation && !canManage) {
+      router.replace(`/automations/${id}`);
+    }
+  }, [automation, authorizationLoading, canManage, id, loading, router]);
 
   const handleSubmit = async (values: AutomationFormValues) => {
     setSubmitting(true);
@@ -45,7 +57,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     }
   };
 
-  if (loading) {
+  if (loading || authorizationLoading) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
@@ -65,6 +77,8 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
       </div>
     );
   }
+
+  if (!canManage) return null;
 
   return (
     <div className="h-full flex flex-col">

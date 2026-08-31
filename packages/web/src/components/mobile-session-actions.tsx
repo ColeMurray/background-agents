@@ -44,6 +44,7 @@ export function MobileSessionActions({
     actions.primaryRepo
   );
   const controls = useSessionActionControls(actions);
+  const canManageLifecycle = actions.canManageLifecycle !== false;
 
   return (
     <>
@@ -106,23 +107,27 @@ export function MobileSessionActions({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={controls.handleArchiveToggle}
-              disabled={controls.isArchiving}
-            >
-              <ArchiveIcon className="w-4 h-4" />
-              {controls.isArchived ? "Unarchive" : "Archive"}
-            </DropdownMenuItem>
+            {canManageLifecycle && <DropdownMenuSeparator />}
+            {canManageLifecycle && (
+              <DropdownMenuItem
+                onClick={controls.handleArchiveToggle}
+                disabled={controls.isArchiving}
+              >
+                <ArchiveIcon className="w-4 h-4" />
+                {controls.isArchived ? "Unarchive" : "Archive"}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
-      <ArchiveSessionDialog
-        open={controls.showArchiveDialog}
-        onOpenChange={controls.setShowArchiveDialog}
-        onConfirm={controls.handleConfirmArchive}
-      />
+      {canManageLifecycle && (
+        <ArchiveSessionDialog
+          open={controls.showArchiveDialog}
+          onOpenChange={controls.setShowArchiveDialog}
+          onConfirm={controls.handleConfirmArchive}
+        />
+      )}
     </>
   );
 }

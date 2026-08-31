@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
 import { UserMenu } from "@/components/sidebar-user-menu";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
@@ -69,6 +70,7 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
+  const { hasPermission } = useCurrentUserAuthorization();
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -202,7 +204,7 @@ export function SessionSidebar({
           <SearchSessionsButton onClick={onSearchSessions} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <NewSessionButton onClick={onNewSession} />
+          {hasPermission("sessions.create") && <NewSessionButton onClick={onNewSession} />}
           <Link
             href={SETTINGS_DESTINATION.href}
             onClick={handleNavigationSelect}

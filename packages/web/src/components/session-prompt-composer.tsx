@@ -24,6 +24,7 @@ type SessionPromptComposerProps = {
     primaryRepo?: { repoOwner: string; repoName: string } | null;
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
+    canManageLifecycle?: boolean;
   };
   prompt: {
     value: string;
@@ -105,6 +106,7 @@ export function SessionPromptComposer({
             primaryRepo={session.primaryRepo}
             onArchive={session.onArchive}
             onUnarchive={session.onUnarchive}
+            canManageLifecycle={session.canManageLifecycle}
           />
         </div>
 
