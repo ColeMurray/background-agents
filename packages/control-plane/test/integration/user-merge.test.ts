@@ -455,6 +455,23 @@ describe("mergeUsers", () => {
     expect(await getUserRow(LOSER)).not.toBeNull();
   });
 
+  it("merges two suspended users even when their suspension timestamps differ", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await env.DB.prepare("UPDATE users SET suspended_at = 123 WHERE id = ?").bind(SURVIVOR).run();
+    await env.DB.prepare("UPDATE users SET suspended_at = 456 WHERE id = ?").bind(LOSER).run();
+
+    await expect(
+      mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER })
+    ).resolves.toMatchObject({
+      counts: { usersDeleted: 1 },
+    });
+    expect(await getUserRow(LOSER)).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(SURVIVOR).first()
+    ).toEqual({ suspended_at: 123 });
+  });
+
   it("rolls back when role invariants change after preflight", async () => {
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
     await insertCanonicalUser({ id: LOSER, email: null });
