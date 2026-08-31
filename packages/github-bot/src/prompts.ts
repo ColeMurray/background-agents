@@ -60,7 +60,7 @@ export function buildCodeReviewPrompt(params: {
     codeReviewInstructions,
     isSelfReview = false,
   } = params;
-  const reviewEvent = isSelfReview ? "COMMENT" : "COMMENT|APPROVE|REQUEST_CHANGES";
+  const reviewEvent = isSelfReview ? "COMMENT" : "<selected review event>";
   const reviewEventGuidance = isSelfReview
     ? "Use COMMENT because GitHub does not allow pull request authors to approve their own PRs."
     : "Use APPROVE if the code looks good, REQUEST_CHANGES if changes are needed,\n   or COMMENT for general feedback.";
@@ -107,24 +107,31 @@ ${prDescriptionBlock}
    - Performance implications
    - Code clarity and maintainability
 3. You may read individual files in the repo for additional context beyond the diff
-4. When your review is complete, submit it via:
+4. Do not publish findings while reviewing. Accumulate the complete review first.
+5. When your review is complete, write valid JSON to "/tmp/open-inspect-review.json" using this shape:
 
-   gh api repos/${owner}/${repo}/pulls/${number}/reviews \\
-     --method POST \\
-     -f body="<your review summary>" \\
-     -f event="${reviewEvent}"
+   {
+     "body": "<complete review summary>",
+     "event": "${reviewEvent}",
+     "comments": [
+       {
+         "path": "<file path>",
+         "line": 42,
+         "side": "RIGHT",
+         "body": "<inline finding>"
+       }
+     ]
+   }
 
    ${reviewEventGuidance}
+   Use an empty comments array when there are no inline findings. If an inline anchor cannot be represented, include that finding in the top-level body instead. Generate the JSON safely; do not interpolate review text into shell arguments.
+6. Submit exactly one review with all inline findings included in that review:
 
-5. For inline comments on specific files:
+   gh api --method POST \\
+     "repos/${owner}/${repo}/pulls/${number}/reviews" \\
+     --input /tmp/open-inspect-review.json
 
-   gh api repos/${owner}/${repo}/pulls/${number}/comments \\
-     --method POST \\
-     -f body="<comment>" \\
-     -f path="<file path>" \\
-     -f commit_id="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha')" \\
-     -f line=<line number> \\
-     -f side="RIGHT"
+   Invoke this endpoint exactly once. Do not submit inline findings through the pull request comments endpoint, run \`gh pr review\` separately, or submit follow-up reviews.
 
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
