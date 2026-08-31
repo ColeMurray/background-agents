@@ -4,6 +4,7 @@
 
 export * from "./types";
 export * from "./git";
+export * from "./github-review-status";
 export * from "./regex";
 export * from "./auth";
 export * from "./service-auth";

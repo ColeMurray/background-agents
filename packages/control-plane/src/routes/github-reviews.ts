@@ -10,7 +10,13 @@
  * github-bot service principal.
  */
 
+import {
+  REVIEW_ABANDONED_DESCRIPTION,
+  REVIEW_STALE_PENDING_MS,
+  REVIEW_STATUS_CONTEXT,
+} from "@open-inspect/shared";
 import { z } from "zod";
+import { getCachedInstallationToken, getGitHubAppConfig } from "../auth/github-app";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -32,6 +38,8 @@ import {
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:github-reviews");
+/** Identifies this worker on the status writes it makes on a dead review's behalf. */
+const CONTROL_PLANE_USER_AGENT = "open-inspect-control-plane";
 const GITHUB_REVIEW_SANDBOX_ROUTE = {
   authentication: {
     kind: "sandbox",
@@ -421,3 +429,131 @@ export const githubReviewRoutes: Route[] = [
     },
   ]),
 ];
+
+/** A review row whose session can no longer post its own commit status. */
+interface DeadReviewSessionRow {
+  session_id: string;
+  repo_id: number;
+  pr_number: number;
+  head_sha: string;
+  created_at: number;
+  status: string;
+  repo_owner: string | null;
+  repo_name: string | null;
+  lease_session_id: string | null;
+  lease_expires_at: number | null;
+}
+
+/**
+ * Post the abandoned status for one review, replacing the pending one the
+ * github-bot wrote when the review started.
+ *
+ * Returns false when the write did not land, so the row is retained and the
+ * next tick retries rather than leaving the PR pending with nothing tracking it.
+ */
+async function postAbandonedReviewStatus(env: Env, row: DeadReviewSessionRow): Promise<boolean> {
+  if (!row.repo_owner || !row.repo_name) return false;
+  const config = getGitHubAppConfig(env);
+  if (!config) return false;
+  const token = await getCachedInstallationToken(config, { userAgent: CONTROL_PLANE_USER_AGENT });
+  const response = await fetch(
+    `https://api.github.com/repos/${row.repo_owner}/${row.repo_name}/statuses/${row.head_sha}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": CONTROL_PLANE_USER_AGENT,
+      },
+      body: JSON.stringify({
+        state: "error",
+        context: REVIEW_STATUS_CONTEXT,
+        description: REVIEW_ABANDONED_DESCRIPTION,
+      }),
+    }
+  );
+  // A 422 is GitHub refusing the sha itself — a force-push dropped it, so there
+  // is no commit left to describe. Treated as done rather than retried forever.
+  return response.ok || response.status === 422;
+}
+
+/**
+ * Close out reviews whose session can no longer speak for itself.
+ *
+ * The github-bot writes `pending` when a review starts and the agent writes the
+ * terminal status when it finishes. A session killed by a supervisor timeout
+ * runs no code of its own, so it writes neither — and a pending status is
+ * indistinguishable from a review still running, so the check never resolves
+ * and any merge rule keyed on it waits forever.
+ *
+ * Two conditions, because a session can fail in two ways this cannot tell apart
+ * from the outside: it reached a terminal status, or it sat pending past
+ * `REVIEW_STALE_PENDING_MS` without reaching one at all. The second is the case
+ * the first cannot cover — a session whose runtime died before recording
+ * anything leaves a row that no status transition will ever resolve.
+ *
+ * Superseded rows are `reapSupersededReviewSessions`' job and are left alone
+ * here: that path cancels the session first, and cancelling then closing out in
+ * one tick would post twice for one head.
+ */
+export async function closeOutDeadReviewSessions(
+  db: RequestContext["db"],
+  env: Env
+): Promise<void> {
+  if (!getGitHubAppConfig(env)) return;
+  const cutoff = Date.now() - REVIEW_STALE_PENDING_MS;
+  const dead = await db
+    .prepare(
+      `SELECT grs.session_id, grs.repo_id, grs.pr_number, grs.head_sha, grs.created_at,
+              s.status, s.repo_owner, s.repo_name,
+              st.lease_session_id, st.lease_expires_at
+       FROM github_review_sessions grs
+       JOIN github_review_state st
+         ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
+       JOIN sessions s ON s.id = grs.session_id
+       WHERE grs.generation = st.latest_generation
+         AND (s.status IN ('failed', 'cancelled') OR grs.created_at < ?1)
+       LIMIT 20`
+    )
+    .bind(cutoff)
+    .all<DeadReviewSessionRow>();
+
+  for (const row of dead.results) {
+    // An unexpired submission lease means the holder is mid-GitHub-write, and a
+    // status posted now would race the verdict it is about to publish. The row
+    // is retained and retried once the lease lapses — the same deferral
+    // `cancelStaleReviewSession` makes, and for the same reason.
+    if (
+      row.lease_session_id === row.session_id &&
+      row.lease_expires_at !== null &&
+      row.lease_expires_at >= Date.now()
+    ) {
+      continue;
+    }
+    let posted: boolean;
+    try {
+      posted = await postAbandonedReviewStatus(env, row);
+    } catch (postError) {
+      logger.warn("review_closeout.post_threw", {
+        event: "review_closeout.post_threw",
+        session_id: row.session_id,
+        error: postError instanceof Error ? postError.message : String(postError),
+      });
+      continue;
+    }
+    if (!posted) continue;
+    await db
+      .prepare(`DELETE FROM github_review_sessions WHERE session_id = ?`)
+      .bind(row.session_id)
+      .run();
+    logger.info("review_closeout.closed", {
+      event: "review_closeout.closed",
+      session_id: row.session_id,
+      repo_id: row.repo_id,
+      pull_number: row.pr_number,
+      session_status: row.status,
+      age_ms: Date.now() - row.created_at,
+    });
+  }
+}

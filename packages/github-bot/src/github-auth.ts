@@ -17,8 +17,15 @@ const installationTokenResponseSchema = z.object({
   token: z.string(),
 });
 
-export const REVIEW_STATUS_CONTEXT = "open-inspect";
-export const REVIEW_PENDING_DESCRIPTION = "Review in progress";
+// Re-exported rather than redeclared: the control plane closes out reviews whose
+// session died before this worker could, so the context string is a contract
+// between two workers and lives in shared.
+export {
+  REVIEW_STATUS_CONTEXT,
+  REVIEW_PENDING_DESCRIPTION,
+  REVIEW_ABANDONED_DESCRIPTION,
+  REVIEW_STALE_PENDING_MS,
+} from "@open-inspect/shared";
 export const REVIEW_COMPLETED_DESCRIPTION = "Review completed";
 export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
 /**

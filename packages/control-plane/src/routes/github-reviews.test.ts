@@ -1,10 +1,26 @@
+import type * as GitHubAppModuleNamespace from "../auth/github-app";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  REVIEW_ABANDONED_DESCRIPTION,
+  REVIEW_STALE_PENDING_MS,
+  REVIEW_STATUS_CONTEXT,
+} from "@open-inspect/shared";
+
+type GitHubAppModule = typeof GitHubAppModuleNamespace;
+
+// The close-out mints an installation token; stubbed so these tests exercise the
+// status write and the row lifecycle rather than GitHub App JWT signing.
+vi.mock("../auth/github-app", async (importOriginal) => ({
+  ...(await importOriginal<GitHubAppModule>()),
+  getCachedInstallationToken: vi.fn(async () => "test-token"),
+}));
 import type { Principal } from "../auth/principal";
 import { SessionIndexStore } from "../db/session-index";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import {
+  closeOutDeadReviewSessions,
   githubReviewRoutes,
   handleClaimReviewGeneration,
   handleReviewLeaseRelease,
@@ -505,5 +521,152 @@ describe("sweep lease deferral", () => {
       failedSessionIds: [],
     });
     expect(deletedSessionIds).toEqual(["expired-lease"]);
+  });
+});
+
+/**
+ * Rows the close-out query returns. Its SELECT joins three tables, so the fake
+ * above (shaped for the sweep) does not fit — this one answers the close-out's
+ * SELECT and records the DELETEs it issues.
+ */
+function createCloseOutDb(rows: Record<string, unknown>[]): {
+  db: SqlDatabase;
+  deleted: string[];
+} {
+  const deleted: string[] = [];
+  const db = {
+    prepare(sql: string) {
+      const binds: unknown[] = [];
+      const statement = {
+        bind(...args: unknown[]) {
+          binds.push(...args);
+          return statement;
+        },
+        async all() {
+          if (!sql.includes("FROM github_review_sessions")) return { results: [] };
+          const cutoff = binds[0] as number;
+          return {
+            results: rows.filter(
+              (row) =>
+                row.status === "failed" ||
+                row.status === "cancelled" ||
+                (row.created_at as number) < cutoff
+            ),
+          };
+        },
+        async run() {
+          if (sql.startsWith("DELETE")) deleted.push(binds[0] as string);
+          return { meta: { changes: 1 } };
+        },
+        async first() {
+          return null;
+        },
+      };
+      return statement;
+    },
+  } as unknown as SqlDatabase;
+  return { db, deleted };
+}
+
+function closeOutRow(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    session_id: "sess-dead",
+    repo_id: 42,
+    pr_number: 7,
+    head_sha: "abc123",
+    created_at: Date.now(),
+    status: "failed",
+    repo_owner: "opencodos",
+    repo_name: "aitaas",
+    lease_session_id: null,
+    lease_expires_at: null,
+    ...overrides,
+  };
+}
+
+const CLOSE_OUT_ENV = {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "key",
+  GITHUB_APP_INSTALLATION_ID: "2",
+} as unknown as Env;
+
+describe("closeOutDeadReviewSessions", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts the abandoned status for a session that died, and drops the row", async () => {
+    const { db, deleted } = createCloseOutDb([closeOutRow()]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+
+    await closeOutDeadReviewSessions(db as RequestContext["db"], CLOSE_OUT_ENV);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://api.github.com/repos/opencodos/aitaas/statuses/abc123");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toMatchObject({
+      state: "error",
+      context: REVIEW_STATUS_CONTEXT,
+      description: REVIEW_ABANDONED_DESCRIPTION,
+    });
+    expect(deleted).toEqual(["sess-dead"]);
+  });
+
+  it("closes out a session that never reached a terminal status but sat pending too long", async () => {
+    // The case a status transition cannot cover: the runtime died without
+    // recording anything, so only elapsed time says the review is not coming.
+    const stale = closeOutRow({
+      status: "active",
+      created_at: Date.now() - REVIEW_STALE_PENDING_MS - 1_000,
+    });
+    const { db, deleted } = createCloseOutDb([stale]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+
+    await closeOutDeadReviewSessions(db as RequestContext["db"], CLOSE_OUT_ENV);
+
+    expect(deleted).toEqual(["sess-dead"]);
+  });
+
+  it("defers to an unexpired submission lease rather than racing the verdict", async () => {
+    const leased = closeOutRow({
+      lease_session_id: "sess-dead",
+      lease_expires_at: Date.now() + 60_000,
+    });
+    const { db, deleted } = createCloseOutDb([leased]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+
+    await closeOutDeadReviewSessions(db as RequestContext["db"], CLOSE_OUT_ENV);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(deleted).toEqual([]);
+  });
+
+  it("retains the row when the status write fails, so the next tick retries", async () => {
+    const { db, deleted } = createCloseOutDb([closeOutRow()]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 500 }));
+
+    await closeOutDeadReviewSessions(db as RequestContext["db"], CLOSE_OUT_ENV);
+
+    expect(deleted).toEqual([]);
+  });
+
+  it("treats a rejected sha as done — a force-push left no commit to describe", async () => {
+    const { db, deleted } = createCloseOutDb([closeOutRow()]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("gone", { status: 422 }));
+
+    await closeOutDeadReviewSessions(db as RequestContext["db"], CLOSE_OUT_ENV);
+
+    expect(deleted).toEqual(["sess-dead"]);
+  });
+
+  it("does nothing when the GitHub App is not configured", async () => {
+    const { db, deleted } = createCloseOutDb([closeOutRow()]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+
+    await closeOutDeadReviewSessions(db as RequestContext["db"], {} as Env);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(deleted).toEqual([]);
   });
 });
