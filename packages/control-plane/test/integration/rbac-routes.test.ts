@@ -1,4 +1,4 @@
-import { env, SELF } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthorizationService } from "../../src/authorization/service";
 import { UserStore } from "../../src/db/user-store";
