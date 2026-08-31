@@ -30,6 +30,12 @@ export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
 export const REVIEW_NOT_PUBLISHED_DESCRIPTION = "Review did not publish — push again to retry";
 /** Terminal status for the head a newer push replaced, so its pending status does not outlive it. */
 export const REVIEW_SUPERSEDED_DESCRIPTION = "Superseded by a newer commit";
+/**
+ * Terminal status for a head whose review was declined because the PR already carries a standing
+ * approval. Posted so the skip is visible on the commit, and so a repository that requires this
+ * context does not wait forever on a review that was deliberately never started.
+ */
+export const REVIEW_SKIPPED_APPROVED_DESCRIPTION = "Skipped — PR already approved";
 export interface GitHubAppConfig {
   appId: string;
   privateKey: string;
@@ -293,4 +299,89 @@ export async function getPullRequestSnapshot(
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * States a review can carry that change a PR's standing approval. `COMMENTED`
+ * and `PENDING` are deliberately absent: GitHub does not let either clear an
+ * earlier approval, so they must not overwrite a reviewer's latest verdict.
+ */
+const APPROVAL_BEARING_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
+
+const REVIEWS_PAGE_SIZE = 100;
+/**
+ * Cap on review pages walked per PR. Approval is decided from each reviewer's
+ * latest verdict, so the pages that matter are the last ones — but the API
+ * only lists oldest-first. A PR with more reviews than this is pathological;
+ * bounding the walk keeps one PR from burning the whole request budget.
+ */
+const REVIEWS_MAX_PAGES = 10;
+
+const pullRequestReviewSchema = z.object({
+  user: z.object({ login: z.string() }).nullable().optional(),
+  state: z.string(),
+});
+const pullRequestReviewsResponseSchema = z.array(pullRequestReviewSchema);
+
+export type PullRequestApprovalResult =
+  | { ok: true; approved: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Whether the PR currently carries at least one standing approval.
+ *
+ * GitHub reports every review ever submitted, so approval is not "an APPROVED
+ * row exists" — it is each reviewer's *latest* approval-bearing verdict being
+ * APPROVED. A later CHANGES_REQUESTED from the same reviewer overrides their
+ * approval, and a dismissal rewrites the row's state to DISMISSED.
+ */
+export async function getPullRequestApproval(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<PullRequestApprovalResult> {
+  const latestVerdictByReviewer = new Map<string, string>();
+  try {
+    for (let page = 1; page <= REVIEWS_MAX_PAGES; page++) {
+      const response = await fetch(
+        `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}/reviews?per_page=${REVIEWS_PAGE_SIZE}&page=${page}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": userAgent,
+          },
+          signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
+        }
+      );
+      if (!response.ok) {
+        return { ok: false, error: `GitHub API returned ${response.status}` };
+      }
+      const parsed = pullRequestReviewsResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        return { ok: false, error: "invalid response" };
+      }
+
+      // The API lists reviews oldest-first, so a later page's verdict always
+      // supersedes an earlier one for the same reviewer.
+      for (const review of parsed.data) {
+        const login = review.user?.login;
+        if (!login) continue; // a deleted account's review carries no reviewer to attribute it to
+        if (!APPROVAL_BEARING_REVIEW_STATES.has(review.state)) continue;
+        latestVerdictByReviewer.set(login, review.state);
+      }
+
+      if (parsed.data.length < REVIEWS_PAGE_SIZE) break;
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+
+  for (const verdict of latestVerdictByReviewer.values()) {
+    if (verdict === "APPROVED") return { ok: true, approved: true };
+  }
+  return { ok: true, approved: false };
 }

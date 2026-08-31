@@ -15,6 +15,7 @@ vi.mock("../src/github-auth", () => ({
   REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
   REVIEW_NOT_PUBLISHED_DESCRIPTION: "Review did not publish — push again to retry",
   REVIEW_SUPERSEDED_DESCRIPTION: "Superseded by a newer commit",
+  REVIEW_SKIPPED_APPROVED_DESCRIPTION: "Skipped — PR already approved",
   REVIEW_STATUS_CONTEXT: "open-inspect",
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postCommitStatus: vi.fn().mockResolvedValue({ ok: true }),
@@ -23,6 +24,7 @@ vi.mock("../src/github-auth", () => ({
   getPullRequestSnapshot: vi
     .fn()
     .mockResolvedValue({ ok: true, headSha: "abc123", state: "open", draft: false }),
+  getPullRequestApproval: vi.fn().mockResolvedValue({ ok: true, approved: false }),
 }));
 
 vi.mock("../src/utils/integration-config", () => ({
@@ -59,6 +61,7 @@ import {
   postReaction,
   checkSenderPermission,
   getPullRequestSnapshot,
+  getPullRequestApproval,
 } from "../src/github-auth";
 import { getGitHubConfig } from "../src/utils/integration-config";
 
@@ -228,6 +231,7 @@ beforeEach(() => {
     state: "open",
     draft: false,
   });
+  vi.mocked(getPullRequestApproval).mockResolvedValue({ ok: true, approved: false });
   vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
 });
 
@@ -505,7 +509,10 @@ describe("handlePullRequestReviewTrigger", () => {
     expect(promptSendBody(getControlPlaneFetch(env)).content).toContain('"event": "COMMENT"');
   });
 
-  it("rejects a bot-authored PR when the bot is not an allowed trigger user", async () => {
+  it("reviews a bot-opened PR even when the allowlist names only humans", async () => {
+    // A PR this app opened arrives with the app itself as sender. An operator's allowlist names
+    // the people who may direct the bot, so it never names the bot — reading it as a verdict on
+    // the app's own actions is what silently dropped every self-opened PR.
     vi.mocked(getGitHubConfig).mockResolvedValue({
       ...defaultConfig,
       allowedTriggerUsers: ["alice"],
@@ -527,9 +534,144 @@ describe("handlePullRequestReviewTrigger", () => {
 
     const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
 
-    expect(result).toEqual({ outcome: "skipped", skip_reason: "sender_not_allowed" });
-    expect(generateInstallationToken).not.toHaveBeenCalled();
-    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      outcome: "processed",
+      session_id: "session-123",
+      message_id: "msg-456",
+      handler_action: "auto_review",
+    });
+  });
+
+  it("reviews a bot-opened PR without consulting the collaborator-permission API", async () => {
+    // That lookup 404s for a `[bot]` login, which the gate reads as permission_check_failed.
+    vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: false, error: true });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      pull_request: {
+        ...pullRequestReviewTriggerPayload.pull_request,
+        user: { login: "test-bot[bot]" },
+      },
+      sender: {
+        login: "test-bot[bot]",
+        id: 1004,
+        avatar_url: "https://avatars.githubusercontent.com/u/1004",
+      },
+    };
+
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    expect(result).toMatchObject({ outcome: "processed", handler_action: "auto_review" });
+    expect(checkSenderPermission).not.toHaveBeenCalled();
+  });
+
+  it("skips the auto review when the PR already carries a standing approval", async () => {
+    vi.mocked(getPullRequestApproval).mockResolvedValue({ ok: true, approved: true });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+    };
+
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "pr_approved" });
+    expect(
+      getControlPlaneFetch(env).mock.calls.some(([url]) => url === "https://internal/sessions")
+    ).toBe(false);
+  });
+
+  it("cancels a review still running against the head an approved PR just replaced", async () => {
+    // The in-flight review is now both superseded and unwanted; left alone it would post a verdict
+    // for the previous head well after this handler declined to review the new one.
+    vi.mocked(getPullRequestApproval).mockResolvedValue({ ok: true, approved: true });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+      before: "oldsha1",
+    };
+
+    await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    const cpFetch = getControlPlaneFetch(env);
+    expect(findCallBody(cpFetch, /github-reviews\/claim$/)).toEqual({ repoId: 501, prNumber: 42 });
+    expect(findCallBody(cpFetch, /github-reviews\/sweep$/)).toEqual({
+      repoId: 501,
+      prNumber: 42,
+      generation: 1,
+    });
+  });
+
+  it("leaves no pending status behind when it skips an approved PR", async () => {
+    // The replaced head must stop advertising a review that will never finish, and the new head
+    // must report the skip rather than leave a required context pending forever.
+    vi.mocked(getPullRequestApproval).mockResolvedValue({ ok: true, approved: true });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+      before: "oldsha1",
+    };
+
+    await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    const statuses = vi
+      .mocked(postCommitStatus)
+      .mock.calls.map(([, , , sha, status]) => [sha, status.state, status.description]);
+    expect(statuses).toEqual([
+      ["oldsha1", "error", "Superseded by a newer commit"],
+      ["abc123", "success", "Skipped — PR already approved"],
+    ]);
+  });
+
+  it("still skips an approved PR when the supersession sweep fails", async () => {
+    // Nothing is going to run either way; a claim failure must degrade to a plain skip rather than
+    // surface as a webhook error and earn a redelivery.
+    vi.mocked(getPullRequestApproval).mockResolvedValue({ ok: true, approved: true });
+    const env = createMockEnv();
+    getControlPlaneFetch(env).mockResolvedValue(new Response("boom", { status: 500 }));
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+    };
+
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    expect(result).toEqual({ outcome: "skipped", skip_reason: "pr_approved" });
+  });
+
+  it("reviews as normal when the approval lookup fails", async () => {
+    // Fail open: an unreadable approval state is not evidence of an approval.
+    vi.mocked(getPullRequestApproval).mockResolvedValue({
+      ok: false,
+      error: "GitHub API returned 502",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const payload: PullRequestReviewTriggerPayload = {
+      ...pullRequestReviewTriggerPayload,
+      action: "synchronize",
+    };
+
+    const result = await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
+
+    expect(result).toMatchObject({ outcome: "processed", handler_action: "auto_review" });
+  });
+
+  it("does not look up approvals for a PR GitHub has just opened", async () => {
+    // A brand-new PR cannot carry a review, so the call could only ever come back empty.
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handlePullRequestReviewTrigger(env, log, pullRequestReviewTriggerPayload, "trace-0");
+
+    expect(getPullRequestApproval).not.toHaveBeenCalled();
   });
 
   it("returns early when autoReviewOnOpen is false", async () => {
