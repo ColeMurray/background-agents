@@ -139,6 +139,28 @@ describe("useSessionSocket", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps the HTTP snapshot available without collaboration or sandbox requests", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const snapshot = createSnapshot();
+    snapshot.session.title = "Read-only snapshot";
+
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", snapshot, {
+        collaborate: false,
+        sandboxAccess: false,
+      })
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.sessionState?.title).toBe("Read-only snapshot");
+    expect(result.current.connected).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps sendPrompt pending until the server acknowledges the queued prompt", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 

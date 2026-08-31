@@ -225,6 +225,7 @@ export function SessionChangesPanel({
   onClose,
   onSelect,
   mobile = false,
+  canRetry = true,
 }: {
   sessionId: string;
   state: SessionDiffState;
@@ -232,6 +233,7 @@ export function SessionChangesPanel({
   onClose: () => void;
   onSelect: (selection: DiffSelection) => void;
   mobile?: boolean;
+  canRetry?: boolean;
 }) {
   const panelRef = useRef<HTMLElement>(null);
   const fileListId = useId();
@@ -308,7 +310,12 @@ export function SessionChangesPanel({
       />
 
       {state.lastError && (
-        <DiffRetryNotice sessionId={sessionId} message={state.lastError.message} variant="banner" />
+        <DiffRetryNotice
+          sessionId={sessionId}
+          message={state.lastError.message}
+          variant="banner"
+          canRetry={canRetry}
+        />
       )}
 
       <div className={cn("flex min-h-0 flex-1", mobile && "flex-col")}>

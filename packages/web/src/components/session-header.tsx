@@ -100,6 +100,9 @@ export type SessionHeaderProps = {
   actions: SessionActionProps;
   optimisticTitle?: string;
   renameSession: (title: string) => Promise<boolean>;
+  canRename?: boolean;
+  showConnectionStatus?: boolean;
+  canAccessSandbox?: boolean;
 };
 
 export function SessionHeader({
@@ -119,6 +122,9 @@ export function SessionHeader({
   actions,
   optimisticTitle,
   renameSession,
+  canRename = true,
+  showConnectionStatus = true,
+  canAccessSandbox = true,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
   const hasFallbackSessionInfo =
@@ -138,6 +144,7 @@ export function SessionHeader({
     optimisticTitle ?? sessionState?.title ?? fallbackSessionInfo.title ?? repoLabel;
 
   const handleStartRename = () => {
+    if (!canRename) return;
     setTitle(resolvedTitle);
     setIsRenaming(true);
   };
@@ -196,9 +203,10 @@ export function SessionHeader({
               <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
                 <button
                   type="button"
-                  className="max-w-full truncate cursor-text text-left"
+                  className={`max-w-full truncate text-left ${canRename ? "cursor-text" : "cursor-default"}`}
                   onClick={handleStartRename}
-                  title="Click to rename"
+                  title={canRename ? "Click to rename" : undefined}
+                  disabled={!canRename}
                 >
                   {resolvedTitle}
                 </button>
@@ -226,10 +234,12 @@ export function SessionHeader({
             onOpenMedia={onOpenMobileDetails}
           />
           <div className="flex items-center gap-1">
-            <ConnectionStatusIcon connected={connected} connecting={connecting} />
+            {showConnectionStatus && (
+              <ConnectionStatusIcon connected={connected} connecting={connecting} />
+            )}
             <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
-              dashboardUrl={sessionState?.sandboxDashboardUrl}
+              dashboardUrl={canAccessSandbox ? sessionState?.sandboxDashboardUrl : undefined}
               error={sandboxError}
             />
           </div>

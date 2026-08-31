@@ -34,6 +34,7 @@ export function ActionBar({
   primaryRepo,
   onArchive,
   onUnarchive,
+  canManageLifecycle = true,
 }: ActionBarProps) {
   const { previewArtifact, previewUrl, prLinks, mediaCount } = resolveSessionActions(
     artifacts,
@@ -99,16 +100,18 @@ export function ActionBar({
         )}
 
         {/* Archive/Unarchive */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={controls.handleArchiveToggle}
-          disabled={controls.isArchiving}
-          className="hidden gap-1.5 md:inline-flex"
-        >
-          <ArchiveIcon className="w-4 h-4" />
-          <span>{controls.isArchived ? "Unarchive" : "Archive"}</span>
-        </Button>
+        {canManageLifecycle && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={controls.handleArchiveToggle}
+            disabled={controls.isArchiving}
+            className="hidden gap-1.5 md:inline-flex"
+          >
+            <ArchiveIcon className="w-4 h-4" />
+            <span>{controls.isArchived ? "Unarchive" : "Archive"}</span>
+          </Button>
+        )}
 
         {mediaCount > 0 && (
           <div className="hidden items-center rounded-md border border-border-muted px-3 text-sm text-muted-foreground md:inline-flex">
@@ -140,11 +143,13 @@ export function ActionBar({
         </DropdownMenu>
       </div>
 
-      <ArchiveSessionDialog
-        open={controls.showArchiveDialog}
-        onOpenChange={controls.setShowArchiveDialog}
-        onConfirm={controls.handleConfirmArchive}
-      />
+      {canManageLifecycle && (
+        <ArchiveSessionDialog
+          open={controls.showArchiveDialog}
+          onOpenChange={controls.setShowArchiveDialog}
+          onConfirm={controls.handleConfirmArchive}
+        />
+      )}
     </>
   );
 }

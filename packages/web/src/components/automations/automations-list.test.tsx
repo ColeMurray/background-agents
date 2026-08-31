@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
@@ -26,6 +26,22 @@ vi.mock("@/hooks/use-environments", () => ({
 }));
 
 const noop = () => {};
+const CURRENT_USER_ID = "11111111111111111111111111111111";
+let permissions = ["automations.create", "automations.manage.own", "automations.trigger.own"];
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    authorization: {
+      userId: CURRENT_USER_ID,
+      permissions,
+    },
+    hasPermission: (permission: string) => permissions.includes(permission),
+  }),
+}));
+
+beforeEach(() => {
+  permissions = ["automations.create", "automations.manage.own", "automations.trigger.own"];
+});
 
 function makeAutomation(overrides: Partial<AutomationListItem> = {}): AutomationListItem {
   return {
@@ -41,7 +57,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",
-    userId: "11111111111111111111111111111111",
+    userId: CURRENT_USER_ID,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     deletedAt: null,
@@ -118,6 +134,50 @@ describe("AutomationsList schedule metadata", () => {
 });
 
 describe("AutomationsList actions", () => {
+  const renderListWithActions = (automation: AutomationListItem) =>
+    render(
+      <AutomationsList
+        automations={[automation]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+  it("uses canonical ownership for own-scoped controls", () => {
+    render(
+      <AutomationsList
+        automations={[
+          makeAutomation({
+            createdBy: CURRENT_USER_ID,
+            userId: "22222222222222222222222222222222",
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trigger" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /actions for/i })).not.toBeInTheDocument();
+  });
+
+  it("gates manage and trigger controls independently", () => {
+    permissions = ["automations.manage.any"];
+    renderListWithActions(makeAutomation({ userId: null }));
+
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trigger" })).not.toBeInTheDocument();
+  });
+
   it("offers row actions from the compact menu", async () => {
     const onTrigger = vi.fn();
     render(
@@ -235,6 +295,23 @@ describe("AutomationsList empty state", () => {
       "href",
       "/automations/new"
     );
+  });
+
+  it("hides creation entry points without automations.create", () => {
+    permissions = [];
+    render(
+      <AutomationsList
+        automations={[]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    expect(screen.queryByRole("link", { name: /template/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create automation/i })).not.toBeInTheDocument();
   });
 
   it("describes an empty name search without showing creation prompts", () => {

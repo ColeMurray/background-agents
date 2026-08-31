@@ -17,6 +17,8 @@ import { BackIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { canAccessAutomation } from "@/lib/automation-authorization";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -25,6 +27,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading, mutate } = useAutomation(id);
+  const { authorization } = useCurrentUserAuthorization();
   const { environments } = useEnvironments();
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
@@ -96,6 +99,9 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     );
   }
 
+  const canManage = canAccessAutomation("automations.manage", authorization, automation);
+  const canTrigger = canAccessAutomation("automations.trigger", authorization, automation);
+
   return (
     <div className="h-full flex flex-col">
       {!isOpen && (
@@ -139,70 +145,76 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               </p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
-              <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
-                <Button variant="outline" size="sm" className="w-full sm:w-auto">
-                  <span className="flex items-center gap-1.5">
-                    <PencilIcon className="w-3.5 h-3.5" />
-                    Edit
-                  </span>
-                </Button>
-              </Link>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full sm:w-auto"
-                onClick={() => handleAction("trigger")}
-              >
-                Trigger Now
-              </Button>
-              {automation.enabled ? (
+              {canManage && (
+                <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
+                    <span className="flex items-center gap-1.5">
+                      <PencilIcon className="w-3.5 h-3.5" />
+                      Edit
+                    </span>
+                  </Button>
+                </Link>
+              )}
+              {canTrigger && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="w-full sm:w-auto"
-                  onClick={() => handleAction("pause")}
+                  onClick={() => handleAction("trigger")}
                 >
-                  Pause
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full sm:w-auto"
-                  onClick={() => handleAction("resume")}
-                >
-                  Resume
+                  Trigger Now
                 </Button>
               )}
-              {confirmDelete ? (
-                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-1">
+              {canManage &&
+                (automation.enabled ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={() => handleAction("pause")}
+                  >
+                    Pause
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={() => handleAction("resume")}
+                  >
+                    Resume
+                  </Button>
+                ))}
+              {canManage &&
+                (confirmDelete ? (
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-1">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      onClick={handleDelete}
+                    >
+                      Confirm Delete
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      onClick={() => setConfirmDelete(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
                   <Button
                     variant="destructive"
                     size="sm"
                     className="w-full sm:w-auto"
-                    onClick={handleDelete}
+                    onClick={() => setConfirmDelete(true)}
                   >
-                    Confirm Delete
+                    Delete
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full sm:w-auto"
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="w-full sm:w-auto"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Delete
-                </Button>
-              )}
+                ))}
             </div>
           </div>
 

@@ -11,6 +11,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon } from "@/components/ui/icons";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -32,6 +33,8 @@ function AutomationsContent() {
   const [nameSearch, setNameSearch] = useState(urlNameSearch);
   const { automations, loading, loadingMore, error, hasMore, loadMore, mutate } =
     useAutomations(committedNameSearch);
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canCreate = hasPermission("automations.create");
 
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -92,17 +95,19 @@ function AutomationsContent() {
         <div className="max-w-3xl mx-auto">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
             <h1 className="text-2xl font-semibold text-foreground sm:text-3xl">Automations</h1>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/automations/templates">Browse templates</Link>
-              </Button>
-              <Button size="sm" asChild>
-                <Link href="/automations/new" className="flex items-center gap-1.5">
-                  <PlusIcon className="w-4 h-4" />
-                  Create Automation
-                </Link>
-              </Button>
-            </div>
+            {canCreate && (
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/automations/templates">Browse templates</Link>
+                </Button>
+                <Button size="sm" asChild>
+                  <Link href="/automations/new" className="flex items-center gap-1.5">
+                    <PlusIcon className="w-4 h-4" />
+                    Create Automation
+                  </Link>
+                </Button>
+              </div>
+            )}
           </div>
 
           <div className="relative mb-4">

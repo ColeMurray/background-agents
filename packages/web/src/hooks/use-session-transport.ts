@@ -23,6 +23,7 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
 const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
 const WS_CLOSE_INVALID_MESSAGE = 4004;
+const WS_CLOSE_AUTHORIZATION_REVOKED = 4010;
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -38,6 +39,7 @@ type CloseDirective =
   | { action: "auth_required" }
   | { action: "refresh_authorization" }
   | { action: "session_expired" }
+  | { action: "authorization_revoked"; delayMs?: number }
   | { action: "retry"; delayMs: number }
   | { action: "give_up" }
   | { action: "none" };
@@ -97,7 +99,8 @@ export interface UseSessionTransportReturn {
  */
 export function useSessionTransport(
   sessionId: string,
-  handlers: SessionTransportHandlers
+  handlers: SessionTransportHandlers,
+  enabled = true
 ): UseSessionTransportReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const mountedRef = useRef(true);
@@ -257,6 +260,19 @@ export function useSessionTransport(
         wsTokenRef.current = null;
         return;
 
+      case "authorization_revoked":
+        wsTokenRef.current = null;
+        if (!mountedRef.current) return;
+        if (directive.delayMs === undefined) {
+          setConnectionError("Authorization could not be refreshed. Please try reconnecting.");
+          return;
+        }
+        reconnectAttempts.current++;
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (mountedRef.current) retry();
+        }, directive.delayMs);
+        return;
+
       case "retry":
         if (!mountedRef.current) return;
         reconnectAttempts.current++;
@@ -346,6 +362,7 @@ export function useSessionTransport(
   }, []);
 
   const reconnect = useCallback(() => {
+    if (!enabled) return;
     // A connect() still awaiting its token must not open a second socket
     // alongside the one this call creates.
     invalidateInFlightConnect();
@@ -367,7 +384,7 @@ export function useSessionTransport(
     setAuthError(null);
     setConnectionError(null);
     connect();
-  }, [connect, invalidateInFlightConnect]);
+  }, [connect, enabled, invalidateInFlightConnect]);
 
   const markHealthy = useCallback(() => {
     reconnectAttempts.current = 0;
@@ -376,7 +393,7 @@ export function useSessionTransport(
   // Connect on mount
   useEffect(() => {
     mountedRef.current = true;
-    connect();
+    if (enabled) connect();
 
     return () => {
       mountedRef.current = false;
@@ -390,10 +407,11 @@ export function useSessionTransport(
         discarded.close();
       }
     };
-  }, [connect, invalidateInFlightConnect]);
+  }, [connect, enabled, invalidateInFlightConnect]);
 
   // Ping periodically to keep connection alive.
   useEffect(() => {
+    if (!enabled) return;
     const pingInterval = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "ping" }));
@@ -401,7 +419,7 @@ export function useSessionTransport(
     }, PING_INTERVAL_MS);
 
     return () => clearInterval(pingInterval);
-  }, []);
+  }, [enabled]);
 
   return {
     connected,

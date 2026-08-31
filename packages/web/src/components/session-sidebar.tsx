@@ -70,6 +70,7 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
+  const { hasPermission } = useCurrentUserAuthorization();
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();

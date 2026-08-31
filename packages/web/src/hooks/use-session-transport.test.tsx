@@ -110,6 +110,25 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
+  it("does not fetch a token or open a socket when transport is disabled", async () => {
+    const { result } = renderHook(() =>
+      useSessionTransport("session-1", { onMessage, onClose }, false)
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(result.current.connected).toBe(false);
+    expect(result.current.connecting).toBe(false);
+
+    act(() => result.current.reconnect());
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it("forwards schema-valid messages to onMessage", async () => {
     const { socket } = await openSocket();
 
