@@ -9,7 +9,7 @@ export interface AuthError {
    * "none" means no recognized credential was presented at all, and the
    * router may still try sandbox auth on sandbox routes.
    */
-  failedScheme: "per-service" | "browser-session" | "none";
+  failedScheme: "per-service" | "browser-session" | "cli-bearer" | "none";
 }
 
 export type AuthResult =

@@ -4,10 +4,11 @@ import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-even
 import type { NormalizedArtifactResponse } from "../artifacts";
 import type { MessageRepository } from "../message-repository";
 import type { ArtifactRepository } from "../artifact-repository";
-import type { EventRepository } from "../event-repository";
+import type { EventRepository, ListEventChangesOptions } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
+import type { SessionEventChangePage } from "../contracts";
 import { parseStoredSessionAttachments } from "../session-attachment-resolver";
 
 export type ListEventsRequest = SessionEventListRequest;
@@ -47,6 +48,10 @@ export class MessageService {
 
   listEvents(request: ListEventsRequest): ListEventsResponse {
     return this.eventStream.listEvents(request);
+  }
+
+  listEventChanges(request: ListEventChangesOptions): SessionEventChangePage {
+    return this.eventStream.listEventChanges(request);
   }
 
   listArtifacts(): { artifacts: NormalizedArtifactResponse[] } {

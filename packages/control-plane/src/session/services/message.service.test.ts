@@ -76,9 +76,27 @@ describe("MessageService", () => {
   it("paginates events with hasMore and cursor", () => {
     const { service, eventRepository } = createService();
     const events: EventRow[] = [
-      { id: "e3", type: "token", data: "{}", message_id: "m1", created_at: 3000 },
-      { id: "e2", type: "token", data: "{}", message_id: "m1", created_at: 2000 },
-      { id: "e1", type: "token", data: "{}", message_id: "m1", created_at: 1000 },
+      {
+        id: "e3",
+        type: "token",
+        data: "{}",
+        message_id: "m1",
+        created_at: 3000,
+      },
+      {
+        id: "e2",
+        type: "token",
+        data: "{}",
+        message_id: "m1",
+        created_at: 2000,
+      },
+      {
+        id: "e1",
+        type: "token",
+        data: "{}",
+        message_id: "m1",
+        created_at: 1000,
+      },
     ];
     vi.mocked(eventRepository.listEventPage).mockReturnValue({
       events: events.slice(0, 2),

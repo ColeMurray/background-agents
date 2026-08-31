@@ -309,7 +309,7 @@ export class MessageRepository {
     this.transactionSync(() => {
       this.attachments.claimForMessage(data.id, attachmentIds);
       this.createMessage(data);
-      if (event) this.eventRepository.createEvent(event);
+      if (event) this.eventRepository.createEventWithinTransaction(event);
     });
   }
 
@@ -329,7 +329,7 @@ export class MessageRepository {
       );
       if (claimed.toArray().length !== 1) return false;
 
-      this.eventRepository.createEvent({
+      this.eventRepository.createEventWithinTransaction({
         id: `user_message:${messageId}`,
         type: "user_message",
         data: JSON.stringify(userMessageEvent),
@@ -349,7 +349,7 @@ export class MessageRepository {
         messageId
       );
       if (updated.toArray().length === 1) {
-        this.sql.exec(`DELETE FROM events WHERE id = ?`, `user_message:${messageId}`);
+        this.eventRepository.deleteEventWithinTransaction(`user_message:${messageId}`);
       }
     });
   }
@@ -381,7 +381,11 @@ export class MessageRepository {
         event.success ? null : (event.error ?? null),
         event.messageId
       );
-      this.eventRepository.upsertExecutionCompleteEvent(event.messageId, event, completedAt);
+      this.eventRepository.upsertExecutionCompleteEventWithinTransaction(
+        event.messageId,
+        event,
+        completedAt
+      );
 
       return {
         messageId: event.messageId,

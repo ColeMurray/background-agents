@@ -146,6 +146,7 @@ export interface ListSessionsOptions {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
+  repositorylessOnly?: boolean;
 }
 
 /** Paginated session index entries. */
@@ -513,10 +514,13 @@ export class SessionIndexStore {
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
+      repositorylessOnly,
     } = options;
 
     const conditions: string[] = [];
     const params: unknown[] = [];
+
+    if (repositorylessOnly) conditions.push("repo_owner IS NULL AND repo_name IS NULL");
 
     if (status) {
       conditions.push("status = ?");

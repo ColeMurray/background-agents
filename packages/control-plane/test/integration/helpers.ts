@@ -295,16 +295,80 @@ export async function seedEvents(
 ): Promise<void> {
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     for (const e of events) {
-      state.storage.sql.exec(
-        `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-         VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
-        e.id,
-        e.type,
-        e.data,
-        e.messageId ?? null,
-        e.createdAt
-      );
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec(
+          `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+           VALUES (?, ?, ?, ?, ?,
+             (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
+          e.id,
+          e.type,
+          e.data,
+          e.messageId ?? null,
+          e.createdAt
+        );
+        state.storage.sql.exec(
+          `INSERT INTO event_changes
+           (kind, event_id, type, data, message_id, created_at, timeline_sequence)
+           SELECT 'upsert', id, type, data, message_id, created_at, timeline_sequence
+           FROM events WHERE id = ?`,
+          e.id
+        );
+      });
     }
+  });
+}
+
+export async function updateEventData(
+  stub: DurableObjectStub,
+  eventId: string,
+  data: string
+): Promise<void> {
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.transactionSync(() => {
+      state.storage.sql.exec(`UPDATE events SET data = ? WHERE id = ?`, data, eventId);
+      state.storage.sql.exec(
+        `INSERT INTO event_changes
+         (kind, event_id, type, data, message_id, created_at, timeline_sequence)
+         SELECT 'upsert', id, type, data, message_id, created_at, timeline_sequence
+         FROM events WHERE id = ?`,
+        eventId
+      );
+    });
+  });
+}
+
+export async function deleteEvent(stub: DurableObjectStub, eventId: string): Promise<void> {
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.transactionSync(() => {
+      state.storage.sql.exec(`DELETE FROM events WHERE id = ?`, eventId);
+      state.storage.sql.exec(
+        `INSERT INTO event_changes (kind, event_id) VALUES ('delete', ?)`,
+        eventId
+      );
+    });
+  });
+}
+
+export async function renameEvent(
+  stub: DurableObjectStub,
+  oldEventId: string,
+  newEventId: string
+): Promise<void> {
+  await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.transactionSync(() => {
+      state.storage.sql.exec(`UPDATE events SET id = ? WHERE id = ?`, newEventId, oldEventId);
+      state.storage.sql.exec(
+        `INSERT INTO event_changes (kind, event_id) VALUES ('delete', ?)`,
+        oldEventId
+      );
+      state.storage.sql.exec(
+        `INSERT INTO event_changes
+         (kind, event_id, type, data, message_id, created_at, timeline_sequence)
+         SELECT 'upsert', id, type, data, message_id, created_at, timeline_sequence
+         FROM events WHERE id = ?`,
+        newEventId
+      );
+    });
   });
 }
 

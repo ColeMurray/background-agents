@@ -47,6 +47,7 @@ npm test
 
 | Package                    | Description                          |
 | -------------------------- | ------------------------------------ |
+| `packages/cli`             | Session CLI and local stdio MCP      |
 | `packages/control-plane`   | Cloudflare Workers + Durable Objects |
 | `packages/web`             | Next.js web application              |
 | `packages/sandbox-runtime` | Shared in-sandbox agent runtime      |

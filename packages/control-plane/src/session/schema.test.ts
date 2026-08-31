@@ -591,4 +591,74 @@ describe("applyMigrations", () => {
       db.close();
     }
   });
+
+  it("backfills monotonic event change revisions", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 47);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        timeline_sequence INTEGER NOT NULL UNIQUE
+      )`);
+      db.exec(`INSERT INTO events (id, timeline_sequence) VALUES ('first', 2), ('second', 7)`);
+
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+
+      expect(
+        db.prepare("SELECT id, change_revision FROM events ORDER BY change_revision").all()
+      ).toEqual([
+        { id: "first", change_revision: 2 },
+        { id: "second", change_revision: 7 },
+      ]);
+      expect(db.prepare("SELECT revision FROM event_revision_state WHERE id = 1").get()).toEqual({
+        revision: 7,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("migrates current events into the immutable journal deterministically", () => {
+    const revisionMigration = MIGRATIONS.find((entry) => entry.id === 47)!;
+    const journalMigration = MIGRATIONS.find((entry) => entry.id === 48)!;
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        data TEXT NOT NULL,
+        message_id TEXT,
+        created_at INTEGER NOT NULL,
+        timeline_sequence INTEGER NOT NULL UNIQUE
+      )`);
+      db.exec(`INSERT INTO events VALUES
+        ('later', 'token', '{}', NULL, 20, 1),
+        ('earlier', 'token', '{}', NULL, 10, 2)`);
+      (revisionMigration.run as (sql: SqlStorage) => void)(sql);
+      (journalMigration.run as (sql: SqlStorage) => void)(sql);
+      expect(() => (journalMigration.run as (sql: SqlStorage) => void)(sql)).not.toThrow();
+
+      expect(
+        db.prepare("SELECT revision, kind, event_id FROM event_changes ORDER BY revision").all()
+      ).toEqual([
+        { revision: 1, kind: "upsert", event_id: "earlier" },
+        { revision: 2, kind: "upsert", event_id: "later" },
+      ]);
+      expect(db.prepare("PRAGMA table_info(events)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "change_revision" })])
+      );
+      expect(() =>
+        db.prepare("INSERT INTO event_changes (kind, event_id) VALUES ('upsert', 'invalid')").run()
+      ).toThrow();
+      expect(
+        db.prepare("SELECT length(cursor_scope) AS length FROM event_feed_state").get()
+      ).toEqual({ length: 32 });
+    } finally {
+      db.close();
+    }
+  });
 });

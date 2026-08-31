@@ -14,6 +14,7 @@ function createMockSql() {
   const matchingData: Array<{ pattern: RegExp; rows: unknown[] }> = [];
   let oneValue: unknown = null;
   let rowsWritten = 0;
+  let eventRevision = 0;
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
@@ -25,7 +26,8 @@ function createMockSql() {
             data.get(query) ?? matchingData.find(({ pattern }) => pattern.test(query))?.rows ?? []
           );
         },
-        one: () => oneValue,
+        one: () =>
+          query.includes("UPDATE event_revision_state") ? { revision: ++eventRevision } : oneValue,
         get rowsWritten() {
           return consumed ? rowsWritten : 0;
         },
@@ -390,7 +392,7 @@ describe("MessageRepository", () => {
     expect(mock.calls[0].query).toContain("status = 'processing'");
     expect(mock.calls[0].query).toContain("status = 'pending'");
     expect(mock.calls[0].query).toContain("NOT EXISTS");
-    expect(mock.calls[1].params[0]).toBe("user_message:msg-1");
+    expect(mock.calls[2].params[0]).toBe("user_message:msg-1");
   });
 
   it("does not create a user event when the processing claim is lost", () => {
@@ -410,10 +412,13 @@ describe("MessageRepository", () => {
     mock.setMatchingData(/UPDATE messages SET status = 'pending'[\s\S]*RETURNING id/, [
       { id: "msg-1" },
     ]);
+    mock.setMatchingData(/DELETE FROM events[\s\S]*RETURNING id/, [{ id: "user_message:msg-1" }]);
     repository.updateMessageToPending("msg-1");
     expect(mock.calls[0].query).toContain("status = 'pending'");
     expect(mock.calls[0].params).toEqual(["msg-1"]);
     expect(mock.calls[1].params).toEqual(["user_message:msg-1"]);
+    expect(mock.calls[2].query).toContain("INSERT INTO event_changes");
+    expect(mock.calls[2].params).toEqual(["user_message:msg-1"]);
   });
 
   it("atomically records message completion and its canonical event", () => {
@@ -435,7 +440,7 @@ describe("MessageRepository", () => {
       status: "completed",
     });
     expect(transactionSyncCalls).toBe(1);
-    expect(mock.calls[2].params[0]).toBe("execution_complete:msg-1");
+    expect(mock.calls[3].params[0]).toBe("execution_complete:msg-1");
   });
 
   it("does not complete a message in another state", () => {

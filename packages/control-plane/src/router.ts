@@ -61,6 +61,7 @@ import { keyboardShortcutRoutes } from "./routes/keyboard-shortcuts";
 import { rbacRoutes } from "./routes/rbac";
 import { sessionRoutes } from "./routes/sessions";
 import { modelProviderAccountRoutes } from "./routes/model-provider-accounts";
+import { cliAuthRoutes } from "./routes/cli-auth";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
 
@@ -303,7 +304,10 @@ export function enforceRoutePrincipal(
   ) {
     return error("Unauthorized", 401);
   }
-  if (authentication.kind === "user" && principal.kind !== "user") {
+  if (
+    (authentication.kind === "user" || authentication.kind === "external-user") &&
+    principal.kind !== "user"
+  ) {
     return error("Human user authentication required", 403);
   }
   if (authentication.kind === "service" && principal.kind !== "service") {
@@ -547,6 +551,7 @@ export const routes: Route[] = [
 
   ...browserAuthRoutes,
   ...signInProviderRoutes,
+  ...cliAuthRoutes,
 
   // Session management
   ...sessionRoutes,
@@ -702,6 +707,7 @@ export async function handleRequest(
           authentication.kind === "web-service" || authentication.kind === "service"
             ? "service"
             : "user",
+        ...(authentication.kind === "external-user" ? { userCredential: "cli" } : {}),
       });
 
       if (isAuthError(authResult)) {

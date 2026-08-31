@@ -179,6 +179,37 @@ describe("signIn", () => {
     await expect(signIn("google")).rejects.toThrow("Sign-in failed with status 503");
     expect(location.assign).not.toHaveBeenCalled();
   });
+
+  it("preserves a validated same-origin callback path", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ url: "https://accounts.google.com/o/oauth2/auth", redirect: true })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("location", {
+      origin: "https://app.example",
+      assign: vi.fn(),
+    });
+
+    await signIn("google", "/cli/authorize?user_code=ABCD-EFGH");
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      callbackURL: "/cli/authorize?user_code=ABCD-EFGH",
+    });
+  });
+
+  it.each(["https://evil.example/steal", "//evil.example/steal"])(
+    "rejects the cross-origin callback %s",
+    async (callbackURL) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("location", { origin: "https://app.example", assign: vi.fn() });
+
+      await expect(signIn("github", callbackURL)).rejects.toThrow("Invalid sign-in callback URL");
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("signOut", () => {

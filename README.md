@@ -120,6 +120,7 @@ ownership, bots, and member suspension.
 
 | Package                                           | Description                                 |
 | ------------------------------------------------- | ------------------------------------------- |
+| [cli](packages/cli)                               | Session CLI and local stdio MCP server      |
 | [control-plane](packages/control-plane)           | Cloudflare Workers + Durable Objects        |
 | [web](packages/web)                               | Next.js web client                          |
 | [sandbox-runtime](packages/sandbox-runtime)       | Shared in-sandbox agent runtime             |

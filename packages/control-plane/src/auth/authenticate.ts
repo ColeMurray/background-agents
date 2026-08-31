@@ -3,8 +3,8 @@
  * typed `Principal` before any handler runs.
  *
  * A `sig1` service signature is verified against that service's own secret.
- * User requests additionally require a Better Auth session. Anything else
- * is not a recognized credential.
+ * Browser users require a Better Auth session. Explicit external-user routes
+ * instead accept a revocable CLI bearer. Anything else is not recognized.
  *
  * Sandbox tokens stay router-verified (they need the session id from the
  * path and a DO round-trip), so they are not dispatched here.
@@ -14,6 +14,7 @@ import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared/service-auth";
 import { authenticateSession, SessionIntegrityError } from "./user/session-authenticator";
 import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
+import { authenticateCliBearer } from "./cli-bearer-authenticator";
 import { createLogger } from "../logger";
 import type { RequestContext } from "../routes/shared";
 import type { Env } from "../types";
@@ -29,6 +30,8 @@ export interface AuthenticationRequirement {
    * as a user through a Better Auth session.
    */
   readonly webService?: "service" | "user";
+  /** Direct CLI bearer authentication is enabled only for explicit external routes. */
+  readonly userCredential?: "cli";
 }
 
 export async function authenticate(
@@ -86,6 +89,24 @@ export async function authenticate(
         reason: "User authentication failed",
         status: 500,
         failedScheme: "browser-session",
+      };
+    }
+  }
+
+  if (requirement.userCredential === "cli") {
+    try {
+      return await authenticateCliBearer(request, ctx);
+    } catch (cause) {
+      logger.error("CLI credential validation failed", {
+        event: "auth.cli.failed",
+        error: cause,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        reason: "CLI authentication failed",
+        status: 500,
+        failedScheme: "cli-bearer",
       };
     }
   }

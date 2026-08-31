@@ -10,7 +10,7 @@ function createMockSql() {
       calls.push({ query, params });
       return {
         toArray: () => rowsByQuery.get(query) ?? [],
-        one: () => null,
+        one: () => rowsByQuery.get(query)?.[0] ?? null,
         rowsWritten: 0,
       };
     },
@@ -22,6 +22,10 @@ function createMockSql() {
       rowsByQuery.set(query, rows);
     },
   };
+}
+
+function eventWrites(calls: Array<{ query: string; params: unknown[] }>) {
+  return calls.filter(({ query }) => /(?:INSERT INTO|UPDATE) events/.test(query));
 }
 
 describe("EventRepository", () => {
@@ -48,20 +52,21 @@ describe("EventRepository", () => {
         createdAt: 1000,
       });
 
-      expect(mock.calls).toHaveLength(1);
-      expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].params).toEqual([
-        "evt-1",
-        "tool_call",
-        '{"tool":"read"}',
-        "msg-1",
-        1000,
-      ]);
+      const writes = eventWrites(mock.calls);
+      expect(writes).toHaveLength(1);
+      expect(writes[0].query).toContain("INSERT INTO events");
+      expect(writes[0].params).toEqual(["evt-1", "tool_call", '{"tool":"read"}', "msg-1", 1000]);
+      expect(mock.calls.some(({ query }) => query.includes("INSERT INTO event_changes"))).toBe(
+        true
+      );
     });
   });
 
   describe("createContextCompactionEvent", () => {
     it("atomically seals the current token and inserts the compaction marker", () => {
+      mock.setRows(`UPDATE events SET id = ? WHERE id = ? RETURNING id`, [
+        { id: "token:msg-1:compaction-1" },
+      ]);
       repository.createContextCompactionEvent({
         id: "compaction-1",
         type: "context_compacted",
@@ -71,17 +76,24 @@ describe("EventRepository", () => {
       });
 
       expect(transactionSyncCalls).toBe(1);
-      expect(mock.calls).toHaveLength(2);
-      expect(mock.calls[0].query).toContain("UPDATE events SET id = ? WHERE id = ?");
-      expect(mock.calls[0].params).toEqual(["token:msg-1:compaction-1", "token:msg-1"]);
-      expect(mock.calls[1].query).toContain("INSERT INTO events");
-      expect(mock.calls[1].params).toEqual([
+      const writes = eventWrites(mock.calls);
+      expect(writes).toHaveLength(2);
+      expect(writes[0].query).toContain("UPDATE events SET id = ? WHERE id = ?");
+      expect(writes[0].params).toEqual(["token:msg-1:compaction-1", "token:msg-1"]);
+      expect(writes[1].query).toContain("INSERT INTO events");
+      expect(writes[1].params).toEqual([
         "compaction-1",
         "context_compacted",
         '{"type":"context_compacted"}',
         "msg-1",
         1000,
       ]);
+      const journalWrites = mock.calls.filter(({ query }) =>
+        query.includes("INSERT INTO event_changes")
+      );
+      expect(journalWrites).toHaveLength(3);
+      expect(journalWrites[0].params).toEqual(["token:msg-1"]);
+      expect(journalWrites[1].params).toEqual(["token:msg-1:compaction-1"]);
     });
   });
 
@@ -97,14 +109,9 @@ describe("EventRepository", () => {
 
       repository.upsertTokenEvent("msg-1", event, 1000);
 
-      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
-      expect(mock.calls[0].params).toEqual([
-        "token:msg-1",
-        "token",
-        JSON.stringify(event),
-        "msg-1",
-        1000,
-      ]);
+      const write = eventWrites(mock.calls)[0];
+      expect(write.query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(write.params).toEqual(["token:msg-1", "token", JSON.stringify(event), "msg-1", 1000]);
     });
 
     it("reuses the same deterministic ID across updates", () => {
@@ -120,10 +127,14 @@ describe("EventRepository", () => {
       repository.upsertTokenEvent("msg-1", firstEvent, 1000);
       repository.upsertTokenEvent("msg-1", secondEvent, 2000);
 
-      expect(mock.calls[0].params[0]).toBe("token:msg-1");
-      expect(mock.calls[1].params[0]).toBe("token:msg-1");
-      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
-      expect(mock.calls[1].params[4]).toBe(2000);
+      const writes = eventWrites(mock.calls);
+      expect(writes[0].params[0]).toBe("token:msg-1");
+      expect(writes[1].params[0]).toBe("token:msg-1");
+      expect(writes[1].params[2]).toBe(JSON.stringify(secondEvent));
+      expect(writes[1].params[4]).toBe(2000);
+      expect(
+        mock.calls.filter(({ query }) => query.includes("INSERT INTO event_changes"))
+      ).toHaveLength(2);
     });
   });
 
@@ -145,9 +156,10 @@ describe("EventRepository", () => {
 
       repository.upsertToolCallEvent("msg-1", event, 1000);
 
-      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
-      expect(mock.calls[0].query).not.toContain("created_at = excluded.created_at");
-      expect(mock.calls[0].params).toEqual([
+      const write = eventWrites(mock.calls)[0];
+      expect(write.query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(write.query).not.toContain("created_at = excluded.created_at");
+      expect(write.params).toEqual([
         'tool_call:["msg-1","child-1","call-1"]',
         "tool_call",
         JSON.stringify(event),
@@ -168,7 +180,7 @@ describe("EventRepository", () => {
       };
 
       repository.upsertToolCallEvent("msg-1", event, 1000);
-      expect(mock.calls[0].params[0]).toBe('tool_call:["msg-1","parent","call-1"]');
+      expect(eventWrites(mock.calls)[0].params[0]).toBe('tool_call:["msg-1","parent","call-1"]');
     });
   });
 
@@ -184,7 +196,7 @@ describe("EventRepository", () => {
 
       repository.upsertExecutionCompleteEvent("msg-1", event, 1000);
 
-      expect(mock.calls[0].params).toEqual([
+      expect(eventWrites(mock.calls)[0].params).toEqual([
         "execution_complete:msg-1",
         "execution_complete",
         JSON.stringify(event),
@@ -307,6 +319,49 @@ describe("EventRepository", () => {
       expect(result.hasMore).toBe(false);
       expect(result.events.map((event) => event.id)).toEqual(["e1", "e2"]);
       expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 3000, id: "e1" });
+    });
+  });
+
+  describe("listEventChanges", () => {
+    it("pins the current checkpoint and returns an ascending bounded journal page", () => {
+      const checkpointQuery = "SELECT COALESCE(MAX(revision), 0) AS revision FROM event_changes";
+      const scopeQuery = "SELECT cursor_scope FROM event_feed_state WHERE singleton = 1";
+      const pageQuery = `SELECT * FROM event_changes
+         WHERE revision > ? AND revision <= ?
+         ORDER BY revision ASC LIMIT ?`;
+      mock.setRows(checkpointQuery, [{ revision: 5 }]);
+      mock.setRows(scopeQuery, [{ cursor_scope: "a".repeat(32) }]);
+      mock.setRows(pageQuery, [
+        { kind: "upsert", event_id: "e2", revision: 2 },
+        { kind: "delete", event_id: "e1", revision: 4 },
+        { kind: "upsert", event_id: "e5", revision: 5 },
+      ]);
+
+      expect(repository.listEventChanges({ after: 1, limit: 2 })).toMatchObject({
+        changes: [{ event_id: "e2" }, { event_id: "e1", kind: "delete" }],
+        checkpoint: 5,
+        hasMore: true,
+        nextCursor: { mode: "changes", checkpoint: 5, revision: 4 },
+      });
+      expect(mock.calls[2].params).toEqual([1, 5, 3]);
+    });
+
+    it("rejects foreign and future continuation cursors", () => {
+      const checkpointQuery = "SELECT COALESCE(MAX(revision), 0) AS revision FROM event_changes";
+      const scopeQuery = "SELECT cursor_scope FROM event_feed_state WHERE singleton = 1";
+      mock.setRows(checkpointQuery, [{ revision: 5 }]);
+      mock.setRows(scopeQuery, [{ cursor_scope: "a".repeat(32) }]);
+      expect(() =>
+        repository.listEventChanges({
+          cursor: {
+            mode: "changes",
+            scope: "b".repeat(32),
+            checkpoint: 6,
+            revision: 5,
+          },
+          limit: 50,
+        })
+      ).toThrow("Invalid event feed cursor");
     });
   });
 });

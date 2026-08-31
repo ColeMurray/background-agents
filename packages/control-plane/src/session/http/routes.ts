@@ -22,6 +22,7 @@ export interface SessionInternalRoute {
 /** Handlers required to serve every internal SessionDO HTTP route. */
 export interface SessionInternalRouteHandlers {
   init: SessionInternalRouteHandler;
+  ensureBootstrap: SessionInternalRouteHandler;
   state: SessionInternalRouteHandler;
   snapshot: SessionInternalRouteHandler;
   sandboxAccess: SessionInternalRouteHandler;
@@ -34,6 +35,7 @@ export interface SessionInternalRouteHandlers {
   recordAttachment: SessionInternalRouteHandler;
   listParticipants: SessionInternalRouteHandler;
   listEvents: SessionInternalRouteHandler;
+  listEventChanges: SessionInternalRouteHandler;
   listArtifacts: SessionInternalRouteHandler;
   listMessages: SessionInternalRouteHandler;
   createPr: SessionInternalRouteHandler;
@@ -71,6 +73,11 @@ export function createSessionInternalRoutes(
 ): SessionInternalRoute[] {
   return [
     { method: "POST", path: SessionInternalPaths.init, handler: handlers.init },
+    {
+      method: "POST",
+      path: SessionInternalPaths.ensureBootstrap,
+      handler: handlers.ensureBootstrap,
+    },
     { method: "GET", path: SessionInternalPaths.state, handler: handlers.state },
     { method: "GET", path: SessionInternalPaths.snapshot, handler: handlers.snapshot },
     {
@@ -95,6 +102,11 @@ export function createSessionInternalRoutes(
       handler: handlers.listParticipants,
     },
     { method: "GET", path: SessionInternalPaths.events, handler: handlers.listEvents },
+    {
+      method: "GET",
+      path: SessionInternalPaths.eventChanges,
+      handler: handlers.listEventChanges,
+    },
     { method: "GET", path: SessionInternalPaths.artifacts, handler: handlers.listArtifacts },
     { method: "GET", path: SessionInternalPaths.messages, handler: handlers.listMessages },
     { method: "POST", path: SessionInternalPaths.createPr, handler: handlers.createPr },

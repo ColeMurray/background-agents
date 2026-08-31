@@ -137,6 +137,17 @@ export interface EventRow {
   timeline_sequence?: number;
 }
 
+export interface EventChangeRow {
+  revision: number;
+  kind: "upsert" | "delete";
+  event_id: string;
+  type: EventType | null;
+  data: string | null;
+  message_id: string | null;
+  created_at: number | null;
+  timeline_sequence: number | null;
+}
+
 export interface ArtifactRow {
   id: string;
   type: ArtifactType;

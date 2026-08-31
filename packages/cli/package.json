@@ -1,0 +1,34 @@
+{
+  "name": "@open-inspect/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "oi": "dist/bin.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "esbuild src/bin.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/bin.js --sourcemap --external:commander --external:zod --external:@modelcontextprotocol/sdk/* --external:@napi-rs/keyring",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "@open-inspect/shared": "file:../shared",
+    "commander": "^14.0.0",
+    "open": "^11.0.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.0"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^2.0.0"
+  }
+}

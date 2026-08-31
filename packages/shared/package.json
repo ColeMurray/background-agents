@@ -70,6 +70,10 @@
       "import": "./dist/types/environments.js",
       "types": "./dist/types/environments.d.ts"
     },
+    "./types/external-session-api": {
+      "import": "./dist/types/external-session-api.js",
+      "types": "./dist/types/external-session-api.d.ts"
+    },
     "./types/github-identity": {
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
@@ -185,6 +189,10 @@
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"
+    },
+    "./types/cli-auth": {
+      "import": "./dist/types/cli-auth.js",
+      "types": "./dist/types/cli-auth.d.ts"
     }
   },
   "scripts": {

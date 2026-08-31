@@ -27,7 +27,13 @@ const PROVIDER_PRESENTATION = {
   }
 >;
 
-export function SignInProviderButtons({ providers }: { providers: readonly SignInProvider[] }) {
+export function SignInProviderButtons({
+  providers,
+  callbackURL,
+}: {
+  providers: readonly SignInProvider[];
+  callbackURL?: string;
+}) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +41,7 @@ export function SignInProviderButtons({ providers }: { providers: readonly SignI
     setError(null);
     setPending(true);
     try {
-      await signIn(provider);
+      await (callbackURL ? signIn(provider, callbackURL) : signIn(provider));
     } catch {
       setError("Could not start sign in. Please try again.");
       setPending(false);

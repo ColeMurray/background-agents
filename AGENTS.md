@@ -28,7 +28,7 @@ events back through the same WebSocket chain.
 ### Package Dependency Graph
 
 ```
-@open-inspect/shared  ←  control-plane, web, slack-bot, github-bot, linear-bot
+@open-inspect/shared  ←  cli, control-plane, web, slack-bot, github-bot, linear-bot
 ```
 
 **Build `@open-inspect/shared` first** whenever you change shared types. Other packages import from
@@ -39,6 +39,7 @@ it at build time.
 | Package         | Lang / Framework                   | Purpose                                                     |
 | --------------- | ---------------------------------- | ----------------------------------------------------------- |
 | `shared`        | TypeScript                         | Shared types, auth utilities, model definitions             |
+| `cli`           | TypeScript / Commander / MCP SDK   | Session CLI and local stdio MCP server                      |
 | `control-plane` | TypeScript / CF Workers + DO       | Session management, WebSocket streaming, GitHub integration |
 | `web`           | TypeScript / Next.js 16 + React 19 | User-facing dashboard, OAuth, real-time UI                  |
 | `slack-bot`     | TypeScript / CF Workers + Hono     | Slack event handler, session creation                       |
@@ -60,6 +61,7 @@ npm run format                                   # Prettier only
 npm run typecheck                                # tsc across all TS packages
 
 # Tests — TypeScript (Vitest)
+npm test -w @open-inspect/cli
 npm test -w @open-inspect/control-plane          # unit tests (node env)
 npm run test:integration -w @open-inspect/control-plane  # integration (workerd/Miniflare + real D1)
 npm test -w @open-inspect/web

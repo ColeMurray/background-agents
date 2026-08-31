@@ -10,7 +10,8 @@ import {
   type EventTimelineCursor,
 } from "./event-cursor";
 import type { EventRow } from "./types";
-import type { EventRepository } from "./event-repository";
+import type { EventFeedCursor, EventRepository, ListEventChangesOptions } from "./event-repository";
+import type { SessionEventChangePage } from "./contracts";
 import {
   sessionTimelineEventSchema,
   type ServerMessage,
@@ -87,6 +88,80 @@ export class SessionEventStream {
       hasMore: page.hasMore,
     };
   }
+
+  listEventChanges(request: ListEventChangesOptions): SessionEventChangePage {
+    const page = this.repository.listEventChanges(request);
+    return {
+      changes: page.changes.map((change) =>
+        change.kind === "delete"
+          ? { kind: change.kind, revision: change.revision, eventId: change.event_id }
+          : {
+              kind: change.kind,
+              revision: change.revision,
+              event: toEventResponse({
+                id: change.event_id,
+                type: change.type!,
+                data: change.data!,
+                message_id: change.message_id,
+                created_at: change.created_at!,
+                timeline_sequence: change.timeline_sequence!,
+              }),
+            }
+      ),
+      checkpoint: page.checkpoint,
+      ...(page.nextCursor === null ? {} : { cursor: encodeEventChangeCursor(page.nextCursor) }),
+      hasMore: page.hasMore,
+    };
+  }
+}
+
+export function encodeEventChangeCursor(cursor: EventFeedCursor): string {
+  return btoa(JSON.stringify(cursor)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+export function parseEventChangeCursor(value: string): EventFeedCursor | null {
+  try {
+    const encoded = value.replaceAll("-", "+").replaceAll("_", "/");
+    const parsed = JSON.parse(
+      atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "="))
+    ) as Record<string, unknown>;
+    if (
+      (parsed.mode !== "snapshot" && parsed.mode !== "changes") ||
+      typeof parsed.scope !== "string" ||
+      !/^[a-f0-9]{32}$/.test(parsed.scope) ||
+      !isCheckpoint(parsed.checkpoint)
+    ) {
+      return null;
+    }
+    if (
+      parsed.mode === "snapshot" &&
+      isCheckpoint(parsed.createdAt) &&
+      isCheckpoint(parsed.timelineSequence)
+    ) {
+      return {
+        mode: parsed.mode,
+        scope: parsed.scope,
+        checkpoint: parsed.checkpoint,
+        createdAt: parsed.createdAt,
+        timelineSequence: parsed.timelineSequence,
+      };
+    }
+    if (parsed.mode === "changes" && isCheckpoint(parsed.revision)) {
+      return {
+        mode: parsed.mode,
+        scope: parsed.scope,
+        checkpoint: parsed.checkpoint,
+        revision: parsed.revision,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isCheckpoint(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function parseSessionTimelineEvents(rows: EventRow[]): SessionTimelineEvent[] {

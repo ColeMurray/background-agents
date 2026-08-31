@@ -709,6 +709,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Internal HTTP route table (transport wiring only).
   const routes = createSessionInternalRoutes({
     init: (request, _url, requestLog) => sessionInitHandler.init(request, requestLog),
+    ensureBootstrap: (request, _url, requestLog) => sessionInitHandler.ensure(request, requestLog),
     state: () => sessionLifecycleHandler.getState(),
     snapshot: () => snapshotReader.handleSnapshot(),
     sandboxAccess: () => accessReader.handleSandboxAccess(),
@@ -727,6 +728,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     },
     listParticipants: () => participantsHandler.listParticipants(),
     listEvents: (_request, url) => messagesHandler.listEvents(url),
+    listEventChanges: (_request, url) => messagesHandler.listEventChanges(url),
     listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => messagesHandler.listMessages(url),
     createPr: (request, _url, requestLog) => pullRequestHandler.createPr(request, requestLog),

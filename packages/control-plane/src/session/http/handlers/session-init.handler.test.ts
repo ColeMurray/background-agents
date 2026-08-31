@@ -10,11 +10,15 @@ function createHandler() {
   const repository = {
     upsertSession: vi.fn(),
     replaceSessionRepositories: vi.fn(),
+    getSession: vi.fn(),
+    getInitializationFingerprint: vi.fn(),
+    setInitializationFingerprint: vi.fn(),
     transaction: vi.fn((callback: () => void) => callback()),
     createParticipant: vi.fn(),
   };
   const sandboxRepository = {
     createSandbox: vi.fn(),
+    getSandbox: vi.fn(),
   } as unknown as SandboxRepository;
   const encryptScmToken = vi.fn();
   const generateId = vi.fn();
@@ -43,6 +47,7 @@ function createHandler() {
   // repeating it at every invocation.
   const handler = {
     init: (request: Request) => sessionInitHandler.init(request, log),
+    ensure: (request: Request) => sessionInitHandler.ensure(request, log),
   };
 
   return {
@@ -499,5 +504,73 @@ describe("SessionInitHandler", () => {
       requested_model: "invalid/model-name",
       default_model: getValidModelOrDefault("invalid/model-name"),
     });
+  });
+
+  it("re-drives pending warm scheduling after init committed before scheduling", async () => {
+    const { handler, repository, sandboxRepository, generateId, scheduleWarmSandbox } =
+      createHandler();
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+    scheduleWarmSandbox.mockImplementationOnce(() => {
+      throw new Error("crash after commit");
+    });
+    const body = {
+      sessionName: "session-public-id",
+      repoOwner: null,
+      repoName: null,
+      repositories: [],
+      userId: "user-1",
+      canonicalUserId: "user-1",
+    };
+
+    await expect(
+      handler.init(
+        new Request("http://internal/internal/init", {
+          method: "POST",
+          body: JSON.stringify(body),
+        })
+      )
+    ).rejects.toThrow("crash after commit");
+    const fingerprint = repository.setInitializationFingerprint.mock.calls[0]![0];
+    repository.getSession.mockReturnValue({ id: "session-do-id", status: "created" });
+    repository.getInitializationFingerprint.mockReturnValue(fingerprint);
+    vi.mocked(sandboxRepository.getSandbox).mockReturnValue({ status: "pending" } as never);
+
+    const response = await handler.ensure(
+      new Request("http://internal/internal/ensure-bootstrap", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ensured",
+      sessionStatus: "created",
+    });
+    expect(scheduleWarmSandbox).toHaveBeenCalledTimes(2);
+    expect(repository.upsertSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a bootstrap ensure fingerprint mismatch without rewriting state", async () => {
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
+    repository.getSession.mockReturnValue({ id: "session-do-id" });
+    repository.getInitializationFingerprint.mockReturnValue("different-fingerprint");
+    vi.mocked(sandboxRepository.getSandbox).mockReturnValue({ status: "pending" } as never);
+
+    const response = await handler.ensure(
+      new Request("http://internal/internal/ensure-bootstrap", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
   });
 });

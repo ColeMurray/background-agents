@@ -308,6 +308,47 @@ describe("authenticate — service credentials", () => {
   });
 });
 
+describe("authenticate — direct CLI bearer", () => {
+  const credential = `oi_cli_${"a".repeat(64)}`;
+
+  it("resolves a CLI credential directly to its canonical user principal", async () => {
+    const ctx = createCtx({
+      id: "credential-id",
+      user_id: "11111111111111111111111111111111",
+      expires_at: Date.now() + 60_000,
+    });
+    const request = new Request("https://cp.test.local/external/v1/cli/me", {
+      headers: { Authorization: `Bearer ${credential}` },
+    });
+
+    const result = await authenticate(request, createEnv(), ctx, { userCredential: "cli" });
+
+    expect(isAuthError(result)).toBe(false);
+    if (isAuthError(result)) return;
+    expect(result.principal).toEqual({
+      kind: "user",
+      userId: "11111111111111111111111111111111",
+    });
+    expect(result.authentication).toMatchObject({
+      mechanism: "cli_credential",
+      credentialId: "credential-id",
+      channel: { kind: "direct_bearer" },
+    });
+  });
+
+  it("does not enable a CLI bearer on browser-only routes", async () => {
+    const request = new Request("https://cp.test.local/sessions", {
+      headers: { Authorization: `Bearer ${credential}` },
+    });
+
+    await expect(authenticate(request, createEnv(), createCtx())).resolves.toEqual({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "none",
+    });
+  });
+});
+
 describe("authenticate — compound browser credentials", () => {
   function createUserAuthContext(
     session: {

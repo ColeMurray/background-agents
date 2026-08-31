@@ -6,6 +6,8 @@ import {
 } from "../../enqueue-prompt-contract";
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
+import { parseEventChangeCursor } from "../../event-stream";
+import { InvalidEventFeedCursorError } from "../../event-repository";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 import {
   PromptQueueFullError,
@@ -85,6 +87,37 @@ export class MessagesHandler {
     });
 
     return Response.json(result);
+  }
+
+  listEventChanges(url: URL): Response {
+    const cursorValue = url.searchParams.get("cursor");
+    const afterValue = url.searchParams.get("after");
+    if (cursorValue && afterValue !== null) {
+      return Response.json({ error: "after and cursor are mutually exclusive" }, { status: 400 });
+    }
+    const cursor = cursorValue ? parseEventChangeCursor(cursorValue) : null;
+    const after = afterValue === null ? undefined : Number(afterValue);
+    const limitValue = url.searchParams.get("limit");
+    const limit = limitValue === null ? 50 : Number(limitValue);
+    if (
+      (cursorValue && !cursor) ||
+      (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 200
+    ) {
+      return Response.json({ error: "Invalid event change query" }, { status: 400 });
+    }
+    try {
+      return Response.json(
+        this.messageService.listEventChanges({ after, cursor: cursor ?? undefined, limit })
+      );
+    } catch (error) {
+      if (error instanceof InvalidEventFeedCursorError) {
+        return Response.json({ error: error.message }, { status: 400 });
+      }
+      throw error;
+    }
   }
 
   listArtifacts(url: URL): Response {

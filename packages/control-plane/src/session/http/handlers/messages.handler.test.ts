@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
 import type { MessageService } from "../../services/message.service";
+import { encodeEventChangeCursor } from "../../event-stream";
 
 function createHandler() {
   const messageService = {
     enqueuePrompt: vi.fn(),
     stop: vi.fn(),
     listEvents: vi.fn(),
+    listEventChanges: vi.fn(),
     listArtifacts: vi.fn(),
     getArtifact: vi.fn(),
     listMessages: vi.fn(),
@@ -223,6 +225,54 @@ describe("MessagesHandler", () => {
       messageId: null,
     });
   });
+
+  it("parses bounded event change feeds and continuation cursors", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listEventChanges).mockReturnValue({
+      changes: [],
+      checkpoint: 12,
+      hasMore: false,
+    });
+
+    expect(
+      handler.listEventChanges(new URL("http://internal/internal/event-changes?after=4&limit=20"))
+        .status
+    ).toBe(200);
+    expect(messageService.listEventChanges).toHaveBeenLastCalledWith({
+      after: 4,
+      cursor: undefined,
+      limit: 20,
+    });
+
+    const cursor = {
+      mode: "changes" as const,
+      scope: "a".repeat(32),
+      checkpoint: 12,
+      revision: 8,
+    };
+    handler.listEventChanges(
+      new URL(
+        `http://internal/internal/event-changes?cursor=${encodeURIComponent(encodeEventChangeCursor(cursor))}&limit=20`
+      )
+    );
+    expect(messageService.listEventChanges).toHaveBeenLastCalledWith({
+      after: undefined,
+      cursor,
+      limit: 20,
+    });
+  });
+
+  it.each(["?after=-1", "?limit=201", "?cursor=bad", "?after=1&cursor=1%3A2%3A1"])(
+    "rejects invalid event change query %s",
+    (search) => {
+      const { handler, messageService } = createHandler();
+      const response = handler.listEventChanges(
+        new URL(`http://internal/internal/event-changes${search}`)
+      );
+      expect(response.status).toBe(400);
+      expect(messageService.listEventChanges).not.toHaveBeenCalled();
+    }
+  );
 
   it("returns artifacts from service unchanged", async () => {
     const { handler, messageService } = createHandler();

@@ -210,12 +210,13 @@ export type RouteAuthentication =
   | { kind: "web-service" }
   | { kind: "service" }
   | { kind: "user" }
+  | { kind: "external-user" }
   | { kind: "user-or-service" }
   | ({ kind: "sandbox" } & SandboxSessionBinding)
   | ({ kind: "user-or-service-with-sandbox-fallback" } & SandboxSessionBinding);
 
 export type RouteContext<Authentication extends RouteAuthentication> = RequestContext & {
-  principal: Authentication extends { kind: "user" }
+  principal: Authentication extends { kind: "user" | "external-user" }
     ? UserPrincipal
     : Authentication extends { kind: "sandbox" }
       ? SandboxPrincipal
@@ -261,6 +262,12 @@ export const SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE = {
 
 export const SCM_AGNOSTIC_HUMAN_USER_ROUTE = {
   authentication: { kind: "user" },
+  supportedScmProviders: "all",
+} as const satisfies RoutePolicy;
+
+/** Direct human CLI credential route under the versioned external API. */
+export const SCM_AGNOSTIC_EXTERNAL_USER_ROUTE = {
+  authentication: { kind: "external-user" },
   supportedScmProviders: "all",
 } as const satisfies RoutePolicy;
 
