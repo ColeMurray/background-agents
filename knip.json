@@ -19,14 +19,13 @@
         "packages/sandbox-runtime/src/sandbox_runtime/tools/spawn-child.js",
         "packages/sandbox-runtime/src/sandbox_runtime/ttyd_proxy/server.ts"
       ],
-      "project": ["scripts/**/*.ts"],
+      "project": ["scripts/**/*.ts", "packages/sandbox-runtime/src/sandbox_runtime/**/*.{js,ts}"],
       "ignoreDependencies": ["@opencode-ai/plugin", "database", "loser", "survivor", "zod"]
     },
     "packages/shared": {
       "project": ["src/**/*.ts"],
       "ignoreIssues": {
-        "src/types/repositories.ts": ["duplicates"],
-        "src/types/keyboard-shortcuts.ts": ["duplicates"]
+        "src/types/repositories.ts": ["duplicates"]
       }
     },
     "packages/control-plane": {
