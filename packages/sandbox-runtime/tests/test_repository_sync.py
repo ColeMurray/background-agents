@@ -40,17 +40,46 @@ def test_git_operation_timeout_defaults_are_named() -> None:
 
 
 @pytest.mark.asyncio
+async def test_successful_clone_is_promoted_from_temporary_directory(tmp_path: Path) -> None:
+    process = MagicMock(returncode=0)
+    process.communicate = AsyncMock(return_value=(b"", b""))
+    synchronizer = RepositorySynchronizer("github.com", MagicMock())
+    repo = _repository(tmp_path)
+
+    async def create_clone(*args: object, **_kwargs: object) -> MagicMock:
+        clone_path = Path(str(args[-1]))
+        assert clone_path.parent == repo.path.parent
+        assert clone_path != repo.path
+        (clone_path / ".git").mkdir()
+        return process
+
+    with patch(
+        "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+        side_effect=create_clone,
+    ):
+        assert await synchronizer._clone_repo(repo)
+
+    assert (repo.path / ".git").is_dir()
+    assert list(tmp_path.iterdir()) == [repo.path]
+
+
+@pytest.mark.asyncio
 async def test_hung_clone_times_out_and_cleans_up_process_group(tmp_path: Path) -> None:
     process = _hung_process()
     log = MagicMock()
     synchronizer = RepositorySynchronizer("github.com", log, clone_timeout_seconds=0.01)
     repo = _repository(tmp_path)
 
+    async def create_partial_clone(*args: object, **_kwargs: object) -> MagicMock:
+        (Path(str(args[-1])) / ".git").mkdir()
+        return process
+
     with (
         patch(
             "sandbox_runtime.repository_sync.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
-            return_value=process,
+            side_effect=create_partial_clone,
         ) as create_process,
         patch("sandbox_runtime.repository_sync.os.killpg") as kill_process_group,
         pytest.raises(RepositorySyncTimeout),
@@ -60,6 +89,8 @@ async def test_hung_clone_times_out_and_cleans_up_process_group(tmp_path: Path) 
     kill_process_group.assert_called_once_with(process.pid, signal.SIGKILL)
     process.wait.assert_awaited_once()
     assert create_process.await_args.kwargs["start_new_session"] is True
+    assert not repo.path.exists()
+    assert list(tmp_path.iterdir()) == []
     log.error.assert_called_once_with(
         "git.clone_timeout",
         repo_owner="acme",
