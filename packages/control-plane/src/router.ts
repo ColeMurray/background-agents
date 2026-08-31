@@ -23,11 +23,7 @@ import {
   auditRouteAuthorizationDecision,
   shouldAuditAllowedRoute,
 } from "./authorization/request-audit";
-import {
-  SCOPED_PERMISSION_PAIRS,
-  hasScopedPermission,
-  resolveScopedPermission,
-} from "@open-inspect/shared/rbac";
+import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -433,7 +429,10 @@ async function enforcePermissionRequirement(
   }
   const userId = authorizationUserId(ctx);
   if (!userId) return null;
-  if (ctx.authorization?.permissions.includes(requirement.permission)) return null;
+  if (ctx.authorization?.permissions.includes(requirement.permission)) {
+    (ctx.authorizedPermissions ??= []).push(requirement.permission);
+    return null;
+  }
   return json(
     { error: "Forbidden", code: "permission_required", permission: requirement.permission },
     403
@@ -453,10 +452,11 @@ async function enforceScopedPermissionRequirement(
   }
   const userId = authorizationUserId(ctx);
   if (!userId) return null;
-  if (
-    ctx.authorization &&
-    resolveScopedPermission(requirement.stem, ctx.authorization.permissions)
-  ) {
+  const scope = ctx.authorization
+    ? resolveScopedPermission(requirement.stem, ctx.authorization.permissions)
+    : null;
+  if (scope) {
+    (ctx.authorizedPermissions ??= []).push(pair[scope]);
     return null;
   }
   return json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403);
@@ -486,20 +486,21 @@ async function enforceAutomationRequirement(
     const automation = await store.resolveCanonicalOwner(storedAutomation);
 
     const permissionStem = `automations.${requirement.operation}` as const;
-    const ownPermission = SCOPED_PERMISSION_PAIRS[permissionStem].own;
-    if (
-      !hasScopedPermission(
-        permissionStem,
-        authorization.permissions,
-        automation.user_id === ctx.principal.userId
-      )
-    ) {
+    const pair = SCOPED_PERMISSION_PAIRS[permissionStem];
+    const isOwner = automation.user_id === ctx.principal.userId;
+    const scope = resolveScopedPermission(permissionStem, authorization.permissions);
+    if (!scope || (scope === "own" && !isOwner)) {
       return json(
-        { error: "Forbidden", code: "permission_required", permission: ownPermission },
+        {
+          error: "Forbidden",
+          code: "permission_required",
+          permission: pair.own,
+        },
         403
       );
     }
 
+    (ctx.authorizedPermissions ??= []).push(pair[scope]);
     ctx.automationAdmission = { automation };
     return null;
   } catch {

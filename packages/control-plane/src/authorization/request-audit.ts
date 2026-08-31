@@ -70,16 +70,19 @@ export async function auditRouteAuthorizationDecision(input: {
       requirement.kind === "scoped-permission" ||
       requirement.kind === "automation"
   );
+  const effectivePermissions = input.ctx.authorizedPermissions ?? [];
   const requiredPermission =
     typeof responseBody.permission === "string"
       ? responseBody.permission
-      : permissionRequirement?.kind === "permission"
-        ? permissionRequirement.permission
-        : permissionRequirement?.kind === "scoped-permission"
-          ? SCOPED_PERMISSION_PAIRS[permissionRequirement.stem].own
-          : permissionRequirement?.kind === "automation"
-            ? SCOPED_PERMISSION_PAIRS[`automations.${permissionRequirement.operation}`].own
-            : undefined;
+      : effectivePermissions[0]
+        ? effectivePermissions[0]
+        : permissionRequirement?.kind === "permission"
+          ? permissionRequirement.permission
+          : permissionRequirement?.kind === "scoped-permission"
+            ? SCOPED_PERMISSION_PAIRS[permissionRequirement.stem].own
+            : permissionRequirement?.kind === "automation"
+              ? SCOPED_PERMISSION_PAIRS[`automations.${permissionRequirement.operation}`].own
+              : undefined;
   const actorUserId =
     principal.kind === "user"
       ? principal.userId
@@ -92,6 +95,7 @@ export async function auditRouteAuthorizationDecision(input: {
     httpPath: input.path,
     httpStatus: input.response.status,
     requirements,
+    ...(effectivePermissions.length > 0 ? { effectivePermissions } : {}),
     ...(requiredPermission ? { requiredPermission } : {}),
     responseCode,
     responseReason,

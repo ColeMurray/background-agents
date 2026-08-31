@@ -4,7 +4,13 @@ import type * as AuthenticateModule from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
 import { handleRequest, routes } from "./router";
-import { json, requirePermission, serviceAuthorized, type Route } from "./routes/shared";
+import {
+  json,
+  requireAutomation,
+  requirePermission,
+  serviceAuthorized,
+  type Route,
+} from "./routes/shared";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
@@ -15,6 +21,14 @@ vi.mock("./auth/authenticate", async (importOriginal) => ({
 }));
 
 const TEST_ROUTES: Route[] = [
+  {
+    authentication: { kind: "user-or-service" },
+    supportedScmProviders: "all",
+    method: "POST",
+    pattern: /^\/audit-test\/automations\/(?<id>[^/]+)\/pause$/,
+    authorization: requireAutomation("manage"),
+    handler: async () => json({ handled: true }),
+  },
   {
     authentication: { kind: "user-or-service" },
     supportedScmProviders: "all",
@@ -62,10 +76,11 @@ interface AuditWrite {
 }
 
 function createEnv(options?: {
-  roleKey?: "owner" | "viewer";
+  roleKey?: "owner" | "administrator" | "viewer";
   suspendedAt?: number | null;
   auditError?: Error;
   authorizationError?: Error;
+  automationOwnerId?: string;
 }) {
   const auditWrites: AuditWrite[] = [];
   const db: SqlDatabase = {
@@ -81,18 +96,31 @@ function createEnv(options?: {
             throw options.authorizationError;
           }
           return (
-            sql.includes("FROM users u")
+            sql.includes("SELECT * FROM automations")
               ? {
-                  user_id: "user-1",
-                  suspended_at: options?.suspendedAt ?? null,
-                  role_id:
-                    options?.roleKey === "viewer"
-                      ? BUILT_IN_ROLE_REGISTRY.viewer.id
-                      : BUILT_IN_ROLE_REGISTRY.owner.id,
-                  role_key: options?.roleKey ?? "owner",
-                  role_name: options?.roleKey === "viewer" ? "Viewer" : "Owner",
+                  id: "automation-1",
+                  user_id: options?.automationOwnerId ?? "user-1",
+                  created_by: "owner",
                 }
-              : null
+              : sql.includes("FROM users u")
+                ? {
+                    user_id: "user-1",
+                    suspended_at: options?.suspendedAt ?? null,
+                    role_id:
+                      options?.roleKey === "viewer"
+                        ? BUILT_IN_ROLE_REGISTRY.viewer.id
+                        : options?.roleKey === "administrator"
+                          ? BUILT_IN_ROLE_REGISTRY.administrator.id
+                          : BUILT_IN_ROLE_REGISTRY.owner.id,
+                    role_key: options?.roleKey ?? "owner",
+                    role_name:
+                      options?.roleKey === "viewer"
+                        ? "Viewer"
+                        : options?.roleKey === "administrator"
+                          ? "Administrator"
+                          : "Owner",
+                  }
+                : null
           ) as T | null;
         },
         all: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
@@ -240,6 +268,27 @@ describe("router authorization decision auditing", () => {
       TEST_BACKGROUND_TASK_CONTEXT
     );
     expect(ordinary.auditWrites).toHaveLength(0);
+  });
+
+  it("audits the any grant selected for a non-owned automation", async () => {
+    authenticateAs({ kind: "user", userId: "user-1" });
+    const access = createEnv({ roleKey: "administrator", automationOwnerId: "user-2" });
+    const response = await handleRequest(
+      new Request("https://test.local/audit-test/automations/automation-1/pause", {
+        method: "POST",
+      }),
+      access.env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+    expect(auditRecord(access.auditWrites[0])).toMatchObject({
+      action: "authorization.request_allowed",
+      metadata: {
+        requiredPermission: "automations.manage.any",
+        effectivePermissions: ["automations.manage.any"],
+      },
+    });
   });
 
   it("preserves allowed and denied responses when audit persistence fails", async () => {

@@ -51,6 +51,8 @@ export type RequestContext = CorrelationContext & {
   authentication?: AuthenticationContext;
   /** Effective human authorization loaded once by the router for this request. */
   authorization?: EffectiveAuthorization;
+  /** Exact grants selected while enforcing this route's authorization requirements. */
+  authorizedPermissions?: PermissionId[];
   /** Resource admission populated by the router for automation mutation routes. */
   automationAdmission?: AutomationRouteAdmission;
 };
