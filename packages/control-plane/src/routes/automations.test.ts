@@ -179,11 +179,20 @@ const SLACK_BOT_PRINCIPAL: Principal = {
 };
 
 function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
+  const statement = {
+    bind: vi.fn(),
+    first: vi.fn(async () => ({ active: 1 })),
+  };
+  statement.bind.mockReturnValue(statement);
+
   return {
     trace_id: "trace-1",
     request_id: "req-1",
     principal,
-    db: { batch: mockBatch } as unknown as SqlDatabase,
+    db: {
+      batch: mockBatch,
+      prepare: vi.fn(() => statement),
+    } as unknown as SqlDatabase,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],

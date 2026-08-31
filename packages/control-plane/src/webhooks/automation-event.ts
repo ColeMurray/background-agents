@@ -23,6 +23,7 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   parsePattern,
+  serviceAuthorized,
 } from "../routes/shared";
 import type { Env } from "../types";
 import { Scheduler } from "../scheduler/scheduler";
@@ -124,6 +125,7 @@ export async function forwardAutomationEventToScheduler(
   return json({ ok: true, ...result });
 }
 
+/** Create an authenticated route for a normalized automation event source. */
 export function createAutomationEventRoute(opts: {
   path: string;
   source: AutomationEventSource;
@@ -157,6 +159,7 @@ export function createAutomationEventRoute(opts: {
   return defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern(opts.path),
+    authorization: serviceAuthorized("slack-bot"),
     handler,
   });
 }

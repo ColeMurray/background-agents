@@ -30,6 +30,7 @@ import {
   type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -63,6 +64,26 @@ async function handleCreateSession(
       return error(e.message, 400);
     }
     throw e;
+  }
+
+  if (ctx.principal?.kind === "user" || ctx.principal?.kind === "service") {
+    const authorization = ctx.authorization;
+    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
+    if (body.environmentId && !authorization.permissions.includes("environments.use")) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: "environments.use" },
+        403
+      );
+    }
+    if (
+      (repositoryContext || body.repositories) &&
+      !authorization.permissions.includes("repositories.use")
+    ) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: "repositories.use" },
+        403
+      );
+    }
   }
 
   // Validate branch names if provided (defense in depth)
@@ -266,6 +287,7 @@ export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_
   {
     method: "POST",
     pattern: parsePattern("/sessions"),
+    authorization: requirePermission("sessions.create"),
     handler: handleCreateSession,
   },
 ]);

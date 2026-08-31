@@ -3,6 +3,7 @@ import {
   defineRoutes,
   error,
   json,
+  NO_AUTHORIZATION,
   parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   type Route,
@@ -35,6 +36,7 @@ export const autofixRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_WEB_SERVICE_ROUT
   {
     method: "GET",
     pattern: parsePattern("/autofix/activity"),
+    authorization: NO_AUTHORIZATION,
     handler: handleActivity,
   },
 ]);

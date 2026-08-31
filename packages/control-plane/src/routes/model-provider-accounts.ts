@@ -56,6 +56,8 @@ import {
   type Route,
   type SandboxRouteContext,
   type UserRouteContext,
+  NO_AUTHORIZATION,
+  requirePermission,
 } from "./shared";
 
 const PRIVATE_NO_STORE = "private, no-store" as const;
@@ -182,6 +184,9 @@ function managementRoute(
     method,
     pattern: parsePattern(path),
     cacheControl: PRIVATE_NO_STORE,
+    authorization: requirePermission(
+      method === "GET" ? "provider_accounts.read" : "provider_accounts.manage"
+    ),
     handler,
   });
 }
@@ -481,6 +486,7 @@ export const modelProviderAccountRoutes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/provider-auth/:provider/access-token"),
     cacheControl: NO_STORE,
+    authorization: NO_AUTHORIZATION,
     handler: handleProviderAccess,
   }),
 ];

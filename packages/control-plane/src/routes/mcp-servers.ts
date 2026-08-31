@@ -19,6 +19,7 @@ import {
   json,
   error,
   parseJsonBody,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:mcp-servers");
@@ -167,26 +168,31 @@ export const mcpServerRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUT
   {
     method: "GET",
     pattern: parsePattern("/mcp-servers"),
+    authorization: requirePermission("mcp_servers.read"),
     handler: handleListMcpServers,
   },
   {
     method: "POST",
     pattern: parsePattern("/mcp-servers"),
+    authorization: requirePermission("mcp_servers.manage"),
     handler: handleCreateMcpServer,
   },
   {
     method: "GET",
     pattern: parsePattern("/mcp-servers/:id"),
+    authorization: requirePermission("mcp_servers.read"),
     handler: handleGetMcpServer,
   },
   {
     method: "PUT",
     pattern: parsePattern("/mcp-servers/:id"),
+    authorization: requirePermission("mcp_servers.manage"),
     handler: handleUpdateMcpServer,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/mcp-servers/:id"),
+    authorization: requirePermission("mcp_servers.manage"),
     handler: handleDeleteMcpServer,
   },
 ]);

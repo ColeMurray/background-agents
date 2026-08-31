@@ -34,6 +34,7 @@ import {
   error,
   parseJsonBody,
   extractRepoParams,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:integration-settings");
@@ -492,37 +493,46 @@ export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SE
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id"),
+    authorization: requirePermission("integrations.read", {
+      actorlessGrants: [{ service: "slack-bot", pathParams: { id: "slack" } }],
+    }),
     handler: handleGetIntegrationSettings,
   },
   {
     method: "PUT",
     pattern: parsePattern("/integration-settings/:id"),
+    authorization: requirePermission("integrations.manage"),
     handler: handleSetIntegrationSettings,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/integration-settings/:id"),
+    authorization: requirePermission("integrations.manage"),
     handler: handleDeleteIntegrationSettings,
   },
   // Integration settings — per-repo
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/repos"),
+    authorization: requirePermission("integrations.read"),
     handler: handleListRepoSettings,
   },
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
+    authorization: requirePermission("integrations.read"),
     handler: handleGetRepoSettings,
   },
   {
     method: "PUT",
     pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
+    authorization: requirePermission("repositories.settings.manage"),
     handler: handleSetRepoSettings,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
+    authorization: requirePermission("repositories.settings.manage"),
     handler: handleDeleteRepoSettings,
   },
   // Integration settings — per-environment (design §13.5; sandbox and
@@ -530,22 +540,31 @@ export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SE
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    authorization: requirePermission("integrations.read"),
     handler: handleGetEnvironmentSettings,
   },
   {
     method: "PUT",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    authorization: requirePermission("environments.settings.manage"),
     handler: handleSetEnvironmentSettings,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    authorization: requirePermission("environments.settings.manage"),
     handler: handleDeleteEnvironmentSettings,
   },
   // Resolved config — used by bots at runtime
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/resolved/:owner/:name"),
+    authorization: requirePermission("integrations.read", {
+      actorlessGrants: [
+        { service: "github-bot", pathParams: { id: "github" } },
+        { service: "linear-bot", pathParams: { id: "linear" } },
+      ],
+    }),
     handler: handleGetResolvedConfig,
   },
 ]);

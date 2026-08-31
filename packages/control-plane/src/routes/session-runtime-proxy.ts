@@ -15,8 +15,10 @@ import {
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
+  NO_AUTHORIZATION,
   parseJsonBody,
   parsePattern,
+  requirePermission,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
@@ -24,6 +26,7 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   SCM_CREDENTIALS_ROUTE,
   type Route,
+  type RouteAuthorization,
   type RoutePolicy,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -44,6 +47,7 @@ type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
+  authorization: RouteAuthorization;
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
@@ -64,6 +68,7 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
     sessionRoute({
       method: config.method,
       pattern: parsePattern(config.routePath),
+      authorization: config.authorization,
       handler: async (request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
@@ -95,6 +100,7 @@ function legacyTokenRefreshRoute(
     sessionRoute({
       method: "POST",
       pattern: parsePattern(routePath),
+      authorization: NO_AUTHORIZATION,
       handler: async (_request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
@@ -252,12 +258,7 @@ async function handleCreatePR(
   });
 }
 
-/**
- * Read a lifecycle-route body (title/archive/unarchive) under identity
- * enforcement. Lifecycle routes accept bodyless requests — a parse failure
- * just yields no fields. The DO participant check runs against the verified
- * identity, never a caller-asserted one.
- */
+/** Read a lifecycle body under verified identity enforcement. */
 async function readEnforcedLifecycleBody(
   request: Request,
   ctx: SessionRouteContext
@@ -286,6 +287,7 @@ function lifecycleProxyRoute(
     sessionRoute({
       method,
       pattern: parsePattern(routePath),
+      authorization: requirePermission("sessions.lifecycle"),
       handler: async (request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
@@ -311,12 +313,14 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/sandbox-access",
     internalPath: SessionInternalPaths.sandboxAccess,
+    authorization: requirePermission("sessions.sandbox_access"),
   }),
   simpleProxyRoute({
     policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     method: "GET",
     routePath: "/sessions/:id",
     internalPath: SessionInternalPaths.snapshot,
+    authorization: requirePermission("sessions.read"),
     notFoundMessage: "Session not found",
   }),
   simpleProxyRoute({
@@ -324,6 +328,9 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "POST",
     routePath: "/sessions/:id/stop",
     internalPath: SessionInternalPaths.stop,
+    authorization: requirePermission("sessions.lifecycle", {
+      actorlessGrants: [{ service: "linear-bot" }],
+    }),
     runtimeMethod: "POST",
   }),
   defineRoute(
@@ -331,6 +338,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/sandbox-error"),
+      authorization: NO_AUTHORIZATION,
       handler: handleSandboxError,
     })
   ),
@@ -339,6 +347,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/events",
     internalPath: SessionInternalPaths.events,
+    authorization: requirePermission("sessions.read"),
     forwardSearch: true,
   }),
   simpleProxyRoute({
@@ -346,18 +355,21 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/artifacts",
     internalPath: SessionInternalPaths.artifacts,
+    authorization: requirePermission("sessions.read"),
   }),
   simpleProxyRoute({
     policy: GITHUB_USER_OR_SERVICE_ROUTE,
     method: "GET",
     routePath: "/sessions/:id/participants",
     internalPath: SessionInternalPaths.participants,
+    authorization: requirePermission("sessions.read"),
   }),
   defineRoute(
     SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method: "GET",
       pattern: parsePattern("/sessions/:id/participant-profiles"),
+      authorization: requirePermission("sessions.read"),
       handler: handleParticipantProfiles,
     })
   ),
@@ -366,6 +378,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/participants"),
+      authorization: requirePermission("sessions.collaborate"),
       handler: handleAddParticipant,
     })
   ),
@@ -374,6 +387,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/messages",
     internalPath: SessionInternalPaths.messages,
+    authorization: requirePermission("sessions.read"),
     forwardSearch: true,
   }),
   defineRoute(
@@ -381,6 +395,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/pr"),
+      authorization: requirePermission("sessions.collaborate"),
       handler: handleCreatePR,
     })
   ),
@@ -399,6 +414,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "POST",
     routePath: "/sessions/:id/scm-credentials",
     internalPath: SessionInternalPaths.scmCredentials,
+    authorization: NO_AUTHORIZATION,
     runtimeMethod: "POST",
   }),
   simpleProxyRoute({
@@ -406,6 +422,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/tunnel-urls",
     internalPath: SessionInternalPaths.tunnelUrls,
+    authorization: requirePermission("sessions.sandbox_access"),
     runtimeMethod: "GET",
   }),
   lifecycleProxyRoute("PATCH", "/sessions/:id/title", SessionInternalPaths.updateTitle),

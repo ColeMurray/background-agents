@@ -3,6 +3,7 @@ import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import { sessionWsTokenRoutes } from "./session-ws-token";
 import type { RequestContext, Route } from "./shared";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 
 function routeFor(path: string): { route: Route; match: RegExpMatchArray } {
   const route = sessionWsTokenRoutes.find((candidate) => candidate.pattern.test(path));
@@ -12,13 +13,32 @@ function routeFor(path: string): { route: Route; match: RegExpMatchArray } {
   return { route, match };
 }
 
-function createContext(): RequestContext {
+function accessDatabase() {
+  const run = vi.fn(async () => ({ meta: { changes: 1 } }));
+  const statement = {
+    bind: vi.fn(() => statement),
+    run,
+  };
+  return {
+    db: { prepare: vi.fn(() => statement) } as unknown as SqlDatabase,
+    statement,
+    run,
+  };
+}
+
+function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
   return {
     request_id: "request-1",
     trace_id: "trace-1",
-    db: {} as never,
+    db,
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     principal: { kind: "user", userId: "user-1" },
+    authorization: {
+      userId: "user-1",
+      suspendedAt: null,
+      role: { id: "role-1", key: "member", name: "Member" },
+      permissions: ["sessions.collaborate"],
+    },
     metrics: {
       d1Queries: [],
       spans: {},
@@ -69,6 +89,25 @@ describe("session ws-token route", () => {
       scmName: "Octo Cat",
       scmEmail: "octo@example.com",
     });
+  });
+
+  it("forwards a runtime rejection without writing D1", async () => {
+    const access = accessDatabase();
+    const fetch = vi.fn(async () => Response.json({ error: "rejected" }, { status: 409 }));
+    const { route, match } = routeFor("/sessions/session-1/ws-token");
+
+    const response = await route.handler(
+      new Request("https://test.local/sessions/session-1/ws-token", {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+      createEnv(fetch),
+      match,
+      createContext(access.db)
+    );
+
+    expect(response.status).toBe(409);
+    expect(access.db.prepare).not.toHaveBeenCalled();
   });
 
   it("forwards null SCM display fields accepted by the session contract", async () => {

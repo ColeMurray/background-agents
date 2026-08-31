@@ -23,6 +23,12 @@ vi.mock("./db/model-preferences", () => ({
   getEffectiveEnabledModels: vi.fn(),
 }));
 
+vi.mock("./db/user-store", () => ({
+  UserStore: vi.fn().mockImplementation(function () {
+    return { getIdentity: async () => ({ userId: "canonical-user-123" }) };
+  }),
+}));
+
 vi.mock("./session/integration-settings-resolution", () => integrationSettingsMocks);
 
 describe("handleSpawnChild prompt enqueue handling", () => {
@@ -173,6 +179,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         method: "POST",
         body: JSON.stringify(body),
         service: "linear-bot",
+        actor: "linear:U1",
       }),
       env as never,
       TEST_BACKGROUND_TASK_CONTEXT
@@ -198,7 +205,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       env: {
         ...TEST_SERVICE_SECRETS,
         SCM_PROVIDER: "github",
-        DB: {},
+        DB: authorizedDb(),
         SESSION: {
           idFromName: (name: string) => name,
           get: (id: string) => (id === parentId ? parentStub : childStub),
@@ -340,7 +347,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: (id: string) => (id === parentId ? parentStub : childStub),
@@ -434,7 +441,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: (id: string) => (id === parentId ? parentStub : childStub),
@@ -482,7 +489,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: (id: string) => (id === parentId ? parentStub : childStub),
@@ -514,7 +521,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -525,6 +532,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
         service: "linear-bot",
+        actor: "linear:U1",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
@@ -554,7 +562,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -577,7 +585,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: vi.fn(),
@@ -588,6 +596,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
         service: "linear-bot",
+        actor: "linear:U1",
         body: JSON.stringify({ title: "Child task" }),
       }),
       env as never,
@@ -612,7 +621,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -640,7 +649,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -666,7 +675,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -699,7 +708,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -740,7 +749,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -768,7 +777,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -779,6 +788,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
         service: "linear-bot",
+        actor: "linear:U1",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
@@ -809,7 +819,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: () => parentStub,
@@ -849,7 +859,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const env = {
       ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
-      DB: {},
+      DB: authorizedDb(),
       SESSION: {
         idFromName: (name: string) => name,
         get: (id: string) => (id === parentId ? parentStub : childStub),
@@ -866,3 +876,33 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(store.updateStatus).toHaveBeenCalledWith(createdChildId, "failed");
   });
 });
+function authorizedDb() {
+  return {
+    prepare: vi.fn((sql: string) => {
+      const statement = {
+        bind: vi.fn(() => statement),
+        first: vi.fn(async () =>
+          sql.includes("FROM users u")
+            ? {
+                user_id: "canonical-user-123",
+                suspended_at: null,
+                role_id: "role-1",
+                role_key: "member",
+                role_name: "Member",
+              }
+            : null
+        ),
+        all: vi.fn(async () => ({
+          results: sql.includes("FROM role_permissions")
+            ? [
+                { permission_id: "sessions.create" },
+                { permission_id: "repositories.use" },
+                { permission_id: "sessions.collaborate" },
+              ]
+            : [],
+        })),
+      };
+      return statement;
+    }),
+  };
+}

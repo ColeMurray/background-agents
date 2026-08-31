@@ -198,7 +198,23 @@ export async function resolveCanonicalUserId(
   enforced: DerivedIdentity & { participantUserId: string },
   display: { displayName?: string; email?: string; avatarUrl?: string }
 ): Promise<{ userId: string } | Response> {
-  if (enforced.canonicalUserId) return { userId: enforced.canonicalUserId };
+  const requireActive = async (userId: string): Promise<{ userId: string } | Response> => {
+    try {
+      const active = await ctx.db
+        .prepare("SELECT 1 AS active FROM users WHERE id = ? AND suspended_at IS NULL")
+        .bind(userId)
+        .first<{ active: number }>();
+      return active ? { userId } : error("Workspace access is disabled", 403);
+    } catch (cause) {
+      logger.error("Failed to verify workspace access", {
+        error: cause instanceof Error ? cause : String(cause),
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Authorization unavailable", 503);
+    }
+  };
+  if (enforced.canonicalUserId) return requireActive(enforced.canonicalUserId);
   const actor = enforced.actor;
   if (!actor) {
     // Unreachable while deriveIdentity holds its invariant (a participant
@@ -219,7 +235,7 @@ export async function resolveCanonicalUserId(
       providerEmail: display.email,
       avatarUrl: display.avatarUrl,
     });
-    return { userId: user.id };
+    return requireActive(user.id);
   } catch (e) {
     logger.error("Failed to resolve verified actor identity", {
       error: e instanceof Error ? e : String(e),

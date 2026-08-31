@@ -4,6 +4,7 @@ import {
   defineRoutes,
   error,
   json,
+  NO_AUTHORIZATION,
   parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   type Route,
@@ -39,6 +40,7 @@ export const signInProviderRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_WEB_SERVI
   {
     method: "GET",
     pattern: parsePattern("/internal/auth/sign-in-providers"),
+    authorization: NO_AUTHORIZATION,
     handler: handleSignInProviders,
   },
 ]);

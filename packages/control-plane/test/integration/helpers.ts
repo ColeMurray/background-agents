@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
+import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
@@ -28,11 +29,22 @@ export function getSetCookies(headers: Headers): string[] {
   return (headers as Headers & { getSetCookie(): string[] }).getSetCookie();
 }
 
+export async function seedActiveUser(userId: string): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO users (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)`
+  )
+    .bind(userId, "Integration User", now, now)
+    .run();
+}
+
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
 export const INTEGRATION_WEBSOCKET_TIMEOUT_MS = 2000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
 const TEST_BROWSER_ACCOUNT_ID = "test-browser-account";
 const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
+type InitialUserRole = Exclude<BuiltInRoleKey, "viewer">;
+const DEFAULT_INITIAL_USER_ROLE = "owner" as const;
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
 const TEST_BROWSER_SESSION_COOKIE = "__Secure-openinspect.session_token";
@@ -69,13 +81,16 @@ async function signCookieValue(value: string, secret: string): Promise<string> {
  * web request must carry the same compound credential as production. Direct
  * service-auth tests intentionally build their own bare sig1 requests.
  */
-async function testBrowserSessionCookie(): Promise<string> {
+async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<string> {
   const secret = env.BROWSER_AUTH_SECRET;
   if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const applicationTimestamp = now.getTime();
+  const existingUser = await env.DB.prepare("SELECT 1 FROM users WHERE id = ?")
+    .bind(TEST_BROWSER_USER_ID)
+    .first();
   await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO users
@@ -86,7 +101,7 @@ async function testBrowserSessionCookie(): Promise<string> {
       "Integration Browser User",
       "browser@test.local",
       1,
-      null,
+      "browser@test.local",
       applicationTimestamp,
       applicationTimestamp
     ),
@@ -121,6 +136,11 @@ async function testBrowserSessionCookie(): Promise<string> {
       TEST_BROWSER_USER_ID
     ),
   ]);
+  if (initialRole !== "member" && !existingUser) {
+    await env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`)
+      .bind(BUILT_IN_ROLE_REGISTRY[initialRole].id, TEST_BROWSER_USER_ID)
+      .run();
+  }
 
   const signedToken = await signCookieValue(TEST_BROWSER_SESSION_TOKEN, secret);
   return `${TEST_BROWSER_SESSION_COOKIE}=${signedToken}`;
@@ -140,6 +160,7 @@ export async function serviceFetch(
     headers?: Record<string, string>;
     service?: ServiceName;
     actor?: string;
+    initialUserRole?: InitialUserRole;
   }
 ): Promise<Response> {
   const method = init?.method ?? "GET";
@@ -152,7 +173,10 @@ export async function serviceFetch(
     body: init?.body,
     actor: init?.actor,
   });
-  const browserCookie = service === "web" ? await testBrowserSessionCookie() : undefined;
+  const browserCookie =
+    service === "web"
+      ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE)
+      : undefined;
   return SELF.fetch(url, {
     method,
     headers: {

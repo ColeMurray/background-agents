@@ -33,6 +33,8 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
   parsePattern,
+  permissionRequirement,
+  requireAll,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -346,6 +348,10 @@ export const sessionChildSpawnRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALL
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/children"),
+    authorization: requireAll(
+      permissionRequirement("sessions.create"),
+      permissionRequirement("sessions.collaborate")
+    ),
     handler: handleSpawnChild,
   }),
 ]);

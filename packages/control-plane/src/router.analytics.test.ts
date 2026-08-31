@@ -27,7 +27,7 @@ describe("analytics router integration", () => {
     vi.clearAllMocks();
   });
 
-  it("serves analytics routes even when the SCM provider is not github", async () => {
+  it("does not let an actorless service read analytics", async () => {
     mockStore.getSummary.mockResolvedValue({
       totalSessions: 1,
       activeUsers: 1,
@@ -63,21 +63,8 @@ describe("analytics router integration", () => {
       TEST_BACKGROUND_TASK_CONTEXT
     );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      totalSessions: 1,
-      activeUsers: 1,
-      totalCost: 0,
-      avgCost: 0,
-      totalPrs: 0,
-      statusBreakdown: {
-        created: 1,
-        active: 0,
-        completed: 0,
-        failed: 0,
-        archived: 0,
-        cancelled: 0,
-      },
-    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+    expect(mockStore.getSummary).not.toHaveBeenCalled();
   });
 });
