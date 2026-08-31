@@ -109,9 +109,10 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
   AND (SELECT COUNT(*) FROM pragma_table_info('authorization_audit_events')
     WHERE name IN (
       'id', 'occurred_at', 'request_id', 'principal_kind',
-      'actor_user_id_snapshot', 'actor_service_snapshot', 'action', 'resource_type',
-      'resource_id', 'target_user_id_snapshot', 'reason_code'
-    )) = 11`;
+       'actor_user_id_snapshot', 'actor_service_snapshot', 'action', 'resource_type',
+       'resource_id', 'target_user_id_snapshot', 'reason_code',
+       'operation_result', 'metadata_json'
+    )) = 13`;
   const commonPreconditions = `${schemaReady}
   AND (SELECT COUNT(*) FROM users WHERE id = ${userId}) = 1
   AND (SELECT COUNT(*) FROM user_role_assignments WHERE user_id = ${userId}) = 1
@@ -138,6 +139,10 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
       AND resource_id IS NULL
       AND target_user_id_snapshot = ${userId}
       AND reason_code = 'operator_cli'
+      AND operation_result = 'applied'
+      AND json_extract(metadata_json, '$.before.roleId') <> ${ownerRoleId}
+      AND json_extract(metadata_json, '$.requested.roleId') = ${ownerRoleId}
+      AND json_extract(metadata_json, '$.after.roleId') = ${ownerRoleId}
   )`;
 
   const preflight = `SELECT 'preflight' AS report,
@@ -176,10 +181,17 @@ export function buildBootstrapSql(options: BootstrapSqlOptions): string {
 INSERT INTO authorization_audit_events
   (id, occurred_at, request_id, principal_kind,
    actor_service_snapshot, action, resource_type,
-   target_user_id_snapshot, reason_code)
+    target_user_id_snapshot, reason_code, operation_result, metadata_json)
 SELECT ${auditId}, ${now}, ${requestId}, 'service',
        'operator-cli', 'workspace.owner_bootstrapped', 'workspace',
-       ${userId}, 'operator_cli'
+       ${userId}, 'operator_cli', 'applied',
+       json_object(
+         'before', json_object('roleId', (
+           SELECT role_id FROM user_role_assignments WHERE user_id = ${userId}
+         )),
+         'requested', json_object('roleId', ${ownerRoleId}),
+         'after', json_object('roleId', ${ownerRoleId})
+       )
 WHERE ${ready};
 
 UPDATE user_role_assignments
