@@ -166,7 +166,7 @@ export class UserStore {
       return await this.doResolveOrCreate(identity);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
-        return await this.doResolveOrCreate(identity);
+        return this.doResolveOrCreate(identity);
       }
       throw err;
     }

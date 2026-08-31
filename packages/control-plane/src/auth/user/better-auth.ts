@@ -6,7 +6,6 @@ import { generateId } from "../crypto";
 import type { ProviderProfileResolver } from "./provider-profile";
 
 const MS_PER_SECOND = 1000;
-
 export const SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
 export const SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
 
