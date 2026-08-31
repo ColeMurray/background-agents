@@ -31,6 +31,7 @@ export function shouldAuditAllowedRoute(route: Route, method: string): boolean {
     if (requirement.kind === "permission") {
       return (
         requirement.permission.endsWith(".manage") ||
+        requirement.permission === "skill_profiles.manage_own" ||
         requirement.permission === "sessions.sandbox_access"
       );
     }

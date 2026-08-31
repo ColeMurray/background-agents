@@ -49,6 +49,14 @@ const TEST_ROUTES: Route[] = [
     authentication: { kind: "user-or-service" },
     supportedScmProviders: "all",
     method: "GET",
+    pattern: /^\/audit-test\/profiles$/,
+    authorization: requirePermission("skill_profiles.manage_own"),
+    handler: async () => json({ handled: true }),
+  },
+  {
+    authentication: { kind: "user-or-service" },
+    supportedScmProviders: "all",
+    method: "GET",
     pattern: /^\/audit-test\/read$/,
     authorization: requirePermission("workspace.roles.read"),
     handler: async () => json({ handled: true }),
@@ -259,7 +267,15 @@ describe("router authorization decision auditing", () => {
       sensitive.env,
       TEST_BACKGROUND_TASK_CONTEXT
     );
-    expect(sensitive.auditWrites).toHaveLength(1);
+    await handleRequest(
+      new Request("https://test.local/audit-test/profiles"),
+      sensitive.env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+    expect(sensitive.auditWrites).toHaveLength(2);
+    expect(auditRecord(sensitive.auditWrites[1])).toMatchObject({
+      metadata: { requiredPermission: "skill_profiles.manage_own" },
+    });
 
     const ordinary = createEnv();
     await handleRequest(
