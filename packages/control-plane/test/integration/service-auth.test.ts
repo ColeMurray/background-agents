@@ -327,7 +327,7 @@ describe("sig1 service-credential authentication", () => {
     });
   });
 
-  it("allows only narrow actorless session callbacks", async () => {
+  it("allows only narrow actorless session callbacks and completion reads", async () => {
     const created = await signedFetch({
       service: "linear-bot",
       method: "POST",
@@ -347,6 +347,17 @@ describe("sig1 service-credential authentication", () => {
       url: `https://test.local/sessions/${sessionId}/stop`,
     });
     expect(linearStop.status).not.toBe(403);
+
+    for (const service of ["slack-bot", "linear-bot"] as const) {
+      for (const path of ["events", "artifacts"] as const) {
+        const completionRead = await signedFetch({
+          service,
+          method: "GET",
+          url: `https://test.local/sessions/${sessionId}/${path}`,
+        });
+        expect(completionRead.status, `${service} GET ${path}`).not.toBe(403);
+      }
+    }
 
     const slackMedia = await signedFetch({
       service: "slack-bot",
