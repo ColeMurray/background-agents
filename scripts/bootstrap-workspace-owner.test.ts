@@ -36,8 +36,8 @@ function createDatabase(): DatabaseSync {
       resource_id TEXT,
       target_user_id_snapshot TEXT,
       reason_code TEXT NOT NULL,
-      operation_result TEXT NOT NULL DEFAULT 'applied',
-      metadata_json TEXT NOT NULL DEFAULT '{}'
+      operation_result TEXT NOT NULL,
+      metadata_json TEXT NOT NULL
     );
     INSERT INTO roles (id, key, is_system) VALUES
       ('role_builtin_owner', 'owner', 1),
@@ -71,10 +71,10 @@ function insertPriorAudit(
       `INSERT INTO authorization_audit_events
         (id, occurred_at, request_id, principal_kind,
          actor_service_snapshot, action, resource_type, target_user_id_snapshot,
-         reason_code)
+          reason_code, operation_result, metadata_json)
        VALUES (?, 1, 'operator-cli:history', 'service',
-          'operator-cli', 'workspace.owner_bootstrapped', 'workspace', ?,
-          'operator_cli')`
+           'operator-cli', 'workspace.owner_bootstrapped', 'workspace', ?,
+           'operator_cli', 'applied', '{"legacy":true}')`
     )
     .run(id, targetUserId);
 }

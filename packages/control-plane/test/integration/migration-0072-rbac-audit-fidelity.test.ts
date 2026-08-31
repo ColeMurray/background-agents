@@ -30,27 +30,32 @@ afterEach(async () => {
 
 describe("migration 0072: RBAC audit fidelity", () => {
   it("adds result metadata and atomically audits default role assignments", async () => {
-    await env.DB.prepare("DROP TRIGGER assign_default_role_after_user_insert").run();
-    await env.DB.prepare("ALTER TABLE authorization_audit_events DROP COLUMN metadata_json").run();
-    await env.DB.prepare(
-      "ALTER TABLE authorization_audit_events DROP COLUMN operation_result"
-    ).run();
-    await env.DB.prepare(
-      `CREATE TRIGGER assign_default_role_after_user_insert
-       AFTER INSERT ON users
-       BEGIN
-         INSERT INTO user_role_assignments (user_id, role_id)
-         VALUES (NEW.id, 'role_builtin_member')
-         ON CONFLICT(user_id) DO NOTHING;
-       END`
-    ).run();
-    await env.DB.prepare(
-      `INSERT INTO authorization_audit_events
-        (id, occurred_at, request_id, principal_kind, actor_service_snapshot,
-         action, resource_type, reason_code)
-       VALUES ('legacy-audit', 1, 'legacy-request', 'service', 'control-plane',
-         'legacy.action', 'workspace', 'legacy')`
-    ).run();
+    await env.DB.batch([
+      env.DB.prepare("DROP TRIGGER assign_default_role_after_user_insert"),
+      env.DB.prepare("DROP TABLE authorization_audit_events"),
+      env.DB.prepare(
+        `CREATE TABLE authorization_audit_events (
+          id TEXT PRIMARY KEY,
+          occurred_at INTEGER NOT NULL,
+          request_id TEXT NOT NULL,
+          principal_kind TEXT NOT NULL,
+          actor_user_id_snapshot TEXT,
+          actor_service_snapshot TEXT,
+          action TEXT NOT NULL,
+          resource_type TEXT NOT NULL,
+          resource_id TEXT,
+          target_user_id_snapshot TEXT,
+          reason_code TEXT NOT NULL
+        )`
+      ),
+      env.DB.prepare(
+        `INSERT INTO authorization_audit_events
+          (id, occurred_at, request_id, principal_kind, actor_service_snapshot,
+           action, resource_type, reason_code)
+         VALUES ('legacy-audit', 1, 'legacy-request', 'service', 'control-plane',
+           'legacy.action', 'workspace', 'legacy')`
+      ),
+    ]);
 
     await env.DB.batch(migration().queries.map((query) => env.DB.prepare(query)));
 
@@ -73,7 +78,44 @@ describe("migration 0072: RBAC audit fidelity", () => {
       await env.DB.prepare(
         "SELECT operation_result, metadata_json FROM authorization_audit_events WHERE id = 'legacy-audit'"
       ).first()
-    ).toEqual({ operation_result: "applied", metadata_json: "{}" });
+    ).toEqual({ operation_result: "applied", metadata_json: '{"legacy":true}' });
+
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO authorization_audit_events
+          (id, occurred_at, request_id, principal_kind, action, resource_type,
+           reason_code, operation_result, metadata_json)
+         VALUES ('invalid-result', 1, 'invalid-result', 'service', 'invalid', 'workspace',
+           'invalid', 'denied', '{"legacy":true}')`
+      ).run()
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO authorization_audit_events
+          (id, occurred_at, request_id, principal_kind, action, resource_type,
+           reason_code, operation_result, metadata_json)
+         VALUES ('empty-metadata', 1, 'empty-metadata', 'service', 'invalid', 'workspace',
+           'invalid', 'applied', '{}')`
+      ).run()
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO authorization_audit_events
+          (id, occurred_at, request_id, principal_kind, action, resource_type,
+           reason_code, operation_result, metadata_json)
+         VALUES ('invalid-metadata', 1, 'invalid-metadata', 'service', 'invalid', 'workspace',
+           'invalid', 'applied', 'true')`
+      ).run()
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO authorization_audit_events
+          (id, occurred_at, request_id, principal_kind, action, resource_type,
+           reason_code, operation_result)
+         VALUES ('missing-metadata', 1, 'missing-metadata', 'service', 'invalid', 'workspace',
+           'invalid', 'applied')`
+      ).run()
+    ).rejects.toThrow();
 
     await env.DB.prepare(
       `INSERT INTO users
