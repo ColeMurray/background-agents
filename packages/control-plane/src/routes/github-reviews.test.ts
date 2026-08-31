@@ -15,7 +15,6 @@ import type { SessionRouteContext } from "./session-route";
 import { parsePattern, type RequestContext } from "./shared";
 
 const GITHUB_BOT_PRINCIPAL: Principal = { kind: "service", service: "github-bot", actor: null };
-const OTHER_SERVICE_PRINCIPAL: Principal = { kind: "service", service: "slack-bot", actor: null };
 
 function routeMatch(path: string, pattern: string): RegExpMatchArray {
   const match = path.match(parsePattern(pattern));
@@ -136,43 +135,20 @@ function sweepContext(
 }
 
 describe("auth gating", () => {
-  afterEach(() => vi.restoreAllMocks());
+  it.each(["/internal/github-reviews/claim", "/internal/github-reviews/sweep"])(
+    "declares %s as github-bot-only service authorization",
+    (path) => {
+      const route = githubReviewRoutes.find((candidate) => candidate.pattern.test(path));
+      if (!route) throw new Error(`No route registered for ${path}`);
 
-  it.each([
-    ["/internal/github-reviews/claim", { repoId: 1, prNumber: 2 }],
-    ["/internal/github-reviews/sweep", { repoId: 1, prNumber: 2, generation: 3 }],
-  ])("rejects %s from a non-github-bot principal", async (path, body) => {
-    const route = githubReviewRoutes.find((r) => r.pattern.test(path));
-    if (!route) throw new Error(`No route registered for ${path}`);
-    const { db } = createFakeDb();
-
-    const response = await route.handler(
-      jsonRequest(`https://test.local${path}`, body),
-      {} as Env,
-      routeMatch(path, path),
-      requestContext(db, OTHER_SERVICE_PRINCIPAL)
-    );
-
-    expect(response.status).toBe(401);
-  });
-
-  it.each([
-    ["/internal/github-reviews/claim", { repoId: 1, prNumber: 2 }],
-    ["/internal/github-reviews/sweep", { repoId: 1, prNumber: 2, generation: 3 }],
-  ])("rejects %s from an unauthenticated request", async (path, body) => {
-    const route = githubReviewRoutes.find((r) => r.pattern.test(path));
-    if (!route) throw new Error(`No route registered for ${path}`);
-    const { db } = createFakeDb();
-
-    const response = await route.handler(
-      jsonRequest(`https://test.local${path}`, body),
-      {} as Env,
-      routeMatch(path, path),
-      requestContext(db, undefined)
-    );
-
-    expect(response.status).toBe(401);
-  });
+      expect(route.authentication).toEqual({ kind: "service" });
+      expect(route.authorization).toEqual({
+        kind: "service",
+        services: ["github-bot"],
+        actor: "optional",
+      });
+    }
+  );
 });
 
 describe("handleClaimReviewGeneration", () => {

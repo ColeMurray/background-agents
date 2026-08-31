@@ -40,22 +40,6 @@ const GITHUB_REVIEW_SANDBOX_ROUTE = {
   supportedScmProviders: ["github"],
 } as const satisfies RoutePolicy;
 
-/**
- * Route guard mirroring requireWebService (routes/browser-auth.ts): rejects
- * every caller except the verified github-bot service principal before the
- * wrapped handler runs.
- */
-function requireGitHubBotService<Ctx extends RequestContext>(
-  handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Ctx) => Promise<Response>
-): (request: Request, env: Env, match: RegExpMatchArray, ctx: Ctx) => Promise<Response> {
-  return async (request, env, match, ctx) => {
-    if (ctx.principal?.kind !== "service" || ctx.principal.service !== "github-bot") {
-      return error("Unauthorized", 401);
-    }
-    return handler(request, env, match, ctx);
-  };
-}
-
 const claimRequestSchema = z.object({
   repoId: z.number().int().positive(),
   prNumber: z.number().int().positive(),
@@ -411,7 +395,7 @@ export const githubReviewRoutes: Route[] = [
     method: "POST",
     pattern: parsePattern("/internal/github-reviews/claim"),
     authorization: serviceAuthorized("github-bot"),
-    handler: requireGitHubBotService(handleClaimReviewGeneration),
+    handler: handleClaimReviewGeneration,
   }),
   defineRoute(
     GITHUB_SERVICE_ROUTE,
@@ -419,7 +403,7 @@ export const githubReviewRoutes: Route[] = [
       method: "POST",
       pattern: parsePattern("/internal/github-reviews/sweep"),
       authorization: serviceAuthorized("github-bot"),
-      handler: requireGitHubBotService(handleSweepStaleReviews),
+      handler: handleSweepStaleReviews,
     })
   ),
   ...defineRoutes(GITHUB_REVIEW_SANDBOX_ROUTE, [
