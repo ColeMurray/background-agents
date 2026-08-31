@@ -11,9 +11,8 @@
  *
  * Dry-run is the default — it prints exact per-table counts and writes
  * nothing. Pass --execute to apply. The merge is idempotent: re-running a
- * completed merge is a zero-count no-op, so a partially-applied run (the
- * wrangler transport executes statements sequentially, not atomically) is
- * repaired by running the script again.
+ * completed merge is a zero-count no-op. Execute mode submits the complete
+ * graph mutation as one atomic D1 SQL file.
  *
  * Usage:
  *   node --experimental-transform-types scripts/merge-split-users.ts \
@@ -26,6 +25,9 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   SqlDatabase,
   SqlResult,
@@ -109,17 +111,20 @@ class WranglerD1Database implements SqlDatabase {
     return statement;
   }
 
-  // Deviation from the SqlDatabase.batch contract: all statements go to D1
-  // in one wrangler submission, but cross-statement atomicity is not
-  // guaranteed by this transport (scripts/d1-migrate.sh documents D1
-  // multi-statement submissions as atomic; we deliberately do not rely on
-  // it). The merge tolerates this for every statement except the final email
-  // backfill, whose input row is deleted earlier in the batch: re-running
-  // repairs any other partial application, and the CLI prints a recovery
-  // record before executing to cover that one residual case.
+  // D1 executes one --file submission atomically. Keep this adapter aligned
+  // with SqlDatabase.batch rather than emulating a batch through independent
+  // or non-transactional command calls.
   async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
+    if (statements.length === 0) return [];
     const rendered = statements.map((entry) => (entry as { render(): string }).render());
-    return this.execute(rendered).map((result) => toSqlResult<T>(result));
+    const directory = mkdtempSync(join(tmpdir(), "open-inspect-user-merge-"));
+    const sqlPath = join(directory, "merge.sql");
+    try {
+      writeFileSync(sqlPath, `${rendered.join(";\n")};\n`, { encoding: "utf8", mode: 0o600 });
+      return this.executeOperation(["--file", sqlPath]).map((result) => toSqlResult<T>(result));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   }
 
   private execute(statements: string[]): WranglerQueryResult[] {
@@ -127,6 +132,10 @@ class WranglerD1Database implements SqlDatabase {
     if (this.verbose) {
       for (const statement of statements) console.error(`[sql] ${statement}`);
     }
+    return this.executeOperation(["--command", statements.join(";\n")]);
+  }
+
+  private executeOperation(operation: string[]): WranglerQueryResult[] {
     const args = [
       "wrangler",
       "d1",
@@ -134,8 +143,7 @@ class WranglerD1Database implements SqlDatabase {
       this.databaseName,
       this.remote ? "--remote" : "--local",
       "--json",
-      "--command",
-      statements.join(";\n"),
+      ...operation,
     ];
     const child = spawnSync("npx", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     if (child.status !== 0) {
@@ -210,25 +218,6 @@ function parseArgs(argv: string[]): CliOptions {
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const db = new WranglerD1Database(options.database, !options.local, options.verbose);
-
-  if (options.execute) {
-    // Durable recovery record: the final email backfill is the one statement
-    // a re-run cannot repair, because its input (the loser row) is deleted by
-    // the statement before it. Everything needed to restore that step by hand
-    // is printed here, before anything executes.
-    const loserRecord = await db
-      .prepare(`SELECT id, email, email_verified FROM users WHERE id = ?`)
-      .bind(options.loserId)
-      .first<{ id: string; email: string | null; email_verified: number }>();
-    console.error(`Recovery record (loser row): ${JSON.stringify(loserRecord)}`);
-    console.error(
-      "Retain this until the merge is verified. If a run fails partway, re-run it — " +
-        "that repairs every step except the final email backfill. If the survivor is " +
-        "left without the loser's email, restore it manually:\n" +
-        `  UPDATE users SET email = <email>, email_verified = <email_verified> ` +
-        `WHERE id = '${options.survivorId}' AND email IS NULL;\n`
-    );
-  }
 
   const result = await mergeUsers(db, {
     survivorId: options.survivorId,
