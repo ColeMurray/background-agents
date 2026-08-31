@@ -6,6 +6,9 @@ import type { SqlDatabase, SqlStatement } from "./db/sql-database";
 import { handleRequest, routes } from "./router";
 import {
   json,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
+  permissionRequirement,
+  requireAll,
   requireAutomation,
   requirePermission,
   serviceAuthorized,
@@ -85,6 +88,24 @@ const TEST_ROUTES: Route[] = [
     authorization: serviceAuthorized("github-bot", "required"),
     handler: async () => json({ handled: true }),
   },
+  {
+    authentication: { kind: "user-or-service" },
+    supportedScmProviders: "all",
+    method: "POST",
+    pattern: /^\/audit-test\/multi$/,
+    authorization: requireAll(
+      permissionRequirement("analytics.read"),
+      permissionRequirement("workspace.members.manage")
+    ),
+    handler: async () => json({ handled: true }),
+  },
+  {
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
+    method: "POST",
+    pattern: /^\/audit-test\/sessions\/(?<id>[^/]+)\/upload$/,
+    authorization: requirePermission("sessions.collaborate"),
+    handler: async () => json({ handled: true }, 201),
+  },
 ];
 
 interface AuditWrite {
@@ -152,7 +173,17 @@ function createEnv(options?: {
     },
     batch: async () => [],
   };
-  return { env: { DB: db, SCM_PROVIDER: "github" } as never, auditWrites };
+  return {
+    env: {
+      DB: db,
+      SCM_PROVIDER: "github",
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => ({ fetch: async () => new Response(null, { status: 204 }) }),
+      },
+    } as never,
+    auditWrites,
+  };
 }
 
 function authenticateAs(principal: Principal): void {
@@ -348,6 +379,60 @@ describe("router authorization decision auditing", () => {
         effectivePermissions: ["automations.manage.any"],
       },
     });
+  });
+
+  it("preserves every evaluated permission when a later requirement is denied", async () => {
+    authenticateAs({ kind: "user", userId: "user-1" });
+    const denied = createEnv({ roleKey: "viewer" });
+    const response = await handleRequest(
+      new Request("https://test.local/audit-test/multi", { method: "POST" }),
+      denied.env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(403);
+    expect(auditRecord(denied.auditWrites[0])).toMatchObject({
+      reasonCode: "permission_required",
+      metadata: {
+        requirements: [
+          { kind: "active-user" },
+          { kind: "permission", permission: "analytics.read" },
+          { kind: "permission", permission: "workspace.members.manage" },
+        ],
+        effectivePermissions: ["analytics.read"],
+        requiredPermission: "workspace.members.manage",
+      },
+    });
+  });
+
+  it("records sandbox fallback admission without the bypassed route permission", async () => {
+    mocks.authenticate.mockResolvedValue({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "none",
+    });
+    const sandbox = createEnv();
+    const response = await handleRequest(
+      new Request("https://test.local/audit-test/sessions/session-1/upload", {
+        method: "POST",
+        headers: { Authorization: "Bearer sandbox-token" },
+      }),
+      sandbox.env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(201);
+    expect(auditRecord(sandbox.auditWrites[0])).toMatchObject({
+      principalKind: "sandbox",
+      action: "authorization.request_allowed",
+      metadata: {
+        admission: "sandbox",
+        requirements: [{ kind: "sandbox-admission", sessionId: "session-1" }],
+        sessionId: "session-1",
+      },
+    });
+    expect(auditRecord(sandbox.auditWrites[0]).metadata).not.toHaveProperty("effectivePermissions");
+    expect(auditRecord(sandbox.auditWrites[0]).metadata).not.toHaveProperty("requiredPermission");
   });
 
   it("preserves allowed and denied responses when audit persistence fails", async () => {

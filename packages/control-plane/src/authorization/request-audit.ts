@@ -1,5 +1,5 @@
-import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
-import type { Route, RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
+import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
 import { createLogger } from "../logger";
 
 const logger = createLogger("authorization-audit");
@@ -8,84 +8,47 @@ export type AuthorizationDecisionRequirement =
   | RouteAuthorizationRequirement
   | { kind: "active-user" }
   | { kind: "principal-type" }
-  | { kind: "service-capability" };
+  | { kind: "service-capability" }
+  | { kind: "sandbox-admission"; sessionId: string };
 
-function routeRequirements(route: Route): AuthorizationDecisionRequirement[] {
-  if (route.authorization.kind === "active-user") return [...route.authorization.allOf];
-  if (route.authorization.kind === "active-self" || route.authorization.kind === "active-global") {
-    return [{ kind: "active-user" }];
-  }
-  if (route.authorization.kind === "service") return [{ kind: "service-capability" }];
-  return [];
+interface AuthorizationDecisionEvidence {
+  requirements: AuthorizationDecisionRequirement[];
+  effectivePermissions: PermissionId[];
 }
 
-export function shouldAuditAllowedRoute(route: Route, method: string): boolean {
-  if (method !== "GET") {
-    return (
-      route.authorization.kind === "active-user" ||
-      route.authorization.kind === "active-self" ||
-      route.authorization.kind === "active-global" ||
-      route.authorization.kind === "service"
-    );
-  }
-  if (route.authorization.kind !== "active-user") return false;
-  return route.authorization.allOf.some((requirement) => {
-    if (requirement.kind === "permission") {
-      return (
-        requirement.permission.endsWith(".manage") ||
-        requirement.permission === "skill_profiles.manage_own" ||
-        requirement.permission === "sessions.sandbox_access"
-      );
-    }
-    return (
-      (requirement.kind === "scoped-permission" && requirement.stem.endsWith(".manage")) ||
-      (requirement.kind === "automation" && requirement.operation === "manage")
-    );
-  });
+export type RouteAuthorizationDecision =
+  | (AuthorizationDecisionEvidence & {
+      kind: "allowed";
+      admission: "user" | "service" | "sandbox";
+      auditAllowed: boolean;
+    })
+  | (AuthorizationDecisionEvidence & {
+      kind: "denied";
+      reasonCode: string;
+      reason: string;
+      failedPermission?: PermissionId;
+    });
+
+export function shouldAuditAllowedDecision(
+  decision: Extract<RouteAuthorizationDecision, { kind: "allowed" }>
+): boolean {
+  return decision.auditAllowed;
 }
 
 export async function auditRouteAuthorizationDecision(input: {
   ctx: RequestContext;
-  route: Route;
   method: string;
   path: string;
   response: Response;
-  allowed: boolean;
-  requirement?: AuthorizationDecisionRequirement;
+  decision: RouteAuthorizationDecision;
 }): Promise<void> {
   const principal = input.ctx.principal;
-  if (!principal || (!input.allowed && input.response.status !== 403)) return;
+  if (!principal) return;
 
-  let responseBody: { code?: unknown; error?: unknown; permission?: unknown } = {};
-  if (!input.allowed) {
-    try {
-      responseBody = (await input.response.clone().json()) as typeof responseBody;
-    } catch {
-      // Denials without JSON bodies still carry their status in the audit metadata.
-    }
-  }
-  const responseCode = typeof responseBody.code === "string" ? responseBody.code : null;
-  const responseReason = typeof responseBody.error === "string" ? responseBody.error : null;
-  const requirements = input.requirement ? [input.requirement] : routeRequirements(input.route);
-  const permissionRequirement = requirements.find(
-    (requirement) =>
-      requirement.kind === "permission" ||
-      requirement.kind === "scoped-permission" ||
-      requirement.kind === "automation"
-  );
-  const effectivePermissions = input.ctx.authorizedPermissions ?? [];
+  const decision = input.decision;
+  const allowed = decision.kind === "allowed";
   const requiredPermission =
-    typeof responseBody.permission === "string"
-      ? responseBody.permission
-      : effectivePermissions[0]
-        ? effectivePermissions[0]
-        : permissionRequirement?.kind === "permission"
-          ? permissionRequirement.permission
-          : permissionRequirement?.kind === "scoped-permission"
-            ? SCOPED_PERMISSION_PAIRS[permissionRequirement.stem].own
-            : permissionRequirement?.kind === "automation"
-              ? SCOPED_PERMISSION_PAIRS[`automations.${permissionRequirement.operation}`].own
-              : undefined;
+    decision.kind === "allowed" ? decision.effectivePermissions[0] : decision.failedPermission;
   const actorUserId =
     principal.kind === "user"
       ? principal.userId
@@ -97,13 +60,16 @@ export async function auditRouteAuthorizationDecision(input: {
     httpMethod: input.method,
     httpPath: input.path,
     httpStatus: input.response.status,
-    requirements,
-    ...(effectivePermissions.length > 0 ? { effectivePermissions } : {}),
+    requirements: decision.requirements,
+    ...(decision.effectivePermissions.length > 0
+      ? { effectivePermissions: decision.effectivePermissions }
+      : {}),
     ...(requiredPermission ? { requiredPermission } : {}),
-    responseCode,
-    responseReason,
+    responseCode: decision.kind === "denied" ? decision.reasonCode : null,
+    responseReason: decision.kind === "denied" ? decision.reason : null,
     requestId: input.ctx.request_id,
     traceId: input.ctx.trace_id,
+    ...(decision.kind === "allowed" ? { admission: decision.admission } : {}),
     ...(principal.kind === "service" && principal.actor
       ? {
           actor: {
@@ -132,17 +98,17 @@ export async function auditRouteAuthorizationDecision(input: {
         principal.kind,
         actorUserId ?? null,
         principal.kind === "service" ? principal.service : null,
-        input.allowed ? "authorization.request_allowed" : "authorization.request_denied",
+        allowed ? "authorization.request_allowed" : "authorization.request_denied",
         input.path,
-        input.allowed ? "authorization_allowed" : (responseCode ?? "authorization_denied"),
-        input.allowed ? "applied" : "denied",
+        decision.kind === "allowed" ? "authorization_allowed" : decision.reasonCode,
+        allowed ? "applied" : "denied",
         JSON.stringify(metadata)
       )
       .run();
   } catch (cause) {
     logger.error("Authorization audit write failed", {
       event: "authorization.audit_failed",
-      action: input.allowed ? "authorization.request_allowed" : "authorization.request_denied",
+      action: allowed ? "authorization.request_allowed" : "authorization.request_denied",
       error: cause instanceof Error ? cause : String(cause),
       request_id: input.ctx.request_id,
       trace_id: input.ctx.trace_id,

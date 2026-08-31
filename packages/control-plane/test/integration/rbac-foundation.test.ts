@@ -216,7 +216,7 @@ describe("RBAC foundation migration", () => {
     });
   });
 
-  it("audits identical role and status requests without touching state or sessions", async () => {
+  it("returns audit-insert outcomes for no-op mutations without touching state or sessions", async () => {
     await insertCanonicalUser({ id: ACTOR_ID, email: "owner@example.com" });
     await insertCanonicalUser({ id: TARGET_ID, email: "member@example.com" });
     await env.DB.batch([
@@ -259,7 +259,7 @@ describe("RBAC foundation migration", () => {
       await env.DB.prepare("SELECT id FROM auth_sessions WHERE id = 'target-session'").first()
     ).toEqual({ id: "target-session" });
     const audits = await env.DB.prepare(
-      `SELECT request_id, operation_result, metadata_json
+      `SELECT request_id, reason_code, operation_result, metadata_json
        FROM authorization_audit_events
        WHERE request_id IN ('same-role', 'same-status') ORDER BY request_id`
     ).all<{ request_id: string; operation_result: string; metadata_json: string }>();
@@ -271,6 +271,7 @@ describe("RBAC foundation migration", () => {
     ).toEqual([
       {
         request_id: "same-role",
+        reason_code: "member_role_unchanged",
         operation_result: "no_op",
         metadata_json: {
           before: { roleId: BUILT_IN_ROLE_REGISTRY.member.id },
@@ -280,6 +281,7 @@ describe("RBAC foundation migration", () => {
       },
       {
         request_id: "same-status",
+        reason_code: "member_status_unchanged",
         operation_result: "no_op",
         metadata_json: {
           before: { suspended: true, suspendedAt: 150 },

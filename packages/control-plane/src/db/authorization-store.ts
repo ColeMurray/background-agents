@@ -286,7 +286,6 @@ export class AuthorizationStore {
       stateChanged
     );
     const results = await this.db.batch([
-      mutation.outcome,
       this.auditStatement(
         {
           requestId: input.requestId,
@@ -396,7 +395,6 @@ export class AuthorizationStore {
       stateChanged
     );
     const statements: SqlStatement[] = [
-      mutation.outcome,
       this.auditStatement(
         {
           requestId: input.requestId,
@@ -482,7 +480,6 @@ export class AuthorizationStore {
     },
     stateChanged: SqlCondition
   ): {
-    outcome: SqlStatement;
     outcomeExpression: SqlCondition;
     writes: SqlCondition;
     auditId: string;
@@ -524,9 +521,6 @@ export class AuthorizationStore {
       ],
     };
     return {
-      outcome: this.db
-        .prepare(`SELECT ${outcomeExpression.sql} AS status`)
-        .bind(...outcomeExpression.values),
       outcomeExpression,
       writes: {
         sql: `EXISTS (
@@ -579,7 +573,15 @@ export class AuthorizationStore {
               ELSE 'rejected'
             END,
             ${metadata.sql}
-          FROM decision`
+           FROM decision
+           RETURNING CASE reason_code
+             WHEN ? THEN 'applied'
+             WHEN ? THEN 'no_op'
+             WHEN 'actor_authorization_changed' THEN 'actor_authorization_changed'
+             WHEN 'role_not_found' THEN 'role_not_found'
+             WHEN 'member_not_found' THEN 'member_not_found'
+             ELSE 'conflict'
+           END AS status`
       )
       .bind(
         ...outcome.values,
@@ -593,7 +595,9 @@ export class AuthorizationStore {
         input.targetUserId ?? null,
         input.reasonCode,
         input.noOpReasonCode,
-        ...metadata.values
+        ...metadata.values,
+        input.reasonCode,
+        input.noOpReasonCode
       );
   }
 }

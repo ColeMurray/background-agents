@@ -3,6 +3,7 @@ import { KeyboardShortcutPreferencesStore } from "../db/keyboard-shortcut-prefer
 import type { Env } from "../types";
 import {
   ACTIVE_SELF,
+  activeSelf,
   defineRoutes,
   error,
   json,
@@ -53,7 +54,7 @@ export const keyboardShortcutRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_U
   {
     method: "PUT",
     pattern: parsePattern("/keyboard-shortcuts"),
-    authorization: ACTIVE_SELF,
+    authorization: activeSelf({ auditAllowed: true }),
     handler: updatePreferences,
   },
 ]);

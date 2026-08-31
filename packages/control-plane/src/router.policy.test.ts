@@ -137,6 +137,11 @@ describe("route policy table", () => {
   it("keeps contextual route requirements explicit", () => {
     expect(routeFor("GET", "/keyboard-shortcuts")?.authorization).toEqual({
       kind: "active-self",
+      auditAllowed: false,
+    });
+    expect(routeFor("PUT", "/keyboard-shortcuts")?.authorization).toEqual({
+      kind: "active-self",
+      auditAllowed: true,
     });
     expect(routeFor("GET", "/model-preferences")?.authorization).toMatchObject({
       kind: "active-global",
@@ -479,6 +484,6 @@ describe("route principal policy", () => {
     ],
     [{ kind: "service" } as const, { kind: "user", userId: "user-1" } as const, 403],
   ])("rejects mismatched principals for %o", (authentication, principal, status) => {
-    expect(enforceRoutePrincipal(authentication, principal)?.status).toBe(status);
+    expect(enforceRoutePrincipal(authentication, principal)?.response.status).toBe(status);
   });
 });

@@ -21,9 +21,15 @@ import { AuthorizationError, AuthorizationService } from "./authorization/servic
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import {
   auditRouteAuthorizationDecision,
-  shouldAuditAllowedRoute,
+  shouldAuditAllowedDecision,
+  type AuthorizationDecisionRequirement,
+  type RouteAuthorizationDecision,
 } from "./authorization/request-audit";
-import { SCOPED_PERMISSION_PAIRS, resolveScopedPermission } from "@open-inspect/shared/rbac";
+import {
+  SCOPED_PERMISSION_PAIRS,
+  resolveScopedPermission,
+  type PermissionId,
+} from "@open-inspect/shared/rbac";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
@@ -293,26 +299,90 @@ function logRequest(
   });
 }
 
+type AllowedAuthorizationDecision = Extract<RouteAuthorizationDecision, { kind: "allowed" }>;
+type DeniedAuthorizationDecision = Extract<RouteAuthorizationDecision, { kind: "denied" }>;
+
+interface AuthorizationFailure {
+  response: Response;
+  decision?: DeniedAuthorizationDecision;
+}
+
+type RouteAuthorizationResult =
+  | { kind: "allowed"; decision: AllowedAuthorizationDecision }
+  | { kind: "denied"; response: Response; decision: DeniedAuthorizationDecision }
+  | { kind: "error"; response: Response };
+
+interface AuthorizationEvidence {
+  requirements: AuthorizationDecisionRequirement[];
+  effectivePermissions: PermissionId[];
+}
+
+function authorizationDenial(
+  response: Response,
+  evidence: AuthorizationEvidence,
+  failedRequirement: AuthorizationDecisionRequirement,
+  reasonCode: string,
+  reason: string,
+  failedPermission?: PermissionId
+): AuthorizationFailure {
+  return {
+    response,
+    decision: {
+      kind: "denied",
+      ...evidence,
+      requirements: [...evidence.requirements, failedRequirement],
+      reasonCode,
+      reason,
+      ...(failedPermission ? { failedPermission } : {}),
+    },
+  };
+}
+
+function resultForFailure(
+  failure: AuthorizationFailure
+): Exclude<RouteAuthorizationResult, { kind: "allowed" }> {
+  return failure.decision
+    ? { kind: "denied", response: failure.response, decision: failure.decision }
+    : { kind: "error", response: failure.response };
+}
+
 export function enforceRoutePrincipal(
   authentication: RouteAuthentication,
-  principal: Principal
-): Response | null {
+  principal: Principal,
+  evidence: AuthorizationEvidence = { requirements: [], effectivePermissions: [] }
+): AuthorizationFailure | null {
   if (
     authentication.kind === "web-service" &&
     (principal.kind !== "service" || principal.service !== "web")
   ) {
-    return error("Unauthorized", 401);
+    return { response: error("Unauthorized", 401) };
   }
   if (authentication.kind === "user" && principal.kind !== "user") {
-    return error("Human user authentication required", 403);
+    return authorizationDenial(
+      error("Human user authentication required", 403),
+      evidence,
+      { kind: "principal-type" },
+      "principal_type_required",
+      "Human user authentication required"
+    );
   }
   if (authentication.kind === "service" && principal.kind !== "service") {
-    return error("Service authentication required", 403);
+    return authorizationDenial(
+      error("Service authentication required", 403),
+      evidence,
+      { kind: "principal-type" },
+      "principal_type_required",
+      "Service authentication required"
+    );
   }
   return null;
 }
 
-async function enforceActiveUser(route: Route, ctx: RequestContext): Promise<Response | null> {
+async function enforceActiveUser(
+  route: Route,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
   if (
     route.authorization.kind !== "active-user" &&
     route.authorization.kind !== "active-self" &&
@@ -333,7 +403,12 @@ async function enforceActiveUser(route: Route, ctx: RequestContext): Promise<Res
       });
       resolvedServiceUserId = user.id;
     } catch {
-      return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+      return {
+        response: json(
+          { error: "Authorization unavailable", code: "authorization_unavailable" },
+          503
+        ),
+      };
     }
   }
   const userId =
@@ -343,18 +418,38 @@ async function enforceActiveUser(route: Route, ctx: RequestContext): Promise<Res
         ? (ctx.principal.actor?.canonicalUserId ?? resolvedServiceUserId)
         : null;
   if (!userId) return null;
+  const requirement = { kind: "active-user" } as const;
   try {
     const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
     ctx.authorization = authorization;
     if (authorization.suspendedAt !== null) {
-      return json({ error: "Forbidden", code: "active_user_required" }, 403);
+      return authorizationDenial(
+        json({ error: "Forbidden", code: "active_user_required" }, 403),
+        evidence,
+        requirement,
+        "active_user_required",
+        "Forbidden"
+      );
     }
+    evidence.requirements.push(requirement);
     return null;
   } catch (cause) {
     if (cause instanceof AuthorizationError) {
-      return json({ error: "Forbidden", code: cause.code }, cause.status);
+      return authorizationDenial(
+        json({ error: "Forbidden", code: cause.code }, cause.status),
+        evidence,
+        requirement,
+        cause.code,
+        "Forbidden",
+        cause.permission
+      );
     }
-    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+    return {
+      response: json(
+        { error: "Authorization unavailable", code: "authorization_unavailable" },
+        503
+      ),
+    };
   }
 }
 
@@ -386,20 +481,41 @@ function actorlessGrantMatches(
 function enforceServiceRouteAuthorization(
   route: Route,
   match: RegExpMatchArray,
-  ctx: RequestContext
-): Response | null {
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): AuthorizationFailure | null {
   const principal = ctx.principal;
   const authorization = route.authorization;
+  const requirement = { kind: "service-capability" } as const;
   if (authorization.kind === "service") {
     if (principal?.kind !== "service") {
-      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+      return authorizationDenial(
+        json({ error: "Forbidden", code: "service_capability_required" }, 403),
+        evidence,
+        requirement,
+        "service_capability_required",
+        "Forbidden"
+      );
     }
     if (!authorization.services.some((service) => service === principal.service)) {
-      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+      return authorizationDenial(
+        json({ error: "Forbidden", code: "service_capability_required" }, 403),
+        evidence,
+        requirement,
+        "service_capability_required",
+        "Forbidden"
+      );
     }
     if (authorization.actor === "required" && !principal.actor) {
-      return json({ error: "Forbidden", code: "service_actor_required" }, 403);
+      return authorizationDenial(
+        json({ error: "Forbidden", code: "service_actor_required" }, 403),
+        evidence,
+        requirement,
+        "service_actor_required",
+        "Forbidden"
+      );
     }
+    evidence.requirements.push(requirement);
     return null;
   }
   if (principal?.kind !== "service") return null;
@@ -408,73 +524,133 @@ function enforceServiceRouteAuthorization(
     (authorization.kind !== "active-user" && authorization.kind !== "active-global") ||
     authorization.service.kind === "deny"
   ) {
-    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    return authorizationDenial(
+      json({ error: "Forbidden", code: "service_capability_required" }, 403),
+      evidence,
+      requirement,
+      "service_capability_required",
+      "Forbidden"
+    );
   }
-  if (principal.actor) return null;
+  if (principal.actor) {
+    evidence.requirements.push(requirement);
+    return null;
+  }
   const granted = authorization.service.actorlessGrants?.some((grant) =>
     actorlessGrantMatches(grant, principal.service, match)
   );
-  return granted ? null : json({ error: "Forbidden", code: "service_actor_required" }, 403);
+  if (granted) {
+    evidence.requirements.push(requirement);
+    return null;
+  }
+  return authorizationDenial(
+    json({ error: "Forbidden", code: "service_actor_required" }, 403),
+    evidence,
+    requirement,
+    "service_actor_required",
+    "Forbidden"
+  );
 }
 
 async function enforcePermissionRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "permission" }>,
-  ctx: RequestContext
-): Promise<Response | null> {
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
   if (
     ctx.principal?.kind === "service" &&
     !serviceAllowsPermission(ctx.principal.service, requirement.permission)
   ) {
-    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    return authorizationDenial(
+      json({ error: "Forbidden", code: "service_capability_required" }, 403),
+      evidence,
+      requirement,
+      "service_capability_required",
+      "Forbidden",
+      requirement.permission
+    );
   }
   const userId = authorizationUserId(ctx);
-  if (!userId) return null;
-  if (ctx.authorization?.permissions.includes(requirement.permission)) {
-    (ctx.authorizedPermissions ??= []).push(requirement.permission);
+  if (!userId) {
+    evidence.requirements.push(requirement);
+    evidence.effectivePermissions.push(requirement.permission);
     return null;
   }
-  return json(
-    { error: "Forbidden", code: "permission_required", permission: requirement.permission },
-    403
+  if (ctx.authorization?.permissions.includes(requirement.permission)) {
+    evidence.requirements.push(requirement);
+    evidence.effectivePermissions.push(requirement.permission);
+    return null;
+  }
+  return authorizationDenial(
+    json(
+      { error: "Forbidden", code: "permission_required", permission: requirement.permission },
+      403
+    ),
+    evidence,
+    requirement,
+    "permission_required",
+    "Forbidden",
+    requirement.permission
   );
 }
 
 async function enforceScopedPermissionRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "scoped-permission" }>,
-  ctx: RequestContext
-): Promise<Response | null> {
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
   const pair = SCOPED_PERMISSION_PAIRS[requirement.stem];
   if (
     ctx.principal?.kind === "service" &&
     !serviceAllowsPermission(ctx.principal.service, pair.own)
   ) {
-    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    return authorizationDenial(
+      json({ error: "Forbidden", code: "service_capability_required" }, 403),
+      evidence,
+      requirement,
+      "service_capability_required",
+      "Forbidden",
+      pair.own
+    );
   }
   const userId = authorizationUserId(ctx);
-  if (!userId) return null;
+  if (!userId) {
+    evidence.requirements.push(requirement);
+    evidence.effectivePermissions.push(pair.own);
+    return null;
+  }
   const scope = ctx.authorization
     ? resolveScopedPermission(requirement.stem, ctx.authorization.permissions)
     : null;
   if (scope) {
-    (ctx.authorizedPermissions ??= []).push(pair[scope]);
+    evidence.requirements.push(requirement);
+    evidence.effectivePermissions.push(pair[scope]);
     return null;
   }
-  return json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403);
+  return authorizationDenial(
+    json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403),
+    evidence,
+    requirement,
+    "permission_required",
+    "Forbidden",
+    pair.own
+  );
 }
 
 async function enforceAutomationRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
   match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response | null> {
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
   if (ctx.principal?.kind !== "user") return null;
   const encodedAutomationId = match.groups?.[requirement.automationIdParam];
-  if (!encodedAutomationId) return json({ error: "Invalid automation route" }, 400);
+  if (!encodedAutomationId) return { response: json({ error: "Invalid automation route" }, 400) };
   let automationId: string;
   try {
     automationId = decodeURIComponent(encodedAutomationId);
   } catch {
-    return json({ error: "Invalid automation route" }, 400);
+    return { response: json({ error: "Invalid automation route" }, 400) };
   }
 
   try {
@@ -482,7 +658,7 @@ async function enforceAutomationRequirement(
     if (!authorization) throw new Error("Missing request authorization");
     const store = new AutomationStore(ctx.db);
     const storedAutomation = await store.getById(automationId);
-    if (!storedAutomation) return error("Automation not found", 404);
+    if (!storedAutomation) return { response: error("Automation not found", 404) };
     const automation = await store.resolveCanonicalOwner(storedAutomation);
 
     const permissionStem = `automations.${requirement.operation}` as const;
@@ -490,21 +666,34 @@ async function enforceAutomationRequirement(
     const isOwner = automation.user_id === ctx.principal.userId;
     const scope = resolveScopedPermission(permissionStem, authorization.permissions);
     if (!scope || (scope === "own" && !isOwner)) {
-      return json(
-        {
-          error: "Forbidden",
-          code: "permission_required",
-          permission: pair.own,
-        },
-        403
+      return authorizationDenial(
+        json(
+          {
+            error: "Forbidden",
+            code: "permission_required",
+            permission: pair.own,
+          },
+          403
+        ),
+        evidence,
+        requirement,
+        "permission_required",
+        "Forbidden",
+        pair.own
       );
     }
 
-    (ctx.authorizedPermissions ??= []).push(pair[scope]);
+    evidence.requirements.push(requirement);
+    evidence.effectivePermissions.push(pair[scope]);
     ctx.automationAdmission = { automation };
     return null;
   } catch {
-    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+    return {
+      response: json(
+        { error: "Authorization unavailable", code: "authorization_unavailable" },
+        503
+      ),
+    };
   }
 }
 
@@ -512,24 +701,77 @@ async function enforceRouteAuthorization(
   route: Route,
   match: RegExpMatchArray,
   ctx: RequestContext
-): Promise<Response | null> {
-  if (route.authorization.kind !== "active-user") return null;
-  for (const requirement of route.authorization.allOf) {
-    let authorizationError: Response | null;
-    switch (requirement.kind) {
-      case "permission":
-        authorizationError = await enforcePermissionRequirement(requirement, ctx);
-        break;
-      case "scoped-permission":
-        authorizationError = await enforceScopedPermissionRequirement(requirement, ctx);
-        break;
-      case "automation":
-        authorizationError = await enforceAutomationRequirement(requirement, match, ctx);
-        break;
-    }
-    if (authorizationError) return authorizationError;
+): Promise<RouteAuthorizationResult> {
+  const evidence: AuthorizationEvidence = { requirements: [], effectivePermissions: [] };
+  const principal = ctx.principal;
+  if (!principal) {
+    return {
+      kind: "allowed",
+      decision: {
+        kind: "allowed",
+        admission: "user",
+        auditAllowed: route.authorization.auditAllowed,
+        ...evidence,
+      },
+    };
   }
-  return null;
+
+  const principalFailure = enforceRoutePrincipal(route.authentication, principal, evidence);
+  if (principalFailure) return resultForFailure(principalFailure);
+
+  if (
+    principal.kind === "sandbox" &&
+    route.authentication.kind === "user-or-service-with-sandbox-fallback"
+  ) {
+    evidence.requirements.push({ kind: "sandbox-admission", sessionId: principal.sessionId });
+    return {
+      kind: "allowed",
+      decision: {
+        kind: "allowed",
+        admission: "sandbox",
+        auditAllowed: route.authorization.auditAllowed,
+        ...evidence,
+      },
+    };
+  }
+
+  const serviceFailure = enforceServiceRouteAuthorization(route, match, ctx, evidence);
+  if (serviceFailure) return resultForFailure(serviceFailure);
+
+  const activeUserFailure = await enforceActiveUser(route, ctx, evidence);
+  if (activeUserFailure) return resultForFailure(activeUserFailure);
+
+  if (route.authorization.kind === "active-user") {
+    for (const requirement of route.authorization.allOf) {
+      let failure: AuthorizationFailure | null;
+      switch (requirement.kind) {
+        case "permission":
+          failure = await enforcePermissionRequirement(requirement, ctx, evidence);
+          break;
+        case "scoped-permission":
+          failure = await enforceScopedPermissionRequirement(requirement, ctx, evidence);
+          break;
+        case "automation":
+          failure = await enforceAutomationRequirement(requirement, match, ctx, evidence);
+          break;
+      }
+      if (failure) return resultForFailure(failure);
+    }
+  }
+  return {
+    kind: "allowed",
+    decision: {
+      kind: "allowed",
+      admission:
+        principal.kind === "service"
+          ? "service"
+          : principal.kind === "sandbox"
+            ? "sandbox"
+            : "user",
+      auditAllowed: route.authorization.auditAllowed,
+      ...evidence,
+    },
+  };
 }
 
 /**
@@ -727,21 +969,11 @@ export async function handleRequest(
         ctx.principal = authResult.principal;
         ctx.authentication = authResult.authentication;
         request = authResult.request;
-        authError = enforceRoutePrincipal(authentication, ctx.principal);
       }
     }
 
     if (authError) {
       if (ctx.principal) {
-        await auditRouteAuthorizationDecision({
-          ctx,
-          route: matchedRoute.route,
-          method,
-          path,
-          response: authError,
-          allowed: false,
-          requirement: { kind: "principal-type" },
-        });
         logPrincipal(ctx.principal, ctx, path);
         logRequest(authError, ctx, method, path, startTime);
       }
@@ -753,60 +985,24 @@ export async function handleRequest(
     }
   }
 
-  const serviceAccessError = enforceServiceRouteAuthorization(
+  const authorizationResult = await enforceRouteAuthorization(
     matchedRoute.route,
     matchedRoute.match,
     ctx
   );
-  if (serviceAccessError) {
-    await auditRouteAuthorizationDecision({
-      ctx,
-      route: matchedRoute.route,
-      method,
-      path,
-      response: serviceAccessError,
-      allowed: false,
-      requirement: { kind: "service-capability" },
-    });
-    logRequest(serviceAccessError, ctx, method, path, startTime);
+  if (authorizationResult.kind !== "allowed") {
+    if (authorizationResult.kind === "denied") {
+      await auditRouteAuthorizationDecision({
+        ctx,
+        method,
+        path,
+        response: authorizationResult.response,
+        decision: authorizationResult.decision,
+      });
+    }
+    logRequest(authorizationResult.response, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(
-      withRouteCachePolicy(serviceAccessError, matchedRoute.route),
-      ctx
-    );
-  }
-
-  const userAccessError = await enforceActiveUser(matchedRoute.route, ctx);
-  if (userAccessError) {
-    await auditRouteAuthorizationDecision({
-      ctx,
-      route: matchedRoute.route,
-      method,
-      path,
-      response: userAccessError,
-      allowed: false,
-      requirement: { kind: "active-user" },
-    });
-    logRequest(userAccessError, ctx, method, path, startTime);
-    return withCorsAndTraceHeaders(withRouteCachePolicy(userAccessError, matchedRoute.route), ctx);
-  }
-
-  const authorizationError = await enforceRouteAuthorization(
-    matchedRoute.route,
-    matchedRoute.match,
-    ctx
-  );
-  if (authorizationError) {
-    await auditRouteAuthorizationDecision({
-      ctx,
-      route: matchedRoute.route,
-      method,
-      path,
-      response: authorizationError,
-      allowed: false,
-    });
-    logRequest(authorizationError, ctx, method, path, startTime);
-    return withCorsAndTraceHeaders(
-      withRouteCachePolicy(authorizationError, matchedRoute.route),
+      withRouteCachePolicy(authorizationResult.response, matchedRoute.route),
       ctx
     );
   }
@@ -837,14 +1033,13 @@ export async function handleRequest(
         ...ctx.metrics.summarize(),
       });
       response = error("Internal server error", 500);
-      if (shouldAuditAllowedRoute(matchedRoute.route, method)) {
+      if (shouldAuditAllowedDecision(authorizationResult.decision)) {
         await auditRouteAuthorizationDecision({
           ctx,
-          route: matchedRoute.route,
           method,
           path,
           response,
-          allowed: true,
+          decision: authorizationResult.decision,
         });
       }
       return withCorsAndTraceHeaders(withRouteCachePolicy(response, matchedRoute.route), ctx);
@@ -853,14 +1048,13 @@ export async function handleRequest(
 
   logRequest(response, ctx, method, path, startTime);
 
-  if (shouldAuditAllowedRoute(matchedRoute.route, method)) {
+  if (shouldAuditAllowedDecision(authorizationResult.decision)) {
     await auditRouteAuthorizationDecision({
       ctx,
-      route: matchedRoute.route,
       method,
       path,
       response,
-      allowed: true,
+      decision: authorizationResult.decision,
     });
   }
 
