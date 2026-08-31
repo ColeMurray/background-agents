@@ -64,6 +64,7 @@ async function handleGetRole(
     const role = await service.getRole(decodeURIComponent(match.groups!.id));
     return role ? json(role) : error("Role not found", 404);
   } catch (cause) {
+    if (cause instanceof URIError) return error("Invalid role ID", 400);
     return rbacErrorResponse(cause);
   }
 }

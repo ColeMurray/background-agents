@@ -3,6 +3,14 @@ import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
 
 export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
 
+/** Standard close code for a transient server-side failure. */
+export const WS_CLOSE_INTERNAL_ERROR = 1011;
+
+/** Signals that the browser must discard its credential and reconnect fresh. */
+export const WS_CLOSE_AUTHORIZATION_REVOKED = 4010;
+
+export const WS_AUTHORIZATION_REVOKED_REASON = "Authorization expired or changed";
+
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
   z.object({

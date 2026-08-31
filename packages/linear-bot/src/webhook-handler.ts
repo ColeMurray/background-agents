@@ -225,15 +225,21 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
     if (existingSession) {
       const stopUrl = `https://internal/sessions/${existingSession.sessionId}/stop`;
       const actorUserId =
-        webhook.agentActivity?.userId ??
-        webhook.agentSession.comment?.userId ??
-        webhook.agentSession.creatorId ??
-        undefined;
+        webhook.agentActivity?.userId ?? webhook.agentSession.comment?.userId ?? undefined;
+      if (!actorUserId) {
+        log.warn("Linear stop rejected because its author is missing", {
+          event: "agent_session.stop_author_missing",
+          agent_session_id: agentSessionId,
+          issue_id: issueId,
+          trace_id: traceId,
+        });
+        return;
+      }
       try {
         const stopRes = await signedControlPlaneFetch(env, {
           method: "POST",
           url: stopUrl,
-          actor: actorUserId ? `linear:${actorUserId}` : undefined,
+          actor: `linear:${actorUserId}`,
           traceId,
         });
         if (!stopRes.ok) {
@@ -315,13 +321,12 @@ function getFollowUp(webhook: AgentSessionWebhook): {
   source: "linear_agent_activity" | "linear_comment" | "linear_fallback";
   actorUserId?: string;
 } {
-  const fallbackActorUserId = webhook.agentSession.creatorId ?? undefined;
   const activityBody = webhook.agentActivity?.content?.body;
   if (activityBody) {
     return {
       content: activityBody,
       source: "linear_agent_activity",
-      actorUserId: webhook.agentActivity?.userId ?? fallbackActorUserId,
+      actorUserId: webhook.agentActivity?.userId ?? undefined,
     };
   }
 
@@ -330,14 +335,14 @@ function getFollowUp(webhook: AgentSessionWebhook): {
     return {
       content: comment.body,
       source: "linear_comment",
-      actorUserId: comment.userId ?? fallbackActorUserId,
+      actorUserId: comment.userId ?? undefined,
     };
   }
 
   return {
     content: "Follow-up on the issue.",
     source: "linear_fallback",
-    actorUserId: fallbackActorUserId,
+    actorUserId: undefined,
   };
 }
 
@@ -400,6 +405,26 @@ async function handleFollowUp(
   });
   if (!client) return;
 
+  if (!followUp.actorUserId) {
+    log.warn("Linear follow-up rejected because its author is missing", {
+      event: "agent_session.follow_up_author_missing",
+      agent_session_id: agentSessionId,
+      issue_id: issue.id,
+      organization_id: orgId,
+      trace_id: traceId,
+    });
+    await emitAgentActivity(
+      client,
+      agentSessionId,
+      {
+        type: "error",
+        body: "Cannot process this follow-up because Linear did not identify its author.",
+      },
+      true
+    );
+    return;
+  }
+
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
   const existingTarget = await resolveStoredSessionTarget(env, existingSession, traceId);
@@ -430,7 +455,7 @@ async function handleFollowUp(
     const eventsRes = await signedControlPlaneFetch(env, {
       method: "GET",
       url: eventsUrl,
-      actor: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
+      actor: `linear:${followUp.actorUserId}`,
       traceId,
     });
     if (eventsRes.ok) {
@@ -452,7 +477,7 @@ async function handleFollowUp(
       issueIdentifier: issue.identifier,
       followUpContent: followUp.content,
       followUpSource: followUp.source,
-      followUpAuthor: followUp.actorUserId ? "linear" : "unknown",
+      followUpAuthor: "linear",
       sessionContextSummary,
     }),
     source: "linear",
@@ -462,7 +487,7 @@ async function handleFollowUp(
     method: "POST",
     url: promptUrl,
     body: promptBody,
-    actor: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
+    actor: `linear:${followUp.actorUserId}`,
     traceId,
   });
 

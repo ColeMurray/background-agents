@@ -761,7 +761,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     );
   });
 
-  it("falls back to the session creator when follow-up author fields are absent", async () => {
+  it("fails closed instead of signing as the session creator when follow-up author fields are absent", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "issue:issue-1": JSON.stringify({
@@ -796,10 +796,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const sessionCalls = controlPlaneFetch.mock.calls.filter(([input]) =>
       /\/(events\?|prompt$)/.test(String(input))
     );
-    expect(sessionCalls).toHaveLength(2);
-    for (const [, init] of sessionCalls) {
-      expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("linear:session-creator");
-    }
+    expect(sessionCalls).toHaveLength(0);
   });
 
   it("adds prior token context from a parsed events response", async () => {
@@ -875,7 +872,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(store.has("issue:issue-1")).toBe(false);
   });
 
-  it("retains the session mapping when stopping the session fails", async () => {
+  it("fails closed and retains the session mapping when a stop author is missing", async () => {
     const { kv, store } = createFakeKV({
       "issue:issue-1": JSON.stringify({
         sessionId: "session-xyz",
@@ -888,7 +885,6 @@ describe("handleAgentSessionEvent environment targets", () => {
     const env = makeLinearBotEnv(kv);
     const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
       .fetch;
-    controlPlaneFetch.mockResolvedValue(new Response(null, { status: 500 }));
     const webhook = makeWebhook();
     webhook.action = "prompted";
     webhook.agentActivity = {
@@ -898,7 +894,7 @@ describe("handleAgentSessionEvent environment targets", () => {
 
     await handleAgentSessionEvent(webhook, env, "trace-stop-failed");
 
-    expect(controlPlaneFetch).toHaveBeenCalledOnce();
+    expect(controlPlaneFetch).not.toHaveBeenCalled();
     expect(store.has("issue:issue-1")).toBe(true);
   });
 
@@ -991,7 +987,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
       String(input).endsWith("/prompt")
     );
-    expect(JSON.parse(String(promptCall?.[1]?.body))).not.toHaveProperty("authorId");
+    expect(promptCall).toBeUndefined();
   });
 });
 

@@ -92,13 +92,14 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   const makeStore = (
     parentUserId: string | null = null,
-    context: typeof spawnContext = spawnContext
+    context: typeof spawnContext = spawnContext,
+    environmentId: string | null = "env_parent"
   ) => ({
     get: vi.fn().mockResolvedValue({
       userId: parentUserId,
       repoOwner: context.repoOwner,
       repoName: context.repoName,
-      environmentId: "env_parent",
+      environmentId,
     }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
     getCompleteProviderAuth: vi.fn().mockResolvedValue(parentProviderAuth),
@@ -186,7 +187,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     );
   }
 
-  function makeSuccessfulEnv(context: TestSpawnContext) {
+  function makeSuccessfulEnv(context: TestSpawnContext, permissions?: string[]) {
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(context)),
     } as never;
@@ -205,7 +206,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       env: {
         ...TEST_SERVICE_SECRETS,
         SCM_PROVIDER: "github",
-        DB: authorizedDb(),
+        DB: authorizedDb(permissions),
         SESSION: {
           idFromName: (name: string) => name,
           get: (id: string) => (id === parentId ? parentStub : childStub),
@@ -213,6 +214,44 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
   }
+
+  it("rejects a repository-backed child when the actor cannot use repositories", async () => {
+    const store = makeStore(null, spawnContext, null);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(spawnContext, ["sessions.create", "sessions.collaborate"]);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "repositories.use",
+    });
+    expect(store.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an environment-backed child when the actor cannot use environments", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(spawnContext, [
+      "sessions.create",
+      "sessions.collaborate",
+      "repositories.use",
+    ]);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "environments.use",
+    });
+    expect(store.create).not.toHaveBeenCalled();
+  });
 
   async function getInitBody(childStub: DurableObjectStub) {
     const initRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
@@ -876,7 +915,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(store.updateStatus).toHaveBeenCalledWith(createdChildId, "failed");
   });
 });
-function authorizedDb() {
+function authorizedDb(
+  permissions = ["sessions.create", "repositories.use", "environments.use", "sessions.collaborate"]
+) {
   return {
     prepare: vi.fn((sql: string) => {
       const statement = {
@@ -886,19 +927,15 @@ function authorizedDb() {
             ? {
                 user_id: "canonical-user-123",
                 suspended_at: null,
-                role_id: "role-1",
-                role_key: "member",
-                role_name: "Member",
+                role_id: "role_custom_spawn_test",
+                role_key: null,
+                role_name: "Spawn Test",
               }
             : null
         ),
         all: vi.fn(async () => ({
           results: sql.includes("FROM role_permissions")
-            ? [
-                { permission_id: "sessions.create" },
-                { permission_id: "repositories.use" },
-                { permission_id: "sessions.collaborate" },
-              ]
+            ? permissions.map((permission_id) => ({ permission_id }))
             : [],
         })),
       };
