@@ -87,6 +87,7 @@ export async function auditRouteAuthorizationDecision(input: {
         ? (principal.actor?.canonicalUserId ?? input.ctx.authorization?.userId)
         : null;
   const metadata = {
+    schema: "authorization_decision.v1",
     httpMethod: input.method,
     httpPath: input.path,
     httpStatus: input.response.status,

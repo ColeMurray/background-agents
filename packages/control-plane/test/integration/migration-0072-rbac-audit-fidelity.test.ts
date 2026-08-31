@@ -2,9 +2,9 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanD1Tables } from "./cleanup";
 
-const migration = () => {
-  const entry = env.TEST_MIGRATIONS.find((candidate) => candidate.name.startsWith("0072"));
-  if (!entry) throw new Error("Migration 0072 not found in TEST_MIGRATIONS");
+const migration = (prefix: string) => {
+  const entry = env.TEST_MIGRATIONS.find((candidate) => candidate.name.startsWith(prefix));
+  if (!entry) throw new Error(`Migration ${prefix} not found in TEST_MIGRATIONS`);
   return entry;
 };
 
@@ -17,7 +17,13 @@ async function tableColumns(): Promise<string[]> {
 
 async function restoreMigration(): Promise<void> {
   if (!(await tableColumns()).includes("operation_result")) {
-    await env.DB.batch(migration().queries.map((query) => env.DB.prepare(query)));
+    await env.DB.batch(migration("0072").queries.map((query) => env.DB.prepare(query)));
+  }
+  const table = await env.DB.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'authorization_audit_events'"
+  ).first<{ sql: string }>();
+  if (!table?.sql.includes("'denied'")) {
+    await env.DB.batch(migration("0073").queries.map((query) => env.DB.prepare(query)));
   }
 }
 
@@ -57,7 +63,7 @@ describe("migration 0072: RBAC audit fidelity", () => {
       ),
     ]);
 
-    await env.DB.batch(migration().queries.map((query) => env.DB.prepare(query)));
+    await env.DB.batch(migration("0072").queries.map((query) => env.DB.prepare(query)));
 
     expect(await tableColumns()).toEqual([
       "id",
