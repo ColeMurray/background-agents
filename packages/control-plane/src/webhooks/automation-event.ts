@@ -14,13 +14,12 @@ import {
   type AutomationEvent,
   type AutomationEventSource,
 } from "@open-inspect/shared/triggers";
-import { requireEventPoster } from "../auth/identity-enforcement";
 import { createLogger } from "../logger";
 import type { Route, RequestContext } from "../routes/shared";
 import {
   defineRoute,
   error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
+  GITHUB_SERVICE_ROUTE,
   json,
   parsePattern,
   serviceAuthorized,
@@ -136,9 +135,6 @@ export function createAutomationEventRoute(opts: {
     _match: RegExpMatchArray,
     ctx: RequestContext
   ): Promise<Response> {
-    const authFailure = requireEventPoster(ctx, opts.source);
-    if (authFailure) return authFailure;
-
     let body: unknown;
     try {
       body = await request.json();
@@ -156,7 +152,7 @@ export function createAutomationEventRoute(opts: {
     return forwardAutomationEventToScheduler(env, validated.event, ctx);
   }
 
-  return defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+  return defineRoute(GITHUB_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern(opts.path),
     authorization: serviceAuthorized("slack-bot"),

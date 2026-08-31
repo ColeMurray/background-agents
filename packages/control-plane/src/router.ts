@@ -302,6 +302,9 @@ export function enforceRoutePrincipal(
   if (authentication.kind === "user" && principal.kind !== "user") {
     return error("Human user authentication required", 403);
   }
+  if (authentication.kind === "service" && principal.kind !== "service") {
+    return error("Service authentication required", 403);
+  }
   return null;
 }
 
@@ -382,11 +385,11 @@ function enforceServiceRouteAuthorization(
   ctx: RequestContext
 ): Response | null {
   const principal = ctx.principal;
-  if (principal?.kind !== "service") return null;
-  if (route.authentication.kind === "web-service" && principal.service === "web") return null;
-
   const authorization = route.authorization;
   if (authorization.kind === "service") {
+    if (principal?.kind !== "service") {
+      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    }
     if (!authorization.services.some((service) => service === principal.service)) {
       return json({ error: "Forbidden", code: "service_capability_required" }, 403);
     }
@@ -395,6 +398,8 @@ function enforceServiceRouteAuthorization(
     }
     return null;
   }
+  if (principal?.kind !== "service") return null;
+  if (route.authentication.kind === "web-service" && principal.service === "web") return null;
   if (
     (authorization.kind !== "active-user" && authorization.kind !== "active-global") ||
     authorization.service.kind === "deny"
@@ -483,7 +488,6 @@ async function enforceAutomationRequirement(
       );
     }
 
-    ctx.automationAdmission = { automation };
     return null;
   } catch {
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
@@ -525,28 +529,11 @@ export const routes: Route[] = [
     method: "GET",
     pattern: parsePattern("/health"),
     authorization: NO_AUTHORIZATION,
-    handler: async (_request, _env, _match, ctx) => {
-      let ownerAssignment: "present" | "missing" | "unknown";
-      try {
-        const owner = await ctx.db
-          .prepare(
-            `SELECT 1 AS complete FROM users u
-             JOIN user_role_assignments ura ON ura.user_id = u.id
-             JOIN roles r ON r.id = ura.role_id
-             WHERE r.key = 'owner' AND u.suspended_at IS NULL
-             LIMIT 1`
-          )
-          .first();
-        ownerAssignment = owner ? "present" : "missing";
-      } catch {
-        ownerAssignment = "unknown";
-      }
-      return json({
+    handler: async () =>
+      json({
         status: "healthy",
         service: "open-inspect-control-plane",
-        rbac: { ownerAssignment },
-      });
-    },
+      }),
   },
 
   ...browserAuthRoutes,
@@ -702,7 +689,10 @@ export async function handleRequest(
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService: authentication.kind === "web-service" ? "service" : "user",
+        webService:
+          authentication.kind === "web-service" || authentication.kind === "service"
+            ? "service"
+            : "user",
       });
 
       if (isAuthError(authResult)) {
