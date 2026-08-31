@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { enforceRoutePrincipal, handleRequest, routes } from "./router";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { serviceAllowsPermission } from "./authorization/service-permissions";
+import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
 function routeFor(method: string, path: string) {
   return routes.find((route) => route.method === method && route.pattern.test(path));
@@ -109,6 +111,27 @@ describe("route policy table", () => {
     );
 
     expect(new Set(granted)).toEqual(expected);
+  });
+
+  it("keeps every actorless route grant within its service permission ceiling", () => {
+    for (const route of routes) {
+      if (route.authorization.kind !== "active-user") continue;
+      if (route.authorization.service.kind !== "actor") continue;
+      for (const grant of route.authorization.service.actorlessGrants ?? []) {
+        for (const requirement of route.authorization.allOf) {
+          if (requirement.kind === "permission") {
+            expect(
+              serviceAllowsPermission(grant.service, requirement.permission),
+              `${grant.service} must allow ${requirement.permission} for ${route.method} ${route.pattern}`
+            ).toBe(true);
+          } else if (requirement.kind === "scoped-permission") {
+            expect(
+              serviceAllowsPermission(grant.service, SCOPED_PERMISSION_PAIRS[requirement.stem].own)
+            ).toBe(true);
+          }
+        }
+      }
+    }
   });
 
   it("keeps contextual route requirements explicit", () => {

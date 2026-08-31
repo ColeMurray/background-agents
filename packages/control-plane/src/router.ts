@@ -417,14 +417,14 @@ async function enforcePermissionRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "permission" }>,
   ctx: RequestContext
 ): Promise<Response | null> {
-  const userId = authorizationUserId(ctx);
-  if (!userId) return null;
   if (
     ctx.principal?.kind === "service" &&
     !serviceAllowsPermission(ctx.principal.service, requirement.permission)
   ) {
     return json({ error: "Forbidden", code: "service_capability_required" }, 403);
   }
+  const userId = authorizationUserId(ctx);
+  if (!userId) return null;
   if (ctx.authorization?.permissions.includes(requirement.permission)) return null;
   return json(
     { error: "Forbidden", code: "permission_required", permission: requirement.permission },
@@ -436,8 +436,6 @@ async function enforceScopedPermissionRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "scoped-permission" }>,
   ctx: RequestContext
 ): Promise<Response | null> {
-  const userId = authorizationUserId(ctx);
-  if (!userId) return null;
   const pair = SCOPED_PERMISSION_PAIRS[requirement.stem];
   if (
     ctx.principal?.kind === "service" &&
@@ -445,6 +443,8 @@ async function enforceScopedPermissionRequirement(
   ) {
     return json({ error: "Forbidden", code: "service_capability_required" }, 403);
   }
+  const userId = authorizationUserId(ctx);
+  if (!userId) return null;
   if (
     ctx.authorization &&
     resolveScopedPermission(requirement.stem, ctx.authorization.permissions)
