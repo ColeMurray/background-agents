@@ -1,4 +1,14 @@
-import { AuthorizationError, AuthorizationService } from "../authorization/service";
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
+import {
+  replaceMemberRoleInputSchema,
+  replaceMemberStatusInputSchema,
+} from "@open-inspect/shared/rbac";
+import { ZodError } from "zod";
+import {
+  AuthorizationError,
+  AuthorizationService,
+  RbacConflictError,
+} from "../authorization/service";
 import type { Env } from "../types";
 import type { Route } from "./shared";
 import {
@@ -7,6 +17,7 @@ import {
   defineRoutes,
   error,
   json,
+  parseJsonBody,
   requirePermission,
   type UserRouteContext,
 } from "./shared";
@@ -22,6 +33,10 @@ function rbacErrorResponse(cause: unknown): Response {
       cause.status
     );
   }
+  if (cause instanceof RbacConflictError) {
+    return json({ error: cause.message, code: "rbac_conflict" }, 409);
+  }
+  if (cause instanceof ZodError) return error("Invalid request body", 400);
   return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
 }
 
@@ -82,6 +97,56 @@ async function handleListMembers(
   }
 }
 
+async function handleReplaceMemberRole(
+  request: Request,
+  _env: Env,
+  match: RegExpMatchArray,
+  ctx: UserRouteContext
+): Promise<Response> {
+  const targetUserId = decodeURIComponent(match.groups!.id);
+  if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
+  const body = await parseJsonBody<unknown>(request);
+  if (body instanceof Response) return body;
+  const service = new AuthorizationService(ctx.db);
+  try {
+    const parsed = replaceMemberRoleInputSchema.parse(body);
+    await service.replaceMemberRole({
+      targetUserId,
+      roleId: parsed.roleId,
+      actorUserId: ctx.principal.userId,
+      requestId: ctx.request_id,
+    });
+    return json(await service.getEffectiveAuthorization(targetUserId));
+  } catch (cause) {
+    return rbacErrorResponse(cause);
+  }
+}
+
+async function handleReplaceMemberStatus(
+  request: Request,
+  _env: Env,
+  match: RegExpMatchArray,
+  ctx: UserRouteContext
+): Promise<Response> {
+  const targetUserId = decodeURIComponent(match.groups!.id);
+  if (!isCanonicalUserId(targetUserId)) return error("Invalid user ID", 400);
+  const body = await parseJsonBody<unknown>(request);
+  if (body instanceof Response) return body;
+  const service = new AuthorizationService(ctx.db);
+  try {
+    const parsed = replaceMemberStatusInputSchema.parse(body);
+    await service.replaceMemberStatus({
+      targetUserId,
+      suspended: parsed.suspended,
+      actorUserId: ctx.principal.userId,
+      requestId: ctx.request_id,
+    });
+    return json(await service.getEffectiveAuthorization(targetUserId));
+  } catch (cause) {
+    return rbacErrorResponse(cause);
+  }
+}
+
 export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "GET",
@@ -110,5 +175,19 @@ export const rbacRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
     authorization: requirePermission("workspace.members.read"),
     cacheControl: "private, no-store",
     handler: handleListMembers,
+  },
+  {
+    method: "PUT",
+    pattern: /^\/members\/(?<id>[^/]+)\/role$/,
+    authorization: requirePermission("workspace.members.manage"),
+    cacheControl: "private, no-store",
+    handler: handleReplaceMemberRole,
+  },
+  {
+    method: "PUT",
+    pattern: /^\/members\/(?<id>[^/]+)\/status$/,
+    authorization: requirePermission("workspace.members.manage"),
+    cacheControl: "private, no-store",
+    handler: handleReplaceMemberStatus,
   },
 ]);

@@ -41,6 +41,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",
+    userId: "11111111111111111111111111111111",
     createdAt: Date.now(),
     updatedAt: Date.now(),
     deletedAt: null,

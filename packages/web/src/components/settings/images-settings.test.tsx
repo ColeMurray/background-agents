@@ -11,6 +11,15 @@ import { ImagesSettings } from "./images-settings";
 
 expect.extend(matchers);
 
+const mocks = vi.hoisted(() => ({ allowedPermissions: null as Set<string> | null }));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      mocks.allowedPermissions === null || mocks.allowedPermissions.has(permission),
+  }),
+}));
+
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
     repos: [
@@ -52,6 +61,7 @@ function renderWithFeed(feed: ImageBuildsFeed) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  mocks.allowedPermissions = null;
 });
 
 describe("ImagesSettings", () => {
@@ -125,6 +135,20 @@ describe("ImagesSettings", () => {
     expect(
       screen.getByRole("switch", { name: "Toggle pre-built images for acme/web" })
     ).not.toBeChecked();
+  });
+
+  it("keeps image state visible but disables mutations for a read-only role", () => {
+    mocks.allowedPermissions = new Set(["image_builds.read"]);
+    renderWithFeed({
+      units: [],
+      enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
+      images: [],
+    });
+
+    expect(
+      screen.getByRole("switch", { name: "Toggle pre-built images for acme/web" })
+    ).toBeDisabled();
+    expect(screen.queryByTitle("Rebuild image")).not.toBeInTheDocument();
   });
 
   it("shows an error instead of unchecked toggles when the feed fails", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState, type ComponentType } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   DEFAULT_SETTINGS_CATEGORY,
@@ -11,45 +11,17 @@ import {
 } from "@/components/settings/settings-nav";
 import { SettingsMobileHeader } from "@/components/settings/settings-mobile-header";
 import { useSettingsIsMobile } from "@/components/settings/settings-viewport-context";
-import { SecretsSettings } from "@/components/settings/secrets-settings";
-import { EnvironmentsSettings } from "@/components/settings/environments-settings";
-import { ModelsSettings } from "@/components/settings/models-settings";
-import { DataControlsSettings } from "@/components/settings/data-controls-settings";
-import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
-import { IntegrationsSettings } from "@/components/settings/integrations-settings";
-import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
-import { ScmSettingsPage } from "@/components/settings/scm-settings";
-import { ImagesSettings } from "@/components/settings/images-settings";
-import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
-import { AppearanceSettings } from "@/components/settings/appearance-settings";
-import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
-import { SkillsSettings } from "@/components/settings/skills-settings";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
-
-const SETTINGS_PANELS: Record<SettingsCategory, ComponentType> = {
-  appearance: AppearanceSettings,
-  "keyboard-shortcuts": KeyboardShortcutsSettings,
-  models: ModelsSettings,
-  "provider-accounts": ProviderAccountsSettings,
-  skills: SkillsSettings,
-  environments: EnvironmentsSettings,
-  secrets: SecretsSettings,
-  scm: ScmSettingsPage,
-  sandbox: SandboxSettingsPage,
-  images: ImagesSettings,
-  integrations: IntegrationsSettings,
-  "mcp-servers": McpServersSettings,
-  "data-controls": DataControlsSettings,
-};
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { getSettingsPanel, resolveSettingsCategory } from "@/components/settings/settings-registry";
 
 function SettingsPageContent() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
   const isMobile = useSettingsIsMobile();
-  const initialCategory = isSettingsCategory(tabParam, repoImagesEnabled)
-    ? tabParam
-    : DEFAULT_SETTINGS_CATEGORY;
+  const { hasPermission, loading } = useCurrentUserAuthorization();
+  const initialCategory = resolveSettingsCategory(tabParam, repoImagesEnabled, hasPermission);
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
   function selectCategory(category: SettingsCategory, trigger: HTMLButtonElement) {
@@ -101,7 +73,7 @@ function SettingsPageContent() {
     const syncFromHistory = () => {
       const requestedCategory = new URLSearchParams(window.location.search).get("tab");
       const nextCategory = isSettingsCategory(requestedCategory, repoImagesEnabled)
-        ? requestedCategory
+        ? resolveSettingsCategory(requestedCategory, repoImagesEnabled, hasPermission)
         : null;
       if (nextCategory) {
         setActiveCategoryRaw(nextCategory);
@@ -121,27 +93,34 @@ function SettingsPageContent() {
 
     window.addEventListener("popstate", syncFromHistory);
     return () => window.removeEventListener("popstate", syncFromHistory);
-  }, [isMobile, repoImagesEnabled]);
+  }, [hasPermission, isMobile, repoImagesEnabled]);
 
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {
     if (isSettingsCategory(tabParam, repoImagesEnabled)) {
-      setActiveCategoryRaw(tabParam);
+      setActiveCategoryRaw(resolveSettingsCategory(tabParam, repoImagesEnabled, hasPermission));
       setMobileView("detail");
       return;
     }
 
     if (!isMobile || !mobileTriggerRef.current) {
-      setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
+      setActiveCategoryRaw(resolveSettingsCategory(null, repoImagesEnabled, hasPermission));
     }
     setMobileView("list");
-  }, [isMobile, repoImagesEnabled, tabParam]);
+  }, [hasPermission, isMobile, repoImagesEnabled, tabParam]);
 
-  const renderedCategory = isSettingsCategory(activeCategory, repoImagesEnabled)
-    ? activeCategory
-    : DEFAULT_SETTINGS_CATEGORY;
-  const ActivePanel = SETTINGS_PANELS[renderedCategory];
-  const content = <ActivePanel />;
+  if (loading) return null;
+  const renderedCategory = resolveSettingsCategory(
+    activeCategory,
+    repoImagesEnabled,
+    hasPermission
+  );
+  const ActivePanel = getSettingsPanel(renderedCategory);
+  const content = (
+    <Suspense fallback={null}>
+      <ActivePanel />
+    </Suspense>
+  );
 
   if (isMobile) {
     return (

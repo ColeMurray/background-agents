@@ -5,9 +5,14 @@ import { useAuthSession } from "@/lib/auth-session";
 import { APP_NAME } from "@/lib/site-config";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
+/**
+ * Renders application children only for authenticated, active workspace users after authorization resolves.
+ */
 export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
   const { status } = useAuthSession();
+  const { authorization, loading: authorizationLoading, error } = useCurrentUserAuthorization();
 
   if (status === "loading") {
     return (
@@ -47,6 +52,31 @@ export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
   }
 
   if (status === "authenticated") {
+    if (authorizationLoading) {
+      return (
+        <div
+          role="status"
+          aria-label="Checking authorization"
+          className="min-h-screen flex items-center justify-center"
+        >
+          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-foreground" />
+        </div>
+      );
+    }
+    if (error || !authorization) {
+      return (
+        <div className="min-h-screen flex items-center justify-center px-6">
+          <ErrorBanner role="alert">Authorization is temporarily unavailable.</ErrorBanner>
+        </div>
+      );
+    }
+    if (authorization.suspendedAt !== null) {
+      return (
+        <div className="min-h-screen flex items-center justify-center px-6">
+          <ErrorBanner role="alert">Your workspace access is disabled.</ErrorBanner>
+        </div>
+      );
+    }
     return children;
   }
 
