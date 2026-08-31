@@ -17,7 +17,6 @@ import type {
   ScopedPermissionStem,
 } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
-import type { AutomationRow } from "../db/automation-store";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -51,14 +50,7 @@ export type RequestContext = CorrelationContext & {
   authentication?: AuthenticationContext;
   /** Effective human authorization loaded once by the router for this request. */
   authorization?: EffectiveAuthorization;
-  /** Resource admission populated by the router for automation mutation routes. */
-  automationAdmission?: AutomationRouteAdmission;
 };
-
-/** Automation resource admitted by the router for the current mutation. */
-export interface AutomationRouteAdmission {
-  automation: AutomationRow;
-}
 
 /** Route matching, authorization, and handler configuration. */
 export interface RouteDefinition<Context extends RequestContext = RequestContext> {
@@ -208,6 +200,7 @@ export type RouteAuthentication =
   | { kind: "public" }
   | { kind: "handler-authenticated" }
   | { kind: "web-service" }
+  | { kind: "service" }
   | { kind: "user" }
   | { kind: "user-or-service" }
   | ({ kind: "sandbox" } & SandboxSessionBinding)
@@ -220,11 +213,13 @@ export type RouteContext<Authentication extends RouteAuthentication> = RequestCo
       ? SandboxPrincipal
       : Authentication extends { kind: "web-service" }
         ? WebServicePrincipal
-        : Authentication extends { kind: "user-or-service" }
-          ? UserOrServicePrincipal
-          : Authentication extends { kind: "user-or-service-with-sandbox-fallback" }
-            ? Principal
-            : Principal | undefined;
+        : Authentication extends { kind: "service" }
+          ? ServicePrincipal
+          : Authentication extends { kind: "user-or-service" }
+            ? UserOrServicePrincipal
+            : Authentication extends { kind: "user-or-service-with-sandbox-fallback" }
+              ? Principal
+              : Principal | undefined;
 };
 
 export type UserRouteContext = RouteContext<{ kind: "user" }>;
@@ -243,6 +238,11 @@ const SESSION_ID_BINDING: SandboxSessionBinding = {
 
 export const GITHUB_USER_OR_SERVICE_ROUTE = {
   authentication: { kind: "user-or-service" },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
+
+export const GITHUB_SERVICE_ROUTE = {
+  authentication: { kind: "service" },
   supportedScmProviders: ["github"],
 } as const satisfies RoutePolicy;
 

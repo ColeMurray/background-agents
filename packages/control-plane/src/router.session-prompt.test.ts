@@ -62,7 +62,7 @@ function createEnv(sessionFetch: ReturnType<typeof vi.fn>): Record<string, unkno
       user_id: "user-1",
       suspended_at: null,
       assigned: 1,
-      role_id: "role-administrator",
+      role_id: "role_builtin_administrator",
       role_key: "administrator",
       role_name: "Administrator",
     })),

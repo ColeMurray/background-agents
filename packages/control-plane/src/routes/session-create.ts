@@ -17,6 +17,7 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { authorizeSessionTarget } from "./session-target-authorization";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -66,25 +67,11 @@ async function handleCreateSession(
     throw e;
   }
 
-  if (ctx.principal?.kind === "user" || ctx.principal?.kind === "service") {
-    const authorization = ctx.authorization;
-    if (!authorization) return json({ error: "Authorization unavailable" }, 503);
-    if (body.environmentId && !authorization.permissions.includes("environments.use")) {
-      return json(
-        { error: "Forbidden", code: "permission_required", permission: "environments.use" },
-        403
-      );
-    }
-    if (
-      (repositoryContext || body.repositories) &&
-      !authorization.permissions.includes("repositories.use")
-    ) {
-      return json(
-        { error: "Forbidden", code: "permission_required", permission: "repositories.use" },
-        403
-      );
-    }
-  }
+  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+    environmentId: body.environmentId,
+    hasRepository: Boolean(repositoryContext || body.repositories),
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
 
   // Validate branch names if provided (defense in depth)
   if (body.branch && !BRANCH_NAME_PATTERN.test(body.branch)) {
