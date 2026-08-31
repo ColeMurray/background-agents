@@ -207,6 +207,15 @@ interface WranglerResult {
   success?: boolean;
 }
 
+type WranglerRunner = (database: string, operation: readonly string[]) => string;
+
+/** Injectable side effects for deterministic bootstrap orchestration tests. */
+export interface BootstrapRunDependencies {
+  runWrangler?: WranglerRunner;
+  randomUUID?: () => string;
+  now?: () => number;
+}
+
 function reportRows(stdout: string): Array<Record<string, unknown>> {
   const parsed = JSON.parse(stdout) as WranglerResult[];
   const rows = parsed.flatMap((result) => result.results ?? []).filter((row) => row.report);
@@ -226,18 +235,22 @@ function runWrangler(database: string, operation: readonly string[]): string {
   return child.stdout;
 }
 
-function preflight(database: string, userId: string): string {
+function preflight(database: string, userId: string, runner: WranglerRunner): string {
   const sql = buildBootstrapSql({ userId, execute: false, auditId: "unused", now: 0 });
-  const rows = reportRows(runWrangler(database, ["--command", sql]));
+  const rows = reportRows(runner(database, ["--command", sql]));
   const status = rows.find((row) => row.report === "preflight")?.status;
   if (typeof status !== "string") throw new Error("Wrangler returned no Owner bootstrap preflight");
   return status;
 }
 
 /** Run the remote Owner bootstrap workflow and verify its postcondition. */
-export async function run(options: BootstrapCliOptions): Promise<void> {
+export async function run(
+  options: BootstrapCliOptions,
+  dependencies: BootstrapRunDependencies = {}
+): Promise<void> {
+  const runner = dependencies.runWrangler ?? runWrangler;
   console.error(`${options.execute ? "Executing" : "Dry-running"} Owner bootstrap on remote D1...`);
-  const status = preflight(options.database, options.userId);
+  const status = preflight(options.database, options.userId, runner);
   if (status === "refused") throw new Error("Owner bootstrap preflight was refused");
   if (status === "no-op") return;
   if (!options.execute) {
@@ -247,24 +260,31 @@ export async function run(options: BootstrapCliOptions): Promise<void> {
 
   const directory = await mkdtemp(join(tmpdir(), "open-inspect-owner-bootstrap-"));
   const sqlPath = join(directory, "bootstrap.sql");
+  let executionRows: Array<Record<string, unknown>>;
   try {
+    const auditId = dependencies.randomUUID?.() ?? crypto.randomUUID();
+    const now = dependencies.now?.() ?? Date.now();
     await writeFile(
       sqlPath,
       buildBootstrapSql({
         userId: options.userId,
         execute: true,
-        auditId: crypto.randomUUID(),
-        now: Date.now(),
+        auditId,
+        now,
       }),
       { encoding: "utf8", mode: 0o600 }
     );
-    runWrangler(options.database, ["--file", sqlPath]);
+    executionRows = reportRows(runner(options.database, ["--file", sqlPath]));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 
-  if (preflight(options.database, options.userId) !== "no-op") {
-    throw new Error("Owner bootstrap postcondition verification failed");
+  const postcondition = executionRows.find((row) => row.report === "postcondition");
+  if (postcondition?.status === "no-op") {
+    throw new Error("Owner bootstrap did not execute because ownership changed concurrently");
+  }
+  if (postcondition?.status !== "executed" || Number(postcondition.audit_written) !== 1) {
+    throw new Error("Owner bootstrap execution did not prove its exact audit and assignment");
   }
   console.error(
     "Owner bootstrap command completed; verify /health reports ownerAssignment=present."

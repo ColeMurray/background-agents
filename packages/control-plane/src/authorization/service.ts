@@ -156,8 +156,11 @@ export class AuthorizationService {
     if (outcome.status === "actor_authorization_changed") {
       throw new RbacConflictError("Actor authorization changed");
     }
-    if (outcome.status === "not_found") {
+    if (outcome.status === "role_not_found") {
       throw new AuthorizationError(404, "role_not_found");
+    }
+    if (outcome.status === "member_not_found") {
+      throw new AuthorizationError(404, "member_not_found");
     }
     if (outcome.status === "conflict") {
       throw new RbacConflictError(conflictMessage);
