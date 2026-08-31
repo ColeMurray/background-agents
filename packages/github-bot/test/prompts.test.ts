@@ -68,6 +68,14 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).not.toContain('-f body="');
   });
 
+  it("encodes nested repository owners in the review API route", () => {
+    const prompt = buildCodeReviewPrompt({ ...baseParams, owner: "group/subgroup" });
+
+    expect(prompt).toContain("reviewing Pull Request #42 in group/subgroup/widgets");
+    expect(prompt).toContain('"repos/group%2Fsubgroup/widgets/pulls/42/reviews"');
+    expect(prompt).not.toContain('"repos/group/subgroup/widgets/pulls/42/reviews"');
+  });
+
   it("limits self-reviews to comments", () => {
     const prompt = buildCodeReviewPrompt({ ...baseParams, isSelfReview: true });
     expect(prompt).toContain('"event": "COMMENT"');

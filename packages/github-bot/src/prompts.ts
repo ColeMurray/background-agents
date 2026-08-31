@@ -1,3 +1,5 @@
+import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
+
 function buildCustomInstructionsSection(instructions: string | null | undefined): string {
   if (!instructions?.trim()) return "";
   return `\n## Custom Instructions\n${instructions}`;
@@ -64,6 +66,7 @@ export function buildCodeReviewPrompt(params: {
   const reviewEventGuidance = isSelfReview
     ? "Use COMMENT because GitHub does not allow pull request authors to approve their own PRs."
     : "Use APPROVE if the code looks good, REQUEST_CHANGES if changes are needed,\n   or COMMENT for general feedback.";
+  const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName: repo });
 
   const prTitleBlock = buildUntrustedUserContentBlock({
     source: "github_pr_title",
@@ -128,7 +131,7 @@ ${prDescriptionBlock}
 6. Submit exactly one review with all inline findings included in that review:
 
    gh api --method POST \\
-     "repos/${owner}/${repo}/pulls/${number}/reviews" \\
+     "repos/${repositoryPath}/pulls/${number}/reviews" \\
      --input /tmp/open-inspect-review.json
 
    Invoke this endpoint exactly once. Do not submit inline findings through the pull request comments endpoint, run \`gh pr review\` separately, or submit follow-up reviews.
