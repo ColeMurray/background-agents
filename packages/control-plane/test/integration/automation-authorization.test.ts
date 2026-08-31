@@ -95,6 +95,26 @@ describe("automation router authorization", () => {
     expect((await store.getById("other-automation"))?.name).toBe("other-automation");
   });
 
+  it("repairs a legacy GitHub owner before own-scope route admission", async () => {
+    await seedBrowser("member");
+    const store = new AutomationStore(env.DB);
+    await store.create({
+      ...automation("legacy-own-automation", BROWSER_USER_ID),
+      created_by: "583231",
+      user_id: null,
+    });
+
+    const response = await serviceFetch("https://cp.test/automations/legacy-own-automation", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Updated legacy own" }),
+      initialUserRole: "member",
+    });
+
+    expect(response.status).toBe(200);
+    expect((await store.getById("legacy-own-automation"))?.user_id).toBe(BROWSER_USER_ID);
+  });
+
   it("denies users without manage permission", async () => {
     await seedBrowser("member");
     await new AutomationStore(env.DB).create(automation("viewer-target", BROWSER_USER_ID));
@@ -136,7 +156,7 @@ describe("automation router authorization", () => {
     const response = await serviceFetch("https://cp.test/automations/target-permission", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repositories: [] }),
+      body: JSON.stringify({ repositories: [{ repoOwner: "acme", repoName: "api" }] }),
     });
 
     expect(response.status).toBe(403);

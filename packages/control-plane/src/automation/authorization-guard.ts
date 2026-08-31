@@ -7,62 +7,81 @@ interface SqlPredicate {
   values: readonly unknown[];
 }
 
-function executionPredicate(
-  automationId: string,
-  requiredAnyOf: readonly PermissionId[] = [],
-  executionUserId?: string
-): SqlPredicate {
+/** Immutable execution requirements derived from the targets selected for one firing. */
+export interface AutomationExecutionAuthorizationRequest {
+  automationId: string;
+  executionUserId?: string;
+  requiresRepositoryUse: boolean;
+  requiresEnvironmentUse: boolean;
+}
+
+function executionPredicate(request: AutomationExecutionAuthorizationRequest): SqlPredicate {
   const createGuard = rolePermissionPredicate("sessions.create");
   const repositoryGuard = rolePermissionPredicate("repositories.use");
   const environmentGuard = rolePermissionPredicate("environments.use");
-  const additionalGuards = requiredAnyOf.map(rolePermissionPredicate);
   return {
     sql: `EXISTS (
       SELECT 1 FROM automations a
-      JOIN users u ON u.id = ${executionUserId ? "?" : "a.user_id"}
+      JOIN users u ON u.id = ${request.executionUserId ? "?" : "a.user_id"}
       JOIN user_role_assignments ura ON ura.user_id = u.id
       JOIN roles r ON r.id = ura.role_id
       WHERE a.id = ? AND a.deleted_at IS NULL AND u.suspended_at IS NULL
         AND ${createGuard.sql}
-        AND (
-          NOT EXISTS (SELECT 1 FROM automation_repositories ar WHERE ar.automation_id = a.id)
-          OR ${repositoryGuard.sql}
-        )
-        AND (
-          NOT EXISTS (SELECT 1 FROM automation_environments ae WHERE ae.automation_id = a.id)
-          OR ${environmentGuard.sql}
-        )
-        ${additionalGuards.length > 0 ? `AND (${additionalGuards.map((guard) => guard.sql).join(" OR ")})` : ""}
+        ${request.requiresRepositoryUse ? `AND ${repositoryGuard.sql}` : ""}
+        ${request.requiresEnvironmentUse ? `AND ${environmentGuard.sql}` : ""}
     )`,
     values: [
-      ...(executionUserId ? [executionUserId] : []),
-      automationId,
+      ...(request.executionUserId ? [request.executionUserId] : []),
+      request.automationId,
       ...createGuard.values,
-      ...repositoryGuard.values,
-      ...environmentGuard.values,
-      ...additionalGuards.flatMap((guard) => guard.values),
+      ...(request.requiresRepositoryUse ? repositoryGuard.values : []),
+      ...(request.requiresEnvironmentUse ? environmentGuard.values : []),
     ],
+  };
+}
+
+function principalPredicate(userId: string, permission: PermissionId): SqlPredicate {
+  const permissionGuard = rolePermissionPredicate(permission);
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM users u
+      JOIN user_role_assignments ura ON ura.user_id = u.id
+      JOIN roles r ON r.id = ura.role_id
+      WHERE u.id = ? AND u.suspended_at IS NULL AND ${permissionGuard.sql}
+    )`,
+    values: [userId, ...permissionGuard.values],
   };
 }
 
 /**
  * Revalidates that an automation's execution principal may create its session and use its targets.
  *
- * Scheduled and event runs default to the automation owner; manual runs pass the requester as
- * `executionUserId`. `requiredAnyOf` adds source-specific execution requirements, such as session
- * collaboration for Slack thread steering. Missing users, roles, automations, or suspended users
- * fail closed.
+ * The caller derives repository/environment requirements from the immutable target selection that
+ * will execute, so a concurrent edit to the automation tables cannot weaken this decision. Missing
+ * users, roles, automations, or suspended users fail closed.
  *
  * This does not decide whether a caller may manage or manually trigger the automation. The route's
  * ownership-scoped authorization performs that admission before execution begins.
  */
 export async function isAutomationExecutionAuthorized(
   db: SqlDatabase,
-  automationId: string,
-  requiredAnyOf: readonly PermissionId[] = [],
-  executionUserId?: string
+  request: AutomationExecutionAuthorizationRequest
 ): Promise<boolean> {
-  const predicate = executionPredicate(automationId, requiredAnyOf, executionUserId);
+  const predicate = executionPredicate(request);
+  const row = await db
+    .prepare(`SELECT CASE WHEN (${predicate.sql}) THEN 1 ELSE 0 END AS authorized`)
+    .bind(...predicate.values)
+    .first<{ authorized: number }>();
+  return row?.authorized === 1;
+}
+
+/** Check one canonical principal for a permission without imposing automation-launch grants. */
+export async function isPrincipalAuthorized(
+  db: SqlDatabase,
+  userId: string,
+  permission: PermissionId
+): Promise<boolean> {
+  const predicate = principalPredicate(userId, permission);
   const row = await db
     .prepare(`SELECT CASE WHEN (${predicate.sql}) THEN 1 ELSE 0 END AS authorized`)
     .bind(...predicate.values)

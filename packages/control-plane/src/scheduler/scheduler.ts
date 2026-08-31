@@ -70,7 +70,10 @@ import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
-import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
+import {
+  isAutomationExecutionAuthorized,
+  isPrincipalAuthorized,
+} from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
 import type { GitHubEnrichment } from "../session/identity";
@@ -242,7 +245,9 @@ type StartInvocationResult =
   /** Overlap on a manual firing — nothing recorded; the caller answers 409. */
   | { outcome: "blocked" }
   /** Idempotency/dedup collision — another firing owns this slot or event. */
-  | { outcome: "deduplicated" };
+  | { outcome: "deduplicated" }
+  /** The execution principal cannot launch the immutable target snapshot. */
+  | { outcome: "unauthorized" };
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
@@ -344,17 +349,7 @@ export class Scheduler {
     params: StartInvocationParams
   ): Promise<StartInvocationResult> {
     const { source } = params;
-    let automation = params.automation;
-    if (!automation.user_id && automation.created_by && automation.created_by !== "anonymous") {
-      const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
-      if (identity) {
-        await this.db
-          .prepare(`UPDATE automations SET user_id = ? WHERE id = ? AND user_id IS NULL`)
-          .bind(identity.userId, automation.id)
-          .run();
-        automation = { ...automation, user_id: identity.userId };
-      }
-    }
+    const automation = await store.resolveCanonicalOwner(params.automation);
     const executionPrincipal =
       params.executionPrincipal ??
       (automation.user_id
@@ -363,17 +358,7 @@ export class Scheduler {
             participantUserId: automation.created_by,
           }
         : null);
-    if (
-      !executionPrincipal ||
-      !(await isAutomationExecutionAuthorized(
-        this.db,
-        automation.id,
-        [],
-        executionPrincipal.platformUserId
-      ))
-    ) {
-      throw new AutomationExecutionUnauthorizedError();
-    }
+    if (!executionPrincipal) return { outcome: "unauthorized" };
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
 
@@ -395,10 +380,20 @@ export class Scheduler {
       return this.recordOverlapSkip(store, params, { advanceSchedule: true });
     }
 
-    const selection =
-      params.repositories ?? (await store.getRepositoriesForAutomation(automation.id));
-    const environmentSelection =
-      params.environments ?? (await store.getEnvironmentsForAutomation(automation.id));
+    const [selection, environmentSelection] = await Promise.all([
+      params.repositories ?? store.getRepositoriesForAutomation(automation.id),
+      params.environments ?? store.getEnvironmentsForAutomation(automation.id),
+    ]);
+    if (
+      !(await isAutomationExecutionAuthorized(this.db, {
+        automationId: automation.id,
+        executionUserId: executionPrincipal.platformUserId,
+        requiresRepositoryUse: selection.length > 0,
+        requiresEnvironmentUse: environmentSelection.length > 0,
+      }))
+    ) {
+      return { outcome: "unauthorized" };
+    }
     const resolutions = await resolveAutomationRepositories(this.env, selection);
 
     const invocationId = generateId();
@@ -735,6 +730,32 @@ export class Scheduler {
           case "blocked":
             skipped++;
             break;
+          case "unauthorized": {
+            const deniedAt = Date.now();
+            await store.recordAuthorizationDenied(
+              {
+                id: generateId(),
+                automation_id: automation.id,
+                source: "schedule",
+                scheduled_at: automation.next_run_at,
+                trigger_key: null,
+                concurrency_key: null,
+                trigger_metadata: null,
+                skip_reason: "execution_authorization_denied",
+                failure_counted_at: null,
+                created_at: deniedAt,
+                updated_at: deniedAt,
+              },
+              automation.next_run_at!
+            );
+            this.log.warn("Paused scheduled automation after execution authorization denial", {
+              event: "scheduler.authorization_denied",
+              automation_id: automation.id,
+              scheduled_at: automation.next_run_at,
+            });
+            skipped++;
+            break;
+          }
         }
       } catch (e) {
         this.log.error("Unexpected error processing automation", {
@@ -967,6 +988,29 @@ export class Scheduler {
       slackContextPromise ??= this.buildSlackContextWithThread(slackEvent);
       return slackContextPromise;
     };
+    let slackSteeringActorPromise: Promise<string | null> | undefined;
+    const slackSteeringActor = (slackEvent: SlackAutomationEvent): Promise<string | null> => {
+      slackSteeringActorPromise ??= (async () => {
+        try {
+          const identity = await new UserStore(this.db).getIdentity(
+            "slack",
+            slackEvent.actorUserId
+          );
+          if (!identity) return null;
+          return (await isPrincipalAuthorized(this.db, identity.userId, "sessions.collaborate"))
+            ? identity.userId
+            : null;
+        } catch (error) {
+          this.log.warn("Failed to authorize slack actor for session steering", {
+            event: "scheduler.slack_steer_authorization_failed",
+            slack_actor_id: slackEvent.actorUserId,
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+          return null;
+        }
+      })();
+      return slackSteeringActorPromise;
+    };
 
     let triggered = 0;
     let skipped = 0;
@@ -996,28 +1040,17 @@ export class Scheduler {
           now - SLACK_THREAD_CONTINUITY_WINDOW_MS
         );
         if (steerable?.session_id) {
-          let ownerAuthorized: boolean;
-          try {
-            ownerAuthorized = await isAutomationExecutionAuthorized(this.db, automation.id, [
-              "sessions.collaborate",
-            ]);
-          } catch (error) {
-            this.log.warn("Failed to authorize automation owner for slack steering", {
-              event: "scheduler.slack_steer_authorization_failed",
-              automation_id: automation.id,
-              error: error instanceof Error ? error : new Error(String(error)),
-            });
-            continue;
-          }
-          if (!ownerAuthorized) {
-            this.log.warn("Blocked slack steering for unauthorized automation owner", {
+          const actorUserId = await slackSteeringActor(event);
+          if (!actorUserId) {
+            this.log.warn("Blocked slack steering for unauthorized actor", {
               event: "scheduler.slack_steer_unauthorized",
               automation_id: automation.id,
               session_id: steerable.session_id,
+              slack_actor_id: event.actorUserId,
             });
             continue;
           }
-          if (await this.steerSession(steerable, automation, event)) {
+          if (await this.steerSession(steerable, automation, event, actorUserId)) {
             steered++;
             continue;
           }
@@ -1084,6 +1117,14 @@ export class Scheduler {
         case "blocked":
           skipped++;
           break;
+        case "unauthorized":
+          this.log.warn("Skipped event automation after execution authorization denial", {
+            event: "scheduler.authorization_denied",
+            automation_id: automation.id,
+            source: event.source,
+          });
+          skipped++;
+          break;
       }
     }
 
@@ -1129,6 +1170,9 @@ export class Scheduler {
       },
     });
 
+    if (result.outcome === "unauthorized") {
+      throw new AutomationExecutionUnauthorizedError();
+    }
     if (result.outcome !== "started") {
       // Manual overlap (pre-check or lost race) records nothing.
       throw new AutomationTriggerBlockedError();
@@ -1503,7 +1547,8 @@ export class Scheduler {
   private async steerSession(
     run: AutomationRunRow,
     automation: AutomationRow,
-    event: SlackAutomationEvent
+    event: SlackAutomationEvent,
+    actorUserId: string
   ): Promise<boolean> {
     const sessionId = run.session_id!;
     const callbackContext: SlackCallbackContext = {
@@ -1522,11 +1567,10 @@ export class Scheduler {
     };
 
     try {
-      const identity = await new UserStore(this.db).getIdentity("slack", event.actorUserId);
       await this.enqueueSessionPrompt(sessionId, {
         content: event.text,
         authorId: `slack:${event.actorUserId}`,
-        canonicalUserId: identity?.userId,
+        canonicalUserId: actorUserId,
         source: "slack",
         callbackContext,
       });

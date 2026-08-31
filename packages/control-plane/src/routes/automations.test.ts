@@ -747,6 +747,28 @@ describe("automation route handlers", () => {
       expect(await res.json()).toEqual({ error: "Environment not found: env_a, env_b" });
     });
 
+    it("checks environment-use permission before disclosing whether an environment exists", async () => {
+      mockEnvironmentStore.getById.mockResolvedValue(null);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Workspace sync",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          instructions: "Run tests",
+          environmentIds: ["env_missing"],
+        },
+        permissions: PERMISSION_IDS.filter((permission) => permission !== "environments.use"),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        code: "permission_required",
+        permission: "environments.use",
+      });
+      expect(mockEnvironmentStore.getById).not.toHaveBeenCalled();
+    });
+
     it("rejects malformed environment ids", async () => {
       const res = await callRoute("POST", "/automations", {
         body: {
@@ -1056,7 +1078,29 @@ describe("automation route handlers", () => {
       ["repository", { repositories: [] }, "repositories.use"],
       ["environment", { environmentIds: [] }, "environments.use"],
     ] as const)(
-      "requires target-use permission for %s replacement",
+      "allows clearing a %s replacement without target-use permission",
+      async (_target, body, permission) => {
+        mockStore.getById.mockResolvedValue(sampleRow);
+
+        const res = await callRoute("PUT", "/automations/auto-1", {
+          body,
+          permissions: PERMISSION_IDS.filter((candidate) => candidate !== permission),
+        });
+
+        expect(res.status).toBe(200);
+        expect(mockBatch).toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      [
+        "repository",
+        { repositories: [{ repoOwner: "acme", repoName: "api" }] },
+        "repositories.use",
+      ],
+      ["environment", { environmentIds: ["env_1"] }, "environments.use"],
+    ] as const)(
+      "requires target-use permission for a non-empty %s replacement",
       async (_target, body, permission) => {
         mockStore.getById.mockResolvedValue(sampleRow);
 

@@ -594,7 +594,6 @@ async function handleCreateAutomation(
     requestedEnvironmentIds =
       environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
     validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
-    await resolveEnvironmentSelection(ctx.db, requestedEnvironmentIds);
   } catch (e) {
     if (e instanceof TargetSelectionError) return error(e.message, 400);
     throw e;
@@ -605,6 +604,12 @@ async function handleCreateAutomation(
       ...(requestedEnvironmentIds.length > 0 ? (["environments.use"] as const) : []),
     ]);
     if (targetAuthorizationError) return targetAuthorizationError;
+  }
+  try {
+    await resolveEnvironmentSelection(ctx.db, requestedEnvironmentIds);
+  } catch (e) {
+    if (e instanceof TargetSelectionError) return error(e.message, 400);
+    throw e;
   }
 
   const isSchedule = triggerType === "schedule";
@@ -915,8 +920,12 @@ async function handleUpdateAutomation(
   const selection = getRepositorySelection(body);
   const environmentSelection = getEnvironmentSelection(body);
   const requiredTargetPermissions: PermissionId[] = [
-    ...(selection.kind === "replace" ? (["repositories.use"] as const) : []),
-    ...(environmentSelection.kind === "replace" ? (["environments.use"] as const) : []),
+    ...(selection.kind === "replace" && selection.repositories.length > 0
+      ? (["repositories.use"] as const)
+      : []),
+    ...(environmentSelection.kind === "replace" && environmentSelection.environmentIds.length > 0
+      ? (["environments.use"] as const)
+      : []),
   ];
   if (requiredTargetPermissions.length > 0) {
     const targetAuthorizationError = requireTargetPermissions(ctx, requiredTargetPermissions);

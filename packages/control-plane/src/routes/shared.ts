@@ -17,6 +17,7 @@ import type {
   ScopedPermissionStem,
 } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
+import type { AutomationRow } from "../db/automation-store";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -50,7 +51,14 @@ export type RequestContext = CorrelationContext & {
   authentication?: AuthenticationContext;
   /** Effective human authorization loaded once by the router for this request. */
   authorization?: EffectiveAuthorization;
+  /** Resource admission populated by the router for automation mutation routes. */
+  automationAdmission?: AutomationRouteAdmission;
 };
+
+/** Automation resource admitted by the router for the current mutation. */
+export interface AutomationRouteAdmission {
+  automation: AutomationRow;
+}
 
 /** Route matching, authorization, and handler configuration. */
 export interface RouteDefinition<Context extends RequestContext = RequestContext> {

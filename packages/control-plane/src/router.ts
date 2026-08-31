@@ -472,8 +472,10 @@ async function enforceAutomationRequirement(
   try {
     const authorization = ctx.authorization;
     if (!authorization) throw new Error("Missing request authorization");
-    const automation = await new AutomationStore(ctx.db).getById(automationId);
-    if (!automation) return error("Automation not found", 404);
+    const store = new AutomationStore(ctx.db);
+    const storedAutomation = await store.getById(automationId);
+    if (!storedAutomation) return error("Automation not found", 404);
+    const automation = await store.resolveCanonicalOwner(storedAutomation);
 
     const permissionStem = `automations.${requirement.operation}` as const;
     const permissionScope = resolveScopedPermission(permissionStem, authorization.permissions);
@@ -488,6 +490,7 @@ async function enforceAutomationRequirement(
       );
     }
 
+    ctx.automationAdmission = { automation };
     return null;
   } catch {
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
