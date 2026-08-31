@@ -11,6 +11,7 @@ import { generateInternalToken } from "@open-inspect/shared/auth";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
+import { insertCanonicalUser } from "./identity-seed-helpers";
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
   web: "test-service-secret-web",
@@ -419,6 +420,54 @@ describe("sig1 service-credential authentication", () => {
       code: "permission_required",
       permission: "sessions.create",
     });
+  });
+
+  it("does not authorize a first-contact actor as one user and attribute it to a Viewer", async () => {
+    await insertCanonicalUser({
+      id: "existing-viewer",
+      email: "viewer@example.com",
+      emailVerified: 1,
+      displayName: "Existing Viewer",
+    });
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind("role_builtin_viewer", "existing-viewer")
+      .run();
+
+    const body = JSON.stringify({
+      title: "First-contact actor",
+      model: "anthropic/claude-haiku-4-5",
+      actorEmail: "viewer@example.com",
+    });
+    const first = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-EMAIL-VIEWER",
+      body,
+    });
+
+    expect(first.status).toBe(409);
+    await expect(first.json()).resolves.toMatchObject({ code: "actor_identity_changed" });
+    const identity = await new UserStore(env.DB).getIdentity("slack", "U-EMAIL-VIEWER");
+    expect(identity?.userId).toBe("existing-viewer");
+
+    const retry = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-EMAIL-VIEWER",
+      body,
+    });
+    expect(retry.status).toBe(403);
+    await expect(retry.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "sessions.create",
+    });
+
+    const sessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{
+      count: number;
+    }>();
+    expect(sessions?.count).toBe(0);
   });
 
   it("requires a user or signed actor before any service can create a session", async () => {

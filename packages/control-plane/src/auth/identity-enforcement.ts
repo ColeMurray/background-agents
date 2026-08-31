@@ -9,14 +9,13 @@
  * can run the steps out of order or skip one.
  */
 
-import type { AutomationEventSource } from "@open-inspect/shared/triggers";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { createLogger } from "./../logger";
 import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
 import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
-import { error, type RequestContext } from "../routes/shared";
+import { error, json, type RequestContext } from "../routes/shared";
 
 const logger = createLogger("identity-enforcement");
 
@@ -229,6 +228,22 @@ export async function resolveCanonicalUserId(
       providerEmail: display.email,
       avatarUrl: display.avatarUrl,
     });
+    if (ctx.authorization && user.id !== ctx.authorization.userId) {
+      logMismatchRejected(
+        "actor-resolution",
+        "canonicalUserId",
+        ctx.authorization.userId,
+        user.id,
+        ctx
+      );
+      return json(
+        {
+          error: "Actor identity changed; retry the request",
+          code: "actor_identity_changed",
+        },
+        409
+      );
+    }
     return requireActive(user.id);
   } catch (e) {
     logger.error("Failed to resolve verified actor identity", {
@@ -270,38 +285,4 @@ function logMismatchRejected(
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   });
-}
-
-/**
- * The bot service allowed to post each normalized automation event source.
- * `null` marks sources that are not bot-posted (sentry/webhook arrive on the
- * CP's own public webhook surface; linear posts no normalized events today)
- * — an explicit exemption, not a missing row.
- */
-const EVENT_SOURCE_SERVICE: Record<AutomationEventSource, ServiceName | null> = {
-  slack: "slack-bot",
-  github: "github-bot",
-  linear: null,
-  sentry: null,
-  webhook: null,
-};
-
-/**
- * Gate for the internal normalized automation-event endpoints: the poster
- * must be a service principal (401 otherwise), and per-service sources
- * accept only the source's own bot. Sources with a null row arrive via the
- * CP's own public webhook surface, so any service may forward them.
- */
-export function requireEventPoster(
-  ctx: RequestContext,
-  source: AutomationEventSource
-): Response | null {
-  const principal = ctx.principal;
-  if (principal?.kind !== "service") {
-    return error("Unauthorized", 401);
-  }
-  const expected = EVENT_SOURCE_SERVICE[source];
-  if (expected === null || principal.service === expected) return null;
-  logMismatchRejected(`internal-${source}-event`, "service", expected, principal.service, ctx);
-  return error("Unauthorized", 401);
 }

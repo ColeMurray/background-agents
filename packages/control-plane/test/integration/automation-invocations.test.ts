@@ -139,7 +139,12 @@ describe("automation invocations (D1 integration)", () => {
       ].map((statement) => statement.run())
     );
 
-    const authorized = () => isAutomationExecutionAuthorized(env.DB, automation.id);
+    const authorized = () =>
+      isAutomationExecutionAuthorized(env.DB, {
+        automationId: automation.id,
+        requiresRepositoryUse: true,
+        requiresEnvironmentUse: true,
+      });
     const grant = (permission: string) =>
       env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)")
         .bind(roleId, permission)

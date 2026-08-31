@@ -101,7 +101,7 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
       "Integration Browser User",
       "browser@test.local",
       1,
-      null,
+      "browser@test.local",
       applicationTimestamp,
       applicationTimestamp
     ),

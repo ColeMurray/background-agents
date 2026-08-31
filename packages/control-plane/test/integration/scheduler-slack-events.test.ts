@@ -83,6 +83,13 @@ describe("Scheduler slack event handling (integration)", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     await seedActiveUser("user-1");
+    await seedActiveUser("slack-actor-1");
+    await env.DB.prepare(
+      `INSERT INTO user_identities
+        (id, user_id, provider, provider_user_id, provider_issuer, created_at, updated_at)
+       VALUES ('slack-identity-1', 'slack-actor-1', 'slack', 'U1',
+         'https://slack.com', 1, 1)`
+    ).run();
   });
 
   it("triggers a matching slack automation and records thread coordinates", async () => {
@@ -177,7 +184,7 @@ describe("Scheduler slack event handling (integration)", () => {
     expect(JSON.parse(invocationRow!.trigger_metadata!).channel).toBe("C1");
   });
 
-  it("steers the running session when the automation owner remains authorized", async () => {
+  it("steers the running session when the Slack actor may collaborate", async () => {
     const store = new AutomationStore(env.DB);
     const id = await seedSlackAutomation(store);
 
@@ -210,14 +217,16 @@ describe("Scheduler slack event handling (integration)", () => {
     [
       "suspended",
       async () => {
-        await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind("user-1").run();
+        await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?")
+          .bind("slack-actor-1")
+          .run();
       },
     ],
     [
       "revoked",
       async () => {
         await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
-          .bind("role_builtin_viewer", "user-1")
+          .bind("role_builtin_viewer", "slack-actor-1")
           .run();
       },
     ],
@@ -236,13 +245,13 @@ describe("Scheduler slack event handling (integration)", () => {
            VALUES ('role_no_collaboration', 'sessions.create')`
           ),
           env.DB.prepare(
-            "UPDATE user_role_assignments SET role_id = 'role_no_collaboration' WHERE user_id = 'user-1'"
+            "UPDATE user_role_assignments SET role_id = 'role_no_collaboration' WHERE user_id = 'slack-actor-1'"
           ),
         ]);
       },
     ],
   ])(
-    "does not steer when the automation owner's execution authority is %s",
+    "does not steer when the Slack actor's collaboration authority is %s",
     async (authorityState, revoke) => {
       const store = new AutomationStore(env.DB);
       const id = await seedSlackAutomation(store);
@@ -272,6 +281,49 @@ describe("Scheduler slack event handling (integration)", () => {
       expect(await fetchInvocations(store, id)).toHaveLength(1);
     }
   );
+
+  it("does not impose automation-launch grants on the Slack actor while steering", async () => {
+    const store = new AutomationStore(env.DB);
+    const id = await seedSlackAutomation(store);
+    const concurrencyKey = "slack:C1:thread-actor-only";
+    expect(
+      await sendEvent(
+        makeSlackEvent({
+          text: "deploy the api",
+          concurrencyKey,
+          triggerKey: "slack:msg:C1:root-actor-only",
+        })
+      )
+    ).toMatchObject({ triggered: 1 });
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system)
+         VALUES ('role_collaboration_only', NULL, 'Collaboration Only',
+           'collaboration only', NULL, 0)`
+      ),
+      env.DB.prepare(
+        `INSERT INTO role_permissions (role_id, permission_id)
+         VALUES ('role_collaboration_only', 'sessions.collaborate')`
+      ),
+      env.DB.prepare(
+        `UPDATE user_role_assignments
+         SET role_id = 'role_collaboration_only' WHERE user_id = 'slack-actor-1'`
+      ),
+    ]);
+
+    expect(
+      await sendEvent(
+        makeSlackEvent({
+          text: "also update the changelog",
+          concurrencyKey,
+          triggerKey: "slack:msg:C1:reply-actor-only",
+        })
+      )
+    ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+    expect(await fetchRuns(id)).toHaveLength(1);
+  });
 
   it("continues the same session on a reply after the run has completed", async () => {
     const store = new AutomationStore(env.DB);

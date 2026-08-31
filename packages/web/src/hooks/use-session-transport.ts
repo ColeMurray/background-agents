@@ -6,6 +6,10 @@ import {
   serverMessageSchema,
   type ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
+import {
+  WS_CLOSE_AUTHORIZATION_REVOKED,
+  WS_CLOSE_INTERNAL_ERROR,
+} from "@open-inspect/shared/types/websocket";
 
 function parseWsMessage(raw: unknown): ServerMessage | null {
   const result = serverMessageSchema.safeParse(raw);
@@ -32,6 +36,7 @@ function reconnectDelayMs(attemptsSoFar: number): number {
 /** What a close event calls for, decided as data; the caller applies effects. */
 type CloseDirective =
   | { action: "auth_required" }
+  | { action: "refresh_authorization" }
   | { action: "session_expired" }
   | { action: "retry"; delayMs: number }
   | { action: "give_up" }
@@ -44,10 +49,17 @@ function closeDirective(
   if (event.code === WS_CLOSE_AUTH_REQUIRED) {
     return { action: "auth_required" };
   }
+  if (event.code === WS_CLOSE_AUTHORIZATION_REVOKED) {
+    return { action: "refresh_authorization" };
+  }
   if (event.code === WS_CLOSE_SESSION_EXPIRED) {
     return { action: "session_expired" };
   }
-  if (!event.wasClean || event.code === WS_CLOSE_INVALID_MESSAGE) {
+  if (
+    !event.wasClean ||
+    event.code === WS_CLOSE_INVALID_MESSAGE ||
+    event.code === WS_CLOSE_INTERNAL_ERROR
+  ) {
     return attemptsSoFar < MAX_RECONNECT_ATTEMPTS
       ? { action: "retry", delayMs: reconnectDelayMs(attemptsSoFar) }
       : { action: "give_up" };
@@ -226,6 +238,17 @@ export function useSessionTransport(
         setAuthError("Authentication failed. Please sign in again.");
         // Clear the token so we fetch a new one on reconnect
         wsTokenRef.current = null;
+        return;
+
+      case "refresh_authorization":
+        if (!mountedRef.current) return;
+        wsTokenRef.current = null;
+        reconnectAttempts.current = 0;
+        setAuthError(null);
+        setConnectionError(null);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (mountedRef.current) retry();
+        }, 0);
         return;
 
       case "session_expired":

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { enforceRoutePrincipal, handleRequest, routes } from "./router";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { serviceAllowsPermission } from "./authorization/service-permissions";
+import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
 function routeFor(method: string, path: string) {
   return routes.find((route) => route.method === method && route.pattern.test(path));
@@ -35,7 +37,7 @@ describe("route policy table", () => {
       } else if (authorization.kind === "authenticated" || authorization.kind === "active-self") {
         expect(authentication).toBe("user");
       } else if (authorization.kind === "service") {
-        expect(authentication).toBe("user-or-service");
+        expect(authentication).toBe("service");
         expect(authorization.services.length).toBeGreaterThan(0);
       } else if (authorization.kind === "active-global") {
         expect(["user", "user-or-service"]).toContain(authentication);
@@ -111,6 +113,27 @@ describe("route policy table", () => {
     expect(new Set(granted)).toEqual(expected);
   });
 
+  it("keeps every actorless route grant within its service permission ceiling", () => {
+    for (const route of routes) {
+      if (route.authorization.kind !== "active-user") continue;
+      if (route.authorization.service.kind !== "actor") continue;
+      for (const grant of route.authorization.service.actorlessGrants ?? []) {
+        for (const requirement of route.authorization.allOf) {
+          if (requirement.kind === "permission") {
+            expect(
+              serviceAllowsPermission(grant.service, requirement.permission),
+              `${grant.service} must allow ${requirement.permission} for ${route.method} ${route.pattern}`
+            ).toBe(true);
+          } else if (requirement.kind === "scoped-permission") {
+            expect(
+              serviceAllowsPermission(grant.service, SCOPED_PERMISSION_PAIRS[requirement.stem].own)
+            ).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
   it("keeps contextual route requirements explicit", () => {
     expect(routeFor("GET", "/keyboard-shortcuts")?.authorization).toEqual({
       kind: "active-self",
@@ -128,6 +151,14 @@ describe("route policy table", () => {
       kind: "active-user",
       allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "deny" },
+    });
+    expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [
+        { kind: "permission", permission: "sessions.read" },
+        { kind: "permission", permission: "sessions.collaborate" },
+        { kind: "permission", permission: "sessions.lifecycle" },
+      ],
     });
     expect(routeFor("POST", "/sessions/session-1/stop")?.authorization).toMatchObject({
       service: { kind: "actor", actorlessGrants: [{ service: "linear-bot" }] },
@@ -151,6 +182,33 @@ describe("route policy table", () => {
       kind: "service",
       services: ["github-bot"],
     });
+    expect(routeFor("POST", "/internal/github-event")?.authentication).toEqual({
+      kind: "service",
+    });
+    expect(routeFor("POST", "/internal/slack-event")?.authentication).toEqual({
+      kind: "service",
+    });
+  });
+
+  it("returns 400 for a malformed percent-encoded role ID before querying D1", async () => {
+    const path = "/roles/%E0%A4%A";
+    const route = routeFor("GET", path);
+    const match = path.match(route!.pattern)!;
+    const prepare = vi.fn();
+
+    const response = await route!.handler(
+      new Request(`https://test.local${path}`),
+      {} as never,
+      match,
+      {
+        principal: { kind: "user", userId: "user-1" },
+        db: { prepare },
+      } as never
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid role ID" });
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -160,7 +218,7 @@ describe("route policy table", () => {
     ["POST", "/automations/automation-1/resume", "manage"],
     ["POST", "/automations/automation-1/trigger", "trigger"],
     ["POST", "/automations/automation-1/regenerate-key", "manage"],
-  ])("declares typed automation admission for %s %s", (method, path, operation) => {
+  ])("declares automation ownership authorization for %s %s", (method, path, operation) => {
     expect(routeFor(method, path)?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [{ kind: "automation", operation, automationIdParam: "id" }],
@@ -350,7 +408,7 @@ describe("route policy dispatch ordering", () => {
     });
   });
 
-  it("keeps health live and private when the RBAC lookup fails", async () => {
+  it("keeps health dependency-free when D1 is unavailable", async () => {
     const testEnv = env("github");
     testEnv.DB.prepare = vi.fn(() => {
       throw new Error("D1 unavailable");
@@ -366,7 +424,6 @@ describe("route policy dispatch ordering", () => {
     await expect(response.json()).resolves.toEqual({
       status: "healthy",
       service: "open-inspect-control-plane",
-      rbac: { ownerAssignment: "unknown" },
     });
   });
 
@@ -401,6 +458,10 @@ describe("route principal policy", () => {
     [{ kind: "web-service" } as const, { kind: "service", service: "web", actor: null } as const],
     [{ kind: "user" } as const, { kind: "user", userId: "user-1" } as const],
     [
+      { kind: "service" } as const,
+      { kind: "service", service: "github-bot", actor: null } as const,
+    ],
+    [
       { kind: "user-or-service" } as const,
       { kind: "service", service: "linear-bot", actor: null } as const,
     ],
@@ -420,6 +481,7 @@ describe("route principal policy", () => {
       { kind: "service", service: "linear-bot", actor: null } as const,
       403,
     ],
+    [{ kind: "service" } as const, { kind: "user", userId: "user-1" } as const, 403],
   ])("rejects mismatched principals for %o", (authentication, principal, status) => {
     expect(enforceRoutePrincipal(authentication, principal)?.status).toBe(status);
   });

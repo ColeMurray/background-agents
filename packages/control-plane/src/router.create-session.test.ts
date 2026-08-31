@@ -139,11 +139,7 @@ describe("handleCreateSession D1 ordering", () => {
   ): Record<string, unknown> {
     const statement = {
       bind: vi.fn(() => statement),
-      first: vi
-        .fn()
-        .mockResolvedValueOnce({ suspended_at: null, assigned: 1 })
-        .mockResolvedValueOnce({ active: 1 })
-        .mockResolvedValue(null),
+      first: vi.fn(async () => null),
       all: vi.fn(async () => ({ results: [] })),
       run: vi.fn(async () => ({ meta: { changes: 0 } })),
     };
@@ -179,6 +175,15 @@ describe("handleCreateSession D1 ordering", () => {
               })),
             };
             return permissionStatement;
+          }
+          if (sql.includes("suspended_at IS NULL")) {
+            const activeStatement = {
+              bind: vi.fn(() => activeStatement),
+              first: vi.fn(async () => ({ active: 1 })),
+              all: vi.fn(async () => ({ results: [] })),
+              run: vi.fn(async () => ({ meta: { changes: 0 } })),
+            };
+            return activeStatement;
           }
           return statement;
         }),
@@ -519,7 +524,7 @@ describe("handleCreateSession D1 ordering", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return { create } as never;
     });
-    const resolveOrCreateUser = vi.fn(async () => ({ id: "user-9" }));
+    const resolveOrCreateUser = vi.fn(async () => ({ id: "user-1" }));
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getIdentity: async () => null,
@@ -545,7 +550,7 @@ describe("handleCreateSession D1 ordering", () => {
       providerEmail: "ada@example.com",
       avatarUrl: "https://avatars.example.com/ada.png",
     });
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-9" }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-1" }));
     expect(initFetch).toHaveBeenCalledOnce();
   });
 

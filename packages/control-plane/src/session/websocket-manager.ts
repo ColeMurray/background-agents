@@ -17,9 +17,8 @@ import type {
 } from "./ws-client-mapping-repository";
 import {
   WS_AUTHORIZATION_REVOKED_REASON,
-  WS_AUTHORIZATION_LEASE_MS,
   WS_CLOSE_AUTHORIZATION_REVOKED,
-} from "./authorization-lease";
+} from "@open-inspect/shared/types/websocket";
 
 /** Configuration for the WebSocket manager. */
 export interface WebSocketManagerConfig {
@@ -65,11 +64,11 @@ export interface SessionWebSocketManager {
   setClient(ws: WebSocket, info: ClientInfo): void;
   removeClient(ws: WebSocket): ClientInfo | null;
 
+  /** Schedule, synchronize, and atomically publish a client authorization lease. */
+  activateClient(ws: WebSocket, info: ClientInfo, synchronize: () => boolean): Promise<boolean>;
+
   /** Return a live client or its persisted hibernation mapping, rejecting expired leases. */
   lookupClient(ws: WebSocket): ClientLookup;
-
-  /** Mint, persist, and schedule an authorization lease. */
-  grantLease(ws: WebSocket, participantId: string, clientId: string): Promise<number>;
 
   /** Close expired sockets, delete expired mappings, and schedule the next lease deadline. */
   expireAuthorizationLeases(now: number): Promise<void>;
@@ -256,9 +255,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   removeClient(ws: WebSocket): ClientInfo | null {
-    const client = this.clients.get(ws) ?? null;
-    this.clients.delete(ws);
-    return client;
+    return this.teardownClient(ws, this.classify(ws));
   }
 
   // -------------------------------------------------------------------------
@@ -287,26 +284,37 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return { kind: "recovered", mapping };
   }
 
-  /** Persist a new authorization lease and schedule its expiration deadline. */
-  async grantLease(ws: WebSocket, participantId: string, clientId: string): Promise<number> {
+  /** Schedule and synchronize before publishing persistent and in-memory identity together. */
+  async activateClient(
+    ws: WebSocket,
+    info: ClientInfo,
+    synchronize: () => boolean
+  ): Promise<boolean> {
     const parsed = this.classify(ws);
     if (parsed.kind !== "client" || !parsed.wsId) {
-      throw new Error("Cannot grant an authorization lease without a client WebSocket ID");
+      throw new Error("Cannot activate a client without a WebSocket ID");
     }
-    const expiresAt = Date.now() + WS_AUTHORIZATION_LEASE_MS;
-    await this.alarmScheduler.schedule(expiresAt);
+    await this.alarmScheduler.schedule(info.authorizationExpiresAt);
+    if (ws.readyState !== WebSocket.OPEN || info.authorizationExpiresAt <= Date.now()) {
+      throw new Error("Cannot activate a closed client or an expired authorization lease");
+    }
+    // No await is allowed from snapshot send through both identity writes: a
+    // client that receives `subscribed` must be immediately usable by the next
+    // event delivered for this socket.
+    if (!synchronize()) return false;
     this.wsClientMappingRepository.upsertWsClientMapping({
       wsId: parsed.wsId,
-      participantId,
-      clientId,
+      participantId: info.participantId,
+      clientId: info.clientId,
       createdAt: Date.now(),
-      authorizationExpiresAt: expiresAt,
+      authorizationExpiresAt: info.authorizationExpiresAt,
     });
+    this.clients.set(ws, info);
     this.log.debug("Stored ws_client_mapping", {
       ws_id: parsed.wsId,
-      participant_id: participantId,
+      participant_id: info.participantId,
     });
-    return expiresAt;
+    return true;
   }
 
   /** Close and remove expired client leases, then schedule the next deadline. */
@@ -411,10 +419,19 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   private rejectExpiredAuthorization(ws: WebSocket, parsed: ConnectionClassification): void {
+    this.teardownClient(ws, parsed);
+    this.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
+  }
+
+  /** Remove every representation of a client before callers notify or close it. */
+  private teardownClient(ws: WebSocket, parsed: ConnectionClassification): ClientInfo | null {
+    const client = this.clients.get(ws) ?? null;
+    this.clients.delete(ws);
+    this.synchronizingClients.delete(ws);
     if (parsed.kind === "client" && parsed.wsId) {
       this.wsClientMappingRepository.deleteWsClientMapping(parsed.wsId);
     }
-    this.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
+    return client;
   }
 
   // -------------------------------------------------------------------------
@@ -439,8 +456,14 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     this.close(ws, 4008, "Authentication timeout");
   }
 
-  getAuthenticatedClients(): IterableIterator<ClientInfo> {
-    return this.clients.values();
+  *getAuthenticatedClients(): IterableIterator<ClientInfo> {
+    for (const [ws, client] of this.clients) {
+      if (client.authorizationExpiresAt <= Date.now()) {
+        this.rejectExpiredAuthorization(ws, this.classify(ws));
+        continue;
+      }
+      yield client;
+    }
   }
 
   getConnectedClientCount(): number {

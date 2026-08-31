@@ -428,6 +428,41 @@ describe("Scheduler (integration)", () => {
       expect(automation!.next_run_at!).toBeGreaterThan(now);
     });
 
+    it("records and pauses an authorization-denied schedule so it is not repeatedly overdue", async () => {
+      const store = new AutomationStore(env.DB);
+      const scheduledAt = Date.now() - 60_000;
+      await store.create(
+        makeAutomation({ id: "auto-denied-schedule", next_run_at: scheduledAt, enabled: 1 })
+      );
+      await env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
+      )
+        .bind("user-1")
+        .run();
+
+      expect(await createScheduler().tick()).toMatchObject({ skipped: 1, failed: 0 });
+      const denied = await store.getById("auto-denied-schedule");
+      expect(denied).toMatchObject({ enabled: 0, next_run_at: null });
+      const firstInvocations = await store.listInvocations("auto-denied-schedule", {
+        limit: 20,
+        offset: 0,
+      });
+      expect(firstInvocations.invocations).toEqual([
+        expect.objectContaining({
+          status: "skipped",
+          skipReason: "execution_authorization_denied",
+          scheduledAt,
+        }),
+      ]);
+
+      expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 0 });
+      const secondInvocations = await store.listInvocations("auto-denied-schedule", {
+        limit: 20,
+        offset: 0,
+      });
+      expect(secondInvocations.invocations).toHaveLength(1);
+    });
+
     it("auto-pauses after recovery sweep detects 3rd consecutive failure", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();

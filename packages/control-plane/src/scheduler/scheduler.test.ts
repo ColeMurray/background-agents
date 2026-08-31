@@ -21,6 +21,7 @@ const mockResolveSessionProviderAuth = vi.hoisted(() =>
   ])
 );
 const mockIsAutomationExecutionAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockIsPrincipalAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 vi.mock("../source-control", () => ({
   createSourceControlProviderFromEnv: vi.fn(() => ({
@@ -37,6 +38,7 @@ vi.mock("../automation/authorization-guard", async (importOriginal) => {
   return {
     ...actual,
     isAutomationExecutionAuthorized: mockIsAutomationExecutionAuthorized,
+    isPrincipalAuthorized: mockIsPrincipalAuthorized,
   };
 });
 
@@ -84,6 +86,7 @@ function createMockStore() {
     getRepositoriesForAutomationIds: vi.fn().mockResolvedValue(new Map()),
     getEnvironmentsForAutomation: vi.fn().mockResolvedValue([]),
     getEnvironmentsForAutomationIds: vi.fn().mockResolvedValue(new Map()),
+    resolveCanonicalOwner: vi.fn(async (automation: unknown) => automation),
     insertInvocationGuarded: vi.fn().mockImplementation(async (params: unknown) => {
       capturedInvocationParams.push(
         structuredClone(params) as { children: Array<Record<string, unknown>> }
@@ -91,6 +94,7 @@ function createMockStore() {
       return { inserted: true };
     }),
     insertSkippedInvocation: vi.fn().mockResolvedValue({ inserted: true }),
+    recordAuthorizationDenied: vi.fn().mockResolvedValue({ inserted: true, paused: true }),
     getInvocationById: vi.fn().mockResolvedValue(null),
     getInvocationRunAggregate: vi.fn().mockResolvedValue(aggregate()),
     tryMarkInvocationFailureCounted: vi.fn().mockResolvedValue(true),
@@ -486,6 +490,10 @@ describe("Scheduler", () => {
     ]);
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
+    mockIsPrincipalAuthorized.mockResolvedValue(true);
+    mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
+      provider === "slack" ? { userId: "slack-actor-user" } : null
+    );
     capturedInvocationParams = [];
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);
@@ -553,16 +561,22 @@ describe("Scheduler", () => {
 
       const result = await createScheduler().tick();
 
-      expect(result).toEqual({ processed: 0, skipped: 0, failed: 1 });
-      expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledWith(
-        expect.anything(),
-        "auto-1",
-        [],
-        "user-1"
-      );
-      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
+      expect(result).toEqual({ processed: 0, skipped: 1, failed: 0 });
+      expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledWith(expect.anything(), {
+        automationId: "auto-1",
+        executionUserId: "user-1",
+        requiresRepositoryUse: true,
+        requiresEnvironmentUse: false,
+      });
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       expect(mockResolveSessionProviderAuth).not.toHaveBeenCalled();
+      expect(mockStore.recordAuthorizationDenied).toHaveBeenCalledWith(
+        expect.objectContaining({
+          automation_id: "auto-1",
+          skip_reason: "execution_authorization_denied",
+        }),
+        sampleAutomation.next_run_at
+      );
     });
 
     it("does not enqueue a prompt when recovery wins the launch transition", async () => {
@@ -1371,15 +1385,19 @@ describe("Scheduler", () => {
     });
 
     it("repairs legacy automation identity before invocation admission", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([{ ...sampleAutomation, user_id: null }]);
+      const legacyAutomation = { ...sampleAutomation, user_id: null };
+      mockStore.getOverdueAutomations.mockResolvedValue([legacyAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
-      mockUserStoreGetIdentity.mockResolvedValue({ userId: "looked-up-user" });
+      mockStore.resolveCanonicalOwner.mockResolvedValue({
+        ...legacyAutomation,
+        user_id: "looked-up-user",
+      });
 
       const scheduler = createScheduler();
       await scheduler.tick();
 
-      expect(mockUserStoreGetIdentity).toHaveBeenCalledWith("github", "user-1");
-      expect(mockUserStoreGetIdentity.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(mockStore.resolveCanonicalOwner).toHaveBeenCalledWith(legacyAutomation);
+      expect(mockStore.resolveCanonicalOwner.mock.invocationCallOrder[0]).toBeLessThan(
         mockIsAutomationExecutionAuthorized.mock.invocationCallOrder[0]
       );
       expect(mockSessionStoreCreate).toHaveBeenCalledWith(
@@ -1388,13 +1406,15 @@ describe("Scheduler", () => {
     });
 
     it("rejects a legacy automation when identity lookup finds nothing", async () => {
-      mockStore.getOverdueAutomations.mockResolvedValue([{ ...sampleAutomation, user_id: null }]);
+      const legacyAutomation = { ...sampleAutomation, user_id: null };
+      mockStore.getOverdueAutomations.mockResolvedValue([legacyAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
-      mockUserStoreGetIdentity.mockResolvedValue(null);
+      mockStore.resolveCanonicalOwner.mockResolvedValue(legacyAutomation);
 
       const result = await createScheduler().tick();
 
-      expect(result).toEqual({ processed: 0, skipped: 0, failed: 1 });
+      expect(result).toEqual({ processed: 0, skipped: 1, failed: 0 });
+      expect(mockStore.recordAuthorizationDenied).toHaveBeenCalled();
       expect(mockSessionStoreCreate).not.toHaveBeenCalled();
     });
 
@@ -2078,7 +2098,6 @@ describe("Scheduler", () => {
       await expect(scheduler.trigger("auto-1", "user-1")).rejects.toBeInstanceOf(
         AutomationExecutionUnauthorizedError
       );
-      expect(mockStore.getActiveRunForAutomation).not.toHaveBeenCalled();
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 
@@ -2286,6 +2305,31 @@ describe("Scheduler", () => {
         expect(threadContextCalls(slackFetch)).toHaveLength(1);
       });
 
+      it("continues fan-out after one matching automation is unauthorized", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          sampleSlackAutomation,
+          { ...sampleSlackAutomation, id: "auto-slack-2" },
+        ]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockIsAutomationExecutionAuthorized
+          .mockResolvedValueOnce(false)
+          .mockResolvedValueOnce(true);
+        const { env } = threadContextEnv();
+
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 1,
+          skipped: 1,
+          steered: 0,
+        });
+
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            invocation: expect.objectContaining({ automation_id: "auto-slack-2" }),
+          })
+        );
+      });
+
       it("launches without history when the context request fails", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
@@ -2428,6 +2472,25 @@ describe("Scheduler", () => {
       // A steer is not a new trigger and not a skip.
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+    });
+
+    it("resolves and authorizes the Slack actor once across several steering candidates", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([
+        sampleSlackAutomation,
+        { ...sampleSlackAutomation, id: "auto-slack-2" },
+      ]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ id: "active-run", session_id: "sess-running" })
+      );
+
+      expect(await createScheduler().event(makeSlackEvent({ text: "follow up" }))).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 2,
+      });
+
+      expect(mockUserStoreGetIdentity).toHaveBeenCalledTimes(1);
+      expect(mockIsPrincipalAuthorized).toHaveBeenCalledTimes(1);
     });
 
     it("continues the same session on a reply after the run has completed", async () => {

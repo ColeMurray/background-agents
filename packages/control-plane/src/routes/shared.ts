@@ -208,6 +208,7 @@ export type RouteAuthentication =
   | { kind: "public" }
   | { kind: "handler-authenticated" }
   | { kind: "web-service" }
+  | { kind: "service" }
   | { kind: "user" }
   | { kind: "user-or-service" }
   | ({ kind: "sandbox" } & SandboxSessionBinding)
@@ -220,11 +221,13 @@ export type RouteContext<Authentication extends RouteAuthentication> = RequestCo
       ? SandboxPrincipal
       : Authentication extends { kind: "web-service" }
         ? WebServicePrincipal
-        : Authentication extends { kind: "user-or-service" }
-          ? UserOrServicePrincipal
-          : Authentication extends { kind: "user-or-service-with-sandbox-fallback" }
-            ? Principal
-            : Principal | undefined;
+        : Authentication extends { kind: "service" }
+          ? ServicePrincipal
+          : Authentication extends { kind: "user-or-service" }
+            ? UserOrServicePrincipal
+            : Authentication extends { kind: "user-or-service-with-sandbox-fallback" }
+              ? Principal
+              : Principal | undefined;
 };
 
 export type UserRouteContext = RouteContext<{ kind: "user" }>;
@@ -243,6 +246,11 @@ const SESSION_ID_BINDING: SandboxSessionBinding = {
 
 export const GITHUB_USER_OR_SERVICE_ROUTE = {
   authentication: { kind: "user-or-service" },
+  supportedScmProviders: ["github"],
+} as const satisfies RoutePolicy;
+
+export const GITHUB_SERVICE_ROUTE = {
+  authentication: { kind: "service" },
   supportedScmProviders: ["github"],
 } as const satisfies RoutePolicy;
 

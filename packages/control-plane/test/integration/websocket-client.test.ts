@@ -243,6 +243,36 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
+  it("rejects a custom role that cannot use the complete WebSocket protocol", async () => {
+    const suffix = Date.now();
+    const name = `ws-client-partial-role-${suffix}`;
+    const userId = `partial-role-user-${suffix}`;
+    const roleId = `role_custom_ws_${suffix}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles (id, key, name, normalized_name, is_system)
+         VALUES (?, NULL, ?, ?, 0)`
+      ).bind(roleId, `WebSocket Collaborator ${suffix}`, `websocket-collaborator-${suffix}`),
+      env.DB.prepare(
+        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate')"
+      ).bind(roleId),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        roleId,
+        userId
+      ),
+    ]);
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "partial-role-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
   it("rejects a token for a suspended user", async () => {
     const name = `ws-client-suspended-authorization-${Date.now()}`;
     const userId = `suspended-user-${Date.now()}`;
@@ -999,7 +1029,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
   it("closing the only socket for a participant broadcasts presence_leave", async () => {
     const name = `ws-client-presence-leave-${Date.now()}`;
-    await initNamedSession(name);
+    const { stub } = await initNamedSession(name);
 
     // Two distinct users so the watcher remains connected after the target leaves
     const watcher = await openClientWs(name, { subscribe: true, userId: "user-1" });
@@ -1016,6 +1046,13 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const leave = messages.find((m) => m.type === "presence_leave") as Record<string, unknown>;
     expect(leave).toBeDefined();
     expect(leave.userId).toBe("user-2");
+    await expect(
+      queryDO<{ count: number }>(
+        stub,
+        "SELECT COUNT(*) AS count FROM ws_client_mapping WHERE participant_id = ?",
+        leaver.participantId
+      )
+    ).resolves.toEqual([{ count: 0 }]);
 
     watcher.ws.close();
   });

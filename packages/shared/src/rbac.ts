@@ -77,6 +77,13 @@ export const PERMISSION_IDS = [
 /** A permission identifier recognized by the RBAC policy. */
 export type PermissionId = (typeof PERMISSION_IDS)[number];
 
+/** Permissions required to admit a browser WebSocket to the full session protocol. */
+export const SESSION_WEBSOCKET_PERMISSIONS = [
+  "sessions.read",
+  "sessions.collaborate",
+  "sessions.lifecycle",
+] as const satisfies readonly PermissionId[];
+
 /** Maps ownership-sensitive capabilities to their workspace-wide and owner-only grants. */
 export const SCOPED_PERMISSION_PAIRS = {
   "automations.manage": {
