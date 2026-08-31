@@ -733,6 +733,15 @@ export async function handleRequest(
 
     if (authError) {
       if (ctx.principal) {
+        await auditRouteAuthorizationDecision({
+          ctx,
+          route: matchedRoute.route,
+          method,
+          path,
+          response: authError,
+          allowed: false,
+          requirement: { kind: "principal-type" },
+        });
         logPrincipal(ctx.principal, ctx, path);
         logRequest(authError, ctx, method, path, startTime);
       }

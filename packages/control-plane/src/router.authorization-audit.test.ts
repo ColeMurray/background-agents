@@ -22,6 +22,14 @@ vi.mock("./auth/authenticate", async (importOriginal) => ({
 
 const TEST_ROUTES: Route[] = [
   {
+    authentication: { kind: "user" },
+    supportedScmProviders: "all",
+    method: "POST",
+    pattern: /^\/audit-test\/user-only$/,
+    authorization: requirePermission("workspace.members.manage"),
+    handler: async () => json({ handled: true }),
+  },
+  {
     authentication: { kind: "user-or-service" },
     supportedScmProviders: "all",
     method: "POST",
@@ -270,6 +278,27 @@ describe("router authorization decision auditing", () => {
       action: "authorization.request_denied",
       reasonCode: "service_capability_required",
       metadata: { requirements: [{ kind: "service-capability" }] },
+    });
+  });
+
+  it("audits a verified service principal rejected by a user-only route", async () => {
+    authenticateAs({ kind: "service", service: "github-bot", actor: null });
+    const denied = createEnv();
+    const response = await handleRequest(
+      new Request("https://test.local/audit-test/user-only", { method: "POST" }),
+      denied.env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(403);
+    expect(auditRecord(denied.auditWrites[0])).toMatchObject({
+      principalKind: "service",
+      actorService: "github-bot",
+      action: "authorization.request_denied",
+      metadata: {
+        requirements: [{ kind: "principal-type" }],
+        responseReason: "Human user authentication required",
+      },
     });
   });
 

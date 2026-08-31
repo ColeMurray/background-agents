@@ -7,6 +7,7 @@ const logger = createLogger("authorization-audit");
 export type AuthorizationDecisionRequirement =
   | RouteAuthorizationRequirement
   | { kind: "active-user" }
+  | { kind: "principal-type" }
   | { kind: "service-capability" };
 
 function routeRequirements(route: Route): AuthorizationDecisionRequirement[] {
