@@ -25,6 +25,8 @@ export const BUILT_IN_ROLE_REGISTRY = {
 export type BuiltInRoleKey = keyof typeof BUILT_IN_ROLE_REGISTRY;
 /** Built-in role keys in canonical registry order. */
 export const BUILT_IN_ROLE_KEYS = Object.keys(BUILT_IN_ROLE_REGISTRY) as BuiltInRoleKey[];
+/** Stable IDs reserved for system-defined roles. */
+export const BUILT_IN_ROLE_IDS = Object.values(BUILT_IN_ROLE_REGISTRY).map((role) => role.id);
 
 /** Canonical permission identifiers accepted by the RBAC policy and persistence layers. */
 export const PERMISSION_IDS = [
@@ -155,21 +157,52 @@ export function isCustomRolePermission(permission: PermissionId): boolean {
   return permission !== "workspace.transfer_ownership";
 }
 
+const roleNameSchema = z.string().min(1);
+const roleReferenceShape = {
+  id: z.string().min(1),
+  key: builtInRoleKeySchema.nullable(),
+  name: roleNameSchema,
+};
+
+function validateRoleIdentity(
+  role: { id: string; key: BuiltInRoleKey | null },
+  context: z.RefinementCtx
+): void {
+  if (role.key === null) {
+    if ((BUILT_IN_ROLE_IDS as readonly string[]).includes(role.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["id"],
+        message: "Built-in role IDs require their canonical key",
+      });
+    }
+    return;
+  }
+  if (role.id !== BUILT_IN_ROLE_REGISTRY[role.key].id) {
+    context.addIssue({
+      code: "custom",
+      path: ["id"],
+      message: "Built-in role keys require their canonical ID",
+    });
+  }
+}
+
 /** Validates the role identity embedded in authorization responses. */
 export const roleReferenceSchema = z
-  .object({
-    id: z.string().min(1),
-    key: builtInRoleKeySchema.nullable(),
-    name: z.string().min(1),
-  })
-  .strict();
+  .object(roleReferenceShape)
+  .strict()
+  .superRefine(validateRoleIdentity);
 
 /** Validates an administrative role view with effective grants and assignment count. */
-export const roleSummarySchema = roleReferenceSchema.extend({
-  description: z.string().nullable(),
-  permissions: z.array(permissionIdSchema),
-  assignmentCount: z.number().int().nonnegative(),
-});
+export const roleSummarySchema = z
+  .object({
+    ...roleReferenceShape,
+    description: z.string().nullable(),
+    permissions: z.array(permissionIdSchema),
+    assignmentCount: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine(validateRoleIdentity);
 
 /** Validates a user's role, suspension state, and currently effective permissions. */
 export const effectiveAuthorizationSchema = z
@@ -213,6 +246,8 @@ export const replaceMemberStatusInputSchema = z
 
 /** Administrative role data with effective grants and current assignment count. */
 export type RoleSummary = z.infer<typeof roleSummarySchema>;
+/** A built-in or custom role identity with canonical ID/key pairing. */
+export type RoleReference = z.infer<typeof roleReferenceSchema>;
 /** The authorization state used to make permission decisions for a user. */
 export type EffectiveAuthorization = z.infer<typeof effectiveAuthorizationSchema>;
 /** A workspace member and their current RBAC assignment state. */
