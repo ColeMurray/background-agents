@@ -9,6 +9,7 @@ import {
   resolveScopedPermission,
   replaceMemberRoleInputSchema,
   replaceMemberStatusInputSchema,
+  roleReferenceSchema,
 } from "./rbac";
 
 describe("RBAC registry", () => {
@@ -37,6 +38,25 @@ describe("RBAC registry", () => {
     expect(new Set(Object.values(BUILT_IN_ROLE_REGISTRY).map((role) => role.id)).size).toBe(
       BUILT_IN_ROLE_KEYS.length
     );
+  });
+
+  it("binds built-in role IDs and keys into one canonical identity", () => {
+    expect(
+      roleReferenceSchema.parse({ id: "role_builtin_owner", key: "owner", name: "Owner" })
+    ).toEqual({ id: "role_builtin_owner", key: "owner", name: "Owner" });
+    expect(
+      roleReferenceSchema.parse({ id: "role_custom_reviewer", key: null, name: "Reviewer" })
+    ).toEqual({ id: "role_custom_reviewer", key: null, name: "Reviewer" });
+
+    expect(() =>
+      roleReferenceSchema.parse({ id: "role_other", key: "owner", name: "Owner" })
+    ).toThrow();
+    expect(() =>
+      roleReferenceSchema.parse({ id: "role_builtin_owner", key: null, name: "Custom" })
+    ).toThrow();
+    expect(() =>
+      roleReferenceSchema.parse({ id: "role_builtin_member", key: "viewer", name: "Viewer" })
+    ).toThrow();
   });
 
   it("contains unique, sorted permission identifiers", () => {

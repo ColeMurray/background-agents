@@ -1,7 +1,9 @@
 import {
   BUILT_IN_ROLE_REGISTRY,
+  roleReferenceSchema,
   type BuiltInRoleKey,
   type PermissionId,
+  type RoleReference,
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
@@ -39,17 +41,14 @@ interface MemberRow {
 export interface EffectiveAuthorizationRecord {
   userId: string;
   suspendedAt: number | null;
-  role: { id: string; key: BuiltInRoleKey | null; name: string } | null;
+  role: RoleReference | null;
 }
 
 /** Persistence view of a role and the number of users currently assigned to it. */
-export interface AuthorizationRoleRecord {
-  id: string;
-  key: BuiltInRoleKey | null;
-  name: string;
+export type AuthorizationRoleRecord = RoleReference & {
   description: string | null;
   assignmentCount: number;
-}
+};
 
 interface AuditInput {
   requestId: string;
@@ -93,8 +92,18 @@ function anotherUnsuspendedOwner(targetUserId: string): SqlCondition {
 export type AuthorizationMutationOutcome =
   | { status: "applied" }
   | { status: "actor_authorization_changed" }
-  | { status: "not_found" }
+  | { status: "role_not_found" }
+  | { status: "member_not_found" }
   | { status: "conflict" };
+
+type NotFoundStatus = Extract<
+  AuthorizationMutationOutcome["status"],
+  "role_not_found" | "member_not_found"
+>;
+
+function toRoleReference(id: string, key: BuiltInRoleKey | null, name: string): RoleReference {
+  return roleReferenceSchema.parse({ id, key, name });
+}
 
 function toEffectiveAuthorizationRecord(row: EffectiveRow): EffectiveAuthorizationRecord {
   return {
@@ -102,16 +111,14 @@ function toEffectiveAuthorizationRecord(row: EffectiveRow): EffectiveAuthorizati
     suspendedAt: row.suspended_at,
     role:
       row.role_id && row.role_name
-        ? { id: row.role_id, key: row.role_key, name: row.role_name }
+        ? toRoleReference(row.role_id, row.role_key, row.role_name)
         : null,
   };
 }
 
 function toRoleRecord(row: RoleRow): AuthorizationRoleRecord {
   return {
-    id: row.id,
-    key: row.key,
-    name: row.name,
+    ...toRoleReference(row.id, row.key, row.name),
     description: row.description,
     assignmentCount: Number(row.assignment_count),
   };
@@ -123,7 +130,7 @@ function toMember(row: MemberRow): WorkspaceMember {
     displayName: row.display_name,
     email: row.email,
     suspendedAt: row.suspended_at,
-    role: { id: row.role_id, key: row.role_key, name: row.role_name },
+    role: toRoleReference(row.role_id, row.role_key, row.role_name),
   };
 }
 
@@ -240,6 +247,22 @@ export class AuthorizationStore {
           sql: `(? <> ? AND NOT (${targetIsOwner.sql})) OR ${transferGuard.sql}`,
           values: [input.roleId, OWNER_ROLE_ID, ...targetIsOwner.values, ...transferGuard.values],
         },
+        notFound: [
+          {
+            status: "role_not_found",
+            condition: {
+              sql: "NOT EXISTS (SELECT 1 FROM roles WHERE id = ?)",
+              values: [input.roleId],
+            },
+          },
+          {
+            status: "member_not_found",
+            condition: {
+              sql: "NOT EXISTS (SELECT 1 FROM user_role_assignments WHERE user_id = ?)",
+              values: [input.targetUserId],
+            },
+          },
+        ],
       }
     );
     const results = await this.db.batch([
@@ -308,6 +331,19 @@ export class AuthorizationStore {
           sql: `NOT (${targetIsOwner.sql}) OR ${transferGuard.sql}`,
           values: [...targetIsOwner.values, ...transferGuard.values],
         },
+        notFound: [
+          {
+            status: "member_not_found",
+            condition: {
+              sql: `NOT EXISTS (
+                SELECT 1 FROM users
+                JOIN user_role_assignments ON user_role_assignments.user_id = users.id
+                WHERE users.id = ?
+              )`,
+              values: [input.targetUserId],
+            },
+          },
+        ],
       }
     );
     const statements: SqlStatement[] = [
@@ -355,7 +391,10 @@ export class AuthorizationStore {
     actorUserId: string,
     permissions: PermissionId[],
     resourceCondition: SqlCondition,
-    options?: { actor?: SqlCondition; notFound?: SqlCondition }
+    options?: {
+      actor?: SqlCondition;
+      notFound?: Array<{ status: NotFoundStatus; condition: SqlCondition }>;
+    }
   ): {
     outcome: SqlStatement;
     applied: SqlCondition;
@@ -383,17 +422,25 @@ export class AuthorizationStore {
       values: [...actor.values, ...resourceCondition.values],
     };
     const auditId = crypto.randomUUID();
+    const notFoundCases =
+      options?.notFound
+        ?.map(({ status, condition }) => `WHEN (${condition.sql}) THEN '${status}'`)
+        .join("\n             ") ?? "";
     return {
       outcome: this.db
         .prepare(
           `SELECT CASE
              WHEN NOT (${actor.sql}) THEN 'actor_authorization_changed'
-             ${options?.notFound ? `WHEN (${options.notFound.sql}) THEN 'not_found'` : ""}
+             ${notFoundCases}
              WHEN NOT (${resourceCondition.sql}) THEN 'conflict'
              ELSE 'applied'
            END AS status`
         )
-        .bind(...actor.values, ...(options?.notFound?.values ?? []), ...resourceCondition.values),
+        .bind(
+          ...actor.values,
+          ...(options?.notFound?.flatMap(({ condition }) => condition.values) ?? []),
+          ...resourceCondition.values
+        ),
       applied,
       writes: {
         sql: "EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ?)",
@@ -408,7 +455,8 @@ export class AuthorizationStore {
     if (
       status !== "applied" &&
       status !== "actor_authorization_changed" &&
-      status !== "not_found" &&
+      status !== "role_not_found" &&
+      status !== "member_not_found" &&
       status !== "conflict"
     ) {
       throw new Error("Invalid authorization mutation outcome");

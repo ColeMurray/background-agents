@@ -62,20 +62,23 @@ describe("AuthorizationStore", () => {
     ]);
   });
 
-  it.each(["applied", "actor_authorization_changed", "not_found", "conflict"] as const)(
-    "returns the %s member status replacement batch outcome",
-    async (status) => {
-      const store = new AuthorizationStore(
-        fakeDatabase({
-          batchResults: [result(0, [{ status }]), result(1), result(1), result(1)],
-        })
-      );
+  it.each([
+    "applied",
+    "actor_authorization_changed",
+    "role_not_found",
+    "member_not_found",
+    "conflict",
+  ] as const)("returns the %s member status replacement batch outcome", async (status) => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        batchResults: [result(0, [{ status }]), result(1), result(1), result(1)],
+      })
+    );
 
-      await expect(store.replaceMemberStatus(replaceMemberStatusInput)).resolves.toEqual({
-        status,
-      });
-    }
-  );
+    await expect(store.replaceMemberStatus(replaceMemberStatusInput)).resolves.toEqual({
+      status,
+    });
+  });
 
   it("does not classify an unexpected database failure as a conflict", async () => {
     const failure = new Error("database unavailable");

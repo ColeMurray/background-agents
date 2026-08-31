@@ -65,7 +65,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          # Minimum supported release: node:sqlite is available without an
+          # additional flag and --experimental-transform-types is present.
+          node-version: "22.13.0"
           cache: "npm"
 
       - name: Install dependencies

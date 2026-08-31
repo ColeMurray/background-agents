@@ -8,8 +8,18 @@ CREATE TABLE roles (
   description TEXT,
   is_system INTEGER NOT NULL DEFAULT 0 CHECK (is_system IN (0, 1)),
   CHECK (
-    (is_system = 1 AND key IN ('owner', 'administrator', 'member', 'viewer'))
-    OR (is_system = 0 AND key IS NULL)
+    (is_system = 1 AND key IS NOT NULL AND (
+      (id = 'role_builtin_owner' AND key = 'owner')
+      OR (id = 'role_builtin_administrator' AND key = 'administrator')
+      OR (id = 'role_builtin_member' AND key = 'member')
+      OR (id = 'role_builtin_viewer' AND key = 'viewer')
+    ))
+    OR (is_system = 0 AND key IS NULL AND id NOT IN (
+      'role_builtin_owner',
+      'role_builtin_administrator',
+      'role_builtin_member',
+      'role_builtin_viewer'
+    ))
   )
 );
 
