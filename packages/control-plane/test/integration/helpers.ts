@@ -101,7 +101,7 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
       "Integration Browser User",
       "browser@test.local",
       1,
-      "browser@test.local",
+      null,
       applicationTimestamp,
       applicationTimestamp
     ),
@@ -116,7 +116,7 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
       "github",
       TEST_BROWSER_PROVIDER_SUBJECT,
       null,
-      null,
+      "browser@test.local",
       "https://github.com",
       applicationTimestamp,
       applicationTimestamp
@@ -447,6 +447,33 @@ interface OpenClientWsOpts {
   scmName?: string;
 }
 
+export async function issueClientWsToken(
+  sessionName: string,
+  opts: Omit<OpenClientWsOpts, "subscribe"> = {}
+): Promise<{ token: string; participantId: string }> {
+  const stub = env.SESSION.get(env.SESSION.idFromName(sessionName));
+  const canonicalUserId = opts.canonicalUserId ?? opts.userId ?? "user-1";
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO users (id, display_name, created_at, updated_at)
+     VALUES (?, ?, ?, ?)`
+  )
+    .bind(canonicalUserId, "WebSocket Test User", now, now)
+    .run();
+  const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: opts.userId ?? "user-1",
+      canonicalUserId,
+      scmLogin: opts.scmLogin,
+      scmName: opts.scmName,
+    }),
+  });
+  if (!tokenRes.ok) throw new Error(`Token issuance failed: ${tokenRes.status}`);
+  return tokenRes.json<{ token: string; participantId: string }>();
+}
+
 // Overloaded on the `subscribe` discriminant: a subscribed socket always
 // resolves its token, participant, and replay messages; a bare socket never
 // carries them.
@@ -481,23 +508,7 @@ export async function openClientWs(sessionName: string, opts?: OpenClientWsOpts)
     return { ws };
   }
 
-  // Generate a WS token via the DO
-  const id = env.SESSION.idFromName(sessionName);
-  const stub = env.SESSION.get(id);
-  const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId: opts.userId ?? "user-1",
-      canonicalUserId: opts.canonicalUserId,
-      scmLogin: opts.scmLogin,
-      scmName: opts.scmName,
-    }),
-  });
-  const { token, participantId } = await tokenRes.json<{
-    token: string;
-    participantId: string;
-  }>();
+  const { token, participantId } = await issueClientWsToken(sessionName, opts);
 
   // Start collecting BEFORE sending subscribe to avoid race.
   // The subscribed message now includes batched replay data, so we terminate on it

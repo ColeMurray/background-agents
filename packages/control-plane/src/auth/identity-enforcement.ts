@@ -21,12 +21,7 @@ import { error, type RequestContext } from "../routes/shared";
 const logger = createLogger("identity-enforcement");
 
 /** The route families that consume caller-supplied identity. */
-export type IdentityRoute =
-  | "session-create"
-  | "ws-token"
-  | "prompt"
-  | "session-lifecycle"
-  | "automation-create";
+type IdentityRoute = "session-create" | "ws-token" | "prompt" | "automation-create";
 
 const SPAWNING_FORBIDDEN_FIELDS = [
   "userId",
@@ -50,7 +45,6 @@ const FORBIDDEN_IDENTITY_FIELDS: Record<IdentityRoute, readonly string[]> = {
   "session-create": SPAWNING_FORBIDDEN_FIELDS,
   "ws-token": ["userId", "scmToken", "scmRefreshToken", "scmUserId"],
   prompt: ["authorId"],
-  "session-lifecycle": ["userId"],
   "automation-create": SPAWNING_FORBIDDEN_FIELDS,
 };
 
@@ -74,7 +68,7 @@ function requiresUserMessage(route: IdentityRoute): string | undefined {
 }
 
 /** Identity a verified principal implies for a consuming route. */
-export interface DerivedIdentity {
+interface DerivedIdentity {
   /** DO participant id: bare canonical id for users, `ns:id` for bot actors. */
   participantUserId: string | null;
   /** Canonical D1 users.id when the principal resolves to one. */
@@ -135,7 +129,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export type IdentityEnforcement<R extends IdentityRoute> =
+type IdentityEnforcement<R extends IdentityRoute> =
   | { rejection: Response; enforced?: undefined }
   | { rejection?: undefined; enforced: EnforcedIdentity<R> };
 

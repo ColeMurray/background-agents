@@ -103,6 +103,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: 1000,
     clientId: "client-1",
+    authorizationExpiresAt: Date.now() + 300_000,
     ws: {} as WebSocket,
     ...overrides,
   };

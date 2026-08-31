@@ -1,4 +1,3 @@
-import { applyIdentityEnforcement } from "../auth/identity-enforcement";
 import { readBodyCapped } from "@open-inspect/shared/http-body";
 import type {
   SessionParticipantProfilesResponse,
@@ -115,25 +114,6 @@ function legacyTokenRefreshRoute(
       },
     })
   );
-}
-
-async function handleAddParticipant(
-  request: Request,
-  _env: Env,
-  match: RegExpMatchArray,
-  ctx: SessionRouteContext
-): Promise<Response> {
-  const sessionId = getSessionId(match);
-  if (sessionId instanceof Response) return sessionId;
-
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-
-  return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.participants, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
 }
 
 async function handleSandboxError(
@@ -258,23 +238,23 @@ async function handleCreatePR(
   });
 }
 
-/** Read a lifecycle body under verified identity enforcement. */
-async function readEnforcedLifecycleBody(
-  request: Request,
-  ctx: SessionRouteContext
-): Promise<{ userId?: string; title?: string; rejection?: Response }> {
+/**
+ * Title updates accept a bodyless request but reject caller-supplied identity.
+ */
+async function readTitleBody(request: Request): Promise<{ title?: string; rejection?: Response }> {
   let body: { title?: string } = {};
   try {
     const parsed: unknown = await request.json();
-    if (isObjectBody(parsed)) body = parsed;
+    if (isObjectBody(parsed)) {
+      if ("userId" in parsed) {
+        return { rejection: error("Field 'userId' is not accepted from verified callers", 400) };
+      }
+      body = parsed;
+    }
   } catch {
     // Body parsing failed, continue without fields.
   }
-
-  const enforcement = applyIdentityEnforcement(ctx, "session-lifecycle", body);
-  if (enforcement.rejection) return { rejection: enforcement.rejection };
-
-  return { userId: enforcement.enforced.participantUserId ?? undefined, title: body.title };
+  return { title: body.title };
 }
 
 function lifecycleProxyRoute(
@@ -292,15 +272,17 @@ function lifecycleProxyRoute(
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
 
-        const { userId, title, rejection } = await readEnforcedLifecycleBody(request, ctx);
-        if (rejection) return rejection;
+        let body = {};
+        if (internalPath === SessionInternalPaths.updateTitle) {
+          const { title, rejection } = await readTitleBody(request);
+          if (rejection) return rejection;
+          body = { title };
+        }
 
         return ctx.sessionRuntime.fetch(sessionId, internalPath, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            internalPath === SessionInternalPaths.updateTitle ? { userId, title } : { userId }
-          ),
+          body: JSON.stringify(body),
         });
       },
     })
@@ -371,15 +353,6 @@ export const sessionRuntimeProxyRoutes: Route[] = [
       pattern: parsePattern("/sessions/:id/participant-profiles"),
       authorization: requirePermission("sessions.read"),
       handler: handleParticipantProfiles,
-    })
-  ),
-  defineRoute(
-    GITHUB_USER_OR_SERVICE_ROUTE,
-    sessionRoute({
-      method: "POST",
-      pattern: parsePattern("/sessions/:id/participants"),
-      authorization: requirePermission("sessions.collaborate"),
-      handler: handleAddParticipant,
     })
   ),
   simpleProxyRoute({

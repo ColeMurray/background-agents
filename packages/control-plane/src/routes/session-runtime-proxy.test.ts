@@ -342,12 +342,11 @@ describe("session runtime proxy routes", () => {
     expect(requests[0].method).toBe("POST");
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.updateTitle);
     await expect(requests[0].json()).resolves.toEqual({
-      userId: "user-1",
       title: "New title",
     });
   });
 
-  it("forwards the verified service actor on title updates", async () => {
+  it("does not forward service actor identity on title updates", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
@@ -380,7 +379,6 @@ describe("session runtime proxy routes", () => {
     expect(response.status).toBe(200);
     expect(fetch).toHaveBeenCalledOnce();
     await expect(requests[0].json()).resolves.toEqual({
-      userId: "slack:U0123",
       title: "New title",
     });
   });
@@ -435,26 +433,6 @@ describe("session runtime proxy routes", () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Session not found" });
-  });
-
-  it("rejects malformed add-participant JSON without forwarding to the runtime", async () => {
-    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
-    const { handler, match } = getHandler("POST", "/sessions/session-1/participants");
-
-    const response = await handler(
-      new Request("https://test.local/sessions/session-1/participants", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{",
-      }),
-      createEnv(fetch),
-      match,
-      createCtx()
-    );
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
-    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("forwards the draft flag through the create-PR contract", async () => {

@@ -2,11 +2,12 @@
  * SessionWebSocketManager — centralizes all Cloudflare WebSocket API usage
  * into a single, testable module.
  *
- * The manager is a registry for ClientInfo, not a factory. The DO builds
- * ClientInfo and stores it here via setClient/getClient.
+ * The manager owns socket identity, persistence, and authorization leases.
+ * The DO builds ClientInfo and stores it here after snapshot synchronization.
  */
 
 import type { Logger } from "../logger";
+import type { AlarmScheduler } from "../platform-ports";
 import type { ClientInfo } from "../types";
 import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
@@ -14,6 +15,11 @@ import type {
   WsClientMappingRepository,
   WsClientMappingResult,
 } from "./ws-client-mapping-repository";
+import {
+  WS_AUTHORIZATION_REVOKED_REASON,
+  WS_AUTHORIZATION_LEASE_MS,
+  WS_CLOSE_AUTHORIZATION_REVOKED,
+} from "./authorization-lease";
 
 /** Configuration for the WebSocket manager. */
 export interface WebSocketManagerConfig {
@@ -24,6 +30,7 @@ export interface WebSocketManagerConfig {
 // Interface
 // ---------------------------------------------------------------------------
 
+/** Manages session sockets, client identity, and expiring authorization leases. */
 export interface SessionWebSocketManager {
   /** Create the client/server WebSocket pair for an upgrade response. */
   createUpgradeSockets(): { client: WebSocket; server: WebSocket };
@@ -56,17 +63,20 @@ export interface SessionWebSocketManager {
   clearSandboxSocketIfMatch(ws: WebSocket): boolean;
 
   setClient(ws: WebSocket, info: ClientInfo): void;
-  getClient(ws: WebSocket): ClientInfo | null;
   removeClient(ws: WebSocket): ClientInfo | null;
 
-  /** Returns raw DB mapping for hibernation recovery. The DO builds ClientInfo from this. */
-  recoverClientMapping(ws: WebSocket): WsClientMappingResult | null;
+  /** Return a live client or its persisted hibernation mapping, rejecting expired leases. */
+  lookupClient(ws: WebSocket): ClientLookup;
 
-  /** Persist ws-to-participant mapping for hibernation survival. */
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
+  /** Mint, persist, and schedule an authorization lease. */
+  grantLease(ws: WebSocket, participantId: string, clientId: string): Promise<number>;
+
+  /** Close expired sockets, delete expired mappings, and schedule the next lease deadline. */
+  expireAuthorizationLeases(now: number): Promise<void>;
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
   isClientSynchronizing(ws: WebSocket): boolean;
+  /** Return whether the client has an unexpired authorization lease. */
   isClientAuthenticated(ws: WebSocket): boolean;
 
   /** Check if a wsId has a persisted mapping (used by auth timeout). */
@@ -75,6 +85,7 @@ export interface SessionWebSocketManager {
   send(ws: WebSocket, message: string | object): boolean;
   close(ws: WebSocket, code: number, reason: string): void;
 
+  /** Visit client sockets, optionally limiting the visit to unexpired authorization leases. */
   forEachClientSocket(
     mode: "all_clients" | "authenticated_only",
     fn: (ws: WebSocket) => void
@@ -85,19 +96,29 @@ export interface SessionWebSocketManager {
   getConnectedClientCount(): number;
 }
 
+/** Result of resolving a client while enforcing its authorization lease. */
+export type ClientLookup =
+  | { kind: "cached"; client: ClientInfo }
+  | { kind: "recovered"; mapping: WsClientMappingResult }
+  | { kind: "authorization_rejected" }
+  | { kind: "missing" };
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
 
+/** Durable Object WebSocket manager with persisted authorization leases. */
 export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private clients = new Map<WebSocket, ClientInfo>();
   private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
 
+  /** Create a WebSocket manager backed by Durable Object state and persisted client mappings. */
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly sandboxRepository: SandboxRepository,
     private readonly wsClientMappingRepository: WsClientMappingRepository,
+    private readonly alarmScheduler: AlarmScheduler,
     private readonly log: Logger,
     private readonly config: WebSocketManagerConfig
   ) {}
@@ -234,10 +255,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     this.clients.set(ws, info);
   }
 
-  getClient(ws: WebSocket): ClientInfo | null {
-    return this.clients.get(ws) ?? null;
-  }
-
   removeClient(ws: WebSocket): ClientInfo | null {
     const client = this.clients.get(ws) ?? null;
     this.clients.delete(ws);
@@ -248,19 +265,63 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Hibernation recovery for client identity
   // -------------------------------------------------------------------------
 
-  recoverClientMapping(ws: WebSocket): WsClientMappingResult | null {
+  /** Return cached or persisted client state, closing the socket if its lease expired. */
+  lookupClient(ws: WebSocket): ClientLookup {
+    const client = this.clients.get(ws);
+    if (client) {
+      if (client.authorizationExpiresAt <= Date.now()) {
+        this.rejectExpiredAuthorization(ws, this.classify(ws));
+        return { kind: "authorization_rejected" };
+      }
+      return { kind: "cached", client };
+    }
+
     const parsed = this.classify(ws);
-    if (parsed.kind !== "client" || !parsed.wsId) return null;
-    return this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
+    if (parsed.kind !== "client" || !parsed.wsId) return { kind: "missing" };
+    const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
+    if (!mapping) return { kind: "missing" };
+    if (mapping.authorization_expires_at <= Date.now()) {
+      this.rejectExpiredAuthorization(ws, parsed);
+      return { kind: "authorization_rejected" };
+    }
+    return { kind: "recovered", mapping };
   }
 
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void {
+  /** Persist a new authorization lease and schedule its expiration deadline. */
+  async grantLease(ws: WebSocket, participantId: string, clientId: string): Promise<number> {
+    const parsed = this.classify(ws);
+    if (parsed.kind !== "client" || !parsed.wsId) {
+      throw new Error("Cannot grant an authorization lease without a client WebSocket ID");
+    }
+    const expiresAt = Date.now() + WS_AUTHORIZATION_LEASE_MS;
+    await this.alarmScheduler.schedule(expiresAt);
     this.wsClientMappingRepository.upsertWsClientMapping({
-      wsId,
+      wsId: parsed.wsId,
       participantId,
       clientId,
       createdAt: Date.now(),
+      authorizationExpiresAt: expiresAt,
     });
+    this.log.debug("Stored ws_client_mapping", {
+      ws_id: parsed.wsId,
+      participant_id: participantId,
+    });
+    return expiresAt;
+  }
+
+  /** Close and remove expired client leases, then schedule the next deadline. */
+  async expireAuthorizationLeases(now: number): Promise<void> {
+    for (const ws of this.ctx.getWebSockets()) {
+      const parsed = this.classify(ws);
+      if (parsed.kind !== "client") continue;
+      const expiresAt = this.authorizationExpiry(ws, parsed);
+      if (expiresAt !== null && expiresAt <= now) {
+        this.rejectExpiredAuthorization(ws, parsed);
+      }
+    }
+    this.wsClientMappingRepository.deleteExpiredMappings(now);
+    const nextExpiry = this.wsClientMappingRepository.getNextAuthorizationExpiry();
+    if (nextExpiry !== null) await this.alarmScheduler.schedule(nextExpiry);
   }
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {
@@ -272,6 +333,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return this.synchronizingClients.has(ws);
   }
 
+  /** Return whether the client has an unexpired authorization lease. */
   isClientAuthenticated(ws: WebSocket): boolean {
     return this.isAuthenticated(ws, this.classify(ws));
   }
@@ -311,6 +373,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Broadcast
   // -------------------------------------------------------------------------
 
+  /** Visit client sockets, optionally limiting the visit to unexpired authorization leases. */
   forEachClientSocket(
     mode: "all_clients" | "authenticated_only",
     fn: (ws: WebSocket) => void
@@ -332,11 +395,26 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
    * either in-memory or via persisted DB mapping (post-hibernation).
    */
   private isAuthenticated(ws: WebSocket, parsed: ConnectionClassification): boolean {
-    if (this.clients.has(ws)) return true;
-    if (parsed.kind === "client" && parsed.wsId) {
-      return this.wsClientMappingRepository.hasWsClientMapping(parsed.wsId);
-    }
+    const expiresAt = this.authorizationExpiry(ws, parsed);
+    if (expiresAt === null) return false;
+    if (expiresAt > Date.now()) return true;
+    this.rejectExpiredAuthorization(ws, parsed);
     return false;
+  }
+
+  private authorizationExpiry(ws: WebSocket, parsed: ConnectionClassification): number | null {
+    const client = this.clients.get(ws);
+    if (client) return client.authorizationExpiresAt;
+    if (parsed.kind !== "client" || !parsed.wsId) return null;
+    const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
+    return mapping?.authorization_expires_at ?? null;
+  }
+
+  private rejectExpiredAuthorization(ws: WebSocket, parsed: ConnectionClassification): void {
+    if (parsed.kind === "client" && parsed.wsId) {
+      this.wsClientMappingRepository.deleteWsClientMapping(parsed.wsId);
+    }
+    this.close(ws, WS_CLOSE_AUTHORIZATION_REVOKED, WS_AUTHORIZATION_REVOKED_REASON);
   }
 
   // -------------------------------------------------------------------------

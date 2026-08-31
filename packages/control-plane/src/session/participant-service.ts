@@ -15,8 +15,6 @@ import type { ParticipantRow } from "./types";
 import type { ParticipantRepository } from "./participant-repository";
 import { DEFAULT_TOKEN_LIFETIME_MS, type UserScmTokenStore } from "../db/user-scm-tokens";
 
-export type { ParticipantRepository } from "./participant-repository";
-
 /**
  * Environment config — only the secrets ParticipantService needs.
  */

@@ -29,9 +29,10 @@ describe("WsClientMappingRepository", () => {
       participantId: "p-1",
       clientId: "client-1",
       createdAt: 1000,
+      authorizationExpiresAt: 2000,
     });
     expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO ws_client_mapping");
-    expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000]);
+    expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000, 2000]);
   });
 
   it("restores a mapping with joined participant data", () => {

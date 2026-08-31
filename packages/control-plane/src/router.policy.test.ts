@@ -135,11 +135,7 @@ describe("route policy table", () => {
     expect(routeFor("GET", "/sessions/session-1/media/artifact-1")?.authorization).toMatchObject({
       service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
     });
-    expect(routeFor("POST", "/sessions/session-1/participants")?.authorization).toEqual({
-      kind: "active-user",
-      allOf: [{ kind: "permission", permission: "sessions.collaborate" }],
-      service: { kind: "actor" },
-    });
+    expect(routeFor("POST", "/sessions/session-1/participants")).toBeUndefined();
     expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [

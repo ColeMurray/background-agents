@@ -4,10 +4,10 @@ import type { ParticipantRow } from "./types";
 import {
   ParticipantService,
   getAvatarUrl,
-  type ParticipantRepository,
   type ParticipantServiceDeps,
   type ParticipantServiceEnv,
 } from "./participant-service";
+import type { ParticipantRepository } from "./participant-repository";
 import type { UserScmTokenStore, ScmTokenRecord, CasResult } from "../db/user-scm-tokens";
 
 // ---- Module-level mocks for centralized refresh tests ----
