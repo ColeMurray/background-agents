@@ -166,6 +166,28 @@ describe("UserStore", () => {
       expect(user!.updatedAt).toBeGreaterThanOrEqual(beforeUpdate!.updatedAt);
     });
 
+    it("does not repair a missing role assignment during identity resolution", async () => {
+      const first = await store.resolveOrCreateUser({
+        provider: "github",
+        providerUserId: "missing-assignment",
+      });
+      await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?")
+        .bind(first.id)
+        .run();
+
+      await store.resolveOrCreateUser({
+        provider: "github",
+        providerUserId: "missing-assignment",
+      });
+
+      const assignment = await env.DB.prepare(
+        "SELECT role_id FROM user_role_assignments WHERE user_id = ?"
+      )
+        .bind(first.id)
+        .first();
+      expect(assignment).toBeNull();
+    });
+
     it("links new identity to existing user by matching email", async () => {
       const github = await store.resolveOrCreateUser({
         provider: "github",

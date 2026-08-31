@@ -1,4 +1,4 @@
-import type { SqlDatabase, SqlStatement } from "./sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 
 /**
  * Split-merge primitive: converge a loser canonical user's entire graph onto
@@ -26,8 +26,9 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
  *   the preceding statement, so a stop exactly between those two statements
  *   is not re-derivable from the database. The CLI prints a recovery record
  *   before executing to cover that residual case.
- * - Browser sessions (`auth_sessions`) are re-pointed, not deleted — the
- *   merged person stays signed in as the survivor.
+ * - Browser sessions (`auth_sessions`) issued to the loser are deleted. An
+ *   issued bearer credential is never rewritten to authenticate as another
+ *   canonical user.
  * - Verification never transfers to an unproven address: the loser's email
  *   (and its `email_verified` flag) backfills the survivor only when the
  *   survivor has no email of its own.
@@ -57,20 +58,147 @@ export interface UserMergeOptions {
   readonly dryRun?: boolean;
 }
 
-interface UserMergeCounts {
-  identitiesDeduped: number;
-  identitiesRepointed: number;
-  readStatesDeduped: number;
-  readStatesRepointed: number;
-  sessionsRepointed: number;
-  authSessionsRepointed: number;
-  automationsOwnedRepointed: number;
-  automationsCreatedRepointed: number;
-  scmTokensRepointed: number;
-  canonicalEmailBackfilled: number;
-  usersDeleted: number;
+const USER_MERGE_COUNT_KEYS = [
+  "identitiesDeduped",
+  "identitiesRepointed",
+  "readStatesDeduped",
+  "readStatesRepointed",
+  "sessionsRepointed",
+  "authSessionsDeleted",
+  "automationsOwnedRepointed",
+  "automationsCreatedRepointed",
+  "scmTokensRepointed",
+  "skillProfileItemsMerged",
+  "skillProfilesDeduped",
+  "skillProfilesRepointed",
+  "roleAssignmentsRemoved",
+  "providerAccountAuthorizationsRepointed",
+  "providerAccountAuthorizationAttemptsRepointed",
+  "keyboardShortcutPreferencesDeduped",
+  "keyboardShortcutPreferencesRepointed",
+  "auditEventsCreated",
+  "canonicalEmailBackfilled",
+  "usersDeleted",
+] as const;
+
+type UserMergeCountKey = (typeof USER_MERGE_COUNT_KEYS)[number];
+type UserMergeCounts = Record<UserMergeCountKey, number>;
+
+interface MergeOperation {
+  readonly key: UserMergeCountKey;
+  readonly execute: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
+  readonly preview: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
+  readonly subtract?: UserMergeCountKey;
 }
 
+function regularRepoint(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
+  return {
+    key,
+    execute: (db, survivorId, loserId) =>
+      db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).bind(survivorId, loserId),
+    preview: (db, _survivorId, loserId) =>
+      db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
+  };
+}
+
+function regularDelete(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
+  return {
+    key,
+    execute: (db, _survivorId, loserId) =>
+      db.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).bind(loserId),
+    preview: (db, _survivorId, loserId) =>
+      db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
+  };
+}
+
+function dedupeThenRepoint(options: {
+  readonly dedupeKey: UserMergeCountKey;
+  readonly repointKey: UserMergeCountKey;
+  readonly table: string;
+  readonly collision: string;
+}): readonly [MergeOperation, MergeOperation] {
+  return [
+    {
+      key: options.dedupeKey,
+      execute: (db, survivorId, loserId) =>
+        db
+          .prepare(`DELETE FROM ${options.table} WHERE user_id = ? AND ${options.collision}`)
+          .bind(loserId, survivorId),
+      preview: (db, survivorId, loserId) =>
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM ${options.table}
+             WHERE user_id = ? AND ${options.collision}`
+          )
+          .bind(loserId, survivorId),
+    },
+    {
+      ...regularRepoint(options.repointKey, options.table),
+      subtract: options.dedupeKey,
+    },
+  ];
+}
+
+const BEFORE_SKILL_PROFILE_OPERATIONS = [
+  ...dedupeThenRepoint({
+    dedupeKey: "identitiesDeduped",
+    repointKey: "identitiesRepointed",
+    table: "user_identities",
+    collision: `EXISTS (
+      SELECT 1 FROM user_identities AS survivor_identity
+      WHERE survivor_identity.user_id = ?
+        AND survivor_identity.provider = user_identities.provider
+        AND survivor_identity.provider_user_id = user_identities.provider_user_id
+    )`,
+  }),
+  ...dedupeThenRepoint({
+    dedupeKey: "readStatesDeduped",
+    repointKey: "readStatesRepointed",
+    table: "session_read_states",
+    collision: `EXISTS (
+      SELECT 1 FROM session_read_states AS survivor_state
+      WHERE survivor_state.user_id = ?
+        AND survivor_state.session_id = session_read_states.session_id
+    )`,
+  }),
+  regularRepoint("sessionsRepointed", "sessions"),
+  regularDelete("authSessionsDeleted", "auth_sessions", "userId"),
+  regularRepoint("automationsOwnedRepointed", "automations"),
+  regularRepoint("automationsCreatedRepointed", "automations", "created_by"),
+  regularRepoint("scmTokensRepointed", "user_scm_tokens"),
+] as const satisfies readonly MergeOperation[];
+
+const SKILL_PROFILE_OPERATIONS = dedupeThenRepoint({
+  dedupeKey: "skillProfilesDeduped",
+  repointKey: "skillProfilesRepointed",
+  table: "skill_profiles",
+  collision: `EXISTS (
+    SELECT 1 FROM skill_profiles survivor_profile
+    WHERE survivor_profile.user_id = ? AND survivor_profile.name = skill_profiles.name
+  )`,
+});
+
+const FINAL_REPOINT_OPERATIONS = [
+  regularRepoint("providerAccountAuthorizationsRepointed", "model_provider_account_authorizations"),
+  regularRepoint(
+    "providerAccountAuthorizationAttemptsRepointed",
+    "model_provider_account_authorization_attempts"
+  ),
+  ...dedupeThenRepoint({
+    dedupeKey: "keyboardShortcutPreferencesDeduped",
+    repointKey: "keyboardShortcutPreferencesRepointed",
+    table: "keyboard_shortcut_preferences",
+    collision: `EXISTS (SELECT 1 FROM keyboard_shortcut_preferences WHERE user_id = ?)`,
+  }),
+] as const satisfies readonly MergeOperation[];
+
+const TABLE_OPERATIONS = [
+  ...BEFORE_SKILL_PROFILE_OPERATIONS,
+  ...SKILL_PROFILE_OPERATIONS,
+  ...FINAL_REPOINT_OPERATIONS,
+] as const;
+
+/** Counts and identities produced by a user merge or dry-run preview. */
 export interface UserMergeResult {
   readonly survivorId: string;
   readonly loserId: string;
@@ -78,6 +206,9 @@ export interface UserMergeResult {
   readonly counts: UserMergeCounts;
 }
 
+/**
+ * Merge a canonical user into a survivor after validating their RBAC assignments.
+ */
 export async function mergeUsers(
   db: SqlDatabase,
   options: UserMergeOptions
@@ -87,9 +218,13 @@ export async function mergeUsers(
     throw new UserMergeError("Survivor and loser must be different users");
   }
   const survivor = await db
-    .prepare(`SELECT id, email FROM users WHERE id = ?`)
+    .prepare(`SELECT id, email, suspended_at FROM users WHERE id = ?`)
     .bind(survivorId)
-    .first<{ id: string; email: string | null }>();
+    .first<{
+      id: string;
+      email: string | null;
+      suspended_at: number | null;
+    }>();
   if (!survivor) {
     throw new UserMergeError(`Survivor user ${survivorId} not found`);
   }
@@ -98,10 +233,45 @@ export async function mergeUsers(
   const loser = await db
     .prepare(`SELECT id, email, email_verified FROM users WHERE id = ?`)
     .bind(loserId)
-    .first<{ id: string; email: string | null; email_verified: number }>();
+    .first<{
+      id: string;
+      email: string | null;
+      email_verified: number;
+    }>();
+  if (!loser) {
+    return { survivorId, loserId, dryRun: options.dryRun === true, counts: emptyCounts() };
+  }
 
   const survivorEmail = normalizeEmail(survivor.email);
   const loserEmail = normalizeEmail(loser?.email);
+  const [survivorAssignment, loserAssignment] = await db.batch<{
+    role_id: string;
+    role_key: string | null;
+  }>([
+    db
+      .prepare(
+        `SELECT ura.role_id, r.key AS role_key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+      .bind(survivorId),
+    db
+      .prepare(
+        `SELECT ura.role_id, r.key AS role_key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+      .bind(loserId),
+  ]);
+  const survivorRole = survivorAssignment.results[0];
+  const loserRole = loserAssignment.results[0];
+  if (!survivorRole || !loserRole) {
+    throw new UserMergeError("Both users must have explicit role assignments before merging");
+  }
+  if (survivorRole && loserRole && survivorRole.role_id !== loserRole.role_id) {
+    throw new UserMergeError("Resolve conflicting user roles before merging");
+  }
+  if (loserRole?.role_key === "owner" && survivor.suspended_at !== null) {
+    throw new UserMergeError("The surviving Owner must be active before merging");
+  }
   // The loser's email backfills an email-less survivor after the loser row's
   // deletion frees the unique slot; its verification state carries with it.
   const backfillEmail = !survivorEmail && loserEmail ? loserEmail : null;
@@ -117,79 +287,59 @@ export async function mergeUsers(
   }
 
   const statements: SqlStatement[] = [];
-  const track: Partial<Record<keyof UserMergeCounts, number>> = {};
-  const add = (key: keyof UserMergeCounts, statement: SqlStatement) => {
+  const track: Partial<Record<UserMergeCountKey, number>> = {};
+  const add = (key: UserMergeCountKey, statement: SqlStatement) => {
     track[key] = statements.length;
     statements.push(statement);
+  };
+  const addOperations = (operations: readonly MergeOperation[]) => {
+    for (const operation of operations) {
+      add(operation.key, operation.execute(db, survivorId, loserId));
+    }
   };
 
   // Dedup before re-pointing: drop loser rows whose target slot the survivor
   // already occupies (identities under idx_user_identities_provider; read
   // states routinely, where both split rows read the same session).
+  addOperations(BEFORE_SKILL_PROFILE_OPERATIONS);
+
+  // Merge items before deleting colliding skill profiles.
   add(
-    "identitiesDeduped",
+    "skillProfileItemsMerged",
     db
       .prepare(
-        `DELETE FROM user_identities
-         WHERE user_id = ?
-           AND EXISTS (
-             SELECT 1 FROM user_identities AS survivor_identity
-             WHERE survivor_identity.user_id = ?
-               AND survivor_identity.provider = user_identities.provider
-               AND survivor_identity.provider_user_id = user_identities.provider_user_id
-           )`
+        `INSERT OR IGNORE INTO skill_profile_items (profile_id, skill_id)
+         SELECT survivor_profile.id, loser_item.skill_id
+         FROM skill_profiles loser_profile
+         JOIN skill_profiles survivor_profile
+           ON survivor_profile.user_id = ? AND survivor_profile.name = loser_profile.name
+         JOIN skill_profile_items loser_item ON loser_item.profile_id = loser_profile.id
+         WHERE loser_profile.user_id = ?`
       )
-      .bind(loserId, survivorId)
+      .bind(survivorId, loserId)
   );
+  addOperations(SKILL_PROFILE_OPERATIONS);
+
+  // Preserve the survivor's RBAC assignment before deleting the loser.
   add(
-    "identitiesRepointed",
-    db.prepare(`UPDATE user_identities SET user_id = ? WHERE user_id = ?`).bind(survivorId, loserId)
+    "roleAssignmentsRemoved",
+    db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId)
   );
+  addOperations(FINAL_REPOINT_OPERATIONS);
+
+  // Record the merge before deleting the user so the snapshots remain explicit.
   add(
-    "readStatesDeduped",
+    "auditEventsCreated",
     db
       .prepare(
-        `DELETE FROM session_read_states
-         WHERE user_id = ?
-           AND EXISTS (
-             SELECT 1 FROM session_read_states AS survivor_state
-             WHERE survivor_state.user_id = ?
-               AND survivor_state.session_id = session_read_states.session_id
-           )`
+        `INSERT INTO authorization_audit_events
+            (id, occurred_at, request_id, principal_kind,
+             actor_service_snapshot, action, resource_type, resource_id,
+             target_user_id_snapshot, reason_code)
+           VALUES (?, ?, 'user-merge', 'service', 'control-plane',
+                   'workspace.user_merged', 'user', ?, ?, 'operator_merge')`
       )
-      .bind(loserId, survivorId)
-  );
-  add(
-    "readStatesRepointed",
-    db
-      .prepare(`UPDATE session_read_states SET user_id = ? WHERE user_id = ?`)
-      .bind(survivorId, loserId)
-  );
-  add(
-    "sessionsRepointed",
-    db.prepare(`UPDATE sessions SET user_id = ? WHERE user_id = ?`).bind(survivorId, loserId)
-  );
-  // Browser sessions re-point (FK → users): the person stays signed in and
-  // is simply the survivor from the next request on.
-  add(
-    "authSessionsRepointed",
-    db.prepare(`UPDATE auth_sessions SET userId = ? WHERE userId = ?`).bind(survivorId, loserId)
-  );
-  add(
-    "automationsOwnedRepointed",
-    db.prepare(`UPDATE automations SET user_id = ? WHERE user_id = ?`).bind(survivorId, loserId)
-  );
-  // Value-conditional: created_by is compared for exact equality with the
-  // loser's canonical id, so legacy GitHub numeric ids pass through.
-  add(
-    "automationsCreatedRepointed",
-    db
-      .prepare(`UPDATE automations SET created_by = ? WHERE created_by = ?`)
-      .bind(survivorId, loserId)
-  );
-  add(
-    "scmTokensRepointed",
-    db.prepare(`UPDATE user_scm_tokens SET user_id = ? WHERE user_id = ?`).bind(survivorId, loserId)
+      .bind(crypto.randomUUID(), Date.now(), survivorId, loserId)
   );
 
   add("usersDeleted", db.prepare(`DELETE FROM users WHERE id = ?`).bind(loserId));
@@ -213,10 +363,10 @@ export async function mergeUsers(
     );
   }
 
-  const results = await db.batch(statements);
+  const results: SqlResult[] = await db.batch(statements);
 
   const counts = emptyCounts();
-  for (const [key, index] of Object.entries(track) as [keyof UserMergeCounts, number][]) {
+  for (const [key, index] of Object.entries(track) as [UserMergeCountKey, number][]) {
     counts[key] = results[index]?.meta.changes ?? 0;
   }
   if (loser) {
@@ -228,19 +378,7 @@ export async function mergeUsers(
 }
 
 function emptyCounts(): UserMergeCounts {
-  return {
-    identitiesDeduped: 0,
-    identitiesRepointed: 0,
-    readStatesDeduped: 0,
-    readStatesRepointed: 0,
-    sessionsRepointed: 0,
-    authSessionsRepointed: 0,
-    automationsOwnedRepointed: 0,
-    automationsCreatedRepointed: 0,
-    scmTokensRepointed: 0,
-    canonicalEmailBackfilled: 0,
-    usersDeleted: 0,
-  };
+  return Object.fromEntries(USER_MERGE_COUNT_KEYS.map((key) => [key, 0])) as UserMergeCounts;
 }
 
 async function previewCounts(
@@ -249,48 +387,34 @@ async function previewCounts(
   loserId: string,
   backfillEmail: string | null
 ): Promise<UserMergeCounts> {
-  const [
-    identitiesDeduped,
-    identities,
-    readStatesDeduped,
-    readStates,
-    sessions,
-    authSessions,
-    automationsOwned,
-    automationsCreated,
-    scmTokens,
-    users,
-  ] = await db.batch<{ count: number }>([
+  const operationResults = await db.batch<{ count: number }>(
+    TABLE_OPERATIONS.map((operation) => operation.preview(db, survivorId, loserId))
+  );
+  const operationCounts = emptyCounts();
+  for (const [index, operation] of TABLE_OPERATIONS.entries()) {
+    const total = operationResults[index]?.results[0]?.count ?? 0;
+    operationCounts[operation.key] =
+      total - (operation.subtract ? operationCounts[operation.subtract] : 0);
+  }
+
+  const [skillProfileItemsMerged, roleAssignments, users] = await db.batch<{ count: number }>([
     db
       .prepare(
-        `SELECT COUNT(*) AS count FROM user_identities
-         WHERE user_id = ?
-           AND EXISTS (
-             SELECT 1 FROM user_identities AS survivor_identity
-             WHERE survivor_identity.user_id = ?
-               AND survivor_identity.provider = user_identities.provider
-               AND survivor_identity.provider_user_id = user_identities.provider_user_id
+        `SELECT COUNT(*) AS count FROM skill_profile_items loser_item
+         JOIN skill_profiles loser_profile ON loser_profile.id = loser_item.profile_id
+         JOIN skill_profiles survivor_profile
+           ON survivor_profile.user_id = ? AND survivor_profile.name = loser_profile.name
+         WHERE loser_profile.user_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM skill_profile_items survivor_item
+             WHERE survivor_item.profile_id = survivor_profile.id
+               AND survivor_item.skill_id = loser_item.skill_id
            )`
       )
-      .bind(loserId, survivorId),
-    db.prepare(`SELECT COUNT(*) AS count FROM user_identities WHERE user_id = ?`).bind(loserId),
+      .bind(survivorId, loserId),
     db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM session_read_states
-         WHERE user_id = ?
-           AND EXISTS (
-             SELECT 1 FROM session_read_states AS survivor_state
-             WHERE survivor_state.user_id = ?
-               AND survivor_state.session_id = session_read_states.session_id
-           )`
-      )
-      .bind(loserId, survivorId),
-    db.prepare(`SELECT COUNT(*) AS count FROM session_read_states WHERE user_id = ?`).bind(loserId),
-    db.prepare(`SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?`).bind(loserId),
-    db.prepare(`SELECT COUNT(*) AS count FROM auth_sessions WHERE userId = ?`).bind(loserId),
-    db.prepare(`SELECT COUNT(*) AS count FROM automations WHERE user_id = ?`).bind(loserId),
-    db.prepare(`SELECT COUNT(*) AS count FROM automations WHERE created_by = ?`).bind(loserId),
-    db.prepare(`SELECT COUNT(*) AS count FROM user_scm_tokens WHERE user_id = ?`).bind(loserId),
+      .prepare(`SELECT COUNT(*) AS count FROM user_role_assignments WHERE user_id = ?`)
+      .bind(loserId),
     db.prepare(`SELECT COUNT(*) AS count FROM users WHERE id = ?`).bind(loserId),
   ]);
 
@@ -311,16 +435,10 @@ async function previewCounts(
   }
 
   return {
-    ...emptyCounts(),
-    identitiesDeduped: count(identitiesDeduped),
-    identitiesRepointed: count(identities) - count(identitiesDeduped),
-    readStatesDeduped: count(readStatesDeduped),
-    readStatesRepointed: count(readStates) - count(readStatesDeduped),
-    sessionsRepointed: count(sessions),
-    authSessionsRepointed: count(authSessions),
-    automationsOwnedRepointed: count(automationsOwned),
-    automationsCreatedRepointed: count(automationsCreated),
-    scmTokensRepointed: count(scmTokens),
+    ...operationCounts,
+    skillProfileItemsMerged: count(skillProfileItemsMerged),
+    roleAssignmentsRemoved: count(roleAssignments),
+    auditEventsCreated: count(users),
     canonicalEmailBackfilled,
     usersDeleted: count(users),
   };

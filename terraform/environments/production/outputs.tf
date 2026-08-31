@@ -18,6 +18,11 @@ output "d1_database_id" {
   value       = cloudflare_d1_database.main.id
 }
 
+output "d1_database_name" {
+  description = "The name of the D1 database used by operator CLI commands"
+  value       = cloudflare_d1_database.main.name
+}
+
 # Cloudflare Workers
 output "control_plane_url" {
   description = "Control plane worker URL"
