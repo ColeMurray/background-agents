@@ -216,7 +216,7 @@ describe("router authorization decision auditing", () => {
     });
   });
 
-  it("audits allowed actor-backed and denied service capability decisions", async () => {
+  it("audits allowed actor-backed, allowed service, and denied service decisions", async () => {
     authenticateAs({
       kind: "service",
       service: "github-bot",
@@ -241,6 +241,20 @@ describe("router authorization decision auditing", () => {
       actorService: "github-bot",
       action: "authorization.request_allowed",
       metadata: { actor: { participantUserId: "github:42" } },
+    });
+
+    const serviceAllowed = createEnv();
+    expect(
+      await handleRequest(
+        new Request("https://test.local/audit-test/service", { method: "POST" }),
+        serviceAllowed.env,
+        TEST_BACKGROUND_TASK_CONTEXT
+      )
+    ).toHaveProperty("status", 200);
+    expect(auditRecord(serviceAllowed.auditWrites[0])).toMatchObject({
+      actorService: "github-bot",
+      action: "authorization.request_allowed",
+      metadata: { requirements: [{ kind: "service-capability" }] },
     });
 
     authenticateAs({ kind: "service", service: "linear-bot", actor: null });

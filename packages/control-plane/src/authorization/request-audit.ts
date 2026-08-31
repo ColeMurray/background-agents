@@ -23,7 +23,8 @@ export function shouldAuditAllowedRoute(route: Route, method: string): boolean {
     return (
       route.authorization.kind === "active-user" ||
       route.authorization.kind === "active-self" ||
-      route.authorization.kind === "active-global"
+      route.authorization.kind === "active-global" ||
+      route.authorization.kind === "service"
     );
   }
   if (route.authorization.kind !== "active-user") return false;
