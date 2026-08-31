@@ -91,7 +91,7 @@ const sampleRow: AutomationRow = {
   next_run_at: now + 86400000,
   consecutive_failures: 0,
   created_by: "user-1",
-  user_id: null,
+  user_id: "11111111111111111111111111111111",
   created_at: now,
   updated_at: now,
   deleted_at: null,
@@ -152,6 +152,7 @@ describe("toAutomation", () => {
     expect(automation.triggerConfig).toBeNull();
     expect(automation.consecutiveFailures).toBe(0);
     expect(automation.createdBy).toBe("user-1");
+    expect(automation.userId).toBe("11111111111111111111111111111111");
     expect(automation.environmentIds).toEqual([]);
   });
 

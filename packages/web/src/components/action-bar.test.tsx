@@ -14,6 +14,20 @@ afterEach(() => {
 });
 
 describe("ActionBar", () => {
+  it("hides lifecycle actions when the capability is denied", () => {
+    render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        canManageLifecycle={false}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More session actions" })).toBeInTheDocument();
+  });
+
   it("renders View PR for hydrated PR artifacts", () => {
     render(
       <ActionBar

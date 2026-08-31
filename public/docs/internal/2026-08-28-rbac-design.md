@@ -213,6 +213,7 @@ The table groups permissions for readability; the registry stores individual ide
 | Transfer Owner role                                      |  Yes  |      No       |    No    |   No   |
 | Read repositories and environments                       |  Yes  |      Yes      |   Yes    |  Yes   |
 | Use repositories and environments                        |  Yes  |      Yes      |   Yes    |   No   |
+| Read image-build status and history                      |  Yes  |      Yes      |   Yes    |  Yes   |
 | Manage environments/settings/images                      |  Yes  |      Yes      |    No    |   No   |
 | Manage global/repository/environment secrets             |  Yes  |      Yes      |    No    |   No   |
 | Create sessions                                          |  Yes  |      Yes      |   Yes    |   No   |

@@ -81,6 +81,16 @@ describe("GlobalCommandMenu", () => {
     ).toBeInTheDocument();
   });
 
+  it("omits session creation destinations without session creation permission", () => {
+    mocks.allowedPermissions = new Set();
+
+    renderMenu();
+
+    expect(screen.queryByText("New session")).not.toBeInTheDocument();
+    expect(screen.queryByText("Home")).not.toBeInTheDocument();
+    expect(screen.queryByText("Start a coding session")).not.toBeInTheDocument();
+  });
+
   it("selects Analytics from the keyboard", async () => {
     const user = userEvent.setup();
     const { onNavigate, onOpenChange } = renderMenu();

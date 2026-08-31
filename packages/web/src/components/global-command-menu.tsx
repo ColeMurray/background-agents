@@ -90,6 +90,7 @@ export function GlobalCommandMenu({
     [sessions]
   );
   const settingsGroups = getSettingsGroups({ hasPermission });
+  const canCreateSession = hasPermission("sessions.create");
 
   const handleSelect = (callback: () => void) => {
     onOpenChange(false);
@@ -97,20 +98,24 @@ export function GlobalCommandMenu({
   };
 
   const navigationItems = [
-    {
-      label: "New session",
-      description: "Start a coding session",
-      Icon: PlusIcon,
-      onSelect: onNewSession,
-      shortcut: labels["new-session"],
-    },
-    {
-      label: "Home",
-      description: "Ask a question or describe what you want to build",
-      Icon: AppIcon,
-      onSelect: () => onNavigate("/"),
-      shortcut: undefined,
-    },
+    ...(canCreateSession
+      ? [
+          {
+            label: "New session",
+            description: "Start a coding session",
+            Icon: PlusIcon,
+            onSelect: onNewSession,
+            shortcut: labels["new-session"],
+          },
+          {
+            label: "Home",
+            description: "Ask a question or describe what you want to build",
+            Icon: AppIcon,
+            onSelect: () => onNavigate("/"),
+            shortcut: undefined,
+          },
+        ]
+      : []),
     ...APP_DESTINATIONS.map(({ label, description, href, icon: Icon }) => ({
       label,
       description,

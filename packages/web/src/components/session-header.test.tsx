@@ -43,6 +43,36 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 }
 
 describe("SessionHeader", () => {
+  it("disables lifecycle controls and connection UI for a read-only session", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState()}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Read only" }}
+        connected={false}
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={{ ...actions, canManageLifecycle: false }}
+        renameSession={vi.fn()}
+        canRename={false}
+        showConnectionStatus={false}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Session 1" })).toBeDisabled();
+    expect(screen.queryByRole("status", { name: /Connection status/ })).not.toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: "Session actions" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeInTheDocument();
+  });
   it("lets desktop users hide and show the session details sidebar", () => {
     const onToggleDesktopDetails = vi.fn();
     const { rerender } = render(

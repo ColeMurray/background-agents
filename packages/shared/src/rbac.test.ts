@@ -94,6 +94,12 @@ describe("RBAC registry", () => {
     expect(permissionsForBuiltInRole("viewer")).toContain("analytics.read");
   });
 
+  it("makes Member a superset of Viewer", () => {
+    expect(permissionsForBuiltInRole("member")).toEqual(
+      expect.arrayContaining(permissionsForBuiltInRole("viewer"))
+    );
+  });
+
   it("requires an assigned role and uses suspension timestamps in public contracts", () => {
     expect(
       effectiveAuthorizationSchema.parse({

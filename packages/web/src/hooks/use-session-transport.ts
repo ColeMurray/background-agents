@@ -92,7 +92,8 @@ export interface UseSessionTransportReturn {
  */
 export function useSessionTransport(
   sessionId: string,
-  handlers: SessionTransportHandlers
+  handlers: SessionTransportHandlers,
+  enabled = true
 ): UseSessionTransportReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const mountedRef = useRef(true);
@@ -343,6 +344,7 @@ export function useSessionTransport(
   }, []);
 
   const reconnect = useCallback(() => {
+    if (!enabled) return;
     // A connect() still awaiting its token must not open a second socket
     // alongside the one this call creates.
     invalidateInFlightConnect();
@@ -364,7 +366,7 @@ export function useSessionTransport(
     setAuthError(null);
     setConnectionError(null);
     connect();
-  }, [connect, invalidateInFlightConnect]);
+  }, [connect, enabled, invalidateInFlightConnect]);
 
   const markHealthy = useCallback(() => {
     reconnectAttempts.current = 0;
@@ -373,7 +375,7 @@ export function useSessionTransport(
   // Connect on mount
   useEffect(() => {
     mountedRef.current = true;
-    connect();
+    if (enabled) connect();
 
     return () => {
       mountedRef.current = false;
@@ -387,10 +389,11 @@ export function useSessionTransport(
         discarded.close();
       }
     };
-  }, [connect, invalidateInFlightConnect]);
+  }, [connect, enabled, invalidateInFlightConnect]);
 
   // Ping periodically to keep connection alive.
   useEffect(() => {
+    if (!enabled) return;
     const pingInterval = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "ping" }));
@@ -398,7 +401,7 @@ export function useSessionTransport(
     }, PING_INTERVAL_MS);
 
     return () => clearInterval(pingInterval);
-  }, []);
+  }, [enabled]);
 
   return {
     connected,

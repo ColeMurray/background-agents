@@ -81,6 +81,7 @@ const mocks = vi.hoisted(() => ({
     ignoredProfileSkillIds: [],
   },
   keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
+  canCreateSession: true,
 }));
 
 const repo = {
@@ -95,6 +96,13 @@ const repo = {
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+}));
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      permission === "sessions.create" && mocks.canCreateSession,
+  }),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -196,6 +204,7 @@ beforeEach(() => {
   mocks.providerAccountsValue = [];
   mocks.providerAccountsLoadingValue = false;
   mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
+  mocks.canCreateSession = true;
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -245,6 +254,17 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("does not render session creation UI without session creation permission", () => {
+    mocks.canCreateSession = false;
+
+    render(<Home />);
+
+    expect(screen.getByText("You don't have permission to create sessions.")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("What do you want to build?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /send/i })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("focuses the prompt when the page loads", () => {
     render(<Home />);
 

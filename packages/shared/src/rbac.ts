@@ -103,28 +103,6 @@ export function resolveScopedPermission(
   return null;
 }
 
-const MEMBER_PERMISSIONS = new Set<PermissionId>([
-  "analytics.read",
-  "automations.create",
-  "automations.manage.own",
-  "automations.read",
-  "automations.trigger.own",
-  "environments.read",
-  "environments.use",
-  "mcp_servers.read",
-  "provider_accounts.read",
-  "repositories.read",
-  "repositories.use",
-  "sessions.collaborate",
-  "sessions.create",
-  "sessions.delete",
-  "sessions.lifecycle",
-  "sessions.read",
-  "sessions.sandbox_access",
-  "skill_profiles.manage_own",
-  "skills.read",
-]);
-
 const VIEWER_PERMISSIONS = new Set<PermissionId>([
   "analytics.read",
   "automations.read",
@@ -135,6 +113,21 @@ const VIEWER_PERMISSIONS = new Set<PermissionId>([
   "sessions.read",
   "skill_profiles.manage_own",
   "skills.read",
+]);
+
+const MEMBER_PERMISSIONS = new Set<PermissionId>([
+  ...VIEWER_PERMISSIONS,
+  "automations.create",
+  "automations.manage.own",
+  "automations.trigger.own",
+  "environments.use",
+  "provider_accounts.read",
+  "repositories.use",
+  "sessions.collaborate",
+  "sessions.create",
+  "sessions.delete",
+  "sessions.lifecycle",
+  "sessions.sandbox_access",
 ]);
 
 /** Validates permission identifiers at API and storage boundaries. */

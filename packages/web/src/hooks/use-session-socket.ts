@@ -99,7 +99,11 @@ interface PendingCorrelatedRequest {
  */
 export function useSessionSocket(
   sessionId: string,
-  initialSnapshot: SessionSnapshot
+  initialSnapshot: SessionSnapshot,
+  capabilities: { collaborate: boolean; sandboxAccess: boolean } = {
+    collaborate: true,
+    sandboxAccess: true,
+  }
 ): UseSessionSocketReturn {
   const [state, dispatch] = useReducer(
     sessionSocketReducer,
@@ -117,7 +121,11 @@ export function useSessionSocket(
     sandboxAccess,
     clear: clearSandboxAccess,
     refresh: refreshSandboxAccess,
-  } = useSandboxAccess(sessionId, state.sessionState?.sandboxStatus === "ready");
+  } = useSandboxAccess(
+    sessionId,
+    state.sessionState?.sandboxStatus === "ready",
+    capabilities.sandboxAccess
+  );
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
@@ -228,10 +236,14 @@ export function useSessionSocket(
     dispatch({ type: "socket_closed" });
   }, [settleAllCorrelatedRequests, settleSubscriptionWaiters]);
 
-  const transport = useSessionTransport(sessionId, {
-    onMessage: handleMessage,
-    onClose: handleClose,
-  });
+  const transport = useSessionTransport(
+    sessionId,
+    {
+      onMessage: handleMessage,
+      onClose: handleClose,
+    },
+    capabilities.collaborate
+  );
   const { isOpen, send, reconnect, markHealthy } = transport;
 
   useEffect(() => {

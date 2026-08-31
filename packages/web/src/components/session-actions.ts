@@ -18,6 +18,7 @@ export interface SessionActionProps {
   primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
+  canManageLifecycle?: boolean;
 }
 
 /** One PR a session-level action can open, ready to render as a link. */

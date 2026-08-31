@@ -54,7 +54,7 @@ Open-Inspect includes four built-in roles.
 | Transfer workspace ownership                      |  Yes  |      No       |   No   |   No   |
 | View analytics                                    |  Yes  |      Yes      |  Yes   |  Yes   |
 | View provider accounts                            |  Yes  |      Yes      |  Yes   |   No   |
-| View image-build history                          |  Yes  |      Yes      |   No   |  Yes   |
+| View image-build history                          |  Yes  |      Yes      |  Yes   |  Yes   |
 | Manage personal skill profiles                    |  Yes  |      Yes      |  Yes   |  Yes   |
 
 ### Owner

@@ -11,6 +11,19 @@ expect.extend(matchers);
 afterEach(cleanup);
 
 describe("QueuedPromptStack", () => {
+  it("shows queued prompts without removal controls in read-only mode", () => {
+    render(
+      <QueuedPromptStack
+        promptQueue={[{ messageId: "queued-1", content: "Review this", status: "pending" }]}
+        cancellingPromptIds={new Set()}
+        onRemove={vi.fn()}
+        canRemove={false}
+      />
+    );
+
+    expect(screen.getByText("Review this")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove queued prompt/ })).not.toBeInTheDocument();
+  });
   it("renders only pending prompts in FIFO order", () => {
     render(
       <QueuedPromptStack

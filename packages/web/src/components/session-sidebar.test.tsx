@@ -8,8 +8,9 @@ import { SessionSidebar } from "./session-sidebar";
 
 expect.extend(matchers);
 
-const { mockHook } = vi.hoisted(() => ({
+const { mockHook, authorization } = vi.hoisted(() => ({
   mockHook: vi.fn(),
+  authorization: { canCreateSession: true },
 }));
 
 vi.mock("@/hooks/use-sidebar-sessions", () => ({ useSidebarSessions: mockHook }));
@@ -19,6 +20,12 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 vi.mock("@/hooks/use-media-query", () => ({ useIsMobile: () => false }));
 vi.mock("@/hooks/use-environments", () => ({ useEnvironments: () => ({ environments: [] }) }));
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      permission === "sessions.create" && authorization.canCreateSession,
+  }),
+}));
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
   useRouter: () => ({ push: vi.fn() }),
@@ -60,6 +67,7 @@ const noPagination = {
 };
 
 beforeEach(() => {
+  authorization.canCreateSession = true;
   const attention = session("attention", "Needs review");
   const running = session("running", "Implementing inbox");
   const child = session("child", "Checking tests", running.id);
@@ -99,6 +107,14 @@ describe("SessionSidebar", () => {
       "/automations"
     );
     expect(screen.getByRole("link", { name: "Analytics" })).toHaveAttribute("href", "/analytics");
+  });
+
+  it("hides the new session action without session creation permission", () => {
+    authorization.canCreateSession = false;
+
+    render(<SessionSidebar />);
+
+    expect(screen.queryByRole("button", { name: /New session/ })).not.toBeInTheDocument();
   });
 
   it("renders server-classified sections and nested descendants", () => {

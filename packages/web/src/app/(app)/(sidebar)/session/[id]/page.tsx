@@ -63,6 +63,7 @@ import { usePromptInput } from "@/hooks/use-prompt-input";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -71,6 +72,10 @@ const DEFAULT_SESSION_STATUS = "created" as const;
 
 export default function SessionPage() {
   const { shortcuts } = useKeyboardShortcuts();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canCollaborate = hasPermission("sessions.collaborate");
+  const canManageLifecycle = hasPermission("sessions.lifecycle");
+  const canAccessSandbox = hasPermission("sessions.sandbox_access");
   const initialSnapshot = useSessionSnapshot();
   const sessionId = initialSnapshot.session.id;
   const {
@@ -95,7 +100,10 @@ export default function SessionPage() {
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId, initialSnapshot);
+  } = useSessionSocket(sessionId, initialSnapshot, {
+    collaborate: canCollaborate,
+    sandboxAccess: canAccessSandbox,
+  });
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
     sessionId,
     participants,
@@ -143,7 +151,7 @@ export default function SessionPage() {
     reasoningEffort,
     loadingEnabledModels,
     sessionState?.status ?? DEFAULT_SESSION_STATUS,
-    ready,
+    ready && canCollaborate,
     shortcuts["send-prompt"]
   );
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
@@ -217,7 +225,7 @@ export default function SessionPage() {
   }, [applyTerminalOpen]);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;
-  const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
+  const showTerminal = !!(canAccessSandbox && ttydUrl && ttydToken && terminalOpen && !isBelowLg);
 
   const toggleDetails = useCallback(() => {
     setIsDetailsOpen((prev) => !prev);
@@ -355,44 +363,48 @@ export default function SessionPage() {
         promptQueue={promptQueue}
         cancellingPromptIds={cancellingPromptIds}
         onRemove={handleRemoveQueuedPrompt}
+        canRemove={canCollaborate}
       />
-      <SessionPromptComposer
-        session={{
-          id: sessionId,
-          status: sessionState?.status ?? DEFAULT_SESSION_STATUS,
-          artifacts,
-          primaryRepo,
-          onArchive: handleArchive,
-          onUnarchive: handleUnarchive,
-        }}
-        prompt={{
-          value: prompt,
-          isProcessing: ready && isProcessing,
-          draftLocked: isSubmitting || sessionAttachments.isUploading,
-          sendBlocked: !ready,
-          submitError,
-          inputRef,
-          onSubmit: handleSubmit,
-          onValueChange: handleInputValueChange,
-          onKeyDown: handleKeyDown,
-          onStopExecution: stopExecution,
-        }}
-        skillSuggestions={skillSuggestions}
-        attachments={{
-          items: sessionAttachments.attachments,
-          error: sessionAttachments.attachmentError,
-          isUploading: sessionAttachments.isUploading,
-          onAdd: sessionAttachments.addFiles,
-          onRemove: sessionAttachments.removeAttachment,
-        }}
-        model={{
-          selectedModel,
-          reasoningEffort,
-          items: enabledModelOptions,
-          onModelChange: handleModelChange,
-          onReasoningEffortChange: setReasoningEffort,
-        }}
-      />
+      {canCollaborate && (
+        <SessionPromptComposer
+          session={{
+            id: sessionId,
+            status: sessionState?.status ?? DEFAULT_SESSION_STATUS,
+            artifacts,
+            primaryRepo,
+            onArchive: handleArchive,
+            onUnarchive: handleUnarchive,
+            canManageLifecycle,
+          }}
+          prompt={{
+            value: prompt,
+            isProcessing: ready && isProcessing,
+            draftLocked: isSubmitting || sessionAttachments.isUploading,
+            sendBlocked: !ready,
+            submitError,
+            inputRef,
+            onSubmit: handleSubmit,
+            onValueChange: handleInputValueChange,
+            onKeyDown: handleKeyDown,
+            onStopExecution: stopExecution,
+          }}
+          skillSuggestions={skillSuggestions}
+          attachments={{
+            items: sessionAttachments.attachments,
+            error: sessionAttachments.attachmentError,
+            isUploading: sessionAttachments.isUploading,
+            onAdd: sessionAttachments.addFiles,
+            onRemove: sessionAttachments.removeAttachment,
+          }}
+          model={{
+            selectedModel,
+            reasoningEffort,
+            items: enabledModelOptions,
+            onModelChange: handleModelChange,
+            onReasoningEffortChange: setReasoningEffort,
+          }}
+        />
+      )}
     </div>
   );
 
@@ -419,13 +431,17 @@ export default function SessionPage() {
           primaryRepo,
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
+          canManageLifecycle,
         }}
         optimisticTitle={optimisticTitle}
         renameSession={renameSession}
+        canRename={canManageLifecycle}
+        showConnectionStatus={canCollaborate}
+        canAccessSandbox={canAccessSandbox}
       />
 
       {/* Connection error banner */}
-      {(authError || connectionError) && (
+      {canCollaborate && (authError || connectionError) && (
         <div className="bg-destructive-muted border-b border-destructive-border px-4 py-3 flex items-center justify-between">
           <p className="text-sm text-destructive">{authError || connectionError}</p>
           <button
@@ -459,6 +475,9 @@ export default function SessionPage() {
                 diffLoading={diffLoading}
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
+                canAccessSandbox={canAccessSandbox}
+                canManageLifecycle={canManageLifecycle}
+                canRetryDiff={canCollaborate}
               />
             }
             changes={
@@ -469,6 +488,7 @@ export default function SessionPage() {
                   resolved={resolvedDiff}
                   onClose={closeDiff}
                   onSelect={setSelectedDiff}
+                  canRetry={canCollaborate}
                 />
               ) : null
             }
@@ -492,6 +512,9 @@ export default function SessionPage() {
               diffLoading={diffLoading}
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
+              canAccessSandbox={canAccessSandbox}
+              canManageLifecycle={canManageLifecycle}
+              canRetryDiff={canCollaborate}
             />
           </>
         )}
@@ -516,6 +539,9 @@ export default function SessionPage() {
           diffLoading={diffLoading}
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
+          canAccessSandbox={canAccessSandbox}
+          canManageLifecycle={canManageLifecycle}
+          canRetryDiff={canCollaborate}
         />
       )}
 
@@ -534,6 +560,7 @@ export default function SessionPage() {
                 resolved={resolvedDiff}
                 onClose={closeDiff}
                 onSelect={setSelectedDiff}
+                canRetry={canCollaborate}
               />
             )}
           </SheetContent>

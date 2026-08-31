@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarIcon } from "@/components/ui/icons";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -60,6 +61,7 @@ export function SidebarToggleButton({ label = "Open sidebar" }: { label?: string
 
 export function CollapsedSidebarControls() {
   const actions = useContext(AppShellActionsContext);
+  const { hasPermission } = useCurrentUserAuthorization();
   if (!actions) {
     throw new Error("CollapsedSidebarControls must be used within a SidebarLayout");
   }
@@ -68,13 +70,15 @@ export function CollapsedSidebarControls() {
     <div className="flex items-center gap-2">
       <SidebarToggleButton />
       <SearchSessionsButton onClick={actions.searchSessions} />
-      <NewSessionButton onClick={actions.newSession} />
+      {hasPermission("sessions.create") && <NewSessionButton onClick={actions.newSession} />}
     </div>
   );
 }
 
 export function SidebarLayout({ children }: SidebarLayoutProps) {
   const router = useRouter();
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canCreateSession = hasPermission("sessions.create");
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
@@ -95,12 +99,13 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   );
 
   const handleNewSession = useCallback(() => {
+    if (!canCreateSession) return;
     setIsCommandMenuOpen(false);
     if (isMobile) {
       sidebar.close();
     }
     router.push("/");
-  }, [isMobile, router, sidebar]);
+  }, [canCreateSession, isMobile, router, sidebar]);
 
   const handleNavigate = useCallback(
     (href: string) => {
