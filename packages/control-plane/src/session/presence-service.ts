@@ -17,9 +17,7 @@ import type { ClientInfo } from "../types";
 import type { SessionMessenger } from "./messenger";
 
 /** Project one participant per identity from one or more client connections. */
-export function projectConnectedParticipants(
-  connections: Iterable<ClientInfo>
-): ParticipantPresence[] {
+function projectConnectedParticipants(connections: Iterable<ClientInfo>): ParticipantPresence[] {
   const participants = new Map<string, ParticipantPresence>();
   for (const connection of connections) {
     const existing = participants.get(connection.participantId);

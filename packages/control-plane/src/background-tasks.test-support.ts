@@ -1,7 +1,7 @@
 import type { BackgroundTasks } from "./platform-ports";
 
 /** One `submit` call: the task name and the factory's promise (absent when it threw). */
-export interface RecordedSubmission {
+interface RecordedSubmission {
   name: string;
   task?: Promise<unknown>;
 }

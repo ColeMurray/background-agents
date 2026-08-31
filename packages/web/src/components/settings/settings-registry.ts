@@ -244,7 +244,7 @@ type SettingsItem = (typeof SETTINGS_GROUPS)[number]["items"][number];
 /** Identifier for a registered settings category. */
 export type SettingsCategory = SettingsItem["id"];
 export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = "secrets";
-export const DEFAULT_SETTINGS_QUERY = "";
+const DEFAULT_SETTINGS_QUERY = "";
 
 /** Returns whether the user's effective permissions make a settings category visible. */
 export function canViewSettingsCategory(

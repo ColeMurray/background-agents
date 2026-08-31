@@ -85,7 +85,7 @@ export type PushBranchResult = { success: true } | { success: false; error: stri
  * A PR-creation failure with a caller-facing HTTP status. Thrown by internal
  * steps; createPullRequest's boundary catch maps it into the error result.
  */
-export class PullRequestCreationError extends Error {
+class PullRequestCreationError extends Error {
   constructor(
     readonly status: number,
     message: string
