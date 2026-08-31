@@ -20,12 +20,9 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
  *   `idx_user_identities_provider`).
  * - `automations.created_by` is re-pointed value-conditionally: legacy rows
  *   store GitHub numeric ids, which must never be rewritten.
- * - Idempotent: re-running a completed merge is a zero-count no-op, and a
- *   partially-applied run is repaired by running the script again — with one
- *   exception: the final email backfill's input (the loser row) is deleted by
- *   the preceding statement, so a stop exactly between those two statements
- *   is not re-derivable from the database. The CLI prints a recovery record
- *   before executing to cover that residual case.
+ * - Idempotent: re-running a completed merge is a zero-count no-op. The
+ *   execute path requires an atomic SqlDatabase batch so no partial graph can
+ *   become externally visible.
  * - Browser sessions (`auth_sessions`) issued to the loser are deleted. An
  *   issued bearer credential is never rewritten to authenticate as another
  *   canonical user.
@@ -74,6 +71,15 @@ const USER_MERGE_COUNT_KEYS = [
   "roleAssignmentsRemoved",
   "providerAccountAuthorizationsRepointed",
   "providerAccountAuthorizationAttemptsRepointed",
+  "providerAccountsCreatedRepointed",
+  "providerAccountsUpdatedRepointed",
+  "providerAccountDefaultsCreatedRepointed",
+  "providerAccountDefaultsUpdatedRepointed",
+  "skillsCreatedRepointed",
+  "skillsUpdatedRepointed",
+  "skillRevisionsCreatedRepointed",
+  "skillAssignmentsCreatedRepointed",
+  "skillCatalogGenerationsAdvanced",
   "keyboardShortcutPreferencesDeduped",
   "keyboardShortcutPreferencesRepointed",
   "auditEventsCreated",
@@ -83,6 +89,12 @@ const USER_MERGE_COUNT_KEYS = [
 
 type UserMergeCountKey = (typeof USER_MERGE_COUNT_KEYS)[number];
 type UserMergeCounts = Record<UserMergeCountKey, number>;
+
+const RESULT_CHANGE_DIVISORS: Partial<Record<UserMergeCountKey, number>> = {
+  // The assignment UPDATE trigger also advances skills_catalog_state once per
+  // changed assignment, and D1 includes both rows in meta.changes.
+  skillAssignmentsCreatedRepointed: 2,
+};
 
 interface MergeOperation {
   readonly key: UserMergeCountKey;
@@ -178,12 +190,48 @@ const SKILL_PROFILE_OPERATIONS = dedupeThenRepoint({
   )`,
 });
 
+const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
+  key: "skillCatalogGenerationsAdvanced",
+  execute: (db, _survivorId, loserId) =>
+    db
+      .prepare(
+        `UPDATE skills_catalog_state SET generation = generation + 1
+         WHERE singleton = 1
+           AND EXISTS (SELECT 1 FROM skill_profiles WHERE user_id = ?)`
+      )
+      .bind(loserId),
+  preview: (db, _survivorId, loserId) =>
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM skills_catalog_state
+         WHERE singleton = 1
+           AND EXISTS (SELECT 1 FROM skill_profiles WHERE user_id = ?)`
+      )
+      .bind(loserId),
+};
+
 const FINAL_REPOINT_OPERATIONS = [
   regularRepoint("providerAccountAuthorizationsRepointed", "model_provider_account_authorizations"),
   regularRepoint(
     "providerAccountAuthorizationAttemptsRepointed",
     "model_provider_account_authorization_attempts"
   ),
+  regularRepoint("providerAccountsCreatedRepointed", "model_provider_accounts", "created_by"),
+  regularRepoint("providerAccountsUpdatedRepointed", "model_provider_accounts", "updated_by"),
+  regularRepoint(
+    "providerAccountDefaultsCreatedRepointed",
+    "model_provider_account_defaults",
+    "created_by"
+  ),
+  regularRepoint(
+    "providerAccountDefaultsUpdatedRepointed",
+    "model_provider_account_defaults",
+    "updated_by"
+  ),
+  regularRepoint("skillsCreatedRepointed", "skills", "created_by"),
+  regularRepoint("skillsUpdatedRepointed", "skills", "updated_by"),
+  regularRepoint("skillRevisionsCreatedRepointed", "skill_revisions", "created_by"),
+  regularRepoint("skillAssignmentsCreatedRepointed", "skill_assignments", "created_by"),
   ...dedupeThenRepoint({
     dedupeKey: "keyboardShortcutPreferencesDeduped",
     repointKey: "keyboardShortcutPreferencesRepointed",
@@ -194,6 +242,7 @@ const FINAL_REPOINT_OPERATIONS = [
 
 const TABLE_OPERATIONS = [
   ...BEFORE_SKILL_PROFILE_OPERATIONS,
+  SKILL_CATALOG_GENERATION_OPERATION,
   ...SKILL_PROFILE_OPERATIONS,
   ...FINAL_REPOINT_OPERATIONS,
 ] as const;
@@ -229,14 +278,15 @@ export async function mergeUsers(
     throw new UserMergeError(`Survivor user ${survivorId} not found`);
   }
   // A missing loser row is not an error: re-running a completed merge must
-  // be a no-op, and a partially-applied merge must be resumable.
+  // be a no-op after an already-completed atomic merge.
   const loser = await db
-    .prepare(`SELECT id, email, email_verified FROM users WHERE id = ?`)
+    .prepare(`SELECT id, email, email_verified, suspended_at FROM users WHERE id = ?`)
     .bind(loserId)
     .first<{
       id: string;
       email: string | null;
       email_verified: number;
+      suspended_at: number | null;
     }>();
   if (!loser) {
     return { survivorId, loserId, dryRun: options.dryRun === true, counts: emptyCounts() };
@@ -269,6 +319,9 @@ export async function mergeUsers(
   if (survivorRole && loserRole && survivorRole.role_id !== loserRole.role_id) {
     throw new UserMergeError("Resolve conflicting user roles before merging");
   }
+  if (survivor.suspended_at !== loser.suspended_at) {
+    throw new UserMergeError("Resolve conflicting user suspension states before merging");
+  }
   if (loserRole?.role_key === "owner" && survivor.suspended_at !== null) {
     throw new UserMergeError("The surviving Owner must be active before merging");
   }
@@ -298,10 +351,53 @@ export async function mergeUsers(
     }
   };
 
+  const auditId = crypto.randomUUID();
+  const occurredAt = Date.now();
+  // The NOT NULL occurred_at column turns a failed revalidation into a batch
+  // error, rolling back every merge write. This closes the preflight/write
+  // window for role, suspension, and last-active-Owner invariants.
+  add(
+    "auditEventsCreated",
+    db
+      .prepare(
+        `INSERT INTO authorization_audit_events
+            (id, occurred_at, request_id, principal_kind,
+             actor_service_snapshot, action, resource_type, resource_id,
+             target_user_id_snapshot, reason_code)
+         VALUES (
+           ?,
+           CASE WHEN EXISTS (
+             SELECT 1
+             FROM users survivor
+             JOIN user_role_assignments survivor_assignment
+               ON survivor_assignment.user_id = survivor.id
+             JOIN users loser ON loser.id = ?
+             JOIN user_role_assignments loser_assignment
+               ON loser_assignment.user_id = loser.id
+             JOIN roles role ON role.id = loser_assignment.role_id
+             WHERE survivor.id = ?
+               AND survivor_assignment.role_id = loser_assignment.role_id
+               AND survivor.suspended_at IS loser.suspended_at
+               AND (role.key IS NULL OR role.key <> 'owner' OR survivor.suspended_at IS NULL)
+           ) THEN ? ELSE NULL END,
+           'user-merge', 'service', 'control-plane',
+           'workspace.user_merged', 'user', ?, ?, 'operator_merge'
+         )`
+      )
+      .bind(auditId, loserId, survivorId, occurredAt, survivorId, loserId)
+  );
+
   // Dedup before re-pointing: drop loser rows whose target slot the survivor
   // already occupies (identities under idx_user_identities_provider; read
   // states routinely, where both split rows read the same session).
   addOperations(BEFORE_SKILL_PROFILE_OPERATIONS);
+
+  // Profile resolution uses this generation as a consistency fence. Advance
+  // it before any profile membership or ownership rows are changed.
+  add(
+    SKILL_CATALOG_GENERATION_OPERATION.key,
+    SKILL_CATALOG_GENERATION_OPERATION.execute(db, survivorId, loserId)
+  );
 
   // Merge items before deleting colliding skill profiles.
   add(
@@ -326,21 +422,6 @@ export async function mergeUsers(
     db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId)
   );
   addOperations(FINAL_REPOINT_OPERATIONS);
-
-  // Record the merge before deleting the user so the snapshots remain explicit.
-  add(
-    "auditEventsCreated",
-    db
-      .prepare(
-        `INSERT INTO authorization_audit_events
-            (id, occurred_at, request_id, principal_kind,
-             actor_service_snapshot, action, resource_type, resource_id,
-             target_user_id_snapshot, reason_code)
-           VALUES (?, ?, 'user-merge', 'service', 'control-plane',
-                   'workspace.user_merged', 'user', ?, ?, 'operator_merge')`
-      )
-      .bind(crypto.randomUUID(), Date.now(), survivorId, loserId)
-  );
 
   add("usersDeleted", db.prepare(`DELETE FROM users WHERE id = ?`).bind(loserId));
   if (backfillEmail) {
@@ -367,7 +448,7 @@ export async function mergeUsers(
 
   const counts = emptyCounts();
   for (const [key, index] of Object.entries(track) as [UserMergeCountKey, number][]) {
-    counts[key] = results[index]?.meta.changes ?? 0;
+    counts[key] = (results[index]?.meta.changes ?? 0) / (RESULT_CHANGE_DIVISORS[key] ?? 1);
   }
   if (loser) {
     // The users delete's reported `changes` includes any FK-cascaded rows;
@@ -438,7 +519,9 @@ async function previewCounts(
     ...operationCounts,
     skillProfileItemsMerged: count(skillProfileItemsMerged),
     roleAssignmentsRemoved: count(roleAssignments),
-    auditEventsCreated: count(users),
+    // mergeUsers returns before previewing when the loser is absent, so an
+    // executed merge always writes exactly one audit event.
+    auditEventsCreated: 1,
     canonicalEmailBackfilled,
     usersDeleted: count(users),
   };

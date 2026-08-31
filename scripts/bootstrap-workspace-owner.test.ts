@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { buildBootstrapSql, parseArgs } from "./bootstrap-workspace-owner.ts";
+import { buildBootstrapSql, parseArgs, run } from "./bootstrap-workspace-owner.ts";
 
 const USER_ID = "11111111111111111111111111111111";
 const OTHER_USER_ID = "22222222222222222222222222222222";
@@ -306,5 +307,70 @@ describe("Owner bootstrap SQL", () => {
       /workspace_bootstrap|authorization_version|access_status|mutation_id|policy_id|operation_result|decision_outcome|metadata_json|actor_provider|assigned_by|assigned_at/
     );
     assert.match(generated, /SELECT 1 FROM authorization_audit_events WHERE id = 'audit-exact'/);
+  });
+});
+
+describe("Owner bootstrap orchestration", () => {
+  it("accepts only the execution response bound to this invocation's audit", async () => {
+    let calls = 0;
+    await run(
+      { database: "workspace", userId: USER_ID, execute: true },
+      {
+        randomUUID: () => "audit-exact",
+        now: () => 123,
+        runWrangler: (_database, operation) => {
+          calls += 1;
+          if (operation[0] === "--command") {
+            return JSON.stringify([
+              { success: true, results: [{ report: "preflight", status: "ready" }] },
+            ]);
+          }
+          assert.equal(operation[0], "--file");
+          const sqlPath = operation[1];
+          assert.ok(sqlPath);
+          const generated = readFileSync(sqlPath, "utf8");
+          assert.match(generated, /audit-exact/);
+          assert.match(generated, /123/);
+          return JSON.stringify([
+            {
+              success: true,
+              results: [
+                {
+                  report: "postcondition",
+                  status: "executed",
+                  audit_written: 1,
+                },
+              ],
+            },
+          ]);
+        },
+      }
+    );
+
+    assert.equal(calls, 2);
+  });
+
+  it("reports a concurrent winner instead of claiming this invocation completed", async () => {
+    await assert.rejects(
+      run(
+        { database: "workspace", userId: USER_ID, execute: true },
+        {
+          randomUUID: () => "audit-loser",
+          now: () => 123,
+          runWrangler: (_database, operation) =>
+            JSON.stringify([
+              {
+                success: true,
+                results: [
+                  operation[0] === "--command"
+                    ? { report: "preflight", status: "ready" }
+                    : { report: "postcondition", status: "no-op", audit_written: 0 },
+                ],
+              },
+            ]),
+        }
+      ),
+      /ownership changed concurrently/
+    );
   });
 });
