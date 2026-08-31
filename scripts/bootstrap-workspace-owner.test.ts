@@ -350,6 +350,24 @@ describe("Owner bootstrap orchestration", () => {
     assert.equal(calls, 2);
   });
 
+  it("accepts Wrangler progress output before the execution JSON", async () => {
+    await run(
+      { database: "workspace", userId: USER_ID, execute: true },
+      {
+        randomUUID: () => "audit-exact",
+        now: () => 123,
+        runWrangler: (_database, operation) => {
+          const report =
+            operation[0] === "--command"
+              ? { report: "preflight", status: "ready" }
+              : { report: "postcondition", status: "executed", audit_written: 1 };
+          const output = JSON.stringify([{ success: true, results: [report] }]);
+          return operation[0] === "--file" ? `├ Checking remote database...\n${output}` : output;
+        },
+      }
+    );
+  });
+
   it("reports a concurrent winner instead of claiming this invocation completed", async () => {
     await assert.rejects(
       run(

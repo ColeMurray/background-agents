@@ -217,7 +217,15 @@ export interface BootstrapRunDependencies {
 }
 
 function reportRows(stdout: string): Array<Record<string, unknown>> {
-  const parsed = JSON.parse(stdout) as WranglerResult[];
+  // Wrangler emits progress lines before the JSON array for remote --file
+  // execution even when --json is set. Parse the documented JSON payload
+  // without treating that human-readable prefix as part of it.
+  const jsonStart = stdout.search(/^\s*\[/m);
+  const jsonEnd = stdout.lastIndexOf("]");
+  if (jsonStart < 0 || jsonEnd < jsonStart) {
+    throw new Error("Wrangler returned no JSON output");
+  }
+  const parsed = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1)) as WranglerResult[];
   const rows = parsed.flatMap((result) => result.results ?? []).filter((row) => row.report);
   for (const row of rows) console.log(JSON.stringify(row));
   return rows;
