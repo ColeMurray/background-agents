@@ -20,6 +20,10 @@ import { AutomationStore } from "./db/automation-store";
 import { AuthorizationError, AuthorizationService } from "./authorization/service";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import {
+  auditRouteAuthorizationDecision,
+  shouldAuditAllowedRoute,
+} from "./authorization/request-audit";
+import {
   SCOPED_PERMISSION_PAIRS,
   hasScopedPermission,
   resolveScopedPermission,
@@ -745,6 +749,15 @@ export async function handleRequest(
     ctx
   );
   if (serviceAccessError) {
+    await auditRouteAuthorizationDecision({
+      ctx,
+      route: matchedRoute.route,
+      method,
+      path,
+      response: serviceAccessError,
+      allowed: false,
+      requirement: { kind: "service-capability" },
+    });
     logRequest(serviceAccessError, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(
       withRouteCachePolicy(serviceAccessError, matchedRoute.route),
@@ -754,6 +767,15 @@ export async function handleRequest(
 
   const userAccessError = await enforceActiveUser(matchedRoute.route, ctx);
   if (userAccessError) {
+    await auditRouteAuthorizationDecision({
+      ctx,
+      route: matchedRoute.route,
+      method,
+      path,
+      response: userAccessError,
+      allowed: false,
+      requirement: { kind: "active-user" },
+    });
     logRequest(userAccessError, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(withRouteCachePolicy(userAccessError, matchedRoute.route), ctx);
   }
@@ -764,6 +786,14 @@ export async function handleRequest(
     ctx
   );
   if (authorizationError) {
+    await auditRouteAuthorizationDecision({
+      ctx,
+      route: matchedRoute.route,
+      method,
+      path,
+      response: authorizationError,
+      allowed: false,
+    });
     logRequest(authorizationError, ctx, method, path, startTime);
     return withCorsAndTraceHeaders(
       withRouteCachePolicy(authorizationError, matchedRoute.route),
@@ -796,14 +826,33 @@ export async function handleRequest(
         error: e instanceof Error ? e : String(e),
         ...ctx.metrics.summarize(),
       });
-      return withCorsAndTraceHeaders(
-        withRouteCachePolicy(error("Internal server error", 500), matchedRoute.route),
-        ctx
-      );
+      response = error("Internal server error", 500);
+      if (shouldAuditAllowedRoute(matchedRoute.route, method)) {
+        await auditRouteAuthorizationDecision({
+          ctx,
+          route: matchedRoute.route,
+          method,
+          path,
+          response,
+          allowed: true,
+        });
+      }
+      return withCorsAndTraceHeaders(withRouteCachePolicy(response, matchedRoute.route), ctx);
     }
   }
 
   logRequest(response, ctx, method, path, startTime);
+
+  if (shouldAuditAllowedRoute(matchedRoute.route, method)) {
+    await auditRouteAuthorizationDecision({
+      ctx,
+      route: matchedRoute.route,
+      method,
+      path,
+      response,
+      allowed: true,
+    });
+  }
 
   return withCorsAndTraceHeaders(withRouteCachePolicy(response, matchedRoute.route), ctx);
 }

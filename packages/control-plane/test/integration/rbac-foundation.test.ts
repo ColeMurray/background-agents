@@ -93,6 +93,55 @@ describe("RBAC foundation migration", () => {
       })
     ).resolves.toEqual({ status: "member_not_found" });
 
+    const rejectedAudits = await env.DB.prepare(
+      `SELECT request_id, reason_code, operation_result, metadata_json
+       FROM authorization_audit_events
+       WHERE request_id IN ('missing-role', 'missing-role-target', 'missing-status-target')
+       ORDER BY request_id`
+    ).all<{
+      request_id: string;
+      reason_code: string;
+      operation_result: string;
+      metadata_json: string;
+    }>();
+    expect(
+      rejectedAudits.results.map((audit) => ({
+        ...audit,
+        metadata_json: JSON.parse(audit.metadata_json),
+      }))
+    ).toEqual([
+      {
+        request_id: "missing-role",
+        reason_code: "role_not_found",
+        operation_result: "rejected",
+        metadata_json: {
+          before: { roleId: BUILT_IN_ROLE_REGISTRY.member.id },
+          requested: { roleId: "role_missing" },
+          after: { roleId: BUILT_IN_ROLE_REGISTRY.member.id },
+        },
+      },
+      {
+        request_id: "missing-role-target",
+        reason_code: "member_not_found",
+        operation_result: "rejected",
+        metadata_json: {
+          before: { roleId: null },
+          requested: { roleId: BUILT_IN_ROLE_REGISTRY.viewer.id },
+          after: { roleId: null },
+        },
+      },
+      {
+        request_id: "missing-status-target",
+        reason_code: "member_not_found",
+        operation_result: "rejected",
+        metadata_json: {
+          before: { suspended: null, suspendedAt: null },
+          requested: { suspended: true },
+          after: { suspended: null, suspendedAt: null },
+        },
+      },
+    ]);
+
     const service = new AuthorizationService(env.DB);
     await expect(
       service.replaceMemberRole({
@@ -236,6 +285,86 @@ describe("RBAC foundation migration", () => {
           before: { suspended: true, suspendedAt: 150 },
           requested: { suspended: true },
           after: { suspended: true, suspendedAt: 150 },
+        },
+      },
+    ]);
+  });
+
+  it("audits denied actor revalidation and rejected owner conflicts without changing state", async () => {
+    await insertCanonicalUser({ id: ACTOR_ID, email: "owner@example.com" });
+    await insertCanonicalUser({ id: TARGET_ID, email: "member@example.com" });
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind(BUILT_IN_ROLE_REGISTRY.owner.id, ACTOR_ID)
+      .run();
+    const store = new AuthorizationStore(env.DB);
+
+    await env.DB.prepare("UPDATE users SET suspended_at = 50 WHERE id = ?").bind(ACTOR_ID).run();
+    await expect(
+      store.replaceMemberRole({
+        actorUserId: ACTOR_ID,
+        targetUserId: TARGET_ID,
+        roleId: BUILT_IN_ROLE_REGISTRY.viewer.id,
+        requestId: "actor-revalidation",
+        now: 100,
+      })
+    ).resolves.toEqual({ status: "actor_authorization_changed" });
+
+    await env.DB.prepare("UPDATE users SET suspended_at = NULL WHERE id = ?").bind(ACTOR_ID).run();
+    await expect(
+      store.replaceMemberRole({
+        actorUserId: ACTOR_ID,
+        targetUserId: ACTOR_ID,
+        roleId: BUILT_IN_ROLE_REGISTRY.member.id,
+        requestId: "owner-conflict",
+        now: 101,
+      })
+    ).resolves.toEqual({ status: "conflict" });
+
+    expect(
+      await env.DB.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?")
+        .bind(TARGET_ID)
+        .first()
+    ).toEqual({ role_id: BUILT_IN_ROLE_REGISTRY.member.id });
+    expect(
+      await env.DB.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?")
+        .bind(ACTOR_ID)
+        .first()
+    ).toEqual({ role_id: BUILT_IN_ROLE_REGISTRY.owner.id });
+
+    const audits = await env.DB.prepare(
+      `SELECT request_id, reason_code, operation_result, metadata_json
+       FROM authorization_audit_events
+       WHERE request_id IN ('actor-revalidation', 'owner-conflict') ORDER BY request_id`
+    ).all<{
+      request_id: string;
+      reason_code: string;
+      operation_result: string;
+      metadata_json: string;
+    }>();
+    expect(
+      audits.results.map((audit) => ({
+        ...audit,
+        metadata_json: JSON.parse(audit.metadata_json),
+      }))
+    ).toEqual([
+      {
+        request_id: "actor-revalidation",
+        reason_code: "actor_authorization_changed",
+        operation_result: "denied",
+        metadata_json: {
+          before: { roleId: BUILT_IN_ROLE_REGISTRY.member.id },
+          requested: { roleId: BUILT_IN_ROLE_REGISTRY.viewer.id },
+          after: { roleId: BUILT_IN_ROLE_REGISTRY.member.id },
+        },
+      },
+      {
+        request_id: "owner-conflict",
+        reason_code: "owner_conflict",
+        operation_result: "rejected",
+        metadata_json: {
+          before: { roleId: BUILT_IN_ROLE_REGISTRY.owner.id },
+          requested: { roleId: BUILT_IN_ROLE_REGISTRY.member.id },
+          after: { roleId: BUILT_IN_ROLE_REGISTRY.owner.id },
         },
       },
     ]);

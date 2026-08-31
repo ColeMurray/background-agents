@@ -138,6 +138,37 @@ describe("RBAC routes", () => {
       ).getEffectiveAuthorization(member!.id);
       expect(authorization.permissions).not.toContain(permission);
       expect((await serviceFetch("https://cp.test/roles")).status).toBe(403);
+      const audit = await env.DB.prepare(
+        `SELECT principal_kind, actor_user_id_snapshot, action, resource_type, resource_id,
+                reason_code, operation_result, metadata_json
+         FROM authorization_audit_events
+         WHERE action = 'authorization.request_denied' AND resource_id = '/roles'`
+      ).first<{
+        principal_kind: string;
+        actor_user_id_snapshot: string;
+        action: string;
+        resource_type: string;
+        resource_id: string;
+        reason_code: string;
+        operation_result: string;
+        metadata_json: string;
+      }>();
+      expect(audit).toMatchObject({
+        principal_kind: "user",
+        actor_user_id_snapshot: member!.id,
+        action: "authorization.request_denied",
+        resource_type: "http_route",
+        resource_id: "/roles",
+        reason_code: "permission_required",
+        operation_result: "denied",
+      });
+      expect(JSON.parse(audit!.metadata_json)).toMatchObject({
+        httpMethod: "GET",
+        httpPath: "/roles",
+        httpStatus: 403,
+        requiredPermission: permission,
+        responseCode: "permission_required",
+      });
     } finally {
       await env.DB.prepare(
         "DELETE FROM role_permissions WHERE role_id = 'role_builtin_member' AND permission_id = ?"
@@ -348,7 +379,7 @@ describe("RBAC routes", () => {
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.member_status_updated'"
       ).first()
-    ).toEqual({ count: 0 });
+    ).toEqual({ count: 1 });
   });
 
   it("lets an Owner suspend themselves when another unsuspended Owner exists", async () => {
@@ -504,7 +535,7 @@ describe("RBAC routes", () => {
             'stale-member-role-request', 'stale-member-request'
          )`
       ).first()
-    ).toEqual({ count: 0 });
+    ).toEqual({ count: 2 });
   });
 
   it("returns authorization unavailable for an unexpected mutation database failure", async () => {
