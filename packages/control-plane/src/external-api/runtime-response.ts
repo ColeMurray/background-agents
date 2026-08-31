@@ -4,6 +4,11 @@ const FAILURE_BY_STATUS: Record<number, { status: number; error: string; code: s
   400: { status: 400, error: "Invalid session runtime request", code: "runtime_bad_request" },
   404: { status: 404, error: "Session runtime not found", code: "runtime_not_found" },
   409: { status: 409, error: "Session runtime conflict", code: "runtime_conflict" },
+  410: {
+    status: 410,
+    error: "Event checkpoint expired",
+    code: "event_checkpoint_expired",
+  },
   429: { status: 429, error: "Session runtime is busy", code: "runtime_busy" },
 };
 

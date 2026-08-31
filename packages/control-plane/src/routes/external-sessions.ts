@@ -3,19 +3,16 @@ import {
   externalCreateSessionResponseSchema,
   externalFollowUpRequestSchema,
   externalEventFeedQuerySchema,
+  externalSessionListQuerySchema,
   externalStopSessionResponseSchema,
   type ExternalCreateSessionResponse,
   type ExternalSession,
 } from "@open-inspect/shared/types/external-session-api";
 import { sendPromptResponseSchema } from "@open-inspect/shared/types/session-api";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
-import { generateId, hashToken } from "../auth/crypto";
-import { ExternalSessionCreateOperationStore } from "../db/external-session-create-operations";
+import { hashToken, hmacToken } from "../auth/crypto";
 import { SessionIndexStore, type SessionEntry } from "../db/session-index";
-import { getEffectiveEnabledModels } from "../db/model-preferences";
-import { GlobalSecretsStore } from "../db/global-secrets";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
-import { initializeSession } from "../session/initialize";
 import {
   SessionInternalPaths,
   sessionBootstrapEnsureResponseSchema,
@@ -25,6 +22,7 @@ import { createSessionRuntimeClient } from "../session/runtime-client";
 import { projectExternalEventPage } from "../external-api/event-projection";
 import { adaptExternalRuntimeFailure } from "../external-api/runtime-response";
 import type { Env } from "../types";
+import { requireExternalSessionIdSecret } from "../env-validation";
 import {
   SCM_AGNOSTIC_EXTERNAL_USER_ROUTE,
   defineRoutes,
@@ -37,6 +35,7 @@ import {
   type UserRouteContext,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { admitPromptModel, dispatchSessionPrompt } from "./session-prompt";
 
 const EXTERNAL_SESSIONS_PATH = "/external/v1/sessions";
 
@@ -63,15 +62,15 @@ async function repositorylessSession(
   return session;
 }
 
-async function enqueueExternalPrompt(
+async function dispatchExternalPrompt(
   ctx: SessionRouteContext,
   sessionId: string,
   input: { content: string; model?: string; reasoningEffort?: string; clientRequestId: string }
 ): Promise<Response> {
-  const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  return dispatchSessionPrompt(
+    ctx,
+    sessionId,
+    {
       content: input.content,
       authorId: ctx.principal?.kind === "user" ? ctx.principal.userId : "anonymous",
       canonicalUserId: ctx.principal?.kind === "user" ? ctx.principal.userId : undefined,
@@ -79,27 +78,24 @@ async function enqueueExternalPrompt(
       model: input.model,
       reasoningEffort: input.reasoningEffort,
       clientRequestId: input.clientRequestId,
-    }),
-  });
-  return adaptExternalRuntimeFailure(response) ?? response;
+    },
+    (response) => adaptExternalRuntimeFailure(response) ?? response
+  );
 }
 
 async function ensureExternalSessionRuntime(
   env: Env,
   ctx: UserRouteContext,
   session: SessionEntry,
-  input: { title: string; model: string; reasoningEffort: string }
-): Promise<Response | null> {
-  if (
-    session.repoOwner !== null ||
-    session.repoName !== null ||
-    session.userId !== ctx.principal.userId ||
-    session.title !== input.title ||
-    session.model !== input.model ||
-    session.reasoningEffort !== input.reasoningEffort
-  ) {
-    return error("External create request conflicts with the reserved session", 409);
+  input: {
+    title: string;
+    model: string;
+    reasoningEffort?: string;
+    requestFingerprint: string;
   }
+): Promise<Response | null> {
+  const reservationError = validateExternalSessionReservation(session, ctx.principal.userId, input);
+  if (reservationError) return reservationError;
 
   const runtime = createSessionRuntimeClient(env, ctx);
   const response = await runtime.fetch(session.id, SessionInternalPaths.ensureBootstrap, {
@@ -121,6 +117,7 @@ async function ensureExternalSessionRuntime(
       canonicalUserId: ctx.principal.userId,
       scmTokenEncrypted: null,
       scmRefreshTokenEncrypted: null,
+      requestFingerprint: input.requestFingerprint,
     }),
   });
   const runtimeError = adaptExternalRuntimeFailure(response);
@@ -130,18 +127,37 @@ async function ensureExternalSessionRuntime(
   return null;
 }
 
-async function validateEnabledModel(
-  ctx: UserRouteContext | SessionRouteContext,
-  model: string
-): Promise<Response | null> {
-  try {
-    const enabledModels = await getEffectiveEnabledModels(ctx.db);
-    return enabledModels.some((enabledModel) => enabledModel === model)
-      ? null
-      : error(`Model "${model}" is not enabled`, 400);
-  } catch {
-    return error("Model preferences unavailable", 503);
+function validateExternalSessionReservation(
+  session: SessionEntry,
+  userId: string,
+  input: {
+    title: string;
+    model: string;
+    reasoningEffort?: string;
+    requestFingerprint: string;
   }
+): Response | null {
+  return session.externalRequestFingerprint !== input.requestFingerprint ||
+    session.repoOwner !== null ||
+    session.repoName !== null ||
+    session.userId !== userId ||
+    session.title !== input.title ||
+    session.model !== input.model ||
+    session.reasoningEffort !== (input.reasoningEffort ?? null)
+    ? error("Idempotency key conflict", 409)
+    : null;
+}
+
+export async function deriveExternalSessionId(
+  userId: string,
+  idempotencyKey: string,
+  secret: string
+): Promise<string> {
+  const digest = await hmacToken(
+    `open-inspect.external-session-id.v1\0${userId}\0${idempotencyKey}`,
+    secret
+  );
+  return `external-${digest.slice(0, 32)}`;
 }
 
 /** Creates only repository-less sessions and persists progress before any side effect. */
@@ -157,8 +173,35 @@ async function createExternalSession(
   if (!parsed.success) return error("Invalid external session request body", 400);
   const input = parsed.data;
 
-  const modelError = await validateEnabledModel(ctx, input.model);
-  if (modelError) return modelError;
+  let installationKey: string;
+  try {
+    installationKey = requireExternalSessionIdSecret(env);
+  } catch {
+    return error("External session identity unavailable", 503);
+  }
+  const requestFingerprint = await hashToken(JSON.stringify(input));
+  const sessionId = await deriveExternalSessionId(
+    ctx.principal.userId,
+    input.idempotencyKey,
+    installationKey
+  );
+  const sessionStore = new SessionIndexStore(ctx.db);
+  let session = await sessionStore.get(sessionId);
+  const reservationInput = { ...input, requestFingerprint };
+  if (session) {
+    const reservationError = validateExternalSessionReservation(
+      session,
+      ctx.principal.userId,
+      reservationInput
+    );
+    if (reservationError) return reservationError;
+  }
+
+  const admission = await admitPromptModel(ctx, {
+    model: input.model,
+    reasoningEffort: input.reasoningEffort,
+  });
+  if (admission instanceof Response) return admission;
 
   if (input.initialPrompt && !ctx.authorization?.permissions.includes("sessions.collaborate")) {
     return json(
@@ -171,66 +214,52 @@ async function createExternalSession(
     );
   }
 
-  const requestHash = await hashToken(JSON.stringify(input));
-  const proposedSessionId = generateId();
-  const operationStore = new ExternalSessionCreateOperationStore(ctx.db);
-  let operation = await operationStore.claim({
-    userId: ctx.principal.userId,
-    idempotencyKey: input.idempotencyKey,
-    requestHash,
-    sessionId: proposedSessionId,
-  });
-  if (operation.requestHash !== requestHash) return error("Idempotency key conflict", 409);
-  if (operation.stage === "completed" && operation.result) return json(operation.result);
-
-  if (operation.stage === "reserved") {
-    const sessionStore = new SessionIndexStore(ctx.db);
-    const existing = await sessionStore.get(operation.sessionId);
-    if (existing) {
-      const runtimeError = await ensureExternalSessionRuntime(env, ctx, existing, input);
-      if (runtimeError) return runtimeError;
-    } else {
-      const providerAuth = await resolveSessionProviderAuth(ctx.db, { unattended: false });
-      try {
-        await initializeSession(
-          env,
-          {
-            sessionId: operation.sessionId,
-            repoOwner: null,
-            repoName: null,
-            repoId: null,
-            defaultBranch: null,
-            branch: null,
-            title: input.title,
-            model: input.model,
-            reasoningEffort: input.reasoningEffort,
-            participantUserId: ctx.principal.userId,
-            platformUserId: ctx.principal.userId,
-            scmTokenEncrypted: null,
-            scmRefreshTokenEncrypted: null,
-            providerAuth,
-          },
-          ctx
-        );
-      } catch (cause) {
-        const racedSession = await sessionStore.get(operation.sessionId);
-        if (!racedSession) throw cause;
-        const runtimeError = await ensureExternalSessionRuntime(env, ctx, racedSession, input);
-        if (runtimeError) return runtimeError;
-      }
+  let created = false;
+  if (!session) {
+    const now = Date.now();
+    const providerAuth = await resolveSessionProviderAuth(ctx.db, { unattended: false });
+    try {
+      await sessionStore.create({
+        id: sessionId,
+        title: input.title,
+        repoOwner: null,
+        repoName: null,
+        model: input.model,
+        reasoningEffort: input.reasoningEffort ?? null,
+        baseBranch: null,
+        environmentId: null,
+        status: "created",
+        userId: ctx.principal.userId,
+        createdAt: now,
+        updatedAt: now,
+        providerAuth,
+        externalRequestFingerprint: requestFingerprint,
+      });
+      created = true;
+    } catch (cause) {
+      session = await sessionStore.get(sessionId);
+      if (!session) throw cause;
     }
-    operation = await operationStore.markSessionCreated(operation);
-    if (operation.stage === "completed" && operation.result) return json(operation.result);
+    session ??= await sessionStore.get(sessionId);
   }
+  if (!session) throw new Error("External session reservation was not persisted");
+  const reservationError = validateExternalSessionReservation(
+    session,
+    ctx.principal.userId,
+    reservationInput
+  );
+  if (reservationError) return reservationError;
+  const runtimeError = await ensureExternalSessionRuntime(env, ctx, session, reservationInput);
+  if (runtimeError) return runtimeError;
 
   let result: ExternalCreateSessionResponse = {
-    sessionId: operation.sessionId,
+    sessionId,
     status: "created",
   };
   if (input.initialPrompt) {
-    const response = await enqueueExternalPrompt(
+    const response = await dispatchExternalPrompt(
       { ...ctx, sessionRuntime: createSessionRuntimeClient(env, ctx) },
-      operation.sessionId,
+      sessionId,
       {
         content: input.initialPrompt,
         model: input.model,
@@ -241,22 +270,35 @@ async function createExternalSession(
     if (!response.ok) return response;
     const promptResult = sendPromptResponseSchema.parse(await response.json());
     result = externalCreateSessionResponseSchema.parse({
-      sessionId: operation.sessionId,
+      sessionId,
       ...promptResult,
     });
   }
-  operation = await operationStore.complete(operation, result);
-  return json(operation.result ?? result, operation.sessionId === proposedSessionId ? 201 : 200);
+  return json(result, created ? 201 : 200);
 }
 
 async function listExternalSessions(
-  _request: Request,
+  request: Request,
   _env: Env,
   _match: RegExpMatchArray,
   ctx: UserRouteContext
 ): Promise<Response> {
-  const result = await new SessionIndexStore(ctx.db).list({ repositorylessOnly: true });
-  return json({ sessions: result.sessions.map(projectSession), hasMore: result.hasMore });
+  const url = new URL(request.url);
+  const parsed = externalSessionListQuerySchema.safeParse({
+    ...(url.searchParams.has("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
+    ...(url.searchParams.has("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
+  });
+  if (!parsed.success) return error("Invalid external session list query", 400);
+  const offset = parsed.data.offset ?? 0;
+  const result = await new SessionIndexStore(ctx.db).list({
+    repositorylessOnly: true,
+    ...parsed.data,
+  });
+  return json({
+    sessions: result.sessions.map(projectSession),
+    hasMore: result.hasMore,
+    ...(result.hasMore ? { continuationOffset: offset + result.sessions.length } : {}),
+  });
 }
 
 async function getExternalSession(
@@ -285,11 +327,7 @@ async function followUp(
   if (raw instanceof Response) return raw;
   const parsed = externalFollowUpRequestSchema.safeParse(raw);
   if (!parsed.success) return error("Invalid external follow-up request body", 400);
-  if (parsed.data.model !== undefined) {
-    const modelError = await validateEnabledModel(ctx, parsed.data.model);
-    if (modelError) return modelError;
-  }
-  return enqueueExternalPrompt(ctx, sessionId, parsed.data);
+  return dispatchExternalPrompt(ctx, sessionId, parsed.data);
 }
 
 async function stopExternalSession(
@@ -312,7 +350,7 @@ async function stopExternalSession(
 
 async function externalEvents(
   request: Request,
-  env: Env,
+  _env: Env,
   match: RegExpMatchArray,
   ctx: SessionRouteContext
 ): Promise<Response> {
@@ -343,18 +381,7 @@ async function externalEvents(
   const runtimeError = adaptExternalRuntimeFailure(response);
   if (runtimeError) return runtimeError;
   const page = sessionEventChangePageSchema.parse(await response.json());
-  const managedSecretValues =
-    page.changes.length > 0 && env.REPO_SECRETS_ENCRYPTION_KEY
-      ? new Set(
-          Object.values(
-            await new GlobalSecretsStore(
-              ctx.db,
-              env.REPO_SECRETS_ENCRYPTION_KEY
-            ).getDecryptedSecrets()
-          )
-        )
-      : new Set<string>();
-  return json(projectExternalEventPage(page, managedSecretValues));
+  return json(projectExternalEventPage(page));
 }
 
 async function waitExternalSession(

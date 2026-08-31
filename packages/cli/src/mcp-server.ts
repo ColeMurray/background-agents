@@ -5,6 +5,7 @@ import {
   externalCreateSessionRequestSchema,
   externalEventFeedQuerySchema,
   externalFollowUpRequestSchema,
+  externalSessionListQuerySchema,
 } from "@open-inspect/shared/types/external-session-api";
 import { classifyError, CliError } from "./errors.js";
 import type { Operations } from "./operations.js";
@@ -36,9 +37,10 @@ export function createMcpServer(operations: Operations): McpServer {
     "session_list",
     {
       description: "List repository-less sessions",
-      inputSchema: {},
+      inputSchema: { ...externalSessionListQuerySchema.shape },
     },
-    async () => runTool(() => operations.listSessions())
+    async (query) =>
+      runTool(() => operations.listSessions(externalSessionListQuerySchema.parse(query)))
   );
   server.registerTool(
     "session_get",

@@ -583,17 +583,17 @@ tool or sandbox event. Event history remains available for complete inspection.
 
 ### Live Progress
 
-The CLI supports live progress by subscribing after the snapshot's high-water checkpoint. Every live
-event revision is persisted before broadcast and carries the same event ID, revision, and checkpoint
-available from the forward change feed. Human-readable mode renders concise status and assistant
-progress. NDJSON mode emits one complete event revision per line and does not mix progress logs into
-stdout.
+Increment 1 follows progress by repeatedly polling bounded forward change-feed pages after the
+snapshot's high-water checkpoint. Human-readable mode renders concise status and assistant progress.
+NDJSON mode emits one complete event revision per line and does not mix progress logs into stdout.
+The client applies changes in forward checkpoint order, deduplicates identical `(id, revision)`
+pairs, and advances its checkpoint only after consuming every page in the bounded response.
 
-If a connection is lost, the client requests changes after its last applied checkpoint before
-resuming live delivery. It deduplicates only identical `(id, revision)` pairs; a later revision of
-the same event is emitted and replaces that event in canonical state. This snapshot-then-follow
-contract closes the history/live race and supports MCP polling without interpreting the existing
-newest-first history cursor as a forward cursor.
+Live broadcast transport and reconnect semantics are deferred. A later live transport must persist
+each externally visible revision before broadcast and carry the same event ID, revision, and
+checkpoint as the forward change feed. After reconnecting, the client first requests changes after
+its last applied checkpoint; a later revision of the same event is emitted and replaces that event
+in canonical state.
 
 ### Settlement
 
@@ -1008,16 +1008,18 @@ partially exposing every V1 resource:
 
 Increment 1 rejects repository/environment targets, attachments, managed-skill/profile selections,
 explicit provider accounts, child operations, pull-request reads, and generic output downloads.
-Fields are rejected explicitly rather than ignored. Its append-only event journal provides pinned
-snapshots, monotonic checkpoints, upserts, and delete tombstones; live transport and rolling
-checkpoint retention remain later work. The external route family remains versioned so later
-increments add capabilities without changing the core login/session contract.
+Fields are rejected explicitly rather than ignored. Its bounded event change feed provides pinned
+snapshots, monotonic checkpoints, coalesced upserts, and delete tombstones. Changes are retained for
+up to 24 hours and at most 50,000 revisions per session; an older checkpoint returns
+`checkpoint_expired` so the client can resume from a fresh snapshot. Live transport remains later
+work. The external route family remains versioned so later increments add capabilities without
+changing the core login/session contract.
 
 ### Later V1 Increments
 
 Later increments add discovery and targets, attachments with negotiated MCP roots, skill/provider
-selection, live event transport and checkpoint retention, artifacts/diffs/PRs, and child
-reads/follow-up. Full V1 is complete only when every acceptance criterion below is met.
+selection, live event transport, artifacts/diffs/PRs, and child reads/follow-up. Full V1 is complete
+only when every acceptance criterion below is met.
 
 ## Acceptance Criteria
 

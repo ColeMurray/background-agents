@@ -134,6 +134,7 @@ export default defineConfig({
             // capture encrypts with it inline (fail-closed) rather than
             // inside a swallowed waitUntil.
             TOKEN_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            EXTERNAL_SESSION_ID_SECRET: generateTestEncryptionKey(),
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             PROVIDER_ACCOUNTS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             DEPLOYMENT_NAME: "integration-test",

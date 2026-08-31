@@ -6,6 +6,7 @@ describe("external runtime response adapter", () => {
     [400, 400, "runtime_bad_request"],
     [404, 404, "runtime_not_found"],
     [409, 409, "runtime_conflict"],
+    [410, 410, "event_checkpoint_expired"],
     [429, 429, "runtime_busy"],
     [500, 503, "runtime_unavailable"],
     [418, 502, "runtime_error"],

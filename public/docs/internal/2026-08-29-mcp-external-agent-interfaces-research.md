@@ -744,7 +744,7 @@ are bounded by both the acting user's permissions and a fixed service ceiling.
 Session permissions are intentionally workspace-wide: creator and participant records are
 attribution rather than access boundaries. `sessions.read`, `sessions.collaborate`,
 `sessions.lifecycle`, `sessions.sandbox_access`, and `sessions.delete` each apply across all
-sessions. Members hold all five grants, while Viewers hold read only. Existing browser session
+sessions. Members hold all five grants, while Viewers hold read-only. Existing browser session
 WebSockets use a non-renewed five-minute authorization lease, and mutating commands recheck their
 specific permission.
 
@@ -816,8 +816,10 @@ most detailed public run stream.
 - Increment 1 supports only repository-less text sessions; repository/environment discovery and
   targets, attachments, skills/provider selections, children, diffs, artifacts, and pull-request
   reads remain outside the implemented external surface.
-- Event observation uses sanitized pinned snapshots and an append-only forward change journal with
-  monotonic checkpoints, upserts, and delete tombstones; hosted live transport is not implemented.
+- Event observation uses sanitized pinned snapshots and a bounded forward change feed with monotonic
+  checkpoints, coalesced upserts, and delete tombstones. Changes are retained for up to 24 hours and
+  at most 50,000 revisions per session; expired checkpoints require a fresh snapshot. Hosted live
+  transport is not implemented.
 - MCP configuration is installation-wide and has no separate per-tool permission layer.
 - MCP CRUD is gated by `mcp_servers.read` and `mcp_servers.manage`.
 - Direct API callers can omit the MCP update revision even though shared types and the web UI treat

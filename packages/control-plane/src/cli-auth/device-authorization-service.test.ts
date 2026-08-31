@@ -128,4 +128,21 @@ describe("CliDeviceAuthorizationService", () => {
       CliDeviceAuthorizationError
     );
   });
+
+  it("revokes by the hashed device-secret capability without exposing attempt state", async () => {
+    const store = { revokeIssuedCredentialByDeviceSecret: vi.fn(async () => undefined) };
+    const service = new CliDeviceAuthorizationService(store as never, {
+      now: () => 3000,
+      generateSecret: () => "c".repeat(64),
+      generateUserCode: () => "ABCD-EFGH",
+      generateId: () => "id",
+      hash: async (value) => `hash:${value}`,
+    });
+
+    await expect(service.revokeIssuedCredential("a".repeat(64))).resolves.toBeUndefined();
+    expect(store.revokeIssuedCredentialByDeviceSecret).toHaveBeenCalledWith(
+      `hash:${"a".repeat(64)}`,
+      3000
+    );
+  });
 });

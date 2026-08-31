@@ -7,7 +7,10 @@ import {
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { parseEventChangeCursor } from "../../event-stream";
-import { InvalidEventFeedCursorError } from "../../event-repository";
+import {
+  EventFeedCheckpointExpiredError,
+  InvalidEventFeedCursorError,
+} from "../../event-repository";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 import {
   PromptQueueFullError,
@@ -113,6 +116,9 @@ export class MessagesHandler {
         this.messageService.listEventChanges({ after, cursor: cursor ?? undefined, limit })
       );
     } catch (error) {
+      if (error instanceof EventFeedCheckpointExpiredError) {
+        return Response.json({ error: error.message }, { status: 410 });
+      }
       if (error instanceof InvalidEventFeedCursorError) {
         return Response.json({ error: error.message }, { status: 400 });
       }

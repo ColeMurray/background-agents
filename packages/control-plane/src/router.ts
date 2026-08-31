@@ -4,7 +4,7 @@
 
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
-import type { Principal } from "./auth/principal";
+import type { AuthenticationContext, Principal } from "./auth/principal";
 import { getUserAuth, getUserAuthRuntime } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
@@ -296,7 +296,8 @@ function logRequest(
 
 export function enforceRoutePrincipal(
   authentication: RouteAuthentication,
-  principal: Principal
+  principal: Principal,
+  authenticationContext?: AuthenticationContext
 ): Response | null {
   if (
     authentication.kind === "web-service" &&
@@ -309,6 +310,12 @@ export function enforceRoutePrincipal(
     principal.kind !== "user"
   ) {
     return error("Human user authentication required", 403);
+  }
+  if (
+    authentication.kind === "external-user" &&
+    authenticationContext?.mechanism !== "cli_credential"
+  ) {
+    return error("CLI authentication required", 403);
   }
   if (authentication.kind === "service" && principal.kind !== "service") {
     return error("Service authentication required", 403);
@@ -728,7 +735,7 @@ export async function handleRequest(
         ctx.principal = authResult.principal;
         ctx.authentication = authResult.authentication;
         request = authResult.request;
-        authError = enforceRoutePrincipal(authentication, ctx.principal);
+        authError = enforceRoutePrincipal(authentication, ctx.principal, ctx.authentication);
       }
     }
 

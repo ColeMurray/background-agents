@@ -8,6 +8,7 @@ import {
   createNativeCredentialBackend,
   FileCredentialStore,
   type NativeCredentialBackend,
+  isUnavailableNativeModule,
   selectCredentialStore,
 } from "./credential-store.js";
 
@@ -224,6 +225,24 @@ describe("ConfigStore", () => {
     );
     expect(Object.keys((await new ConfigStore(directory).read()).contexts)).toHaveLength(20);
   });
+
+  it.each(["__proto__", "constructor", "prototype"])(
+    "rejects reserved context name %s at save and selection boundaries",
+    async (name) => {
+      const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+      const store = new ConfigStore(directory);
+
+      await expect(
+        store.saveContext(name, {
+          url: "https://example.com",
+          credential,
+          expiresAt: 10,
+        })
+      ).rejects.toMatchObject({ kind: "validation" });
+      await expect(store.setActiveContext(name)).rejects.toMatchObject({ kind: "validation" });
+      expect((await store.read()).contexts).toEqual({});
+    }
+  );
 });
 
 describe("credential backend selection", () => {
@@ -281,6 +300,44 @@ describe("credential backend selection", () => {
       loadNativeBackend: vi.fn().mockResolvedValue(undefined),
     });
     expect(backend).toBeInstanceOf(FileCredentialStore);
+  });
+
+  it("recognizes the keyring plain Error-with-cause load failure shape", () => {
+    expect(
+      isUnavailableNativeModule(
+        new Error("Cannot find native binding. npm optional dependency is missing.", {
+          cause: new Error("incompatible binary"),
+        })
+      )
+    ).toBe(true);
+    expect(
+      isUnavailableNativeModule(new Error("credential manager locked", { cause: new Error("I/O") }))
+    ).toBe(false);
+    expect(isUnavailableNativeModule(new Error("Failed to load native binding"))).toBe(true);
+    expect(isUnavailableNativeModule(new Error("Cannot find native binding."))).toBe(false);
+  });
+
+  it("falls back for binding load failures but propagates arbitrary loader errors", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+    const unavailable = new Error(
+      "Cannot find native binding. npm optional dependency is missing.",
+      {
+        cause: new Error("missing platform package"),
+      }
+    );
+
+    await expect(
+      selectCredentialStore(directory, {
+        platform: "linux",
+        loadNativeBackend: vi.fn().mockRejectedValue(unavailable),
+      })
+    ).resolves.toBeInstanceOf(FileCredentialStore);
+    await expect(
+      selectCredentialStore(directory, {
+        platform: "linux",
+        loadNativeBackend: vi.fn().mockRejectedValue(new Error("keyring runtime failure")),
+      })
+    ).rejects.toThrow("keyring runtime failure");
   });
 
   it("does not copy secrets to fallback after a native backend operation fails", async () => {

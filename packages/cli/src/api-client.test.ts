@@ -24,19 +24,21 @@ describe("ApiClient", () => {
           201
         )
       )
-      .mockResolvedValueOnce(json({ status: "pending", expiresAt: Date.now() + 60_000 }, 202));
+      .mockResolvedValueOnce(json({ status: "pending", expiresAt: Date.now() + 60_000 }, 202))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const client = new ApiClient({ baseUrl: "https://api.example.com/", fetch });
 
     const started = await client.startDeviceAuthorization("test host");
     await client.exchangeDeviceAuthorization(started.deviceSecret);
+    await client.revokeDeviceAuthorization(started.deviceSecret);
 
     expect(fetch.mock.calls.map(([request]) => new URL(String(request)).pathname)).toEqual([
       "/external/v1/cli/device-authorizations",
       "/external/v1/cli/device-authorizations/exchange",
+      "/external/v1/cli/device-authorizations/revoke",
     ]);
-    expect(fetch.mock.calls[1]?.[1]?.headers).not.toMatchObject({
-      Authorization: expect.anything(),
-    });
+    expect(new Headers(fetch.mock.calls[1]?.[1]?.headers).has("Authorization")).toBe(false);
+    expect(new Headers(fetch.mock.calls[2]?.[1]?.headers).has("Authorization")).toBe(false);
   });
 
   it("reauthorizes every request and preserves caller-supplied request IDs", async () => {
@@ -92,6 +94,25 @@ describe("ApiClient", () => {
     });
   });
 
+  it("validates and encodes bounded session list pagination", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(json({ sessions: [], hasMore: true, continuationOffset: 125 }));
+    const client = new ApiClient({
+      baseUrl: "https://api.example.com",
+      authorize: () => Promise.resolve(credential),
+      fetch,
+    });
+
+    await expect(client.listSessions({ limit: 25, offset: 100 })).resolves.toEqual({
+      sessions: [],
+      hasMore: true,
+      continuationOffset: 125,
+    });
+    expect(new URL(String(fetch.mock.calls[0]?.[0])).search).toBe("?limit=25&offset=100");
+    await expect(client.listSessions({ limit: 201 })).rejects.toMatchObject({ name: "ZodError" });
+  });
+
   it.each([
     [401, "auth", 2],
     [400, "validation", 3],
@@ -140,7 +161,7 @@ describe("ApiClient", () => {
       authorize: () => Promise.resolve(credential),
       fetch: vi.fn().mockRejectedValue(new Error("aborted")),
     });
-    await expect(timedOut.listSessions(controller.signal)).rejects.toMatchObject({
+    await expect(timedOut.listSessions({ signal: controller.signal })).rejects.toMatchObject({
       kind: "timeout",
     });
 

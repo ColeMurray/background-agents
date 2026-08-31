@@ -41,6 +41,10 @@ export const cliDeviceAuthorizationExchangeRequestSchema = z.strictObject({
   deviceSecret: z.string().regex(CLI_DEVICE_SECRET_PATTERN),
 });
 
+export const revokeCliDeviceAuthorizationRequestSchema = z.strictObject({
+  deviceSecret: z.string().regex(CLI_DEVICE_SECRET_PATTERN),
+});
+
 export const cliDeviceAuthorizationExchangeResponseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("pending"), expiresAt: timestampSchema }),
   z.strictObject({ status: z.literal("authorized"), ...credentialFields }),

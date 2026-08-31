@@ -72,6 +72,8 @@ const sessionBootstrapRequestSchema = z.strictObject({
    * SandboxSettings later, so the shape is validated at the use site instead.
    */
   sandboxSettings: z.unknown().optional(),
+  /** Adapter-owned request identity included in the canonical bootstrap fingerprint. */
+  requestFingerprint: z.string().optional(),
 });
 
 type SessionBootstrapRequest = z.infer<typeof sessionBootstrapRequestSchema>;
@@ -150,7 +152,16 @@ export class SessionInitHandler {
       encryptedToken,
     });
 
-    this.sessionCoreRepository.transaction(() => {
+    const transactionResult = this.sessionCoreRepository.transaction<
+      { kind: "initialized" } | { kind: "existing"; status: string } | { kind: "conflict" }
+    >(() => {
+      const existing = this.sessionCoreRepository.getSession();
+      if (existing) {
+        return this.sessionCoreRepository.getInitializationFingerprint() ===
+          initializationFingerprint
+          ? { kind: "existing", status: existing.status }
+          : { kind: "conflict" };
+      }
       this.sessionCoreRepository.upsertSession({
         id: sessionId,
         sessionName,
@@ -208,12 +219,28 @@ export class SessionInitHandler {
         joinedAt: now,
       });
       this.sessionCoreRepository.setInitializationFingerprint(initializationFingerprint);
+      return { kind: "initialized" };
     });
 
-    log.info("Triggering sandbox spawn for new session");
-    this.scheduleWarmSandbox();
+    if (transactionResult.kind === "conflict") {
+      return Response.json({ error: "Session initialization conflict" }, { status: 409 });
+    }
+    if (transactionResult.kind === "existing" && !this.sandboxRepository.getSandbox()) {
+      return Response.json({ error: "Session sandbox not found" }, { status: 409 });
+    }
 
-    return Response.json({ sessionId, status: "created" });
+    if (
+      transactionResult.kind === "initialized" ||
+      this.sandboxRepository.getSandbox()?.status === "pending"
+    ) {
+      log.info("Triggering sandbox spawn for new session");
+      this.scheduleWarmSandbox();
+    }
+
+    return Response.json({
+      sessionId,
+      status: transactionResult.kind === "existing" ? transactionResult.status : "created",
+    });
   }
 
   async ensure(request: Request, log: Logger): Promise<Response> {
@@ -226,33 +253,17 @@ export class SessionInitHandler {
     const parsed = sessionBootstrapRequestSchema.safeParse(raw);
     if (!parsed.success) return Response.json({ error: "Invalid request body" }, { status: 400 });
     const body = parsed.data;
-    const session = this.sessionCoreRepository.getSession();
-    if (!session) {
-      const initialized = await this.init(
-        new Request(request.url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        }),
-        log
-      );
-      if (!initialized.ok) return initialized;
-      return Response.json({ status: "ensured", sessionStatus: "created" });
-    }
-    const prepared = prepareSessionBootstrap(body, log);
-    if (prepared instanceof Response) return prepared;
-    const fingerprint = await createInitializationFingerprint({
-      body,
-      ...prepared,
-      encryptedToken: body.scmTokenEncrypted ?? null,
-    });
-    if (fingerprint !== this.sessionCoreRepository.getInitializationFingerprint()) {
-      return Response.json({ error: "Session initialization conflict" }, { status: 409 });
-    }
-    const sandbox = this.sandboxRepository.getSandbox();
-    if (!sandbox) return Response.json({ error: "Session sandbox not found" }, { status: 409 });
-    if (sandbox.status === "pending") this.scheduleWarmSandbox();
-    return Response.json({ status: "ensured", sessionStatus: session.status });
+    const initialized = await this.init(
+      new Request(request.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      log
+    );
+    if (!initialized.ok) return initialized;
+    const result = (await initialized.json()) as { status: string };
+    return Response.json({ status: "ensured", sessionStatus: result.status });
   }
 }
 
@@ -376,6 +387,7 @@ async function createInitializationFingerprint(
     parentSessionId: body.parentSessionId ?? null,
     spawnSource: body.spawnSource ?? "user",
     spawnDepth: body.spawnDepth ?? 0,
+    requestFingerprint: body.requestFingerprint ?? null,
   });
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");

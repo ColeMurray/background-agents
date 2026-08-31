@@ -3,6 +3,7 @@ import type {
   ExternalEventChange,
   ExternalEventFeedQuery,
   ExternalFollowUpRequest,
+  ExternalSessionListQuery,
 } from "@open-inspect/shared/types/external-session-api";
 import type { ApiClient } from "./api-client.js";
 import { CliError } from "./errors.js";
@@ -39,8 +40,8 @@ export class Operations {
     return this.api.createSession(input);
   }
 
-  listSessions(signal?: AbortSignal) {
-    return this.api.listSessions(signal);
+  listSessions(options?: ExternalSessionListQuery & { signal?: AbortSignal }) {
+    return this.api.listSessions(options);
   }
   getSession(id: string, signal?: AbortSignal) {
     return this.api.getSession(id, signal);

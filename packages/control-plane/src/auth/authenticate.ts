@@ -41,6 +41,26 @@ export async function authenticate(
   requirement: AuthenticationRequirement = {}
 ): Promise<AuthResult> {
   const signatureHeader = request.headers.get(SERVICE_SIGNATURE_HEADER);
+  if (requirement.userCredential === "cli") {
+    if (signatureHeader !== null) {
+      return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+    }
+    try {
+      return await authenticateCliBearer(request, ctx);
+    } catch (cause) {
+      logger.error("CLI credential validation failed", {
+        event: "auth.cli.failed",
+        error: cause,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        reason: "CLI authentication failed",
+        status: 500,
+        failedScheme: "cli-bearer",
+      };
+    }
+  }
   if (signatureHeader !== null) {
     const channel = await authenticateServiceRequest(request, env, ctx, signatureHeader);
     if (
@@ -89,24 +109,6 @@ export async function authenticate(
         reason: "User authentication failed",
         status: 500,
         failedScheme: "browser-session",
-      };
-    }
-  }
-
-  if (requirement.userCredential === "cli") {
-    try {
-      return await authenticateCliBearer(request, ctx);
-    } catch (cause) {
-      logger.error("CLI credential validation failed", {
-        event: "auth.cli.failed",
-        error: cause,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return {
-        reason: "CLI authentication failed",
-        status: 500,
-        failedScheme: "cli-bearer",
       };
     }
   }

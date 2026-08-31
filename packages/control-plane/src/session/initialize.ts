@@ -75,6 +75,7 @@ export interface SessionInitInput {
   managedSkillsSourceSessionId?: string;
   /** Complete, immutable provider routing snapshot resolved by the caller. */
   providerAuth: SessionModelProviderAuthInput[];
+  requestFingerprint?: string;
 }
 
 /**
@@ -203,6 +204,7 @@ export async function initializeSession(
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,
+          requestFingerprint: input.requestFingerprint,
         }),
       })
     );

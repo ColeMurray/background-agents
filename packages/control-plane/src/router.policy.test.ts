@@ -229,6 +229,7 @@ describe("route policy table", () => {
     ["GET", "/health", "public"],
     ["POST", "/external/v1/cli/device-authorizations", "public"],
     ["POST", "/external/v1/cli/device-authorizations/exchange", "public"],
+    ["POST", "/external/v1/cli/device-authorizations/revoke", "public"],
     ["GET", "/external/v1/cli/device-authorizations/pending", "user"],
     ["POST", "/external/v1/cli/device-authorizations/approve", "user"],
     ["GET", "/external/v1/cli/me", "external-user"],
@@ -503,6 +504,24 @@ describe("route principal policy", () => {
     ],
   ])("accepts matching principals for %o", (authentication, principal) => {
     expect(enforceRoutePrincipal(authentication, principal)).toBeNull();
+  });
+
+  it("requires CLI credential provenance for external users", () => {
+    expect(
+      enforceRoutePrincipal(
+        { kind: "external-user" },
+        { kind: "user", userId: "user-1" },
+        {
+          mechanism: "cli_credential",
+          credentialId: "credential-1",
+          expiresAt: Date.now() + 1_000,
+          channel: { kind: "direct_bearer" },
+        }
+      )
+    ).toBeNull();
+    expect(
+      enforceRoutePrincipal({ kind: "external-user" }, { kind: "user", userId: "user-1" })?.status
+    ).toBe(403);
   });
 
   it.each([

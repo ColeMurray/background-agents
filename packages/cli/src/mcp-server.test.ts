@@ -31,11 +31,13 @@ describe("MCP server", () => {
     ]);
     expect(tools.tools.some((tool) => /attachment|target/.test(tool.name))).toBe(false);
     expect(
-      (await client.callTool({ name: "session_list", arguments: {} })).structuredContent
+      (await client.callTool({ name: "session_list", arguments: { limit: 25, offset: 50 } }))
+        .structuredContent
     ).toEqual({
       sessions: [],
       hasMore: false,
     });
+    expect(operations.listSessions).toHaveBeenCalledWith({ limit: 25, offset: 50 });
     await Promise.all([client.close(), server.close()]);
   });
 
@@ -63,7 +65,6 @@ describe("MCP server", () => {
       arguments: {
         title: "T",
         model: "openai/gpt-5.6-sol",
-        reasoningEffort: "high",
         idempotencyKey: "retry-create",
       },
     });
@@ -73,12 +74,26 @@ describe("MCP server", () => {
     });
 
     expect(operations.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ idempotencyKey: "retry-create" })
+      expect.not.objectContaining({ reasoningEffort: expect.anything() })
     );
     expect(operations.promptSession).toHaveBeenCalledWith(
       "s1",
       expect.objectContaining({ clientRequestId: "retry-prompt" })
     );
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("rejects session list pagination outside the shared bounds", async () => {
+    const operations = { listSessions: vi.fn() };
+    const { server, client } = await connectedClient(operations);
+
+    const result = await client.callTool({
+      name: "session_list",
+      arguments: { limit: 201, offset: -1 },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(operations.listSessions).not.toHaveBeenCalled();
     await Promise.all([client.close(), server.close()]);
   });
 

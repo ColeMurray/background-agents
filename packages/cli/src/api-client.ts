@@ -2,6 +2,7 @@ import {
   cliDeviceAuthorizationExchangeResponseSchema,
   cliMeResponseSchema,
   CLI_EXTERNAL_API_V1_PATH,
+  revokeCliDeviceAuthorizationRequestSchema,
   startCliDeviceAuthorizationResponseSchema,
   type CliDeviceAuthorizationExchangeResponse,
   type CliMeResponse,
@@ -15,6 +16,7 @@ import {
   externalEventFeedQuerySchema,
   externalFollowUpRequestSchema,
   externalFollowUpResponseSchema,
+  externalSessionListQuerySchema,
   externalSessionListResponseSchema,
   externalSessionSchema,
   externalStopSessionResponseSchema,
@@ -22,6 +24,7 @@ import {
   type ExternalCreateSessionRequest,
   type ExternalFollowUpRequest,
   type ExternalEventFeedQuery,
+  type ExternalSessionListQuery,
   type ExternalSession,
 } from "@open-inspect/shared/types/external-session-api";
 import type { z } from "zod";
@@ -79,6 +82,17 @@ export class ApiClient {
     );
   }
 
+  async revokeDeviceAuthorization(deviceSecret: string): Promise<void> {
+    await this.request(
+      `${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/revoke`,
+      {
+        method: "POST",
+        body: JSON.stringify(revokeCliDeviceAuthorizationRequestSchema.parse({ deviceSecret })),
+      },
+      false
+    );
+  }
+
   async me(signal?: AbortSignal): Promise<CliMeResponse> {
     return cliMeResponseSchema.parse(
       await this.request(`${CLI_EXTERNAL_API_V1_PATH}/me`, { signal })
@@ -101,9 +115,17 @@ export class ApiClient {
   }
 
   async listSessions(
-    signal?: AbortSignal
+    options: ExternalSessionListQuery & { signal?: AbortSignal } = {}
   ): Promise<z.infer<typeof externalSessionListResponseSchema>> {
-    return externalSessionListResponseSchema.parse(await this.request(SESSIONS_PATH, { signal }));
+    const { signal, ...queryOptions } = options;
+    const parsed = externalSessionListQuerySchema.parse(queryOptions);
+    const query = new URLSearchParams();
+    if (parsed.limit !== undefined) query.set("limit", String(parsed.limit));
+    if (parsed.offset !== undefined) query.set("offset", String(parsed.offset));
+    const suffix = query.size ? `?${query}` : "";
+    return externalSessionListResponseSchema.parse(
+      await this.request(`${SESSIONS_PATH}${suffix}`, { signal })
+    );
   }
 
   async getSession(id: string, signal?: AbortSignal): Promise<ExternalSession> {

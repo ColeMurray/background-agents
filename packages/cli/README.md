@@ -15,8 +15,8 @@ store.
 ```bash
 oi login --url https://control-plane.example.com
 oi auth status
-oi session list --output json
-oi session create --title "Investigate" --model openai/gpt-5.6-sol --reasoning high \
+oi session list --limit 50 --offset 0 --output json
+oi session create --title "Investigate" --model opencode/kimi-k2.5 \
   --idempotency-key retryable-create-id
 oi mcp serve
 ```
@@ -24,11 +24,28 @@ oi mcp serve
 `oi context list` lists contexts without credentials and `oi context use <name>` switches the active
 context. Use `oi login --context <name>` to add or replace one.
 
+Session listing accepts a shared bounded `limit` and zero-based `offset` in both the CLI and MCP
+tool. When `hasMore` is true, pass the returned `continuationOffset` as the next offset. Create
+reasoning is optional for models without reasoning support; follow-up `--reasoning` remains an
+independent optional override.
+
+Before polling, login stores the device authorization secret and recovery metadata. If exchange
+issues a credential but local staging or promotion fails, that secret can revoke the issued
+credential without bearer plaintext, including after process restart. Newly issued credentials are
+also stored under a deterministic reference derived from the server credential ID and recorded as
+pending revocation. One atomic promotion installs the new context, changes device recovery to
+local-only cleanup, removes the bearer staging marker, and moves any replaced credential to the
+pending queue. Login and logout drain both queues. Logout removes the active context only after all
+recoveries and revocations succeed or are definitively invalid; transport, rate-limit, and service
+failures preserve retry handles.
+
 `oi session events <id> --follow` reads one complete, checkpoint-pinned initial snapshot and then
-follows the append-only change journal without rescanning full history. Each emitted record is an
-ordered `upsert` or `delete` change; delete/upsert pairs represent event renames. Incremental
-records are emitted in strictly increasing revision order, and a checkpoint advances only after all
-cursor pages have completed.
+polls the bounded change feed without rescanning full history. Each emitted record is an `upsert` or
+`delete` change in forward commit/checkpoint order; delete/upsert pairs represent event renames.
+Revision comparisons apply only to records with the same event ID, and the server may coalesce
+high-frequency revisions. A checkpoint advances only after all cursor pages have completed. Changes
+are retained for up to 24 hours and at most 50,000 revisions per session; an expired checkpoint
+causes the CLI to resume from a fresh snapshot.
 
 All error modes use the stable `{ "error": { "kind", "message", ... } }` envelope. Text mode renders
 the same envelope, while JSON modes serialize it directly. Failed create and prompt requests include

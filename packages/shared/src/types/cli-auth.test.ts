@@ -7,6 +7,7 @@ import {
   cliDeviceAuthorizationExchangeResponseSchema,
   cliMeResponseSchema,
   pendingCliDeviceAuthorizationResponseSchema,
+  revokeCliDeviceAuthorizationRequestSchema,
   startCliDeviceAuthorizationRequestSchema,
   startCliDeviceAuthorizationResponseSchema,
 } from "./cli-auth";
@@ -38,6 +39,9 @@ describe("CLI authentication contracts", () => {
     expect(
       cliDeviceAuthorizationExchangeRequestSchema.safeParse({ deviceSecret: "ABCD-EFGH" }).success
     ).toBe(false);
+    expect(
+      revokeCliDeviceAuthorizationRequestSchema.parse({ deviceSecret: DEVICE_SECRET })
+    ).toEqual({ deviceSecret: DEVICE_SECRET });
   });
 
   it("validates pending and authorized exchange responses", () => {

@@ -1,5 +1,5 @@
 import { SELF, env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cliDeviceAuthorizationExchangeResponseSchema,
   cliMeResponseSchema,
@@ -35,6 +35,14 @@ async function exchange(deviceSecret: string): Promise<Response> {
   });
 }
 
+async function revokeIssued(deviceSecret: string): Promise<Response> {
+  return SELF.fetch(`${API}/device-authorizations/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceSecret }),
+  });
+}
+
 async function approve(userCode: string): Promise<Response> {
   return serviceFetch(`${API}/device-authorizations/approve`, {
     method: "POST",
@@ -51,7 +59,10 @@ async function pending(userCode: string): Promise<Response> {
 
 describe("external v1 CLI authentication", () => {
   beforeEach(cleanD1Tables);
-  afterEach(cleanD1Tables);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanD1Tables();
+  });
 
   it("stores hashes only and atomically issues one 30-day user credential", async () => {
     const started = await start();
@@ -181,6 +192,65 @@ describe("external v1 CLI authentication", () => {
     ).toBe(401);
   });
 
+  it("capability revocation before issuance prevents later credential creation", async () => {
+    const started = await start();
+
+    expect((await revokeIssued(started.deviceSecret)).status).toBe(204);
+    expect((await approve(started.userCode)).status).toBe(409);
+    expect((await exchange(started.deviceSecret)).status).toBe(410);
+    expect(await env.DB.prepare("SELECT 1 FROM cli_credentials").first()).toBeNull();
+  });
+
+  it("capability revocation links and revokes an issued credential idempotently", async () => {
+    const started = await start();
+    expect((await approve(started.userCode)).status).toBe(204);
+    const issuedResponse = await exchange(started.deviceSecret);
+    const issued = cliDeviceAuthorizationExchangeResponseSchema.parse(await issuedResponse.json());
+    if (issued.status !== "authorized") throw new Error("Expected authorized exchange");
+
+    expect((await revokeIssued(started.deviceSecret)).status).toBe(204);
+    expect((await revokeIssued(started.deviceSecret)).status).toBe(204);
+    expect(
+      (
+        await SELF.fetch(`${API}/me`, {
+          headers: { Authorization: `Bearer ${issued.credential}` },
+        })
+      ).status
+    ).toBe(401);
+    await expect(
+      env.DB.prepare(
+        "SELECT issued_credential_id, capability_revoked_at FROM cli_device_authorization_attempts"
+      ).first()
+    ).resolves.toMatchObject({
+      issued_credential_id: issued.credentialId,
+      capability_revoked_at: expect.any(Number),
+    });
+  });
+
+  it("returns the same capability result for a wrong secret without revoking the known attempt", async () => {
+    const started = await start();
+    expect((await approve(started.userCode)).status).toBe(204);
+    const issuedResponse = await exchange(started.deviceSecret);
+    const issued = cliDeviceAuthorizationExchangeResponseSchema.parse(await issuedResponse.json());
+    if (issued.status !== "authorized") throw new Error("Expected authorized exchange");
+
+    const [knownShape, unknownShape] = await Promise.all([
+      revokeIssued(started.deviceSecret),
+      revokeIssued("f".repeat(64)),
+    ]);
+    expect(knownShape.status).toBe(204);
+    expect(unknownShape.status).toBe(204);
+    expect(await knownShape.text()).toBe("");
+    expect(await unknownShape.text()).toBe("");
+    expect(
+      (
+        await SELF.fetch(`${API}/me`, {
+          headers: { Authorization: `Bearer ${issued.credential}` },
+        })
+      ).status
+    ).toBe(401);
+  });
+
   it("returns not found for a well-formed unknown human code", async () => {
     expect((await pending("ZZZZ-ZZZZ")).status).toBe(404);
   });
@@ -238,6 +308,47 @@ describe("external v1 CLI authentication", () => {
     await expect(known.json()).resolves.toEqual({ error: "Too many requests" });
     await expect(unknown.json()).resolves.toEqual({ error: "Too many requests" });
   });
+
+  it("rate limits capability revocation identically for known and unknown secrets", async () => {
+    const started = await start();
+    const unknownSecret = "f".repeat(64);
+    const now = Date.now();
+    const windowMs = CLI_AUTH_RATE_LIMITS.capabilityRevokePerSecret.windowMs;
+    const windowStartedAt = Math.floor(now / windowMs) * windowMs;
+    for (const secret of [started.deviceSecret, unknownSecret]) {
+      await env.DB.prepare(
+        `INSERT INTO cli_auth_rate_limits
+           (rate_key, window_started_at, request_count, expires_at) VALUES (?, ?, ?, ?)`
+      )
+        .bind(
+          `capability-revoke-secret:${await hashToken(secret)}`,
+          windowStartedAt,
+          CLI_AUTH_RATE_LIMITS.capabilityRevokePerSecret.limit,
+          windowStartedAt + windowMs
+        )
+        .run();
+    }
+
+    const [known, unknown] = await Promise.all([
+      revokeIssued(started.deviceSecret),
+      revokeIssued(unknownSecret),
+    ]);
+    expect(known.status).toBe(429);
+    expect(unknown.status).toBe(429);
+    await expect(known.json()).resolves.toEqual({ error: "Too many requests" });
+    await expect(unknown.json()).resolves.toEqual({ error: "Too many requests" });
+  });
+
+  it("allows correctly paced one-second polling beyond sixty attempts", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const started = await start();
+
+    for (let poll = 0; poll < 61; poll += 1) {
+      now += 1_001;
+      expect((await exchange(started.deviceSecret)).status).toBe(202);
+    }
+  }, 15_000);
 
   it("opportunistically prunes retained attempts, credentials, and stale counters", async () => {
     await pending("ZZZZ-ZZZZ");

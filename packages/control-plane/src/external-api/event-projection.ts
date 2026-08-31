@@ -1,100 +1,112 @@
 import {
   externalEventPageSchema,
   type ExternalEventPage,
-  type ExternalJsonValue,
 } from "@open-inspect/shared/types/external-session-api";
-import { sandboxEventSchema } from "@open-inspect/shared/types/sandbox-events";
+import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { sessionEventChangePageSchema } from "../session/contracts";
 
-const SENSITIVE_KEYS = new Set([
-  "authorization",
-  "cookie",
-  "credential",
-  "credentials",
-  "password",
-  "secret",
-  "secrets",
-  "token",
-  "accesstoken",
-  "refreshtoken",
-  "apikey",
-  "privatekey",
-  "scmtokenencrypted",
-  "canonicaluserid",
-  "modalobjectid",
-  "modalsandboxid",
-  "opencodesessionid",
-  "participantuserid",
-  "sandboxid",
-  "scmemail",
-  "scmlogin",
-  "scmname",
-  "scmuserid",
-  "userid",
+interface SafeEventData {
+  [key: string]: boolean | number | string | SafeEventData;
+}
+
+const SAFE_STATUSES = new Set([
+  "pending",
+  "in_progress",
+  "running",
+  "completed",
+  "failed",
+  "error",
+  "ready",
+  "stopped",
 ]);
 
-function normalizedKey(key: string): string {
-  return key.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+function assertNever(value: never): never {
+  throw new Error(`Unsupported event type: ${String(value)}`);
 }
 
-function redactString(value: string, managedSecretValues: readonly string[]): string {
-  return managedSecretValues.reduce(
-    (redacted, secret) => redacted.split(secret).join("[REDACTED]"),
-    value
-  );
+function numericUsage(
+  event: Extract<SandboxEvent, { type: "step_finish" }>
+): SafeEventData | number | undefined {
+  if (typeof event.tokens === "number") return event.tokens;
+  if (!event.tokens) return undefined;
+  const cache: SafeEventData = {};
+  if (typeof event.tokens.cache?.read === "number") cache.read = event.tokens.cache.read;
+  if (typeof event.tokens.cache?.write === "number") cache.write = event.tokens.cache.write;
+  const usage: SafeEventData = {};
+  if (typeof event.tokens.total === "number") usage.total = event.tokens.total;
+  if (typeof event.tokens.input === "number") usage.input = event.tokens.input;
+  if (typeof event.tokens.output === "number") usage.output = event.tokens.output;
+  if (typeof event.tokens.reasoning === "number") usage.reasoning = event.tokens.reasoning;
+  if (Object.keys(cache).length) usage.cache = cache;
+  return usage;
 }
 
-function sanitize(value: unknown, managedSecretValues: readonly string[]): ExternalJsonValue {
-  if (typeof value === "string") return redactString(value, managedSecretValues);
-  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
-  if (Array.isArray(value)) return value.map((item) => sanitize(item, managedSecretValues));
-  if (typeof value !== "object") return null;
-  return sanitizeRecord(value, managedSecretValues);
+/** Projects only fixed enums, booleans, and numeric metadata. */
+function safeEventData(event: SandboxEvent): SafeEventData {
+  const data: SafeEventData = { type: event.type, timestamp: event.timestamp };
+  switch (event.type) {
+    case "git_sync":
+      data.status = event.status;
+      break;
+    case "step_finish": {
+      if (typeof event.cost === "number") data.cost = event.cost;
+      const tokens = numericUsage(event);
+      if (tokens !== undefined) data.tokens = tokens;
+      if (event.isSubtask !== undefined) data.isSubtask = event.isSubtask;
+      break;
+    }
+    case "step_start":
+    case "error":
+      if (event.isSubtask !== undefined) data.isSubtask = event.isSubtask;
+      break;
+    case "tool_call":
+      if (event.status && SAFE_STATUSES.has(event.status)) data.status = event.status;
+      if (event.isSubtask !== undefined) data.isSubtask = event.isSubtask;
+      break;
+    case "execution_complete":
+      data.success = event.success;
+      break;
+    case "warning":
+      data.scope = event.scope;
+      break;
+    case "heartbeat":
+      if (SAFE_STATUSES.has(event.status)) data.status = event.status;
+      break;
+    case "ready":
+    case "token":
+    case "tool_result":
+    case "context_compacted":
+    case "artifact":
+    case "push_complete":
+    case "push_error":
+    case "session_title":
+    case "user_message":
+      break;
+    default:
+      assertNever(event);
+  }
+  return data;
 }
 
-function sanitizeRecord(
-  value: object,
-  managedSecretValues: readonly string[]
-): { [key: string]: ExternalJsonValue } {
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => !SENSITIVE_KEYS.has(normalizedKey(key)))
-      .map(([key, child]) => [key, sanitize(child, managedSecretValues)])
-  );
-}
-
-/**
- * Parses the internal event page before projecting its stable external envelope.
- * Extensible event data retains legitimate fields while exact sensitive keys are omitted.
- */
-export function projectExternalEventPage(
-  page: unknown,
-  managedSecretValues: ReadonlySet<string> = new Set()
-): ExternalEventPage {
+/** Parses internal events and emits an envelope safe without credential material. */
+export function projectExternalEventPage(page: unknown): ExternalEventPage {
   const parsed = sessionEventChangePageSchema.parse(page);
-  const secrets = [...managedSecretValues].filter(Boolean).sort((a, b) => b.length - a.length);
   return externalEventPageSchema.parse({
     changes: parsed.changes.map((change) => {
-      if (change.kind === "delete") {
-        return {
-          kind: change.kind,
-          revision: change.revision,
-          eventId: redactString(change.eventId, secrets),
-        };
-      }
+      if (change.kind === "delete") return change;
       const data = sandboxEventSchema.parse(change.event.data);
-      if (data.type !== change.event.type)
+      if (data.type !== change.event.type) {
         throw new Error("Event envelope type does not match event data");
+      }
       return {
         kind: change.kind,
         revision: change.revision,
         event: {
-          id: redactString(change.event.id, secrets),
+          id: change.event.id,
           type: change.event.type,
-          messageId:
-            change.event.messageId === null ? null : redactString(change.event.messageId, secrets),
+          messageId: change.event.messageId,
           createdAt: change.event.createdAt,
-          data: sanitizeRecord(data, secrets),
+          data: safeEventData(data),
         },
       };
     }),

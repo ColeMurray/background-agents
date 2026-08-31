@@ -6,7 +6,7 @@ import type { CliAuthStore } from "../db/cli-auth-store";
 
 export const CLI_DEVICE_AUTHORIZATION_LIFETIME_MS = 10 * 60 * 1000;
 export const CLI_CREDENTIAL_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
-export const CLI_DEVICE_ATTEMPT_RETENTION_MS = 24 * 60 * 60 * 1000;
+export const CLI_DEVICE_ATTEMPT_RETENTION_MS = CLI_CREDENTIAL_LIFETIME_MS;
 export const CLI_CREDENTIAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const CLI_AUTH_PRUNE_LIMIT = 100;
 
@@ -38,6 +38,7 @@ export class CliDeviceAuthorizationService {
       | "exchangeApprovedAttempt"
       | "getPendingAuthorization"
       | "pruneExpired"
+      | "revokeIssuedCredentialByDeviceSecret"
     >,
     private readonly dependencies: Dependencies
   ) {}
@@ -120,5 +121,12 @@ export class CliDeviceAuthorizationService {
       throw new CliDeviceAuthorizationError("Authorization not found", 404);
     }
     throw new CliDeviceAuthorizationError("Authorization is no longer available", 410);
+  }
+
+  async revokeIssuedCredential(deviceSecret: string): Promise<void> {
+    await this.store.revokeIssuedCredentialByDeviceSecret(
+      await this.dependencies.hash(deviceSecret),
+      this.dependencies.now()
+    );
   }
 }

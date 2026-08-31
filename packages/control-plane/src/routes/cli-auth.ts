@@ -2,12 +2,14 @@ import {
   CLI_EXTERNAL_API_V1_PATH,
   approveCliDeviceAuthorizationRequestSchema,
   cliDeviceAuthorizationExchangeRequestSchema,
+  revokeCliDeviceAuthorizationRequestSchema,
   startCliDeviceAuthorizationRequestSchema,
 } from "@open-inspect/shared/types/cli-auth";
 import { ZodError } from "zod";
 import { generateId, hashToken } from "../auth/crypto";
 import type { AuthenticationContext } from "../auth/principal";
 import {
+  CLI_DEVICE_AUTHORIZATION_LIFETIME_MS,
   CliDeviceAuthorizationError,
   CliDeviceAuthorizationService,
 } from "../cli-auth/device-authorization-service";
@@ -31,14 +33,25 @@ import {
 const POLL_INTERVAL_MS = 1_000;
 const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MINUTE_MS = 60_000;
+const EXCHANGE_POLL_MARGIN = 30;
+const EXCHANGE_POLLS_PER_LIFETIME =
+  Math.ceil(CLI_DEVICE_AUTHORIZATION_LIFETIME_MS / POLL_INTERVAL_MS) + EXCHANGE_POLL_MARGIN;
 
 export const CLI_AUTH_RATE_LIMITS = {
   startPerIp: { windowMs: MINUTE_MS, limit: 10 },
   exchangeBurstPerSecret: { windowMs: POLL_INTERVAL_MS, limit: 2 },
-  exchangePerSecret: { windowMs: 10 * MINUTE_MS, limit: 60 },
-  exchangePerIp: { windowMs: 10 * MINUTE_MS, limit: 120 },
+  exchangePerSecret: {
+    windowMs: CLI_DEVICE_AUTHORIZATION_LIFETIME_MS,
+    limit: EXCHANGE_POLLS_PER_LIFETIME,
+  },
+  exchangePerIp: {
+    windowMs: CLI_DEVICE_AUTHORIZATION_LIFETIME_MS,
+    limit: EXCHANGE_POLLS_PER_LIFETIME * 2,
+  },
   lookupPerUser: { windowMs: 10 * MINUTE_MS, limit: 30 },
   approvalPerUser: { windowMs: 10 * MINUTE_MS, limit: 10 },
+  capabilityRevokePerSecret: { windowMs: 10 * MINUTE_MS, limit: 10 },
+  capabilityRevokePerIp: { windowMs: 10 * MINUTE_MS, limit: 100 },
 } as const;
 
 function generateUserCode(): string {
@@ -173,6 +186,36 @@ async function exchangeAuthorization(
   }
 }
 
+async function revokeIssuedCredential(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const body = await parseJsonBody<unknown>(request);
+  if (body instanceof Response) return body;
+  try {
+    const input = revokeCliDeviceAuthorizationRequestSchema.parse(body);
+    const limited = await enforceRateLimits(ctx, [
+      {
+        scope: "capability-revoke-secret",
+        identity: input.deviceSecret,
+        ...CLI_AUTH_RATE_LIMITS.capabilityRevokePerSecret,
+      },
+      {
+        scope: "capability-revoke-ip",
+        identity: `${env.DEPLOYMENT_NAME}:${clientIp(request)}`,
+        ...CLI_AUTH_RATE_LIMITS.capabilityRevokePerIp,
+      },
+    ]);
+    if (limited) return limited;
+    await deviceAuthorizationService(ctx).revokeIssuedCredential(input.deviceSecret);
+    return new Response(null, { status: 204 });
+  } catch (cause) {
+    return serviceError(cause);
+  }
+}
+
 async function getPendingAuthorization(
   request: Request,
   _env: Env,
@@ -280,6 +323,15 @@ const publicRoutes: Route[] = [
     authorization: NO_AUTHORIZATION,
     cacheControl: "no-store",
     handler: exchangeAuthorization,
+  },
+  {
+    authentication: { kind: "public" },
+    supportedScmProviders: "all",
+    method: "POST",
+    pattern: new RegExp(`^${CLI_EXTERNAL_API_V1_PATH}/device-authorizations/revoke$`),
+    authorization: NO_AUTHORIZATION,
+    cacheControl: "no-store",
+    handler: revokeIssuedCredential,
   },
 ];
 

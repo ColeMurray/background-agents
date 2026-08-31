@@ -1,10 +1,16 @@
 import { join } from "node:path";
 import { z } from "zod";
-import { CLI_CREDENTIAL_PATTERN } from "@open-inspect/shared/types/cli-auth";
+import {
+  CLI_CREDENTIAL_PATTERN,
+  CLI_DEVICE_SECRET_PATTERN,
+} from "@open-inspect/shared/types/cli-auth";
 import { readJsonFile, updateJsonFile } from "./atomic-json-file.js";
 
-const credentialSchema = z.string().regex(CLI_CREDENTIAL_PATTERN);
-const credentialFileSchema = z.record(z.string().min(1), credentialSchema);
+const storedSecretSchema = z.union([
+  z.string().regex(CLI_CREDENTIAL_PATTERN),
+  z.string().regex(CLI_DEVICE_SECRET_PATTERN),
+]);
+const credentialFileSchema = z.record(z.string().min(1), storedSecretSchema);
 const NATIVE_SERVICE = "open-inspect-cli";
 
 export interface CredentialStore {
@@ -40,7 +46,7 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async set(reference: string, credential: string): Promise<void> {
-    credentialSchema.parse(credential);
+    storedSecretSchema.parse(credential);
     await updateJsonFile(
       this.filePath,
       (value) => this.parse(value),
@@ -75,11 +81,11 @@ class NativeCredentialStore implements CredentialStore {
 
   async get(reference: string): Promise<string | undefined> {
     const value = await this.backend.getPassword(NATIVE_SERVICE, this.account(reference));
-    return value === null ? undefined : credentialSchema.parse(value);
+    return value === null ? undefined : storedSecretSchema.parse(value);
   }
 
   async set(reference: string, credential: string): Promise<void> {
-    credentialSchema.parse(credential);
+    storedSecretSchema.parse(credential);
     await this.backend.setPassword(NATIVE_SERVICE, this.account(reference), credential);
   }
 
@@ -105,21 +111,22 @@ export async function selectCredentialStore(
   const currentPlatform = options.platform ?? process.platform;
   const supportsNative = ["darwin", "linux", "win32"].includes(currentPlatform);
   if (options.enableNative !== false && supportsNative) {
-    const backend =
-      options.nativeBackend ?? (await (options.loadNativeBackend ?? loadNativeBackend)());
+    let backend = options.nativeBackend;
+    if (!backend) {
+      try {
+        backend = await (options.loadNativeBackend ?? loadNativeBackend)();
+      } catch (cause) {
+        if (!isUnavailableNativeModule(cause)) throw cause;
+      }
+    }
     if (backend) return new NativeCredentialStore(options.profile ?? directory, backend);
   }
   return new FileCredentialStore(join(directory, "credentials.json"));
 }
 
-async function loadNativeBackend(): Promise<NativeCredentialBackend | undefined> {
-  try {
-    const { Entry } = await import("@napi-rs/keyring");
-    return createNativeCredentialBackend(Entry);
-  } catch (cause) {
-    if (isUnavailableNativeModule(cause)) return undefined;
-    throw cause;
-  }
+async function loadNativeBackend(): Promise<NativeCredentialBackend> {
+  const { Entry } = await import("@napi-rs/keyring");
+  return createNativeCredentialBackend(Entry);
 }
 
 export function createNativeCredentialBackend(
@@ -133,7 +140,12 @@ export function createNativeCredentialBackend(
   };
 }
 
-function isUnavailableNativeModule(cause: unknown): boolean {
+export function isUnavailableNativeModule(cause: unknown): boolean {
   const code = (cause as NodeJS.ErrnoException).code;
-  return code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+  if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") return true;
+  return (
+    cause instanceof Error &&
+    (cause.message === "Failed to load native binding" ||
+      (cause.message.startsWith("Cannot find native binding.") && cause.cause instanceof Error))
+  );
 }

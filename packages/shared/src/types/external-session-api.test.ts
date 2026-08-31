@@ -6,6 +6,7 @@ import {
   externalEventPageSchema,
   externalFollowUpRequestSchema,
   externalFollowUpResponseSchema,
+  externalSessionListQuerySchema,
 } from "./external-session-api";
 
 describe("external session API schemas", () => {
@@ -37,18 +38,20 @@ describe("external session API schemas", () => {
     ).toBe(false);
   });
 
-  it("rejects unknown models and model-incompatible reasoning without fallback", () => {
+  it("keeps model and reasoning fields structural rather than embedding server policy", () => {
     expect(
       externalCreateSessionRequestSchema.safeParse({ ...validCreate, model: "unknown/model" })
         .success
-    ).toBe(false);
+    ).toBe(true);
     expect(
       externalCreateSessionRequestSchema.safeParse({
         ...validCreate,
         model: "anthropic/claude-haiku-4-5",
         reasoningEffort: "low",
       }).success
-    ).toBe(false);
+    ).toBe(true);
+    const { reasoningEffort: _reasoningEffort, ...withoutReasoning } = validCreate;
+    expect(externalCreateSessionRequestSchema.safeParse(withoutReasoning).success).toBe(true);
   });
 
   it("requires a nonblank text follow-up and clientRequestId", () => {
@@ -144,5 +147,14 @@ describe("external session API schemas", () => {
     expect(externalEventFeedQuerySchema.safeParse({ after: 1, cursor: "0:1:1" }).success).toBe(
       false
     );
+  });
+
+  it("types bounded session-list pagination", () => {
+    expect(externalSessionListQuerySchema.parse({ limit: 200, offset: 50 })).toEqual({
+      limit: 200,
+      offset: 50,
+    });
+    expect(externalSessionListQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
+    expect(externalSessionListQuerySchema.safeParse({ offset: -1 }).success).toBe(false);
   });
 });

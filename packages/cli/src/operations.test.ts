@@ -49,6 +49,15 @@ describe("Operations", () => {
     );
   });
 
+  it("passes session list pagination through unchanged", async () => {
+    const api = { listSessions: vi.fn().mockResolvedValue({ sessions: [], hasMore: false }) };
+    const operations = new Operations(api as never);
+
+    await operations.listSessions({ limit: 40, offset: 80 });
+
+    expect(api.listSessions).toHaveBeenCalledWith({ limit: 40, offset: 80 });
+  });
+
   it("preserves snapshot order and resumes strict journal changes with tombstones and rename", async () => {
     const initial = [
       upsert(2, event("event-1", 1)),

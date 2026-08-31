@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
+import { EventFeedCheckpointExpiredError } from "../../event-repository";
 import type { MessageService } from "../../services/message.service";
 import { encodeEventChangeCursor } from "../../event-stream";
 
@@ -273,6 +274,20 @@ describe("MessagesHandler", () => {
       expect(messageService.listEventChanges).not.toHaveBeenCalled();
     }
   );
+
+  it("returns 410 when an event checkpoint has expired", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listEventChanges).mockImplementation(() => {
+      throw new EventFeedCheckpointExpiredError("Event feed checkpoint expired");
+    });
+
+    const response = handler.listEventChanges(
+      new URL("http://internal/internal/event-changes?after=1")
+    );
+
+    expect(response.status).toBe(410);
+    await expect(response.json()).resolves.toEqual({ error: "Event feed checkpoint expired" });
+  });
 
   it("returns artifacts from service unchanged", async () => {
     const { handler, messageService } = createHandler();

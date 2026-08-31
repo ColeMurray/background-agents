@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { Command, Option } from "commander";
 import open from "open";
+import { externalSessionListQuerySchema } from "@open-inspect/shared/types/external-session-api";
 import { ApiClient, ApiError } from "./api-client.js";
-import { ConfigStore, defaultDeviceName, normalizeBaseUrl } from "./config-store.js";
+import { CredentialLifecycle } from "./credential-lifecycle.js";
+import {
+  ConfigStore,
+  defaultDeviceName,
+  normalizeBaseUrl,
+  validateContextName,
+} from "./config-store.js";
 import { CliError, withErrorContext } from "./errors.js";
 import { serveMcp } from "./mcp-server.js";
 import { Operations } from "./operations.js";
@@ -21,6 +28,7 @@ interface CliDependencies {
 export function createCli(dependencies: CliDependencies = {}): Command {
   const stdout = dependencies.stdout ?? ((value: string) => process.stdout.write(value));
   const store = dependencies.store ?? new ConfigStore();
+  const credentialLifecycle = new CredentialLifecycle(store, dependencies.fetch);
   const outputFor = (command: Command, fallback?: OutputFormat) =>
     new Output(fallback ?? command.optsWithGlobals().output, {
       stdout: dependencies.stdout,
@@ -56,9 +64,16 @@ export function createCli(dependencies: CliDependencies = {}): Command {
     .option("--no-browser", "do not open a browser")
     .action(async (options, command) => {
       const output = outputFor(command);
+      validateContextName(options.context);
       const baseUrl = normalizeBaseUrl(options.url);
+      await credentialLifecycle.prepareLogin();
       const api = new ApiClient({ baseUrl, fetch: dependencies.fetch });
       const started = await api.startDeviceAuthorization(defaultDeviceName());
+      const deviceSecretRef = await credentialLifecycle.stageDeviceAuthorization({
+        url: baseUrl,
+        contextName: options.context,
+        deviceSecret: started.deviceSecret,
+      });
       output.error(`Authorize code ${started.userCode} at ${started.verificationUrl}`);
       if (options.browser) {
         try {
@@ -71,24 +86,44 @@ export function createCli(dependencies: CliDependencies = {}): Command {
       }
       const controller = signalController();
       let exchange;
-      while (Date.now() < started.expiresAt) {
-        exchange = await api.exchangeDeviceAuthorization(started.deviceSecret);
-        if (exchange.status === "authorized") break;
-        await sleep(started.pollIntervalMs, controller.signal, dependencies.sleep);
+      try {
+        while (Date.now() < started.expiresAt) {
+          exchange = await api.exchangeDeviceAuthorization(started.deviceSecret);
+          if (exchange.status === "authorized") break;
+          await sleep(started.pollIntervalMs, controller.signal, dependencies.sleep);
+        }
+      } catch (cause) {
+        try {
+          await credentialLifecycle.prepareLogin();
+        } catch (recoveryCause) {
+          throw new AggregateError(
+            [cause, recoveryCause],
+            "Device authorization failed and capability recovery remains pending"
+          );
+        }
+        throw cause;
       }
-      if (!exchange || exchange.status !== "authorized")
+      if (!exchange || exchange.status !== "authorized") {
+        await credentialLifecycle.prepareLogin();
         throw new CliError("expired", "Device authorization expired");
-      await store.saveContext(options.context, {
-        url: baseUrl,
-        credential: exchange.credential,
-        expiresAt: exchange.expiresAt,
-      });
-      await store.setActiveContext(options.context);
+      }
+      const replacement = await credentialLifecycle.install(
+        options.context,
+        {
+          url: baseUrl,
+          credential: exchange.credential,
+          credentialId: exchange.credentialId,
+          expiresAt: exchange.expiresAt,
+        },
+        deviceSecretRef
+      );
       output.result({
         context: options.context,
         url: baseUrl,
         expiresAt: exchange.expiresAt,
         credentialStore: await store.credentialStoreKind(),
+        pendingRevocations: replacement.pendingRevocations,
+        pendingDeviceAuthorizations: replacement.pendingDeviceAuthorizations,
       });
     });
 
@@ -97,13 +132,7 @@ export function createCli(dependencies: CliDependencies = {}): Command {
     .description("Revoke and remove the active context")
     .action(async (_options, command) => {
       const output = outputFor(command);
-      const { api } = await operations();
-      let removed;
-      try {
-        await api.revokeCredential();
-      } finally {
-        removed = await store.removeActiveContext();
-      }
+      const removed = await credentialLifecycle.logout();
       output.result({ loggedOut: removed.name });
     });
 
@@ -161,7 +190,7 @@ export function createCli(dependencies: CliDependencies = {}): Command {
     .command("create")
     .requiredOption("--title <title>")
     .requiredOption("--model <model>")
-    .requiredOption("--reasoning <effort>")
+    .option("--reasoning <effort>")
     .option("--prompt <text>")
     .option("--idempotency-key <key>")
     .action(async (options, command) => {
@@ -184,9 +213,15 @@ export function createCli(dependencies: CliDependencies = {}): Command {
     });
   session
     .command("list")
-    .action(async (_options, command) =>
-      outputFor(command).result(await (await operations()).operations.listSessions())
-    );
+    .option("--limit <count>", "maximum sessions to return", parseInteger)
+    .option("--offset <count>", "zero-based continuation offset", parseInteger)
+    .action(async (options, command) => {
+      const query = externalSessionListQuerySchema.parse({
+        limit: options.limit,
+        offset: options.offset,
+      });
+      outputFor(command).result(await (await operations()).operations.listSessions(query));
+    });
   session
     .command("get <id>")
     .action(async (id, _options, command) =>
@@ -285,6 +320,13 @@ function parseNumber(value: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0)
     throw new Error(`Invalid nonnegative number: ${value}`);
+  return parsed;
+}
+
+function parseInteger(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0)
+    throw new Error(`Invalid nonnegative integer: ${value}`);
   return parsed;
 }
 

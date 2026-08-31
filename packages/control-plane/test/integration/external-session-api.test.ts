@@ -1,9 +1,11 @@
 import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashToken } from "../../src/auth/crypto";
+import { externalCreateSessionRequestSchema } from "@open-inspect/shared/types/external-session-api";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { cleanD1Tables } from "./cleanup";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { deriveExternalSessionId } from "../../src/routes/external-sessions";
 import { encodeEventChangeCursor, parseEventChangeCursor } from "../../src/session/event-stream";
 import {
   deleteEvent,
@@ -13,10 +15,16 @@ import {
   seedEvents,
   updateEventData,
   waitForSandboxStatus,
+  serviceFetch,
 } from "./helpers";
 
 const API = "https://cp.test/external/v1/sessions";
 const USER_ID = "33333333333333333333333333333333";
+
+function externalSessionIdSecret(): string {
+  if (!env.EXTERNAL_SESSION_ID_SECRET) throw new Error("Missing test external session ID secret");
+  return env.EXTERNAL_SESSION_ID_SECRET;
+}
 
 async function externalHeaders(roleId = "role_builtin_member"): Promise<Record<string, string>> {
   await seedActiveUser(USER_ID);
@@ -38,7 +46,7 @@ function createBody(overrides: Record<string, unknown> = {}): string {
     title: "External session",
     model: "openai/gpt-5.6-sol",
     reasoningEffort: "high",
-    idempotencyKey: "create-1",
+    idempotencyKey: `create-${crypto.randomUUID()}`,
     ...overrides,
   });
 }
@@ -101,8 +109,38 @@ describe("external v1 session API", () => {
       }),
     });
     expect(deniedPrompt.status).toBe(400);
+    const deniedWebPrompt = await serviceFetch(`https://cp.test/sessions/${sessionId}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "Continue",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "high",
+      }),
+    });
+    expect(deniedWebPrompt.status).toBe(deniedPrompt.status);
+    await expect(deniedWebPrompt.json()).resolves.toEqual(await deniedPrompt.json());
     const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
     expect((await queryDO(stub, "SELECT id FROM messages")).length).toBe(0);
+  });
+
+  it("allows create without reasoning for a non-reasoning model", async () => {
+    const headers = await externalHeaders();
+    const response = await SELF.fetch(API, {
+      method: "POST",
+      headers,
+      body: createBody({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: undefined,
+      }),
+    });
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect(
+      await env.DB.prepare("SELECT reasoning_effort FROM sessions WHERE id = ?")
+        .bind(sessionId)
+        .first()
+    ).toEqual({ reasoning_effort: null });
   });
 
   it("requires create and collaborate permissions before an initial-prompt side effect", async () => {
@@ -132,36 +170,15 @@ describe("external v1 session API", () => {
     });
   });
 
-  it("creates idempotently, resumes the initial prompt stage, and conflicts on changed payload", async () => {
+  it("creates idempotently with a deterministic session and prompt response", async () => {
     const headers = await externalHeaders();
-    const body = createBody({ initialPrompt: "Start work" });
+    const body = createBody({
+      idempotencyKey: "initial-prompt-retry",
+      initialPrompt: "Start work",
+    });
     const first = await SELF.fetch(API, { method: "POST", headers, body });
     expect(first.status).toBe(201);
     const result = (await first.json()) as { sessionId: string; messageId: string };
-
-    // Simulate a crash that lost operation progress after the idempotent side effects.
-    await env.DB.prepare("DELETE FROM external_session_create_operations").run();
-    await env.DB.prepare(
-      `INSERT INTO external_session_create_operations
-       (user_id, idempotency_key, request_hash, session_id, stage, created_at, updated_at)
-       VALUES (?, 'create-1', ?, ?, 'reserved', ?, ?)`
-    )
-      .bind(
-        USER_ID,
-        await hashToken(
-          JSON.stringify({
-            title: "External session",
-            model: "openai/gpt-5.6-sol",
-            reasoningEffort: "high",
-            initialPrompt: "Start work",
-            idempotencyKey: "create-1",
-          })
-        ),
-        result.sessionId,
-        Date.now(),
-        Date.now()
-      )
-      .run();
 
     const retry = await SELF.fetch(API, { method: "POST", headers, body });
     expect(retry.status).toBe(200);
@@ -169,14 +186,148 @@ describe("external v1 session API", () => {
     const conflict = await SELF.fetch(API, {
       method: "POST",
       headers,
-      body: createBody({ initialPrompt: "Different work" }),
+      body: createBody({ idempotencyKey: "initial-prompt-retry", initialPrompt: "Different work" }),
     });
     expect(conflict.status).toBe(409);
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first()).toEqual({
       count: 1,
     });
+    expect(
+      await env.DB.prepare("SELECT external_request_fingerprint FROM sessions WHERE id = ?")
+        .bind(result.sessionId)
+        .first()
+    ).toEqual({
+      external_request_fingerprint: await hashToken(
+        JSON.stringify(externalCreateSessionRequestSchema.parse(JSON.parse(body)))
+      ),
+    });
     const stub = env.SESSION.get(env.SESSION.idFromName(result.sessionId));
     expect((await queryDO(stub, "SELECT id FROM messages")).length).toBe(1);
+  });
+
+  it("reserves the full request fingerprint before bootstrap and rejects changed crash retries", async () => {
+    const headers = await externalHeaders();
+    const idempotencyKey = `d1-crash-${crypto.randomUUID()}`;
+    const body = createBody({ idempotencyKey, initialPrompt: "Original prompt" });
+    const fingerprint = await hashToken(
+      JSON.stringify(externalCreateSessionRequestSchema.parse(JSON.parse(body)))
+    );
+    const sessionId = await deriveExternalSessionId(
+      USER_ID,
+      idempotencyKey,
+      externalSessionIdSecret()
+    );
+    const now = Date.now();
+    await new SessionIndexStore(env.DB).create({
+      id: sessionId,
+      title: "External session",
+      repoOwner: null,
+      repoName: null,
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "high",
+      baseBranch: null,
+      status: "created",
+      userId: USER_ID,
+      externalRequestFingerprint: fingerprint,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const changed = await SELF.fetch(API, {
+      method: "POST",
+      headers,
+      body: createBody({ idempotencyKey, initialPrompt: "Changed prompt" }),
+    });
+    expect(changed.status).toBe(409);
+    await expect(changed.json()).resolves.toEqual({ error: "Idempotency key conflict" });
+    const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    expect(
+      await queryDO(
+        stub,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'"
+      )
+    ).toEqual([]);
+  });
+
+  it("derives IDs only from the dedicated external-session secret", async () => {
+    const key = `secret-separation-${crypto.randomUUID()}`;
+    const expected = await deriveExternalSessionId(USER_ID, key, externalSessionIdSecret());
+    expect(await deriveExternalSessionId(USER_ID, key, externalSessionIdSecret())).toBe(expected);
+    expect(await deriveExternalSessionId(USER_ID, key, env.TOKEN_ENCRYPTION_KEY)).not.toBe(
+      expected
+    );
+  });
+
+  it("converges concurrent identical creates onto one bootstrap aggregate", async () => {
+    const headers = await externalHeaders();
+    const body = createBody({ idempotencyKey: `concurrent-${crypto.randomUUID()}` });
+
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () => SELF.fetch(API, { method: "POST", headers, body }))
+    );
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 200, 200, 201]);
+    const results = await Promise.all(
+      responses.map((response) => response.json<{ sessionId: string }>())
+    );
+    expect(new Set(results.map((result) => result.sessionId)).size).toBe(1);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first()).toEqual({
+      count: 1,
+    });
+    const stub = env.SESSION.get(env.SESSION.idFromName(results[0]!.sessionId));
+    expect((await queryDO(stub, "SELECT id FROM sandbox")).length).toBe(1);
+    expect((await queryDO(stub, "SELECT id FROM participants")).length).toBe(1);
+    expect((await queryDO(stub, "SELECT id FROM messages")).length).toBe(0);
+  });
+
+  it("lets exactly one differing concurrent create reserve and bootstrap", async () => {
+    const headers = await externalHeaders();
+    const idempotencyKey = `concurrent-conflict-${crypto.randomUUID()}`;
+    const bodies = [
+      createBody({ idempotencyKey, initialPrompt: "Prompt A" }),
+      createBody({ idempotencyKey, initialPrompt: "Prompt B" }),
+    ];
+
+    const responses = await Promise.all(
+      bodies.map((body) => SELF.fetch(API, { method: "POST", headers, body }))
+    );
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+    const winnerIndex = responses.findIndex((response) => response.status === 201);
+    const loserIndex = 1 - winnerIndex;
+    const winner = await responses[winnerIndex]!.json<{ sessionId: string }>();
+    await expect(responses[loserIndex]!.json()).resolves.toEqual({
+      error: "Idempotency key conflict",
+    });
+
+    const winnerInput = externalCreateSessionRequestSchema.parse(JSON.parse(bodies[winnerIndex]!));
+    const winnerFingerprint = await hashToken(JSON.stringify(winnerInput));
+    expect(
+      await env.DB.prepare("SELECT external_request_fingerprint FROM sessions WHERE id = ?")
+        .bind(winner.sessionId)
+        .first()
+    ).toEqual({ external_request_fingerprint: winnerFingerprint });
+
+    const stub = env.SESSION.get(env.SESSION.idFromName(winner.sessionId));
+    const doFingerprint = await queryDO<{ initialization_fingerprint: string }>(
+      stub,
+      "SELECT initialization_fingerprint FROM session_bootstrap WHERE singleton = 1"
+    );
+    expect(doFingerprint).toHaveLength(1);
+    expect(await queryDO(stub, "SELECT content FROM messages")).toEqual([
+      { content: winnerInput.initialPrompt },
+    ]);
+
+    const winnerRetry = await SELF.fetch(API, {
+      method: "POST",
+      headers,
+      body: bodies[winnerIndex],
+    });
+    expect(winnerRetry.status).toBe(200);
+    expect(
+      await queryDO(
+        stub,
+        "SELECT initialization_fingerprint FROM session_bootstrap WHERE singleton = 1"
+      )
+    ).toEqual(doFingerprint);
   });
 
   it.each(["active", "completed", "failed"] as const)(
@@ -192,17 +343,6 @@ describe("external v1 session API", () => {
         .run();
       const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
       await queryDO(stub, "UPDATE session SET status = ?", status);
-      await env.DB.prepare("DELETE FROM external_session_create_operations WHERE session_id = ?")
-        .bind(sessionId)
-        .run();
-      await env.DB.prepare(
-        `INSERT INTO external_session_create_operations
-         (user_id, idempotency_key, request_hash, session_id, stage, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'reserved', ?, ?)`
-      )
-        .bind(USER_ID, idempotencyKey, await hashToken(body), sessionId, Date.now(), Date.now())
-        .run();
-
       const retry = await SELF.fetch(API, { method: "POST", headers, body });
       expect(retry.status).toBe(200);
       expect(
@@ -211,70 +351,6 @@ describe("external v1 session API", () => {
       expect(await queryDO(stub, "SELECT status FROM session")).toEqual([{ status }]);
     }
   );
-
-  it("initializes a missing runtime when retrying a reserved D1 session", async () => {
-    const headers = await externalHeaders();
-    const sessionId = crypto.randomUUID();
-    const body = createBody({ idempotencyKey: "missing-runtime" });
-    const now = Date.now();
-    await new SessionIndexStore(env.DB).create({
-      id: sessionId,
-      title: "External session",
-      repoOwner: null,
-      repoName: null,
-      model: "openai/gpt-5.6-sol",
-      reasoningEffort: "high",
-      baseBranch: "main",
-      environmentId: null,
-      status: "created",
-      userId: USER_ID,
-      createdAt: now,
-      updatedAt: now,
-    });
-    await env.DB.prepare(
-      `INSERT INTO external_session_create_operations
-       (user_id, idempotency_key, request_hash, session_id, stage, created_at, updated_at)
-       VALUES (?, 'missing-runtime', ?, ?, 'reserved', ?, ?)`
-    )
-      .bind(USER_ID, await hashToken(body), sessionId, now, now)
-      .run();
-
-    const response = await SELF.fetch(API, { method: "POST", headers, body });
-
-    expect(response.status).toBe(200);
-    const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
-    expect(await queryDO(stub, "SELECT session_name, status FROM session")).toEqual([
-      { session_name: sessionId, status: "created" },
-    ]);
-  });
-
-  it("repairs a compensating failed index status after bootstrap recovery", async () => {
-    const headers = await externalHeaders();
-    const idempotencyKey = "failed-index-recovery";
-    const body = createBody({ idempotencyKey });
-    const created = await SELF.fetch(API, { method: "POST", headers, body });
-    const { sessionId } = (await created.json()) as { sessionId: string };
-    await env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
-      .bind(sessionId)
-      .run();
-    await env.DB.prepare("DELETE FROM external_session_create_operations WHERE session_id = ?")
-      .bind(sessionId)
-      .run();
-    await env.DB.prepare(
-      `INSERT INTO external_session_create_operations
-       (user_id, idempotency_key, request_hash, session_id, stage, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'reserved', ?, ?)`
-    )
-      .bind(USER_ID, idempotencyKey, await hashToken(body), sessionId, Date.now(), Date.now())
-      .run();
-
-    const retry = await SELF.fetch(API, { method: "POST", headers, body });
-
-    expect(retry.status).toBe(200);
-    expect(
-      await env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(sessionId).first()
-    ).toEqual({ status: "created" });
-  });
 
   it("re-drives warming after the aggregate committed before warm scheduling", async () => {
     const headers = await externalHeaders();
@@ -289,17 +365,6 @@ describe("external v1 session API", () => {
       participants: await queryDO(stub, "SELECT id FROM participants ORDER BY id"),
     };
     await queryDO(stub, "UPDATE sandbox SET status = 'pending'");
-    await env.DB.prepare("DELETE FROM external_session_create_operations WHERE session_id = ?")
-      .bind(sessionId)
-      .run();
-    await env.DB.prepare(
-      `INSERT INTO external_session_create_operations
-       (user_id, idempotency_key, request_hash, session_id, stage, created_at, updated_at)
-       VALUES (?, 'warm-recovery', ?, ?, 'reserved', ?, ?)`
-    )
-      .bind(USER_ID, await hashToken(body), sessionId, Date.now(), Date.now())
-      .run();
-
     const retry = await SELF.fetch(API, { method: "POST", headers, body });
 
     expect(retry.status).toBe(200);
@@ -325,17 +390,6 @@ describe("external v1 session API", () => {
     const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
     const aggregateBefore = await queryDO(stub, "SELECT * FROM session");
     await queryDO(stub, "UPDATE session_bootstrap SET initialization_fingerprint = 'mismatch'");
-    await env.DB.prepare("DELETE FROM external_session_create_operations WHERE session_id = ?")
-      .bind(sessionId)
-      .run();
-    await env.DB.prepare(
-      `INSERT INTO external_session_create_operations
-       (user_id, idempotency_key, request_hash, session_id, stage, created_at, updated_at)
-       VALUES (?, 'bootstrap-conflict', ?, ?, 'reserved', ?, ?)`
-    )
-      .bind(USER_ID, await hashToken(body), sessionId, Date.now(), Date.now())
-      .run();
-
     const retry = await SELF.fetch(API, { method: "POST", headers, body });
 
     expect(retry.status).toBe(409);
@@ -382,12 +436,52 @@ describe("external v1 session API", () => {
     expect((await SELF.fetch(API, { headers })).status).toBe(403);
   });
 
+  it("returns bounded session-list continuation offsets", async () => {
+    const headers = await externalHeaders();
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    for (const [index, id] of ["list-oldest", "list-middle", "list-newest"].entries()) {
+      await store.create({
+        id,
+        title: id,
+        repoOwner: null,
+        repoName: null,
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "created",
+        userId: USER_ID,
+        createdAt: now + index,
+        updatedAt: now + index,
+      });
+    }
+
+    const first = await SELF.fetch(`${API}?limit=2&offset=0`, { headers });
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({
+      sessions: [{ id: "list-newest" }, { id: "list-middle" }],
+      hasMore: true,
+      continuationOffset: 2,
+    });
+    const second = await SELF.fetch(`${API}?limit=2&offset=2`, { headers });
+    await expect(second.json()).resolves.toMatchObject({
+      sessions: [{ id: "list-oldest" }],
+      hasMore: false,
+    });
+    expect((await SELF.fetch(`${API}?limit=201`, { headers })).status).toBe(400);
+  });
+
   it("denies suspended users", async () => {
     const headers = await externalHeaders();
     await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(USER_ID).run();
     const response = await SELF.fetch(API, { headers });
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ code: "active_user_required" });
+  });
+
+  it("rejects compound service:web and browser credentials on CLI-only routes", async () => {
+    const response = await serviceFetch(API);
+    expect(response.status).toBe(401);
   });
 
   it("uses Durable Object idempotency for strict text follow-ups", async () => {
@@ -450,13 +544,39 @@ describe("external v1 session API", () => {
     ).toBe(409);
   });
 
+  it("resolves reasoning-only follow-ups against the session model", async () => {
+    const headers = await externalHeaders();
+    const created = await SELF.fetch(API, { method: "POST", headers, body: createBody() });
+    const { sessionId } = await created.json<{ sessionId: string }>();
+    const before = await env.DB.prepare("SELECT updated_at FROM sessions WHERE id = ?")
+      .bind(sessionId)
+      .first<{ updated_at: number }>();
+
+    const response = await SELF.fetch(`${API}/${sessionId}/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        content: "Reason more",
+        clientRequestId: "reasoning-only",
+        reasoningEffort: "xhigh",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(
+      (await env.DB.prepare("SELECT updated_at FROM sessions WHERE id = ?")
+        .bind(sessionId)
+        .first<{ updated_at: number }>())!.updated_at
+    ).toBeGreaterThanOrEqual(before!.updated_at);
+  });
+
   it("projects event snapshots conservatively and reports one-shot settled status", async () => {
     const headers = await externalHeaders();
     const created = await SELF.fetch(API, { method: "POST", headers, body: createBody() });
     const { sessionId } = (await created.json()) as { sessionId: string };
     const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
     const managedSecret = "managed-value-123";
-    await new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!).setSecrets({
+    const secrets = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!);
+    await secrets.setSecrets({
       EXTERNAL_TEST_SECRET: managedSecret,
     });
     await seedEvents(stub, [
@@ -491,6 +611,7 @@ describe("external v1 session API", () => {
         }),
       },
     ]);
+    await secrets.setSecrets({ EXTERNAL_TEST_SECRET: "rotated-value-456" });
     const events = await SELF.fetch(`${API}/${sessionId}/events`, { headers });
     expect(events.status).toBe(200);
     const eventBody = (await events.json()) as {
@@ -499,15 +620,13 @@ describe("external v1 session API", () => {
     const projectedEvents = eventBody.changes.map((change) => change.event);
     const toolCall = projectedEvents.find((event) => event.data.type === "tool_call");
     const stepFinish = projectedEvents.find((event) => event.data.type === "step_finish");
-    expect(toolCall?.data).toMatchObject({
-      type: "tool_call",
-      args: { command: "safe" },
-    });
+    expect(toolCall?.data).toEqual({ type: "tool_call", timestamp: 1 });
     expect(JSON.stringify(eventBody)).not.toContain("sandbox-identity");
     expect(JSON.stringify(eventBody)).not.toContain("Bearer credential");
     expect(stepFinish?.data.tokens).toEqual({ input: 7, output: 3 });
-    expect(stepFinish?.data.reason).toBe("completed with [REDACTED]");
+    expect(stepFinish?.data.reason).toBeUndefined();
     expect(JSON.stringify(eventBody)).not.toContain(managedSecret);
+    expect(JSON.stringify(eventBody)).not.toContain("rotated-value-456");
 
     const waiting = await SELF.fetch(`${API}/${sessionId}/wait`, { headers });
     await expect(waiting.json()).resolves.toMatchObject({ status: "created", settled: false });
@@ -606,7 +725,7 @@ describe("external v1 session API", () => {
         {
           kind: "upsert",
           revision: 4,
-          event: { id: "event-1", data: { content: "updated older event" } },
+          event: { id: "event-1" },
         },
         { kind: "upsert", revision: 5, event: { id: "event-4" } },
         { kind: "delete", revision: 6, eventId: "event-3" },
@@ -629,12 +748,12 @@ describe("external v1 session API", () => {
         {
           kind: "upsert",
           revision: 7,
-          event: { id: "event-1", data: { content: "second update" } },
+          event: { id: "event-1" },
         },
         {
           kind: "upsert",
           revision: 8,
-          event: { id: "event-1", data: { content: "third update" } },
+          event: { id: "event-1" },
         },
         { kind: "delete", revision: 9, eventId: "event-2" },
         { kind: "delete", revision: 10, eventId: "event-4" },
@@ -688,6 +807,29 @@ describe("external v1 session API", () => {
       changes: [],
       checkpoint: 0,
       hasMore: false,
+    });
+  });
+
+  it("returns an explicit error for an expired event checkpoint", async () => {
+    const headers = await externalHeaders();
+    const created = await SELF.fetch(API, {
+      method: "POST",
+      headers,
+      body: createBody({ idempotencyKey: "expired-events" }),
+    });
+    const { sessionId } = (await created.json()) as { sessionId: string };
+    const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    await queryDO(
+      stub,
+      "UPDATE event_feed_state SET current_revision = 2, retention_floor = 2 WHERE singleton = 1"
+    );
+
+    const response = await SELF.fetch(`${API}/${sessionId}/events?after=1`, { headers });
+
+    expect(response.status).toBe(410);
+    await expect(response.json()).resolves.toEqual({
+      error: "Event checkpoint expired",
+      code: "event_checkpoint_expired",
     });
   });
 });

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { isValidModel, isValidReasoningEffort } from "../models";
 import { clientRequestIdSchema, promptContentSchema } from "./prompts";
 import { eventTypeSchema } from "./sandbox-events";
 import { sessionStatusSchema } from "./sessions";
@@ -20,46 +19,29 @@ export const externalEventFeedQuerySchema = z
 
 export type ExternalEventFeedQuery = z.infer<typeof externalEventFeedQuerySchema>;
 
-function validateModelReasoning(
-  value: { model?: string; reasoningEffort?: string },
-  ctx: z.RefinementCtx
-): void {
-  if (value.model !== undefined && !isValidModel(value.model)) {
-    ctx.addIssue({ code: "custom", path: ["model"], message: "Unknown model" });
-    return;
-  }
-  if (
-    value.reasoningEffort !== undefined &&
-    (value.model === undefined || !isValidReasoningEffort(value.model, value.reasoningEffort))
-  ) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["reasoningEffort"],
-      message: "Reasoning effort is not supported by model",
-    });
-  }
-}
+export const externalSessionListQuerySchema = z.strictObject({
+  limit: z.number().int().min(1).max(200).optional(),
+  offset: z.number().int().nonnegative().optional(),
+});
 
-export const externalCreateSessionRequestSchema = z
-  .strictObject({
-    title: requiredTextSchema,
-    model: requiredTextSchema,
-    reasoningEffort: requiredTextSchema,
-    initialPrompt: promptContentSchema.refine((value) => value.trim().length > 0).optional(),
-    idempotencyKey: idempotencyKeySchema,
-  })
-  .superRefine(validateModelReasoning);
+export type ExternalSessionListQuery = z.infer<typeof externalSessionListQuerySchema>;
+
+export const externalCreateSessionRequestSchema = z.strictObject({
+  title: requiredTextSchema,
+  model: requiredTextSchema,
+  reasoningEffort: requiredTextSchema.optional(),
+  initialPrompt: promptContentSchema.refine((value) => value.trim().length > 0).optional(),
+  idempotencyKey: idempotencyKeySchema,
+});
 
 export type ExternalCreateSessionRequest = z.infer<typeof externalCreateSessionRequestSchema>;
 
-export const externalFollowUpRequestSchema = z
-  .strictObject({
-    content: promptContentSchema.refine((value) => value.trim().length > 0),
-    clientRequestId: clientRequestIdSchema,
-    model: requiredTextSchema.optional(),
-    reasoningEffort: requiredTextSchema.optional(),
-  })
-  .superRefine(validateModelReasoning);
+export const externalFollowUpRequestSchema = z.strictObject({
+  content: promptContentSchema.refine((value) => value.trim().length > 0),
+  clientRequestId: clientRequestIdSchema,
+  model: requiredTextSchema.optional(),
+  reasoningEffort: requiredTextSchema.optional(),
+});
 
 export type ExternalFollowUpRequest = z.infer<typeof externalFollowUpRequestSchema>;
 
@@ -91,10 +73,16 @@ export const externalFollowUpResponseSchema = z.strictObject({
   status: z.literal("queued"),
 });
 
-export const externalSessionListResponseSchema = z.strictObject({
-  sessions: z.array(externalSessionSchema),
-  hasMore: z.boolean(),
-});
+export const externalSessionListResponseSchema = z
+  .strictObject({
+    sessions: z.array(externalSessionSchema),
+    hasMore: z.boolean(),
+    continuationOffset: z.number().int().nonnegative().optional(),
+  })
+  .refine((response) => !response.hasMore || response.continuationOffset !== undefined, {
+    message: "continuationOffset is required when hasMore is true",
+    path: ["continuationOffset"],
+  });
 
 export const externalStopSessionResponseSchema = z.strictObject({
   status: z.literal("stopping"),
@@ -144,7 +132,7 @@ export const externalEventChangeSchema = z.discriminatedUnion("kind", [
 
 export type ExternalEventChange = z.infer<typeof externalEventChangeSchema>;
 
-/** Event journals are retained indefinitely in Increment 1, so checkpoints do not expire. */
+/** Event changes are retained for 24 hours or 50,000 revisions, whichever is reached first. */
 export const externalEventPageSchema = z
   .strictObject({
     changes: z.array(externalEventChangeSchema),

@@ -33,10 +33,12 @@ describe("migration 0072: CLI authentication", () => {
       "user_code_hash",
       "approved_user_id",
       "exchange_claim_id",
+      "issued_credential_id",
       "created_at",
       "expires_at",
       "approved_at",
       "exchanged_at",
+      "capability_revoked_at",
     ]);
     expect(credentialColumns.results.map((column) => column.name)).toEqual([
       "id",

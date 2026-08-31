@@ -5,12 +5,15 @@ CREATE TABLE cli_device_authorization_attempts (
   user_code_hash TEXT NOT NULL UNIQUE,
   approved_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
   exchange_claim_id TEXT UNIQUE,
+  issued_credential_id TEXT,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   approved_at INTEGER,
   exchanged_at INTEGER,
+  capability_revoked_at INTEGER,
   CHECK ((approved_user_id IS NULL) = (approved_at IS NULL)),
-  CHECK (exchanged_at IS NULL OR (approved_user_id IS NOT NULL AND exchange_claim_id IS NOT NULL))
+  CHECK (exchanged_at IS NULL OR (approved_user_id IS NOT NULL AND exchange_claim_id IS NOT NULL)),
+  CHECK ((exchanged_at IS NULL) = (issued_credential_id IS NULL))
 );
 
 CREATE INDEX idx_cli_device_authorization_expiry

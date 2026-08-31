@@ -22,6 +22,7 @@ interface AttemptStateRow {
   approved_user_id: string | null;
   expires_at: number;
   exchanged_at: number | null;
+  capability_revoked_at: number | null;
 }
 
 interface PendingAttemptRow extends AttemptStateRow {
@@ -72,7 +73,7 @@ export class CliAuthStore {
         `UPDATE cli_device_authorization_attempts
          SET approved_user_id = ?, approved_at = ?
          WHERE user_code_hash = ? AND approved_user_id IS NULL
-           AND exchanged_at IS NULL AND expires_at > ?`
+           AND exchanged_at IS NULL AND capability_revoked_at IS NULL AND expires_at > ?`
       )
       .bind(userId, now, userCodeHash, now)
       .run();
@@ -80,7 +81,7 @@ export class CliAuthStore {
 
     const row = await this.db
       .prepare(
-        `SELECT approved_user_id, expires_at, exchanged_at
+        `SELECT approved_user_id, expires_at, exchanged_at, capability_revoked_at
          FROM cli_device_authorization_attempts WHERE user_code_hash = ?`
       )
       .bind(userCodeHash)
@@ -96,14 +97,18 @@ export class CliAuthStore {
   ): Promise<CliPendingAuthorizationOutcome> {
     const row = await this.db
       .prepare(
-        `SELECT device_name, approved_user_id, expires_at, exchanged_at
+        `SELECT device_name, approved_user_id, expires_at, exchanged_at, capability_revoked_at
          FROM cli_device_authorization_attempts WHERE user_code_hash = ?`
       )
       .bind(userCodeHash)
       .first<PendingAttemptRow>();
     if (!row) return { status: "not_found" };
     if (row.expires_at <= now) return { status: "expired" };
-    if (row.approved_user_id !== null || row.exchanged_at !== null)
+    if (
+      row.approved_user_id !== null ||
+      row.exchanged_at !== null ||
+      row.capability_revoked_at !== null
+    )
       return { status: "unavailable" };
     return { status: "pending", deviceName: row.device_name, expiresAt: row.expires_at };
   }
@@ -187,11 +192,11 @@ export class CliAuthStore {
       this.db
         .prepare(
           `UPDATE cli_device_authorization_attempts
-           SET exchange_claim_id = ?, exchanged_at = ?
+           SET exchange_claim_id = ?, exchanged_at = ?, issued_credential_id = ?
            WHERE device_secret_hash = ? AND approved_user_id IS NOT NULL
-             AND exchanged_at IS NULL AND expires_at > ?`
+              AND exchanged_at IS NULL AND capability_revoked_at IS NULL AND expires_at > ?`
         )
-        .bind(input.claimId, input.now, input.deviceSecretHash, input.now),
+        .bind(input.claimId, input.now, input.credentialId, input.deviceSecretHash, input.now),
       this.db
         .prepare(
           `INSERT INTO cli_credentials (id, token_hash, user_id, created_at, expires_at)
@@ -214,15 +219,37 @@ export class CliAuthStore {
 
     const row = await this.db
       .prepare(
-        `SELECT approved_user_id, expires_at, exchanged_at
-         FROM cli_device_authorization_attempts WHERE device_secret_hash = ?`
+        `SELECT approved_user_id, expires_at, exchanged_at, capability_revoked_at
+          FROM cli_device_authorization_attempts WHERE device_secret_hash = ?`
       )
       .bind(input.deviceSecretHash)
       .first<AttemptStateRow>();
     if (!row) return { status: "not_found" };
     if (row.expires_at <= input.now) return { status: "expired" };
+    if (row.capability_revoked_at !== null) return { status: "consumed" };
     if (row.exchanged_at !== null) return { status: "consumed" };
     return { status: "pending", expiresAt: row.expires_at };
+  }
+
+  async revokeIssuedCredentialByDeviceSecret(deviceSecretHash: string, now: number): Promise<void> {
+    await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE cli_credentials SET revoked_at = COALESCE(revoked_at, ?)
+           WHERE id = (
+             SELECT issued_credential_id FROM cli_device_authorization_attempts
+             WHERE device_secret_hash = ?
+           )`
+        )
+        .bind(now, deviceSecretHash),
+      this.db
+        .prepare(
+          `UPDATE cli_device_authorization_attempts
+           SET capability_revoked_at = COALESCE(capability_revoked_at, ?)
+           WHERE device_secret_hash = ?`
+        )
+        .bind(now, deviceSecretHash),
+    ]);
   }
 
   async getActiveCredential(tokenHash: string, now: number): Promise<ActiveCliCredential | null> {

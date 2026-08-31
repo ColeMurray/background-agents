@@ -70,7 +70,8 @@ export class SessionCoreRepository {
 
   setInitializationFingerprint(fingerprint: string): void {
     this.sql.exec(
-      `INSERT INTO session_bootstrap (singleton, initialization_fingerprint) VALUES (1, ?)`,
+      `INSERT INTO session_bootstrap (singleton, initialization_fingerprint) VALUES (1, ?)
+       ON CONFLICT(singleton) DO UPDATE SET initialization_fingerprint = excluded.initialization_fingerprint`,
       fingerprint
     );
   }

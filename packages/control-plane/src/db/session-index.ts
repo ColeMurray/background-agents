@@ -101,6 +101,8 @@ export interface SessionEntry {
   skillManifestSourceSessionId?: string;
   /** Complete immutable model-provider authentication snapshot. */
   providerAuth?: SessionModelProviderAuthInput[];
+  /** Canonical external create request reserved atomically with the session row. */
+  externalRequestFingerprint?: string | null;
 }
 
 interface SessionRow {
@@ -125,6 +127,7 @@ interface SessionRow {
   message_count: number;
   pr_count: number;
   environment_id: string | null;
+  external_request_fingerprint: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -179,6 +182,7 @@ function toEntry(row: SessionRow): SessionEntry {
     messageCount: row.message_count,
     prCount: row.pr_count,
     environmentId: row.environment_id,
+    externalRequestFingerprint: row.external_request_fingerprint,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -268,8 +272,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, external_request_fingerprint, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -291,6 +295,7 @@ export class SessionIndexStore {
         session.scmLogin ?? null,
         session.userId ?? null,
         session.environmentId ?? null,
+        session.externalRequestFingerprint ?? null,
         session.createdAt,
         session.updatedAt
       );

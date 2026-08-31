@@ -296,21 +296,34 @@ export async function seedEvents(
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     for (const e of events) {
       state.storage.transactionSync(() => {
+        const revision = state.storage.sql
+          .exec(
+            `UPDATE event_feed_state SET current_revision = current_revision + 1
+            WHERE singleton = 1 RETURNING current_revision`
+          )
+          .one().current_revision as number;
         state.storage.sql.exec(
-          `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+          `INSERT INTO events
+           (id, type, data, message_id, created_at, timeline_sequence, change_revision)
            VALUES (?, ?, ?, ?, ?,
-             (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
+              (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events), ?)`,
           e.id,
           e.type,
           e.data,
           e.messageId ?? null,
-          e.createdAt
+          e.createdAt,
+          revision
         );
         state.storage.sql.exec(
           `INSERT INTO event_changes
-           (kind, event_id, type, data, message_id, created_at, timeline_sequence)
-           SELECT 'upsert', id, type, data, message_id, created_at, timeline_sequence
+           (revision, kind, event_id, type, data, message_id, created_at, timeline_sequence,
+            changed_at, journal_bytes)
+           SELECT ?, 'upsert', id, type, data, message_id, created_at, timeline_sequence, ?,
+             64 + length(CAST(id AS BLOB)) + length(CAST(type AS BLOB))
+               + length(CAST(data AS BLOB)) + COALESCE(length(CAST(message_id AS BLOB)), 0)
            FROM events WHERE id = ?`,
+          revision,
+          Date.now(),
           e.id
         );
       });
@@ -325,12 +338,28 @@ export async function updateEventData(
 ): Promise<void> {
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     state.storage.transactionSync(() => {
-      state.storage.sql.exec(`UPDATE events SET data = ? WHERE id = ?`, data, eventId);
+      const revision = state.storage.sql
+        .exec(
+          `UPDATE event_feed_state SET current_revision = current_revision + 1
+          WHERE singleton = 1 RETURNING current_revision`
+        )
+        .one().current_revision as number;
+      state.storage.sql.exec(
+        `UPDATE events SET data = ?, change_revision = ? WHERE id = ?`,
+        data,
+        revision,
+        eventId
+      );
       state.storage.sql.exec(
         `INSERT INTO event_changes
-         (kind, event_id, type, data, message_id, created_at, timeline_sequence)
-         SELECT 'upsert', id, type, data, message_id, created_at, timeline_sequence
-         FROM events WHERE id = ?`,
+          (revision, kind, event_id, type, data, message_id, created_at, timeline_sequence,
+           changed_at, journal_bytes)
+          SELECT ?, 'upsert', id, type, data, message_id, created_at, timeline_sequence, ?,
+            64 + length(CAST(id AS BLOB)) + length(CAST(type AS BLOB))
+              + length(CAST(data AS BLOB)) + COALESCE(length(CAST(message_id AS BLOB)), 0)
+          FROM events WHERE id = ?`,
+        revision,
+        Date.now(),
         eventId
       );
     });
@@ -340,9 +369,19 @@ export async function updateEventData(
 export async function deleteEvent(stub: DurableObjectStub, eventId: string): Promise<void> {
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     state.storage.transactionSync(() => {
+      const revision = state.storage.sql
+        .exec(
+          `UPDATE event_feed_state SET current_revision = current_revision + 1
+          WHERE singleton = 1 RETURNING current_revision`
+        )
+        .one().current_revision as number;
       state.storage.sql.exec(`DELETE FROM events WHERE id = ?`, eventId);
       state.storage.sql.exec(
-        `INSERT INTO event_changes (kind, event_id) VALUES ('delete', ?)`,
+        `INSERT INTO event_changes (revision, kind, event_id, changed_at, journal_bytes)
+         VALUES (?, 'delete', ?, ?, 64 + length(CAST(? AS BLOB)))`,
+        revision,
+        eventId,
+        Date.now(),
         eventId
       );
     });
@@ -356,16 +395,42 @@ export async function renameEvent(
 ): Promise<void> {
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     state.storage.transactionSync(() => {
-      state.storage.sql.exec(`UPDATE events SET id = ? WHERE id = ?`, newEventId, oldEventId);
+      const deleteRevision = state.storage.sql
+        .exec(
+          `UPDATE event_feed_state SET current_revision = current_revision + 1
+          WHERE singleton = 1 RETURNING current_revision`
+        )
+        .one().current_revision as number;
+      const upsertRevision = state.storage.sql
+        .exec(
+          `UPDATE event_feed_state SET current_revision = current_revision + 1
+          WHERE singleton = 1 RETURNING current_revision`
+        )
+        .one().current_revision as number;
       state.storage.sql.exec(
-        `INSERT INTO event_changes (kind, event_id) VALUES ('delete', ?)`,
+        `UPDATE events SET id = ?, change_revision = ? WHERE id = ?`,
+        newEventId,
+        upsertRevision,
+        oldEventId
+      );
+      state.storage.sql.exec(
+        `INSERT INTO event_changes (revision, kind, event_id, changed_at, journal_bytes)
+         VALUES (?, 'delete', ?, ?, 64 + length(CAST(? AS BLOB)))`,
+        deleteRevision,
+        oldEventId,
+        Date.now(),
         oldEventId
       );
       state.storage.sql.exec(
         `INSERT INTO event_changes
-         (kind, event_id, type, data, message_id, created_at, timeline_sequence)
-         SELECT 'upsert', id, type, data, message_id, created_at, timeline_sequence
-         FROM events WHERE id = ?`,
+          (revision, kind, event_id, type, data, message_id, created_at, timeline_sequence,
+           changed_at, journal_bytes)
+          SELECT ?, 'upsert', id, type, data, message_id, created_at, timeline_sequence, ?,
+            64 + length(CAST(id AS BLOB)) + length(CAST(type AS BLOB))
+              + length(CAST(data AS BLOB)) + COALESCE(length(CAST(message_id AS BLOB)), 0)
+          FROM events WHERE id = ?`,
+        upsertRevision,
+        Date.now(),
         newEventId
       );
     });
