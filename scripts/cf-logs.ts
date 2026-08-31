@@ -100,6 +100,32 @@ interface LogEvent {
   links?: unknown[];
 }
 
+interface TelemetryQueryResponse {
+  success: boolean;
+  errors?: unknown[];
+  result?: { events?: { events?: LogEvent[] } };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseTelemetryQueryResponse(value: unknown): TelemetryQueryResponse {
+  if (!isRecord(value) || typeof value.success !== "boolean") {
+    throw new Error("API response was not a telemetry query result");
+  }
+
+  const result = isRecord(value.result) ? value.result : undefined;
+  const eventsEnvelope = isRecord(result?.events) ? result.events : undefined;
+  const events = Array.isArray(eventsEnvelope?.events) ? eventsEnvelope.events : undefined;
+
+  return {
+    success: value.success,
+    errors: Array.isArray(value.errors) ? value.errors : undefined,
+    result: events ? { events: { events: events.filter(isRecord) } } : undefined,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -391,11 +417,7 @@ async function fetchLogs(): Promise<LogEvent[]> {
     throw new Error(`API request failed: ${response.status} ${response.statusText}\n${text}`);
   }
 
-  const data = (await response.json()) as {
-    success: boolean;
-    errors?: unknown[];
-    result?: { events?: { events?: LogEvent[] } };
-  };
+  const data = parseTelemetryQueryResponse(await response.json());
 
   if (!data.success) {
     throw new Error(`API error: ${JSON.stringify(data.errors)}`);

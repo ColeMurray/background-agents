@@ -43,6 +43,25 @@ interface WranglerQueryResult {
   meta?: { changes?: number };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseWranglerQueryResults(value: unknown): WranglerQueryResult[] {
+  if (!Array.isArray(value)) throw new Error("wrangler returned malformed JSON output");
+  return value.map((entry) => {
+    if (!isRecord(entry) || typeof entry.success !== "boolean") {
+      throw new Error("wrangler returned malformed query result");
+    }
+    const meta = isRecord(entry.meta) ? entry.meta : undefined;
+    return {
+      results: Array.isArray(entry.results) ? entry.results.filter(isRecord) : [],
+      success: entry.success,
+      meta: typeof meta?.changes === "number" ? { changes: meta.changes } : undefined,
+    };
+  });
+}
+
 function sqlLiteral(value: unknown): string {
   if (value === null || value === undefined) return "NULL";
   if (typeof value === "number") {
@@ -141,7 +160,7 @@ class WranglerD1Database implements SqlDatabase {
     if (child.status !== 0) {
       throw new Error(`wrangler d1 execute failed:\n${child.stderr || child.stdout}`);
     }
-    const parsed = JSON.parse(child.stdout) as WranglerQueryResult[];
+    const parsed = parseWranglerQueryResults(JSON.parse(child.stdout));
     const failed = parsed.find((result) => !result.success);
     if (failed) {
       throw new Error(`Statement failed: ${JSON.stringify(failed)}`);
