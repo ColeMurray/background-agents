@@ -319,7 +319,7 @@ export async function mergeUsers(
   if (survivorRole && loserRole && survivorRole.role_id !== loserRole.role_id) {
     throw new UserMergeError("Resolve conflicting user roles before merging");
   }
-  if (survivor.suspended_at !== loser.suspended_at) {
+  if ((survivor.suspended_at === null) !== (loser.suspended_at === null)) {
     throw new UserMergeError("Resolve conflicting user suspension states before merging");
   }
   if (loserRole?.role_key === "owner" && survivor.suspended_at !== null) {
@@ -377,7 +377,7 @@ export async function mergeUsers(
              JOIN roles role ON role.id = loser_assignment.role_id
              WHERE survivor.id = ?
                AND survivor_assignment.role_id = loser_assignment.role_id
-               AND survivor.suspended_at IS loser.suspended_at
+               AND (survivor.suspended_at IS NULL) = (loser.suspended_at IS NULL)
                AND (role.key IS NULL OR role.key <> 'owner' OR survivor.suspended_at IS NULL)
            ) THEN ? ELSE NULL END,
            'user-merge', 'service', 'control-plane',
