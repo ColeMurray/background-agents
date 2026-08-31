@@ -198,7 +198,7 @@ describe("GitHub review supersession (claim -> fenced create -> sweep)", () => {
         body: JSON.stringify({ repoId: 1, prNumber: 1 }),
       }
     );
-    expect(claimFromWrongService.status).toBe(401);
+    expect(claimFromWrongService.status).toBe(403);
 
     const createWithGithubReviewFromWrongService = await serviceFetch(
       "https://test.local/sessions",
@@ -223,6 +223,6 @@ describe("GitHub review supersession (claim -> fenced create -> sweep)", () => {
         body: JSON.stringify({ repoId: 1, prNumber: 1, generation: 1 }),
       }
     );
-    expect(sweepFromWrongService.status).toBe(401);
+    expect(sweepFromWrongService.status).toBe(403);
   });
 });

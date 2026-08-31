@@ -12,6 +12,7 @@ import {
   defineRoute,
   error,
   json,
+  NO_AUTHORIZATION,
   parsePattern,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
@@ -122,5 +123,6 @@ async function handleSentryWebhook(
 export const sentryWebhookRoute: Route = defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
   method: "POST",
   pattern: parsePattern("/webhooks/sentry/:id"),
+  authorization: NO_AUTHORIZATION,
   handler: handleSentryWebhook,
 });

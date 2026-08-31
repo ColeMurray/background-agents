@@ -118,6 +118,17 @@ export const sessionSnapshotSchema = z.object({
 });
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 
+/** Removes sandbox location data before a snapshot crosses a read-only boundary. */
+export function redactSessionSnapshotSandboxAccess(snapshot: SessionSnapshot): SessionSnapshot {
+  const session = { ...snapshot.session };
+  delete session.codeServerUrl;
+  delete session.vncUrl;
+  delete session.ttydUrl;
+  delete session.tunnelUrls;
+  delete session.sandboxDashboardUrl;
+  return { ...snapshot, session };
+}
+
 const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
   sessionSnapshotSchema.extend({

@@ -8,8 +8,16 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionPromptComposer } from "./session-prompt-composer";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 expect.extend(matchers);
+
+const FULL_CAPABILITIES: SessionCapabilities = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+};
 
 vi.mock("@/components/action-bar", () => ({
   ActionBar: () => <div data-testid="action-bar" />,
@@ -38,6 +46,7 @@ function ComposerHarness({
   status = "active",
   submitError = null,
   withSkill = false,
+  canManageLifecycle = true,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
@@ -46,6 +55,7 @@ function ComposerHarness({
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
   withSkill?: boolean;
+  canManageLifecycle?: boolean;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -58,6 +68,7 @@ function ComposerHarness({
         artifacts: [],
         onArchive: vi.fn(),
         onUnarchive: vi.fn(),
+        capabilities: { ...FULL_CAPABILITIES, lifecycle: canManageLifecycle },
       }}
       prompt={{
         value,
@@ -170,6 +181,16 @@ describe("SessionPromptComposer", () => {
 
     rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
     expect(screen.getByTitle(/Send/)).toBeDisabled();
+  });
+
+  it("hides stop controls without lifecycle permission", () => {
+    render(
+      <ComposerHarness initialValue="Queued prompt" isProcessing canManageLifecycle={false} />
+    );
+
+    expect(
+      screen.queryByTitle("Stop current prompt; queued prompts will continue")
+    ).not.toBeInTheDocument();
   });
 
   it("shows an inline submission error", () => {

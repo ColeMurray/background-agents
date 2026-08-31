@@ -300,6 +300,7 @@ export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
   updateLastActivity(timestamp: number): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
+  terminateFailedSandbox(reason: string): Promise<boolean>;
   reportSandboxError(reason: string): void;
 }
 
@@ -336,6 +337,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * The persisted sandbox status ("spawning", "connecting") handles cross-request protection.
    */
   private isSpawningSandbox = false;
+  private isTerminatingSandbox = false;
   private providerStartupPending = false;
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
@@ -423,7 +425,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       spawnState,
       this.config.spawn,
       now,
-      this.isSpawningSandbox,
+      this.isSpawningSandbox || this.isTerminatingSandbox,
       !!this.provider.capabilities.supportsPersistentResume
     );
 
@@ -1474,6 +1476,41 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
+  async terminateFailedSandbox(reason: string): Promise<boolean> {
+    const sandbox = this.storage.getSandbox();
+    if (
+      !sandbox ||
+      sandbox.status === "stopped" ||
+      sandbox.status === "stale" ||
+      this.isTerminatingSandbox
+    ) {
+      return false;
+    }
+
+    this.isTerminatingSandbox = true;
+    if (sandbox.status !== "failed") {
+      this.storage.updateSandboxStatus("failed");
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+    }
+    this.reportSandboxError(reason);
+    this.clearSandboxAccessState();
+
+    const canStopProvider = this.canStopProviderSandbox();
+    if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
+    this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
+
+    try {
+      if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error");
+    } catch (error) {
+      this.log.warn("Provider stop failed after fatal runtime error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.isTerminatingSandbox = false;
+    }
+    return true;
+  }
+
   /**
    * Warm sandbox proactively (e.g., when user starts typing).
    */
@@ -1560,7 +1597,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.log.debug("Broadcasting sandbox dashboard URL", {
         provider_object_id: providerObjectId,
       });
-      this.broadcaster.broadcast({ type: "sandbox_dashboard_url", url });
+      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
     }
   }
 
@@ -1603,7 +1640,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     if (!urls || Object.keys(urls).length === 0) return;
     this.log.info("Storing and broadcasting tunnel URLs", { ports: Object.keys(urls) });
     await this.storage.updateSandboxTunnelUrls(urls);
-    this.broadcaster.broadcast({ type: "tunnel_urls", urls });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /** Mint and persist terminal access. */
@@ -1657,7 +1694,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * Used by SessionDO to coordinate spawn decisions.
    */
   isSpawning(): boolean {
-    return this.isSpawningSandbox;
+    return this.isSpawningSandbox || this.isTerminatingSandbox;
   }
 
   isProviderStartupPending(): boolean {

@@ -6,16 +6,33 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAuthSession } from "@/lib/auth-session";
 import { AppAuthBoundary } from "./app-auth-boundary";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 expect.extend(matchers);
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: vi.fn(),
 }));
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: vi.fn(),
+}));
+
+const activeAuthorization = {
+  userId: "11111111111111111111111111111111",
+  suspendedAt: null,
+  role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
+  permissions: ["repositories.read" as const],
+};
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+    authorization: null,
+    loading: false,
+    error: null,
+    hasPermission: () => false,
+  });
 });
 
 describe("AppAuthBoundary", () => {
@@ -23,6 +40,12 @@ describe("AppAuthBoundary", () => {
     vi.mocked(useAuthSession).mockReturnValue({
       data: { user: { id: "user-1", name: "Test User" } },
       status: "authenticated",
+    });
+    vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+      authorization: activeAuthorization,
+      loading: false,
+      error: null,
+      hasPermission: () => true,
     });
 
     render(<AppAuthBoundary>Session</AppAuthBoundary>);
@@ -57,6 +80,23 @@ describe("AppAuthBoundary", () => {
       "Authentication is temporarily unavailable."
     );
     expect(screen.queryByRole("link", { name: "Sign in" })).not.toBeInTheDocument();
+  });
+
+  it("fails closed when workspace access is suspended", () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user-1", name: "Test User" } },
+      status: "authenticated",
+    });
+    vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+      authorization: { ...activeAuthorization, suspendedAt: 1, permissions: [] },
+      loading: false,
+      error: null,
+      hasPermission: () => false,
+    });
+
+    render(<AppAuthBoundary>Session</AppAuthBoundary>);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Your workspace access is disabled.");
   });
 
   it("fails closed for an unhandled authentication state", () => {

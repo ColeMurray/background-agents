@@ -15,6 +15,7 @@ import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 import type { ModelCategory, ReasoningEffort, ValidModel } from "@open-inspect/shared/models";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 type SessionPromptComposerProps = {
   session: {
@@ -24,6 +25,7 @@ type SessionPromptComposerProps = {
     primaryRepo?: { repoOwner: string; repoName: string } | null;
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
+    capabilities: SessionCapabilities;
   };
   prompt: {
     value: string;
@@ -105,6 +107,7 @@ export function SessionPromptComposer({
             primaryRepo={session.primaryRepo}
             onArchive={session.onArchive}
             onUnarchive={session.onUnarchive}
+            capabilities={session.capabilities}
           />
         </div>
 
@@ -165,7 +168,7 @@ export function SessionPromptComposer({
               >
                 <PaperclipIcon className="w-5 h-5" />
               </button>
-              {prompt.isProcessing && (
+              {prompt.isProcessing && session.capabilities.lifecycle && (
                 <button
                   type="button"
                   onClick={prompt.onStopExecution}

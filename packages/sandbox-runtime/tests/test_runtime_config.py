@@ -37,6 +37,7 @@ def test_runtime_config_parses_frozen_values_without_environment_patching(tmp_pa
     )
 
     assert config.repo_path == tmp_path / "repo"
+    assert config.session_id == "session-1"
     assert config.base_branch == "develop"
     assert config.has_repository is True
 
@@ -44,6 +45,22 @@ def test_runtime_config_parses_frozen_values_without_environment_patching(tmp_pa
 def test_runtime_config_rejects_non_object_session_config():
     with pytest.raises(ValueError, match="JSON object"):
         RuntimeConfig.from_env({"SESSION_CONFIG": "[]"})
+
+
+@pytest.mark.parametrize(
+    "url", ["http://control.example", "ftp://control.example", "control.example"]
+)
+def test_runtime_config_rejects_insecure_control_plane_url(url):
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        RuntimeConfig.from_env({"CONTROL_PLANE_URL": url})
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787"],
+)
+def test_runtime_config_allows_loopback_http_control_plane_url(url):
+    assert RuntimeConfig.from_env({"CONTROL_PLANE_URL": url}).control_plane_url == url
 
 
 def test_session_config_is_recursively_immutable():

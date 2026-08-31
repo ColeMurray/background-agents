@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlsplit
 
 
 class BootMode(StrEnum):
@@ -34,6 +35,17 @@ def _freeze_json(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_freeze_json(item) for item in value)
     return value
+
+
+def _validate_control_plane_url(url: str) -> None:
+    if not url:
+        return
+    parsed = urlsplit(url)
+    if parsed.scheme == "https" and parsed.hostname:
+        return
+    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+        return
+    raise ValueError("CONTROL_PLANE_URL must use HTTPS except for loopback development URLs")
 
 
 @dataclass(frozen=True)
@@ -104,9 +116,11 @@ class RuntimeConfig:
             raise ValueError("SESSION_CONFIG must contain a JSON object")
         session_config = _freeze_json(parsed_session_config)
         repo_path = workspace_path / repo_name if repo_owner and repo_name else workspace_path
+        control_plane_url = environment.get("CONTROL_PLANE_URL", "")
+        _validate_control_plane_url(control_plane_url)
         return cls(
             sandbox_id=environment.get("SANDBOX_ID", "unknown"),
-            control_plane_url=environment.get("CONTROL_PLANE_URL", ""),
+            control_plane_url=control_plane_url,
             sandbox_token=environment.get("SANDBOX_AUTH_TOKEN", ""),
             repo_owner=repo_owner,
             repo_name=repo_name,
@@ -123,6 +137,10 @@ class RuntimeConfig:
     @property
     def base_branch(self) -> str:
         return str(self.session_config.get("branch") or "main")
+
+    @property
+    def session_id(self) -> str:
+        return str(self.session_config.get("session_id") or "")
 
     def repository_config(self) -> RepositoryConfig:
         raw_repositories = self.session_config.get("repositories")
@@ -164,12 +182,12 @@ class RuntimeConfig:
             sandbox_id=self.sandbox_id,
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
-            session_id=str(self.session_config.get("session_id") or ""),
+            session_id=self.session_id,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:
         return ManagedSkillsConfig(
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
-            session_id=str(self.session_config.get("session_id") or ""),
+            session_id=self.session_id,
         )

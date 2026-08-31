@@ -4,7 +4,7 @@
 
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
-import { principalMayUseMethod, type Principal } from "./auth/principal";
+import { canonicalUserIdOf, principalMayUseMethod, type Principal } from "./auth/principal";
 import { getUserAuth, getUserAuthRuntime } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
@@ -15,15 +15,28 @@ import { SessionInternalPaths } from "./session/contracts";
 import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
+import { UserStore } from "./db/user-store";
+import { AutomationStore } from "./db/automation-store";
+import { AuthorizationError, AuthorizationService } from "./authorization/service";
+import { serviceAllowsPermission } from "./authorization/service-permissions";
+import {
+  SCOPED_PERMISSION_PAIRS,
+  hasScopedPermission,
+  resolveScopedPermission,
+} from "@open-inspect/shared/rbac";
 import { createLogger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
 import {
+  type ActorlessServiceGrant,
   type Route,
   type RouteAuthentication,
+  type RouteAuthorizationRequirement,
   type RequestContext,
   defineRoute,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
+  NO_AUTHORIZATION,
   parsePattern,
+  requirePermission,
   json,
   error,
   HttpError,
@@ -46,6 +59,7 @@ import { analyticsRoutes } from "./routes/analytics";
 import { autofixRoutes } from "./routes/autofix";
 import { skillRoutes } from "./routes/skills";
 import { keyboardShortcutRoutes } from "./routes/keyboard-shortcuts";
+import { rbacRoutes } from "./routes/rbac";
 import { sessionRoutes } from "./routes/sessions";
 import { githubReviewRoutes } from "./routes/github-reviews";
 import { modelProviderAccountRoutes } from "./routes/model-provider-accounts";
@@ -302,11 +316,219 @@ export function enforceRoutePrincipal(
   if (authentication.kind === "user" && principal.kind !== "user") {
     return error("Human user authentication required", 403);
   }
-  // A read-only service is refused every mutating method on every route,
-  // whatever that route's own policy allows. This is the trust boundary for
-  // the claim: holding the secret is not enough to write.
+  if (authentication.kind === "service" && principal.kind !== "service") {
+    return error("Service authentication required", 403);
+  }
+  // A read-only access token is refused every mutating method on every route,
+  // regardless of the route's authorization policy.
   if (!principalMayUseMethod(principal, method)) {
     return error("This credential may only read", 403);
+  }
+  return null;
+}
+
+async function enforceActiveUser(route: Route, ctx: RequestContext): Promise<Response | null> {
+  if (
+    route.authorization.kind !== "active-user" &&
+    route.authorization.kind !== "active-self" &&
+    route.authorization.kind !== "active-global"
+  ) {
+    return null;
+  }
+  let resolvedServiceUserId: string | null = null;
+  if (
+    ctx.principal?.kind === "service" &&
+    ctx.principal.actor &&
+    !ctx.principal.actor.canonicalUserId
+  ) {
+    try {
+      const user = await new UserStore(ctx.db).resolveOrCreateUser({
+        provider: ctx.principal.actor.provider,
+        providerUserId: ctx.principal.actor.providerUserId,
+      });
+      resolvedServiceUserId = user.id;
+    } catch {
+      return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+    }
+  }
+  const userId = canonicalUserIdOf(ctx.principal) ?? resolvedServiceUserId;
+  if (!userId) return null;
+  try {
+    const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
+    ctx.authorization = authorization;
+    if (authorization.suspendedAt !== null) {
+      return json({ error: "Forbidden", code: "active_user_required" }, 403);
+    }
+    return null;
+  } catch (cause) {
+    if (cause instanceof AuthorizationError) {
+      return json({ error: "Forbidden", code: cause.code }, cause.status);
+    }
+    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  }
+}
+
+function authorizationUserId(ctx: RequestContext): string | null {
+  return canonicalUserIdOf(ctx.principal) ?? ctx.authorization?.userId ?? null;
+}
+
+function actorlessGrantMatches(
+  grant: ActorlessServiceGrant,
+  service: string,
+  match: RegExpMatchArray
+): boolean {
+  if (grant.service !== service) return false;
+  return Object.entries(grant.pathParams ?? {}).every(([name, expected]) => {
+    const value = match.groups?.[name];
+    if (value === undefined) return false;
+    try {
+      return decodeURIComponent(value) === expected;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function enforceServiceRouteAuthorization(
+  route: Route,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Response | null {
+  const principal = ctx.principal;
+  const authorization = route.authorization;
+  if (authorization.kind === "service") {
+    if (principal?.kind !== "service") {
+      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    }
+    if (!authorization.services.some((service) => service === principal.service)) {
+      return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+    }
+    if (authorization.actor === "required" && !principal.actor) {
+      return json({ error: "Forbidden", code: "service_actor_required" }, 403);
+    }
+    return null;
+  }
+  if (principal?.kind !== "service") return null;
+  if (route.authentication.kind === "web-service" && principal.service === "web") return null;
+  if (
+    (authorization.kind !== "active-user" && authorization.kind !== "active-global") ||
+    authorization.service.kind === "deny"
+  ) {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  }
+  if (principal.actor) return null;
+  const granted = authorization.service.actorlessGrants?.some((grant) =>
+    actorlessGrantMatches(grant, principal.service, match)
+  );
+  return granted ? null : json({ error: "Forbidden", code: "service_actor_required" }, 403);
+}
+
+async function enforcePermissionRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "permission" }>,
+  ctx: RequestContext
+): Promise<Response | null> {
+  if (
+    ctx.principal?.kind === "service" &&
+    !serviceAllowsPermission(ctx.principal.service, requirement.permission)
+  ) {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  }
+  const userId = authorizationUserId(ctx);
+  if (!userId) return null;
+  if (ctx.authorization?.permissions.includes(requirement.permission)) return null;
+  return json(
+    { error: "Forbidden", code: "permission_required", permission: requirement.permission },
+    403
+  );
+}
+
+async function enforceScopedPermissionRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "scoped-permission" }>,
+  ctx: RequestContext
+): Promise<Response | null> {
+  const pair = SCOPED_PERMISSION_PAIRS[requirement.stem];
+  if (
+    ctx.principal?.kind === "service" &&
+    !serviceAllowsPermission(ctx.principal.service, pair.own)
+  ) {
+    return json({ error: "Forbidden", code: "service_capability_required" }, 403);
+  }
+  const userId = authorizationUserId(ctx);
+  if (!userId) return null;
+  if (
+    ctx.authorization &&
+    resolveScopedPermission(requirement.stem, ctx.authorization.permissions)
+  ) {
+    return null;
+  }
+  return json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403);
+}
+
+async function enforceAutomationRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response | null> {
+  if (ctx.principal?.kind !== "user") return null;
+  const encodedAutomationId = match.groups?.[requirement.automationIdParam];
+  if (!encodedAutomationId) return json({ error: "Invalid automation route" }, 400);
+  let automationId: string;
+  try {
+    automationId = decodeURIComponent(encodedAutomationId);
+  } catch {
+    return json({ error: "Invalid automation route" }, 400);
+  }
+
+  try {
+    const authorization = ctx.authorization;
+    if (!authorization) throw new Error("Missing request authorization");
+    const store = new AutomationStore(ctx.db);
+    const storedAutomation = await store.getById(automationId);
+    if (!storedAutomation) return error("Automation not found", 404);
+    const automation = await store.resolveCanonicalOwner(storedAutomation);
+
+    const permissionStem = `automations.${requirement.operation}` as const;
+    const ownPermission = SCOPED_PERMISSION_PAIRS[permissionStem].own;
+    if (
+      !hasScopedPermission(
+        permissionStem,
+        authorization.permissions,
+        automation.user_id === ctx.principal.userId
+      )
+    ) {
+      return json(
+        { error: "Forbidden", code: "permission_required", permission: ownPermission },
+        403
+      );
+    }
+
+    ctx.automationAdmission = { automation };
+    return null;
+  } catch {
+    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  }
+}
+
+async function enforceRouteAuthorization(
+  route: Route,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response | null> {
+  if (route.authorization.kind !== "active-user") return null;
+  for (const requirement of route.authorization.allOf) {
+    let authorizationError: Response | null;
+    switch (requirement.kind) {
+      case "permission":
+        authorizationError = await enforcePermissionRequirement(requirement, ctx);
+        break;
+      case "scoped-permission":
+        authorizationError = await enforceScopedPermissionRequirement(requirement, ctx);
+        break;
+      case "automation":
+        authorizationError = await enforceAutomationRequirement(requirement, match, ctx);
+        break;
+    }
+    if (authorizationError) return authorizationError;
   }
   return null;
 }
@@ -321,7 +543,12 @@ export const routes: Route[] = [
     supportedScmProviders: "all",
     method: "GET",
     pattern: parsePattern("/health"),
-    handler: async () => json({ status: "healthy", service: "open-inspect-control-plane" }),
+    authorization: NO_AUTHORIZATION,
+    handler: async () =>
+      json({
+        status: "healthy",
+        service: "open-inspect-control-plane",
+      }),
   },
 
   ...browserAuthRoutes,
@@ -334,6 +561,7 @@ export const routes: Route[] = [
   defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "POST",
     pattern: parsePattern("/sessions/:id/slack-notify"),
+    authorization: requirePermission("sessions.collaborate"),
     handler: handleSlackNotify,
   }),
 
@@ -382,6 +610,9 @@ export const routes: Route[] = [
 
   // Personal keyboard shortcuts
   ...keyboardShortcutRoutes,
+
+  // Workspace roles, members, and current-user authorization
+  ...rbacRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
@@ -477,7 +708,10 @@ export async function handleRequest(
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService: authentication.kind === "web-service" ? "service" : "user",
+        webService:
+          authentication.kind === "web-service" || authentication.kind === "service"
+            ? "service"
+            : "user",
       });
 
       if (isAuthError(authResult)) {
@@ -513,6 +747,38 @@ export async function handleRequest(
     if (ctx.principal) {
       logPrincipal(ctx.principal, ctx, path);
     }
+  }
+
+  const serviceAccessError = enforceServiceRouteAuthorization(
+    matchedRoute.route,
+    matchedRoute.match,
+    ctx
+  );
+  if (serviceAccessError) {
+    logRequest(serviceAccessError, ctx, method, path, startTime);
+    return withCorsAndTraceHeaders(
+      withRouteCachePolicy(serviceAccessError, matchedRoute.route),
+      ctx
+    );
+  }
+
+  const userAccessError = await enforceActiveUser(matchedRoute.route, ctx);
+  if (userAccessError) {
+    logRequest(userAccessError, ctx, method, path, startTime);
+    return withCorsAndTraceHeaders(withRouteCachePolicy(userAccessError, matchedRoute.route), ctx);
+  }
+
+  const authorizationError = await enforceRouteAuthorization(
+    matchedRoute.route,
+    matchedRoute.match,
+    ctx
+  );
+  if (authorizationError) {
+    logRequest(authorizationError, ctx, method, path, startTime);
+    return withCorsAndTraceHeaders(
+      withRouteCachePolicy(authorizationError, matchedRoute.route),
+      ctx
+    );
   }
 
   const providerCheck = enforceImplementedScmProvider(matchedRoute.route, path, env, ctx);

@@ -124,9 +124,11 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 - Bot OAuth Token (`xoxb-...`)
 - Signing Secret
 
-The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
-`groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`, `files:write`, and
-`reactions:write`. Reinstall the app after changing scopes.
+The bot token requires `assistant:write`, `app_mentions:read`, `chat:write`, `channels:history`,
+`channels:read`, `groups:history`, `groups:read`, `im:history`, `files:read`, `files:write`,
+`reactions:write`, `users:read`, and `users:read.email`. Reinstall the app after changing scopes.
+The complete app configuration is available in
+[`packages/slack-bot/slack-app-manifest.yaml`](../packages/slack-bot/slack-app-manifest.yaml).
 
 Before upgrading any deployment, add **Queues: Edit** to the Cloudflare API token before running
 `terraform apply`; image-build finalization now provisions a Queue and dead-letter Queue. For Slack

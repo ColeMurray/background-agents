@@ -20,6 +20,7 @@ import { parseDiffErrorBody } from "@/lib/session-diffs";
 import type { DiffSelection, ResolvedDiffSelection } from "@/lib/session-diffs";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { cn } from "@/lib/utils";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { FilesChangedSection } from "@/components/sidebar/files-changed-section";
 import { SidebarIcon } from "@/components/ui/icons";
@@ -225,6 +226,7 @@ export function SessionChangesPanel({
   onClose,
   onSelect,
   mobile = false,
+  capabilities,
 }: {
   sessionId: string;
   state: SessionDiffState;
@@ -232,6 +234,7 @@ export function SessionChangesPanel({
   onClose: () => void;
   onSelect: (selection: DiffSelection) => void;
   mobile?: boolean;
+  capabilities: SessionCapabilities;
 }) {
   const panelRef = useRef<HTMLElement>(null);
   const fileListId = useId();
@@ -308,7 +311,12 @@ export function SessionChangesPanel({
       />
 
       {state.lastError && (
-        <DiffRetryNotice sessionId={sessionId} message={state.lastError.message} variant="banner" />
+        <DiffRetryNotice
+          sessionId={sessionId}
+          message={state.lastError.message}
+          variant="banner"
+          capabilities={capabilities}
+        />
       )}
 
       <div className={cn("flex min-h-0 flex-1", mobile && "flex-col")}>

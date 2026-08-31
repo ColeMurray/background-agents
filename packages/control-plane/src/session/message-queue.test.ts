@@ -103,6 +103,7 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: 1000,
     clientId: "client-1",
+    authorizationExpiresAt: Date.now() + 300_000,
     ws: {} as WebSocket,
     ...overrides,
   };
@@ -210,6 +211,7 @@ function buildQueue() {
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
+    terminateFailedSandbox: vi.fn(async () => true),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
   const backgroundTasks = createTestBackgroundTasks();
@@ -1449,6 +1451,54 @@ describe("SessionMessageQueue", () => {
       "processing"
     );
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+  });
+
+  it("uses a fatal sandbox reason for completion and callback notification", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-crashed",
+      created_at: 800,
+    });
+
+    await h.queue.failStuckProcessingMessage("OpenCode repeatedly crashed");
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-crashed",
+        error: "OpenCode repeatedly crashed",
+      }),
+      expect.any(Number),
+      "processing"
+    );
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-crashed",
+      false,
+      "OpenCode repeatedly crashed"
+    );
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+  });
+
+  it("redrives a pending prompt after fatal sandbox termination completes", async () => {
+    const h = buildQueue();
+    let resolveTermination!: (terminated: boolean) => void;
+    h.sandboxLifecycle.terminateFailedSandbox.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTermination = resolve;
+      })
+    );
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
+
+    const handling = h.queue.handleFatalSandboxFailure("Sandbox crashed");
+    await Promise.resolve();
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+
+    resolveTermination(true);
+    await handling;
+    await h.backgroundTasks.settle();
+
+    expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
+    expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();
   });
 
   describe("enqueuePromptFromApi", () => {

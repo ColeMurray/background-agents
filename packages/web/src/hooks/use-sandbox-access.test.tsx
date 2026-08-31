@@ -26,7 +26,7 @@ describe("useSandboxAccess", () => {
         ttyd: null,
       })
     );
-    const { result } = renderHook(() => useSandboxAccess("session/one"), { wrapper });
+    const { result } = renderHook(() => useSandboxAccess("session/one", true), { wrapper });
 
     await waitFor(() =>
       expect(result.current.sandboxAccess).toEqual(
@@ -43,9 +43,24 @@ describe("useSandboxAccess", () => {
     );
   });
 
-  it.each([404, 409])("authoritatively clears credentials on status %s", async (status) => {
+  it.each([204, 404])("authoritatively clears credentials on status %s", async (status) => {
     mocks.browserApiFetch.mockResolvedValue(new Response(null, { status }));
-    const { result } = renderHook(() => useSandboxAccess("session-1"), { wrapper });
+    const { result } = renderHook(() => useSandboxAccess("session-1", true), { wrapper });
     await waitFor(() => expect(result.current.sandboxAccess).toBeNull());
+  });
+
+  it("does not fetch until the sandbox is ready", async () => {
+    mocks.browserApiFetch.mockResolvedValue(
+      Response.json({ codeServer: null, vnc: null, ttyd: null })
+    );
+    const { rerender } = renderHook(
+      ({ isSandboxReady }) => useSandboxAccess("session-1", isSandboxReady),
+      { wrapper, initialProps: { isSandboxReady: false } }
+    );
+
+    expect(mocks.browserApiFetch).not.toHaveBeenCalled();
+
+    rerender({ isSandboxReady: true });
+    await waitFor(() => expect(mocks.browserApiFetch).toHaveBeenCalledOnce());
   });
 });

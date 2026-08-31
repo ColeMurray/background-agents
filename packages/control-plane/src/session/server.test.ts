@@ -56,6 +56,7 @@ function createHarness() {
     notifyTyping: vi.fn(async () => undefined),
     updatePresence: vi.fn(),
     getHistoryPage: vi.fn(() => ({ items: [], hasMore: false, cursor: null })),
+    authorize: vi.fn(async () => "allowed" as const),
   };
   const sandbox: SandboxDisconnectMonitor = {
     getStatus: vi.fn((): "ready" => "ready"),
@@ -248,6 +249,30 @@ describe("SessionServer", () => {
 
     await server.onMessage("client", JSON.stringify({ type: "stop" }));
 
+    expect(clientCommands.stopExecution).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ type: "prompt", content: "work", clientRequestId: "request-1" }, "sessions.collaborate"],
+    [
+      { type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" },
+      "sessions.lifecycle",
+    ],
+    [{ type: "stop" }, "sessions.lifecycle"],
+  ] as const)("rejects %s without its command permission", async (message, permission) => {
+    const { server, sockets, clientCommands, client } = createHarness();
+    vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
+
+    await server.onMessage("client", JSON.stringify(message));
+
+    expect(clientCommands.authorize).toHaveBeenCalledWith(client, permission);
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "PERMISSION_REQUIRED",
+      message: `Permission required: ${permission}`,
+    });
+    expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
+    expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
     expect(clientCommands.stopExecution).not.toHaveBeenCalled();
   });
 

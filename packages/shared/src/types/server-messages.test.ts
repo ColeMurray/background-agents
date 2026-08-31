@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { serverMessageSchema, sessionSnapshotSchema } from "./server-messages";
+import {
+  redactSessionSnapshotSandboxAccess,
+  serverMessageSchema,
+  sessionSnapshotSchema,
+} from "./server-messages";
 
 describe("artifact_updated server message", () => {
   const artifact = {
@@ -111,6 +115,31 @@ describe("session view contracts", () => {
     expect(parsed.session).not.toHaveProperty("vncPassword");
     expect(parsed.session).not.toHaveProperty("ttydToken");
     expect(parsed.timeline.events.map((item) => item.eventId)).toEqual(["event-1"]);
+  });
+
+  it("redacts sandbox locations without mutating the source snapshot", () => {
+    const snapshot = sessionSnapshotSchema.parse({
+      session: {
+        ...snapshotState,
+        codeServerUrl: "https://code.example",
+        vncUrl: "https://vnc.example",
+        ttydUrl: "https://terminal.example",
+        tunnelUrls: { "3000": "https://app.example" },
+        sandboxDashboardUrl: "https://provider.example",
+      },
+      artifacts: [],
+      promptQueue: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+    });
+
+    const redacted = redactSessionSnapshotSandboxAccess(snapshot);
+
+    expect(redacted.session).not.toHaveProperty("codeServerUrl");
+    expect(redacted.session).not.toHaveProperty("vncUrl");
+    expect(redacted.session).not.toHaveProperty("ttydUrl");
+    expect(redacted.session).not.toHaveProperty("tunnelUrls");
+    expect(redacted.session).not.toHaveProperty("sandboxDashboardUrl");
+    expect(snapshot.session.codeServerUrl).toBe("https://code.example");
   });
 
   it("rejects malformed stable event envelopes", () => {

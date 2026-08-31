@@ -19,10 +19,12 @@ import {
   defineRoute,
   defineRoutes,
   error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
+  GITHUB_SERVICE_ROUTE,
   json,
+  NO_AUTHORIZATION,
   parseJsonBody,
   parsePattern,
+  serviceAuthorized,
   type RequestContext,
   type Route,
   type RoutePolicy,
@@ -405,16 +407,18 @@ export async function reapSupersededReviewSessions(
 }
 
 export const githubReviewRoutes: Route[] = [
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+  defineRoute(GITHUB_SERVICE_ROUTE, {
     method: "POST",
     pattern: parsePattern("/internal/github-reviews/claim"),
+    authorization: serviceAuthorized("github-bot"),
     handler: requireGitHubBotService(handleClaimReviewGeneration),
   }),
   defineRoute(
-    GITHUB_USER_OR_SERVICE_ROUTE,
+    GITHUB_SERVICE_ROUTE,
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/internal/github-reviews/sweep"),
+      authorization: serviceAuthorized("github-bot"),
       handler: requireGitHubBotService(handleSweepStaleReviews),
     })
   ),
@@ -422,11 +426,13 @@ export const githubReviewRoutes: Route[] = [
     {
       method: "GET",
       pattern: parsePattern("/sessions/:id/review-ownership"),
+      authorization: NO_AUTHORIZATION,
       handler: handleReviewOwnership,
     },
     {
       method: "DELETE",
       pattern: parsePattern("/sessions/:id/review-ownership"),
+      authorization: NO_AUTHORIZATION,
       handler: handleReviewLeaseRelease,
     },
   ]),

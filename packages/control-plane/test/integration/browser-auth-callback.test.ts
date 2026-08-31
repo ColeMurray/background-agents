@@ -317,6 +317,19 @@ describe("browser auth callback", () => {
       .bind(session.user.id)
       .first<{ id: string }>();
     expect(account).not.toBeNull();
+    await expect(
+      env.DB.prepare(
+        `SELECT r.key FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id WHERE ura.user_id = ?`
+      )
+        .bind(session.user.id)
+        .first()
+    ).resolves.toEqual({ key: "member" });
+    await expect(
+      env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.owner_bootstrapped'"
+      ).first()
+    ).resolves.toEqual({ count: 0 });
 
     const enrichment = await resolveGitHubEnrichmentForRequest(
       env,

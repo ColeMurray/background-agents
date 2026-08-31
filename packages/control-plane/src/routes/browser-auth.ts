@@ -4,6 +4,7 @@ import { createLogger } from "../logger";
 import {
   defineRoutes,
   error,
+  NO_AUTHORIZATION,
   parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   type Route,
@@ -54,7 +55,8 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
     if (!ctx.getUserAuth) {
       throw new UserAuthConfigurationError("User authentication runtime is unavailable");
     }
-    const response = await forwardBrowserAuthRequest(ctx.getUserAuth(), request);
+    const auth = ctx.getUserAuth();
+    const response = await forwardBrowserAuthRequest(auth, request);
     const headers = copyBrowserAuthResponseHeaders(response.headers);
     headers.set("Cache-Control", "no-store");
     headers.set("Referrer-Policy", "no-referrer");
@@ -86,6 +88,7 @@ export const browserAuthRoutes: Route[] = defineRoutes(
   BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
     method,
     pattern: parsePattern(path),
+    authorization: NO_AUTHORIZATION,
     handler: handleBrowserAuth,
   }))
 );

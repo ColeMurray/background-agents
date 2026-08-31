@@ -1,197 +1,157 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
-import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
-import { SecretsSettings } from "@/components/settings/secrets-settings";
-import { EnvironmentsSettings } from "@/components/settings/environments-settings";
-import { ModelsSettings } from "@/components/settings/models-settings";
-import { DataControlsSettings } from "@/components/settings/data-controls-settings";
-import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
-import { IntegrationsSettings } from "@/components/settings/integrations-settings";
-import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
-import { ScmSettingsPage } from "@/components/settings/scm-settings";
-import { ImagesSettings } from "@/components/settings/images-settings";
-import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
-import { AccessTokensSettings } from "@/components/settings/access-tokens-settings";
-import { AppearanceSettings } from "@/components/settings/appearance-settings";
-import { ProviderAccountsSettings } from "@/components/settings/provider-accounts-settings";
-import { SkillsSettings } from "@/components/settings/skills-settings";
-import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { useIsMobile } from "@/hooks/use-media-query";
+import {
+  DEFAULT_SETTINGS_CATEGORY,
+  getSettingsCategoryLabel,
+  isSettingsCategory,
+  SettingsNav,
+  type SettingsCategory,
+} from "@/components/settings/settings-nav";
+import { SettingsMobileHeader } from "@/components/settings/settings-mobile-header";
+import { useSettingsIsMobile } from "@/components/settings/settings-viewport-context";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
-
-const CATEGORY_LABELS: Record<SettingsCategory, string> = {
-  secrets: "Secrets",
-  environments: "Environments",
-  models: "Models",
-  "provider-accounts": "Accounts",
-  images: "Images",
-  appearance: "Appearance",
-  "keyboard-shortcuts": "Keyboard",
-  "data-controls": "Data Controls",
-  sandbox: "Sandbox",
-  scm: "SCM Settings",
-  integrations: "Integrations",
-  skills: "Skills",
-  "mcp-servers": "MCP Servers",
-  "access-tokens": "Access Tokens",
-};
-
-const VALID_CATEGORIES = new Set<string>([
-  "secrets",
-  "environments",
-  "models",
-  "provider-accounts",
-  "images",
-  "appearance",
-  "keyboard-shortcuts",
-  "data-controls",
-  "sandbox",
-  "scm",
-  "integrations",
-  "skills",
-  "mcp-servers",
-  "access-tokens",
-]);
-
-function isValidCategory(tab: string | null): tab is SettingsCategory {
-  return tab !== null && VALID_CATEGORIES.has(tab);
-}
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { getSettingsPanel, resolveSettingsCategory } from "@/components/settings/settings-registry";
 
 function SettingsPageContent() {
-  const { labels } = useKeyboardShortcuts();
-  const { isOpen, toggle } = useSidebarContext();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
-  const initialCategory =
-    isValidCategory(tabParam) && (tabParam !== "images" || repoImagesEnabled)
-      ? tabParam
-      : "secrets";
+  const isMobile = useSettingsIsMobile();
+  const { hasPermission, loading } = useCurrentUserAuthorization();
+  const initialCategory = resolveSettingsCategory(tabParam, repoImagesEnabled, hasPermission);
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
-  function setActiveCategory(category: SettingsCategory) {
+  function selectCategory(category: SettingsCategory, trigger: HTMLButtonElement) {
     setActiveCategoryRaw(category);
-    window.history.replaceState(null, "", `/settings?tab=${category}`);
+    const url = `/settings?tab=${category}`;
+    if (isMobile) {
+      mobileTriggerRef.current = trigger;
+      window.history.pushState(
+        { ...window.history.state, openInspectSettingsDetail: true },
+        "",
+        url
+      );
+      showMobileView("detail");
+    } else {
+      window.history.replaceState(window.history.state, "", url);
+    }
   }
-  const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState<"list" | "detail">(
-    isValidCategory(tabParam) && (tabParam !== "images" || repoImagesEnabled) ? "detail" : "list"
+    isSettingsCategory(tabParam, repoImagesEnabled) ? "detail" : "list"
   );
+  const mobileListHeadingRef = useRef<HTMLHeadingElement>(null);
+  const mobileDetailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
+
+  function showMobileView(view: "list" | "detail") {
+    setMobileView(view);
+    requestAnimationFrame(() => {
+      if (view === "list" && mobileTriggerRef.current) {
+        mobileTriggerRef.current.focus();
+      } else {
+        (view === "list" ? mobileListHeadingRef : mobileDetailHeadingRef).current?.focus();
+      }
+    });
+  }
+
+  function showMobileList() {
+    if (window.history.state?.openInspectSettingsDetail) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState(window.history.state, "", "/settings");
+    setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
+    showMobileView("list");
+  }
+
+  useEffect(() => {
+    if (!isMobile) return;
+
+    const syncFromHistory = () => {
+      const requestedCategory = new URLSearchParams(window.location.search).get("tab");
+      const nextCategory = isSettingsCategory(requestedCategory, repoImagesEnabled)
+        ? resolveSettingsCategory(requestedCategory, repoImagesEnabled, hasPermission)
+        : null;
+      if (nextCategory) {
+        setActiveCategoryRaw(nextCategory);
+        setMobileView("detail");
+      } else {
+        if (!mobileTriggerRef.current) setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
+        setMobileView("list");
+      }
+      requestAnimationFrame(() => {
+        if (!nextCategory && mobileTriggerRef.current) {
+          mobileTriggerRef.current.focus();
+        } else {
+          (nextCategory ? mobileDetailHeadingRef : mobileListHeadingRef).current?.focus();
+        }
+      });
+    };
+
+    window.addEventListener("popstate", syncFromHistory);
+    return () => window.removeEventListener("popstate", syncFromHistory);
+  }, [hasPermission, isMobile, repoImagesEnabled]);
 
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {
-    if (isValidCategory(tabParam) && (tabParam !== "images" || repoImagesEnabled)) {
-      setActiveCategoryRaw(tabParam);
+    if (isSettingsCategory(tabParam, repoImagesEnabled)) {
+      setActiveCategoryRaw(resolveSettingsCategory(tabParam, repoImagesEnabled, hasPermission));
       setMobileView("detail");
       return;
     }
 
-    setActiveCategoryRaw("secrets");
+    if (!isMobile || !mobileTriggerRef.current) {
+      setActiveCategoryRaw(resolveSettingsCategory(null, repoImagesEnabled, hasPermission));
+    }
     setMobileView("list");
-  }, [repoImagesEnabled, tabParam]);
+  }, [hasPermission, isMobile, repoImagesEnabled, tabParam]);
 
+  if (loading) return null;
+  const renderedCategory = resolveSettingsCategory(
+    activeCategory,
+    repoImagesEnabled,
+    hasPermission
+  );
+  const ActivePanel = getSettingsPanel(renderedCategory);
   const content = (
-    <>
-      {activeCategory === "secrets" && <SecretsSettings />}
-      {activeCategory === "environments" && <EnvironmentsSettings />}
-      {activeCategory === "models" && <ModelsSettings />}
-      {activeCategory === "provider-accounts" && <ProviderAccountsSettings />}
-      {activeCategory === "images" && repoImagesEnabled && <ImagesSettings />}
-      {activeCategory === "appearance" && <AppearanceSettings />}
-      {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
-      {activeCategory === "data-controls" && <DataControlsSettings />}
-      {activeCategory === "sandbox" && <SandboxSettingsPage />}
-      {activeCategory === "scm" && <ScmSettingsPage />}
-      {activeCategory === "integrations" && <IntegrationsSettings />}
-      {activeCategory === "skills" && <SkillsSettings />}
-      {activeCategory === "mcp-servers" && <McpServersSettings />}
-      {activeCategory === "access-tokens" && <AccessTokensSettings />}
-    </>
+    <Suspense fallback={null}>
+      <ActivePanel />
+    </Suspense>
   );
 
   if (isMobile) {
     return (
-      <div className="h-full flex flex-col">
-        {mobileView === "list" ? (
-          <>
-            <header className="border-b border-border-muted flex-shrink-0">
-              <div className="px-4 py-3">
-                <button
-                  type="button"
-                  onClick={toggle}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  title={`Open sidebar (${labels["toggle-sidebar"]})`}
-                  aria-label={`Open sidebar (${labels["toggle-sidebar"]})`}
-                >
-                  <SidebarIcon className="w-4 h-4" />
-                </button>
-              </div>
-            </header>
-            <div className="flex-1 overflow-y-auto">
-              <SettingsNav
-                activeCategory={activeCategory}
-                onSelect={setActiveCategory}
-                onNavigate={() => setMobileView("detail")}
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <header className="border-b border-border-muted flex-shrink-0">
-              <div className="px-4 py-3 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={toggle}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  title={`Open sidebar (${labels["toggle-sidebar"]})`}
-                  aria-label={`Open sidebar (${labels["toggle-sidebar"]})`}
-                >
-                  <SidebarIcon className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobileView("list")}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                  aria-label="Back to settings"
-                >
-                  <BackIcon className="w-4 h-4" />
-                </button>
-                <h2 className="text-sm font-medium text-foreground">
-                  {CATEGORY_LABELS[activeCategory]}
-                </h2>
-              </div>
-            </header>
-            <div className="flex-1 overflow-y-auto p-4">
-              <div className="max-w-2xl">{content}</div>
-            </div>
-          </>
-        )}
+      <div className="h-full bg-background">
+        <div
+          hidden={mobileView !== "list"}
+          className={mobileView === "list" ? "flex h-full flex-col" : "hidden"}
+        >
+          <SettingsMobileHeader title="Settings" headingRef={mobileListHeadingRef} />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <SettingsNav activeCategory={activeCategory} onSelect={selectCategory} />
+          </div>
+        </div>
+        <div
+          hidden={mobileView !== "detail"}
+          className={mobileView === "detail" ? "flex h-full flex-col" : "hidden"}
+        >
+          <SettingsMobileHeader
+            title={getSettingsCategoryLabel(activeCategory)}
+            headingRef={mobileDetailHeadingRef}
+            onBack={showMobileList}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+            <div className="mx-auto max-w-3xl">{mobileView === "detail" ? content : null}</div>
+          </div>
+        </div>
       </div>
     );
   }
 
-  return (
-    <div className="h-full flex flex-col">
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3">
-            <CollapsedSidebarControls />
-          </div>
-        </header>
-      )}
-
-      <div className="flex-1 flex overflow-hidden">
-        <SettingsNav activeCategory={activeCategory} onSelect={setActiveCategory} />
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-2xl">{content}</div>
-        </div>
-      </div>
-    </div>
-  );
+  return content;
 }
 
 export default function SettingsPage() {

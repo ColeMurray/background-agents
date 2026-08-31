@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { enforceRoutePrincipal, handleRequest, routes } from "./router";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { serviceAllowsPermission } from "./authorization/service-permissions";
+import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
 function routeFor(method: string, path: string) {
   return routes.find((route) => route.method === method && route.pattern.test(path));
@@ -13,9 +15,211 @@ describe("route policy table", () => {
       routes.every(
         (route) =>
           route.authentication &&
+          route.authorization &&
           (route.supportedScmProviders === "all" || route.supportedScmProviders.length > 0)
       )
     ).toBe(true);
+  });
+
+  it("has no duplicate method and pattern declarations", () => {
+    const identities = routes.map((route) => `${route.method}:${route.pattern}`);
+    expect(new Set(identities).size).toBe(identities.length);
+  });
+
+  it("declares authorization compatible with authentication", () => {
+    for (const route of routes) {
+      const authentication = route.authentication.kind;
+      const authorization = route.authorization;
+      if (authorization.kind === "none") {
+        expect(["public", "handler-authenticated", "web-service", "sandbox"]).toContain(
+          authentication
+        );
+      } else if (authorization.kind === "authenticated" || authorization.kind === "active-self") {
+        expect(authentication).toBe("user");
+      } else if (authorization.kind === "service") {
+        expect(authentication).toBe("service");
+        expect(authorization.services.length).toBeGreaterThan(0);
+      } else if (authorization.kind === "active-global") {
+        expect(["user", "user-or-service"]).toContain(authentication);
+      } else {
+        expect(["user", "user-or-service", "user-or-service-with-sandbox-fallback"]).toContain(
+          authentication
+        );
+        expect(authorization.allOf.length).toBeGreaterThan(0);
+        for (const requirement of authorization.allOf) {
+          if (requirement.kind === "automation") {
+            expect(route.pattern.source).toContain(`?<${requirement.automationIdParam}>`);
+          }
+        }
+        if (authorization.service.kind === "actor") {
+          for (const grant of authorization.service.actorlessGrants ?? []) {
+            for (const pathParam of Object.keys(grant.pathParams ?? {})) {
+              expect(route.pattern.source).toContain(`?<${pathParam}>`);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it.each([
+    ["GET", "/repos", [{ service: "slack-bot" }, { service: "linear-bot" }]],
+    ["GET", "/repos/acme/widgets/metadata", [{ service: "github-bot" }]],
+    ["GET", "/environments", [{ service: "slack-bot" }, { service: "linear-bot" }]],
+    ["GET", "/environments/env-1", [{ service: "github-bot" }]],
+    ["GET", "/integration-settings/slack", [{ service: "slack-bot", pathParams: { id: "slack" } }]],
+    [
+      "GET",
+      "/integration-settings/github/resolved/acme/widgets",
+      [
+        { service: "github-bot", pathParams: { id: "github" } },
+        { service: "linear-bot", pathParams: { id: "linear" } },
+      ],
+    ],
+    ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
+    ["GET", "/model-preferences", [{ service: "slack-bot" }]],
+  ])("declares the exact actorless grants for %s %s", (method, path, expected) => {
+    const authorization = routeFor(method, path)?.authorization;
+    expect(["active-user", "active-global"]).toContain(authorization?.kind);
+    if (authorization?.kind === "active-user" || authorization?.kind === "active-global") {
+      expect(authorization.service.kind).toBe("actor");
+      if (authorization.service.kind === "actor") {
+        expect(authorization.service.actorlessGrants).toEqual(expected);
+      }
+    }
+  });
+
+  it("does not declare actorless grants on other routes", () => {
+    const expected = new Set([
+      routeFor("GET", "/repos"),
+      routeFor("GET", "/repos/acme/widgets/metadata"),
+      routeFor("GET", "/environments"),
+      routeFor("GET", "/environments/env-1"),
+      routeFor("GET", "/integration-settings/slack"),
+      routeFor("GET", "/integration-settings/github/resolved/acme/widgets"),
+      routeFor("GET", "/integration-settings/slack/watched-channels"),
+      routeFor("GET", "/model-preferences"),
+      routeFor("POST", "/sessions/session-1/stop"),
+      routeFor("GET", "/sessions/session-1/media/artifact-1"),
+    ]);
+    const granted = routes.filter(
+      (route) =>
+        (route.authorization.kind === "active-user" ||
+          route.authorization.kind === "active-global") &&
+        route.authorization.service.kind === "actor" &&
+        (route.authorization.service.actorlessGrants?.length ?? 0) > 0
+    );
+
+    expect(new Set(granted)).toEqual(expected);
+  });
+
+  it("keeps every actorless route grant within its service permission ceiling", () => {
+    for (const route of routes) {
+      if (route.authorization.kind !== "active-user") continue;
+      if (route.authorization.service.kind !== "actor") continue;
+      for (const grant of route.authorization.service.actorlessGrants ?? []) {
+        for (const requirement of route.authorization.allOf) {
+          if (requirement.kind === "permission") {
+            expect(
+              serviceAllowsPermission(grant.service, requirement.permission),
+              `${grant.service} must allow ${requirement.permission} for ${route.method} ${route.pattern}`
+            ).toBe(true);
+          } else if (requirement.kind === "scoped-permission") {
+            expect(
+              serviceAllowsPermission(grant.service, SCOPED_PERMISSION_PAIRS[requirement.stem].own)
+            ).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps contextual route requirements explicit", () => {
+    expect(routeFor("GET", "/keyboard-shortcuts")?.authorization).toEqual({
+      kind: "active-self",
+    });
+    expect(routeFor("GET", "/model-preferences")?.authorization).toMatchObject({
+      kind: "active-global",
+      service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
+    });
+    expect(routeFor("GET", "/sessions")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
+      service: { kind: "actor" },
+    });
+    expect(routeFor("GET", "/sessions/inbox")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
+      service: { kind: "deny" },
+    });
+    expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
+    });
+    expect(routeFor("POST", "/sessions/session-1/stop")?.authorization).toMatchObject({
+      service: { kind: "actor", actorlessGrants: [{ service: "linear-bot" }] },
+    });
+    expect(routeFor("GET", "/sessions/session-1/media/artifact-1")?.authorization).toMatchObject({
+      service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
+    });
+    expect(routeFor("POST", "/sessions/session-1/participants")).toBeUndefined();
+    expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [
+        { kind: "permission", permission: "sessions.create" },
+        { kind: "permission", permission: "sessions.collaborate" },
+      ],
+    });
+    expect(routeFor("GET", "/sessions/parent/children/child")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
+    });
+    expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
+      kind: "service",
+      services: ["github-bot"],
+    });
+    expect(routeFor("POST", "/internal/github-event")?.authentication).toEqual({
+      kind: "service",
+    });
+    expect(routeFor("POST", "/internal/slack-event")?.authentication).toEqual({
+      kind: "service",
+    });
+  });
+
+  it("returns 400 for a malformed percent-encoded role ID before querying D1", async () => {
+    const path = "/roles/%E0%A4%A";
+    const route = routeFor("GET", path);
+    const match = path.match(route!.pattern)!;
+    const prepare = vi.fn();
+
+    const response = await route!.handler(
+      new Request(`https://test.local${path}`),
+      {} as never,
+      match,
+      {
+        principal: { kind: "user", userId: "user-1" },
+        db: { prepare },
+      } as never
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid role ID" });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["PUT", "/automations/automation-1", "manage"],
+    ["DELETE", "/automations/automation-1", "manage"],
+    ["POST", "/automations/automation-1/pause", "manage"],
+    ["POST", "/automations/automation-1/resume", "manage"],
+    ["POST", "/automations/automation-1/trigger", "trigger"],
+    ["POST", "/automations/automation-1/regenerate-key", "manage"],
+  ])("declares automation ownership authorization for %s %s", (method, path, operation) => {
+    expect(routeFor(method, path)?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "automation", operation, automationIdParam: "id" }],
+      service: { kind: "deny" },
+    });
   });
 
   it.each([
@@ -61,6 +265,7 @@ describe("route policy table", () => {
     if (route?.authentication.kind === "user-or-service-with-sandbox-fallback") {
       expect(route.authentication.getSessionId(match)).toBe("session-1");
     }
+    expect(route?.authorization.kind).toBe("active-user");
   });
 
   it.each([
@@ -199,6 +404,25 @@ describe("route policy dispatch ordering", () => {
     });
   });
 
+  it("keeps health dependency-free when D1 is unavailable", async () => {
+    const testEnv = env("github");
+    testEnv.DB.prepare = vi.fn(() => {
+      throw new Error("D1 unavailable");
+    });
+
+    const response = await handleRequest(
+      new Request("https://test.local/health"),
+      testEnv as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "healthy",
+      service: "open-inspect-control-plane",
+    });
+  });
+
   it("applies broker cache policy when sandbox authentication is unavailable", async () => {
     const testEnv = env("github") as ReturnType<typeof env> & {
       SESSION: {
@@ -230,6 +454,10 @@ describe("route principal policy", () => {
     [{ kind: "web-service" } as const, { kind: "service", service: "web", actor: null } as const],
     [{ kind: "user" } as const, { kind: "user", userId: "user-1" } as const],
     [
+      { kind: "service" } as const,
+      { kind: "service", service: "github-bot", actor: null } as const,
+    ],
+    [
       { kind: "user-or-service" } as const,
       { kind: "service", service: "linear-bot", actor: null } as const,
     ],
@@ -249,6 +477,7 @@ describe("route principal policy", () => {
       { kind: "service", service: "linear-bot", actor: null } as const,
       403,
     ],
+    [{ kind: "service" } as const, { kind: "user", userId: "user-1" } as const, 403],
   ])("rejects mismatched principals for %o", (authentication, principal, status) => {
     expect(enforceRoutePrincipal(authentication, principal, "GET")?.status).toBe(status);
   });

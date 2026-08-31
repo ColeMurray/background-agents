@@ -25,6 +25,7 @@ function automation(id: string, name: string): AutomationListItem {
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",
+    userId: "11111111111111111111111111111111",
     createdAt: 1,
     updatedAt: 1,
     deletedAt: null,

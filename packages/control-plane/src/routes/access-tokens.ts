@@ -15,6 +15,7 @@ import {
 import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import type { Env } from "../types";
 import {
+  ACTIVE_SELF,
   defineRoutes,
   error,
   json,
@@ -85,7 +86,22 @@ async function revokeToken(
 }
 
 export const accessTokenRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
-  { method: "GET", pattern: parsePattern("/access-tokens"), handler: listTokens },
-  { method: "POST", pattern: parsePattern("/access-tokens"), handler: createToken },
-  { method: "DELETE", pattern: parsePattern("/access-tokens/:id"), handler: revokeToken },
+  {
+    method: "GET",
+    pattern: parsePattern("/access-tokens"),
+    authorization: ACTIVE_SELF,
+    handler: listTokens,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/access-tokens"),
+    authorization: ACTIVE_SELF,
+    handler: createToken,
+  },
+  {
+    method: "DELETE",
+    pattern: parsePattern("/access-tokens/:id"),
+    authorization: ACTIVE_SELF,
+    handler: revokeToken,
+  },
 ]);

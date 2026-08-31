@@ -89,10 +89,6 @@ class TerminateBuildSandboxRequest(_ModalRequestModel):
     reason: NonEmptyString
 
 
-class DeleteProviderImageRequest(_ModalRequestModel):
-    provider_image_id: NonEmptyString
-
-
 class InteractiveRepositoryRequest(_ModalRequestModel):
     repo_owner: NonEmptyString
     repo_name: NonEmptyString
@@ -474,9 +470,7 @@ async def api_snapshot_sandbox(
 
     POST body:
     {
-        "sandbox_id": "...",
-        "session_id": "...",
-        "reason": "execution_complete" | "pre_timeout" | "heartbeat_timeout"
+        "sandbox_id": "..."
     }
 
     Returns:
@@ -484,9 +478,7 @@ async def api_snapshot_sandbox(
         "success": true,
         "data": {
             "image_id": "...",
-            "sandbox_id": "...",
-            "session_id": "...",
-            "reason": "..."
+            "sandbox_id": "..."
         }
     }
     """
@@ -505,9 +497,6 @@ async def api_snapshot_sandbox(
 
         from .sandbox.manager import SandboxManager
 
-        session_id = request.get("session_id")
-        reason = request.get("reason", "manual")
-
         manager = SandboxManager()
 
         handle = await manager.get_sandbox_by_id(sandbox_id)
@@ -521,8 +510,6 @@ async def api_snapshot_sandbox(
             "data": {
                 "image_id": image_id,
                 "sandbox_id": sandbox_id,
-                "session_id": session_id,
-                "reason": reason,
             },
         }
 
@@ -856,50 +843,3 @@ def _validated_build_repositories(
         }
         for repository in repositories
     ]
-
-
-@app.function(
-    image=function_image,
-    secrets=[internal_api_secret],
-)
-@fastapi_endpoint(method="POST")
-async def api_delete_provider_image(
-    request: dict[str, object],
-    authorization: str | None = Header(None),
-    x_trace_id: str | None = Header(None),
-    x_request_id: str | None = Header(None),
-) -> dict:
-    """
-    Delete a single provider image (best-effort).
-
-    Used to clean up old pre-built images after they're replaced by newer builds.
-
-    POST body:
-    {
-        "provider_image_id": "..."
-    }
-    """
-    async with _execute_endpoint(
-        endpoint_name="api_delete_provider_image",
-        authorization=authorization,
-        trace_id=x_trace_id,
-        request_id=x_request_id,
-    ):
-        parsed_request = _parse_request(DeleteProviderImageRequest, request)
-        provider_image_id = parsed_request.provider_image_id
-
-        # Modal doesn't have an explicit delete API for images;
-        # images are garbage-collected when no longer referenced.
-        # We log the request for auditability.
-        log.info(
-            "image.delete_requested",
-            provider_image_id=provider_image_id,
-        )
-
-        return {
-            "success": True,
-            "data": {
-                "provider_image_id": provider_image_id,
-                "deleted": True,
-            },
-        }

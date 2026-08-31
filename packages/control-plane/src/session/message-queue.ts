@@ -78,6 +78,7 @@ interface EnqueuedPrompt {
 }
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
 
 type EnqueueAutofixResponse = Extract<
   GitHubAutofixSessionResponse,
@@ -571,6 +572,12 @@ export class SessionMessageQueue {
     await this.processMessageQueue();
   }
 
+  async handleFatalSandboxFailure(reason: string): Promise<void> {
+    const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
+    await this.failStuckProcessingMessage(reason);
+    if (await termination) await this.resumeAfterSandboxTermination();
+  }
+
   /** Close every unfinished message synchronously; status projection happens afterwards. */
   cancelExecution(): void {
     const now = Date.now();
@@ -590,25 +597,18 @@ export class SessionMessageQueue {
   }
 
   /**
-   * Fail a stuck processing message (defense-in-depth for execution timeout).
+   * Fail a processing message that its sandbox can no longer complete.
    *
    * Only marks the message as failed and broadcasts — does NOT send a stop command
    * to the sandbox or call processMessageQueue(). This avoids races where a new
    * prompt could be dispatched to a sandbox being shut down.
    */
-  async failStuckProcessingMessage(): Promise<void> {
+  async failStuckProcessingMessage(error = STUCK_PROCESSING_ERROR): Promise<void> {
     const now = Date.now();
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
-    if (
-      !this.failMessage(
-        processingMessage,
-        "Execution timed out (stuck processing)",
-        now,
-        "processing"
-      )
-    ) {
+    if (!this.failMessage(processingMessage, error, now, "processing")) {
       return;
     }
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });

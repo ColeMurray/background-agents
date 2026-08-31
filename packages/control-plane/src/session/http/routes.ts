@@ -19,6 +19,7 @@ export interface SessionInternalRoute {
   handler: SessionInternalRouteHandler;
 }
 
+/** Handlers required to serve every internal SessionDO HTTP route. */
 export interface SessionInternalRouteHandlers {
   init: SessionInternalRouteHandler;
   state: SessionInternalRouteHandler;
@@ -28,10 +29,10 @@ export interface SessionInternalRouteHandlers {
   autofix: SessionInternalRouteHandler;
   stop: SessionInternalRouteHandler;
   sandboxEvent: SessionInternalRouteHandler;
+  sandboxError: SessionInternalRouteHandler;
   createMediaArtifact: SessionInternalRouteHandler;
   recordAttachment: SessionInternalRouteHandler;
   listParticipants: SessionInternalRouteHandler;
-  addParticipant: SessionInternalRouteHandler;
   listEvents: SessionInternalRouteHandler;
   listArtifacts: SessionInternalRouteHandler;
   listMessages: SessionInternalRouteHandler;
@@ -82,6 +83,7 @@ export function createSessionInternalRoutes(
     { method: "POST", path: SessionInternalPaths.autofix, handler: handlers.autofix },
     { method: "POST", path: SessionInternalPaths.stop, handler: handlers.stop },
     { method: "POST", path: SessionInternalPaths.sandboxEvent, handler: handlers.sandboxEvent },
+    { method: "POST", path: SessionInternalPaths.sandboxError, handler: handlers.sandboxError },
     {
       method: "POST",
       path: SessionInternalPaths.createMediaArtifact,
@@ -92,11 +94,6 @@ export function createSessionInternalRoutes(
       method: "GET",
       path: SessionInternalPaths.participants,
       handler: handlers.listParticipants,
-    },
-    {
-      method: "POST",
-      path: SessionInternalPaths.participants,
-      handler: handlers.addParticipant,
     },
     { method: "GET", path: SessionInternalPaths.events, handler: handlers.listEvents },
     { method: "GET", path: SessionInternalPaths.artifacts, handler: handlers.listArtifacts },

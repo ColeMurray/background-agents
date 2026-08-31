@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -10,6 +10,7 @@ import {
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { IntegrationId, IntegrationEntry } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
+import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { RadioCard } from "@/components/ui/form-controls";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -30,6 +31,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 interface EnablementSettings {
   enabled?: boolean;
@@ -69,7 +71,13 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+/**
+ * Renders global and repository enablement settings with each scope editable only by authorized users.
+ */
 export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegrationCopy }) {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageGlobal = hasPermission("integrations.manage");
+  const canManageRepos = hasPermission("repositories.settings.manage");
   const globalSettingsKey = `/api/integration-settings/${copy.id}` as const;
   const repoSettingsKey = `/api/integration-settings/${copy.id}/repos` as const;
   const { data: globalData, isLoading: globalLoading } = useSWR<GlobalResponse>(globalSettingsKey);
@@ -87,24 +95,28 @@ export function EnablementIntegrationSettings({ copy }: { copy: EnablementIntegr
 
   return (
     <div>
-      <h3 className="text-lg font-semibold text-foreground mb-1">{copy.title}</h3>
+      <h2 className="text-lg font-semibold text-foreground mb-1">{copy.title}</h2>
       <p className="text-sm text-muted-foreground mb-6">{copy.intro}</p>
 
-      <GlobalSettingsSection
-        settings={settings}
-        availableRepos={availableRepos}
-        settingsKey={globalSettingsKey}
-        copy={copy}
-      />
-
-      <Section title="Repository Overrides" description={copy.overrideDescription}>
-        <RepoOverridesSection
-          overrides={repoOverrides}
+      <fieldset disabled={!canManageGlobal} className="min-w-0">
+        <GlobalSettingsSection
+          settings={settings}
           availableRepos={availableRepos}
-          settingsKey={repoSettingsKey}
+          settingsKey={globalSettingsKey}
           copy={copy}
         />
-      </Section>
+      </fieldset>
+
+      <SettingsCardSection title="Repository Overrides" description={copy.overrideDescription}>
+        <fieldset disabled={!canManageRepos} className="min-w-0">
+          <RepoOverridesSection
+            overrides={repoOverrides}
+            availableRepos={availableRepos}
+            settingsKey={repoSettingsKey}
+            copy={copy}
+          />
+        </fieldset>
+      </SettingsCardSection>
     </div>
   );
 }
@@ -207,7 +219,7 @@ function GlobalSettingsSection({
   };
 
   return (
-    <Section title="Defaults & Scope" description={copy.scopeDescription}>
+    <SettingsCardSection title="Defaults & Scope" description={copy.scopeDescription}>
       <div className="mb-4">
         <label className="flex items-center justify-between px-3 py-2 border border-border rounded-sm cursor-pointer hover:bg-muted/50 transition text-sm">
           <div>
@@ -312,7 +324,7 @@ function GlobalSettingsSection({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </SettingsCardSection>
   );
 }
 
@@ -492,25 +504,5 @@ function RepoOverrideRow({
         </Button>
       </div>
     </div>
-  );
-}
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="border border-border-muted rounded-md p-5 mb-5">
-      <h4 className="text-sm font-semibold uppercase tracking-wider text-foreground mb-1">
-        {title}
-      </h4>
-      <p className="text-sm text-muted-foreground mb-4">{description}</p>
-      {children}
-    </section>
   );
 }

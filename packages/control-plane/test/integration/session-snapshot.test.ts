@@ -73,6 +73,8 @@ describe("session snapshot synchronization", () => {
       codeServer: { url: "https://code.example.test", password: "code-secret" },
       vnc: { url: "https://desktop.example.test", password: "vnc-secret" },
       ttyd: { url: "https://terminal.example.test", token: "terminal-secret" },
+      tunnelUrls: null,
+      sandboxDashboardUrl: null,
     });
 
     const { ws, messages } = await openClientWs(name, { subscribe: true });

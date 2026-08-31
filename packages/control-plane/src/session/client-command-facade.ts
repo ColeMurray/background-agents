@@ -20,6 +20,7 @@ import type { SessionEventStream, SessionHistoryPage } from "./event-stream";
 import type { SessionConnectionAuthenticator } from "./connection-authenticator";
 import type { SessionMessageQueue } from "./message-queue";
 import type { PresenceService } from "./presence-service";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 
 export class SessionClientCommandFacade implements SessionClientCommands<WebSocket, ClientInfo> {
   constructor(
@@ -58,5 +59,12 @@ export class SessionClientCommandFacade implements SessionClientCommands<WebSock
     limit?: number;
   }): SessionHistoryPage {
     return this.events.getHistoryPage(message);
+  }
+
+  authorize(
+    client: ClientInfo,
+    permission: PermissionId
+  ): Promise<"allowed" | "denied" | "unavailable"> {
+    return this.authenticator.authorizeClientCommand(client.userId, permission);
   }
 }

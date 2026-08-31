@@ -8,6 +8,8 @@ import {
   error,
   json,
   parsePattern,
+  NO_AUTHORIZATION,
+  requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type SandboxRouteContext,
@@ -27,9 +29,6 @@ async function handleSessionSkillsView(
 ): Promise<Response> {
   const id = sessionId(match);
   if (id instanceof Response) return id;
-  if (!(await new SessionIndexStore(ctx.db).getVisibleForUser(id, ctx.principal.userId))) {
-    return error("Session not found", 404);
-  }
   const view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
   if (!view) return error("Session skill manifest not found", 404);
   const response = json(view);
@@ -96,11 +95,13 @@ export const sessionSkillRoutes: Route[] = [
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/skills"),
+    authorization: requirePermission("sessions.read"),
     handler: handleSessionSkillsView,
   }),
   defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/sandbox-skills"),
+    authorization: NO_AUTHORIZATION,
     handler: handleSandboxInstallation,
   }),
 ];

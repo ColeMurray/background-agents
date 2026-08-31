@@ -237,6 +237,30 @@ describe("MessageRepository", () => {
     expect(mock.calls).toHaveLength(3);
   });
 
+  it("admits Autofix feedback without checking the rolling count when there is no limit", () => {
+    mock.setOne({ count: 0 });
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: null,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "enqueued", messageId: "msg-new" });
+    expect(mock.calls.some(({ query }) => query.includes("autofix_pr_key = ?"))).toBe(false);
+  });
+
   it("rejects Autofix admission when the session queue is full", () => {
     mock.setOne({ count: MAX_UNFINISHED_PROMPTS });
 

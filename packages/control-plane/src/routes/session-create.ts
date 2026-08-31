@@ -21,6 +21,7 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { authorizeSessionTarget } from "./session-target-authorization";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -34,6 +35,7 @@ import {
   type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -79,6 +81,12 @@ async function handleCreateSession(
     }
     throw e;
   }
+
+  const targetAuthorizationError = authorizeSessionTarget(ctx, {
+    environmentId: body.environmentId,
+    hasRepository: Boolean(repositoryContext || body.repositories),
+  });
+  if (targetAuthorizationError) return targetAuthorizationError;
 
   // Validate branch names if provided (defense in depth)
   if (body.branch && !BRANCH_NAME_PATTERN.test(body.branch)) {
@@ -285,6 +293,7 @@ export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_
   {
     method: "POST",
     pattern: parsePattern("/sessions"),
+    authorization: requirePermission("sessions.create"),
     handler: handleCreateSession,
   },
 ]);

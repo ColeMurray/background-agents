@@ -10,6 +10,7 @@ import {
 import type { Env } from "../types";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 import {
+  ACTIVE_SELF,
   defineRoute,
   error,
   json,
@@ -85,6 +86,7 @@ export const sessionOperatorArchiveRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/operator/sessions/archive"),
+      authorization: ACTIVE_SELF,
       handler: handleOperatorSessionArchive,
     })
   ),

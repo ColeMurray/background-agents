@@ -11,6 +11,7 @@ import {
   error,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  requirePermission,
   parsePattern,
   type Route,
 } from "./shared";
@@ -193,6 +194,7 @@ export const sessionDiffRoutes: Route[] = [
     sessionRoute({
       method: "GET",
       pattern: parsePattern("/sessions/:id/diff"),
+      authorization: requirePermission("sessions.read"),
       handler: handleDiffState,
     })
   ),
@@ -201,6 +203,7 @@ export const sessionDiffRoutes: Route[] = [
     sessionRoute({
       method: "PUT",
       pattern: parsePattern("/sessions/:id/diff"),
+      authorization: requirePermission("sessions.collaborate"),
       handler: handleDiffUpload,
     })
   ),
@@ -209,6 +212,7 @@ export const sessionDiffRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/diff/failure"),
+      authorization: requirePermission("sessions.collaborate"),
       handler: handleDiffFailure,
     })
   ),
@@ -217,6 +221,7 @@ export const sessionDiffRoutes: Route[] = [
     sessionRoute({
       method: "GET",
       pattern: parsePattern("/sessions/:id/diff/:revisionId/files/:fileId"),
+      authorization: requirePermission("sessions.read"),
       handler: handleDiffFile,
     })
   ),
@@ -225,6 +230,7 @@ export const sessionDiffRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/diff/retry"),
+      authorization: requirePermission("sessions.lifecycle"),
       handler: handleDiffRetry,
     })
   ),

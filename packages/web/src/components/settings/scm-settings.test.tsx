@@ -10,6 +10,10 @@ import type { EnrichedRepository } from "@open-inspect/shared/types/repository-c
 import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import { ScmSettingsPage } from "./scm-settings";
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {

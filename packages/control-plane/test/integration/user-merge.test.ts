@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { mergeUsers, UserMergeError } from "../../src/db/user-merge";
+import type { SqlDatabase, SqlResult, SqlStatement } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
 import {
   SEED_NOW_MS,
@@ -61,6 +62,15 @@ async function insertScmToken(providerUserId: string, userId: string) {
     .run();
 }
 
+async function insertSkillProfile(id: string, userId: string, name: string) {
+  await env.DB.prepare(
+    `INSERT INTO skill_profiles (id, user_id, name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+    .bind(id, userId, name, SEED_NOW_MS, SEED_NOW_MS)
+    .run();
+}
+
 beforeEach(async () => {
   await cleanD1Tables();
 });
@@ -79,6 +89,7 @@ describe("mergeUsers", () => {
     await insertSession("session-loser", LOSER);
     await insertAutomation("auto-1", LOSER, LOSER);
     await insertScmToken("583231", LOSER);
+    await insertSkillProfile("profile-loser", LOSER, "Personal profile");
     await insertAuthSession({ id: "authsess-loser", userId: LOSER });
     // Survivor: the email-owning row the user already signs into.
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com", emailVerified: 1 });
@@ -100,10 +111,12 @@ describe("mergeUsers", () => {
     expect(result.counts).toMatchObject({
       identitiesRepointed: 1,
       sessionsRepointed: 1,
-      authSessionsRepointed: 1,
+      authSessionsDeleted: 1,
       automationsOwnedRepointed: 1,
       automationsCreatedRepointed: 1,
       scmTokensRepointed: 1,
+      skillProfilesRepointed: 1,
+      skillCatalogGenerationsAdvanced: 1,
       readStatesDeduped: 1,
       readStatesRepointed: 1,
       usersDeleted: 1,
@@ -119,12 +132,12 @@ describe("mergeUsers", () => {
         user_id: string;
       }>()
     ).toEqual({ user_id: SURVIVOR });
-    // The loser's browser session survives, re-keyed to the survivor.
+    // Bearer sessions issued to the loser are invalidated, never re-keyed.
     expect(
       await env.DB.prepare(`SELECT userId FROM auth_sessions WHERE id = 'authsess-loser'`).first<{
         userId: string;
       }>()
-    ).toEqual({ userId: SURVIVOR });
+    ).toBeNull();
     expect(
       await env.DB.prepare(
         `SELECT user_id, created_by FROM automations WHERE id = 'auto-1'`
@@ -133,6 +146,9 @@ describe("mergeUsers", () => {
         created_by: string;
       }>()
     ).toEqual({ user_id: SURVIVOR, created_by: SURVIVOR });
+    expect(
+      await env.DB.prepare(`SELECT user_id FROM skill_profiles WHERE id = 'profile-loser'`).first()
+    ).toEqual({ user_id: SURVIVOR });
     // Read-state dedup kept the survivor's row on the shared session.
     expect(
       await env.DB.prepare(
@@ -144,6 +160,24 @@ describe("mergeUsers", () => {
     ).toEqual({ last_read_message_id: "msg-survivor" });
     expect(await getUserRow(LOSER)).toBeNull();
     expect(await countTableRows("users")).toBe(1);
+    expect(
+      await env.DB.prepare(
+        "SELECT generation FROM skills_catalog_state WHERE singleton = 1"
+      ).first()
+    ).toEqual({ generation: 1 });
+    expect(
+      await env.DB.prepare(
+        `SELECT principal_kind, actor_user_id_snapshot, actor_service_snapshot,
+                resource_id, target_user_id_snapshot
+         FROM authorization_audit_events WHERE action = 'workspace.user_merged'`
+      ).first()
+    ).toEqual({
+      principal_kind: "service",
+      actor_user_id_snapshot: null,
+      actor_service_snapshot: "control-plane",
+      resource_id: SURVIVOR,
+      target_user_id_snapshot: LOSER,
+    });
   });
 
   it("backfills the loser's email onto an email-less survivor, carrying verification as-was", async () => {
@@ -201,7 +235,7 @@ describe("mergeUsers", () => {
     expect(await getUserRow(SURVIVOR)).toMatchObject({ email: null });
 
     const executed = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
-    expect(executed.counts.canonicalEmailBackfilled).toBe(preview.counts.canonicalEmailBackfilled);
+    expect(executed.counts).toEqual(preview.counts);
   });
 
   it("leaves non-canonical created_by values (legacy GitHub numeric ids) untouched", async () => {
@@ -219,6 +253,181 @@ describe("mergeUsers", () => {
     ).toEqual({ created_by: "583231", user_id: SURVIVOR });
   });
 
+  it("keeps preview and execution counts aligned for newer user-owned records", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    const authorizationId = "c".repeat(64);
+    const attemptId = "d".repeat(64);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO model_provider_account_authorizations (
+             id, user_id, provider, operation, display_name, next_poll_at,
+             expires_at, state, created_at, updated_at
+           ) VALUES (?, ?, 'openai', 'create', 'Personal', ?, ?, 'initiating', ?, ?)`
+      ).bind(authorizationId, LOSER, SEED_NOW_MS, SEED_NOW_MS + 60_000, SEED_NOW_MS, SEED_NOW_MS),
+      env.DB.prepare(
+        `INSERT INTO model_provider_account_authorization_attempts
+             (id, user_id, attempted_at) VALUES (?, ?, ?)`
+      ).bind(attemptId, LOSER, SEED_NOW_MS),
+      env.DB.prepare(
+        `INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at)
+           VALUES (?, '{}', ?)`
+      ).bind(LOSER, SEED_NOW_MS),
+    ]);
+
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+
+    expect(preview.counts).toMatchObject({
+      providerAccountAuthorizationsRepointed: 1,
+      providerAccountAuthorizationAttemptsRepointed: 1,
+      keyboardShortcutPreferencesDeduped: 0,
+      keyboardShortcutPreferencesRepointed: 1,
+    });
+    expect(
+      await env.DB.prepare(`SELECT user_id FROM model_provider_account_authorizations WHERE id = ?`)
+        .bind(authorizationId)
+        .first()
+    ).toEqual({ user_id: LOSER });
+
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(result.counts).toEqual(preview.counts);
+    expect(
+      await env.DB.prepare(`SELECT user_id FROM model_provider_account_authorizations WHERE id = ?`)
+        .bind(authorizationId)
+        .first()
+    ).toEqual({ user_id: SURVIVOR });
+    expect(
+      await env.DB.prepare(
+        `SELECT user_id FROM model_provider_account_authorization_attempts WHERE id = ?`
+      )
+        .bind(attemptId)
+        .first()
+    ).toEqual({ user_id: SURVIVOR });
+    expect(
+      await env.DB.prepare(`SELECT shortcuts FROM keyboard_shortcut_preferences WHERE user_id = ?`)
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ shortcuts: "{}" });
+  });
+
+  it("preserves canonical attribution across provider accounts and managed skills", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO model_provider_accounts
+          (id, provider, display_name, status, created_by, updated_by, created_at, updated_at)
+         VALUES ('provider-account', 'openai', 'Personal', 'active', ?, ?, 1, 1)`
+      ).bind(LOSER, LOSER),
+      env.DB.prepare(
+        `INSERT INTO model_provider_account_defaults
+          (provider, provider_account_id, created_by, updated_by, created_at, updated_at)
+         VALUES ('openai', 'provider-account', ?, ?, 1, 1)`
+      ).bind(LOSER, LOSER),
+      env.DB.prepare(
+        `INSERT INTO skills
+          (id, name, enabled, created_by, updated_by, created_at, updated_at)
+         VALUES ('skill-1', 'Skill One', 1, ?, ?, 1, 1)`
+      ).bind(LOSER, LOSER),
+      env.DB.prepare(
+        `INSERT INTO skill_revisions
+          (id, skill_id, revision_number, revision_sha256, description, body,
+           metadata_json, total_bytes, created_by, created_at)
+         VALUES ('revision-1', 'skill-1', 1, ?, 'Description', 'Body', '{}', 4, ?, 1)`
+      ).bind("a".repeat(64), LOSER),
+    ]);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE skills SET current_revision_id = 'revision-1' WHERE id = 'skill-1'"),
+      env.DB.prepare(
+        `INSERT INTO skill_assignments
+          (id, skill_id, scope_type, created_by, created_at)
+         VALUES ('assignment-1', 'skill-1', 'global', ?, 1)`
+      ).bind(LOSER),
+    ]);
+
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(preview.counts).toMatchObject({
+      providerAccountsCreatedRepointed: 1,
+      providerAccountsUpdatedRepointed: 1,
+      providerAccountDefaultsCreatedRepointed: 1,
+      providerAccountDefaultsUpdatedRepointed: 1,
+      skillsCreatedRepointed: 1,
+      skillsUpdatedRepointed: 1,
+      skillRevisionsCreatedRepointed: 1,
+      skillAssignmentsCreatedRepointed: 1,
+    });
+    expect(result.counts).toEqual(preview.counts);
+    expect(
+      await env.DB.prepare(
+        `SELECT created_by, updated_by FROM model_provider_accounts
+         WHERE id = 'provider-account'`
+      ).first()
+    ).toEqual({ created_by: SURVIVOR, updated_by: SURVIVOR });
+    expect(
+      await env.DB.prepare(
+        `SELECT created_by, updated_by FROM model_provider_account_defaults
+         WHERE provider = 'openai'`
+      ).first()
+    ).toEqual({ created_by: SURVIVOR, updated_by: SURVIVOR });
+    expect(
+      await env.DB.prepare(
+        `SELECT s.created_by, s.updated_by, r.created_by AS revision_created_by,
+                a.created_by AS assignment_created_by
+         FROM skills s
+         JOIN skill_revisions r ON r.id = 'revision-1'
+         JOIN skill_assignments a ON a.id = 'assignment-1'
+         WHERE s.id = 'skill-1'`
+      ).first()
+    ).toEqual({
+      created_by: SURVIVOR,
+      updated_by: SURVIVOR,
+      revision_created_by: SURVIVOR,
+      assignment_created_by: SURVIVOR,
+    });
+  });
+
+  it("keeps keyboard preference collision preview and execution counts aligned", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at)
+           VALUES (?, '{"survivor":true}', ?)`
+      ).bind(SURVIVOR, SEED_NOW_MS),
+      env.DB.prepare(
+        `INSERT INTO keyboard_shortcut_preferences (user_id, shortcuts, updated_at)
+           VALUES (?, '{"loser":true}', ?)`
+      ).bind(LOSER, SEED_NOW_MS),
+    ]);
+
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(preview.counts.keyboardShortcutPreferencesDeduped).toBe(1);
+    expect(preview.counts.keyboardShortcutPreferencesRepointed).toBe(0);
+    expect(result.counts).toEqual(preview.counts);
+    expect(
+      await env.DB.prepare(`SELECT shortcuts FROM keyboard_shortcut_preferences WHERE user_id = ?`)
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ shortcuts: '{"survivor":true}' });
+  });
+
   it("is idempotent: re-running after a completed merge is a zero-count no-op", async () => {
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
     await insertCanonicalUser({ id: LOSER, email: null });
@@ -233,6 +442,68 @@ describe("mergeUsers", () => {
       usersDeleted: 0,
     });
     expect(await countTableRows("users")).toBe(1);
+  });
+
+  it("rejects a suspended loser merging into an active survivor", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await env.DB.prepare("UPDATE users SET suspended_at = 123 WHERE id = ?").bind(LOSER).run();
+
+    await expect(mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER })).rejects.toThrow(
+      /suspension states/
+    );
+    expect(await getUserRow(LOSER)).not.toBeNull();
+  });
+
+  it("merges two suspended users even when their suspension timestamps differ", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await env.DB.prepare("UPDATE users SET suspended_at = 123 WHERE id = ?").bind(SURVIVOR).run();
+    await env.DB.prepare("UPDATE users SET suspended_at = 456 WHERE id = ?").bind(LOSER).run();
+
+    await expect(
+      mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER })
+    ).resolves.toMatchObject({
+      counts: { usersDeleted: 1 },
+    });
+    expect(await getUserRow(LOSER)).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?").bind(SURVIVOR).first()
+    ).toEqual({ suspended_at: 123 });
+  });
+
+  it("rolls back when role invariants change after preflight", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    let batchCount = 0;
+    const racingDatabase: SqlDatabase = {
+      prepare(query: string): SqlStatement {
+        return env.DB.prepare(query) as unknown as SqlStatement;
+      },
+      async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
+        batchCount += 1;
+        if (batchCount === 2) {
+          await env.DB.prepare(
+            "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
+          )
+            .bind(SURVIVOR)
+            .run();
+        }
+        return env.DB.batch(statements as unknown as D1PreparedStatement[]) as Promise<
+          SqlResult<T>[]
+        >;
+      },
+    };
+
+    await expect(
+      mergeUsers(racingDatabase, { survivorId: SURVIVOR, loserId: LOSER })
+    ).rejects.toThrow();
+    expect(await getUserRow(LOSER)).not.toBeNull();
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.user_merged'"
+      ).first()
+    ).toEqual({ count: 0 });
   });
 
   it("rejects a missing survivor and a self-merge", async () => {

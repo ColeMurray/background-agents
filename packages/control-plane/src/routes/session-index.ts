@@ -9,8 +9,8 @@ import {
   type SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
-import { canonicalUserIdOf } from "../auth/principal";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
+import { canonicalUserIdOf } from "../auth/principal";
 import { SessionIndexStore } from "../db/session-index";
 import {
   error,
@@ -20,6 +20,7 @@ import {
   parseJsonBody,
   parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  requirePermission,
   type RequestContext,
   type Route,
   type UserRouteContext,
@@ -33,13 +34,13 @@ const SESSION_INBOX_LIMIT = 20;
 
 function parseCreatedByFilters(
   values: readonly string[],
-  principal: RequestContext["principal"]
+  currentUserId: string | null
 ): string[] | Response {
   const userIds: string[] = [];
   const seen = new Set<string>();
 
   for (const value of values) {
-    const userId = value === SESSION_LIST_CURRENT_USER ? canonicalUserIdOf(principal) : value;
+    const userId = value === SESSION_LIST_CURRENT_USER ? currentUserId : value;
 
     if (!isCanonicalUserId(userId)) {
       return error("Invalid createdBy", 400);
@@ -66,7 +67,8 @@ async function handleListSessions(
 
   const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
     parsedQuery.data;
-  const createdByUserIds = parseCreatedByFilters(createdBy, ctx.principal);
+  const viewerUserId = canonicalUserIdOf(ctx.principal) ?? ctx.authorization?.userId ?? undefined;
+  const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
@@ -74,7 +76,7 @@ async function handleListSessions(
 
   const store = new SessionIndexStore(ctx.db);
   const listStartedAt = Date.now();
-  const viewerUserId = canonicalUserIdOf(ctx.principal) ?? undefined;
+
   const result = await store.list({
     status,
     excludeStatus,
@@ -82,7 +84,7 @@ async function handleListSessions(
     createdByUserIds,
     limit,
     offset,
-    viewerUserId,
+    ...(viewerUserId ? { viewerUserId } : {}),
   });
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
@@ -199,9 +201,6 @@ async function handlePatchReadState(
   const body = parsedBody.data;
 
   const store = new SessionIndexStore(ctx.db);
-  const visibleSession = await store.getVisibleForUser(sessionId, ctx.principal.userId);
-  if (!visibleSession) return error("Session not found", 404);
-
   const result = await store.updateReadState(ctx.principal.userId, sessionId, body);
   if (!result) return error("Session not found", 404);
 
@@ -238,21 +237,25 @@ export const sessionIndexRoutes: Route[] = [
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions"),
+    authorization: requirePermission("sessions.read"),
     handler: handleListSessions,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/inbox"),
+    authorization: requirePermission("sessions.read", { service: "deny" }),
     handler: handleListSessionInbox,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "PATCH",
     pattern: parsePattern("/sessions/:id/read-state"),
+    authorization: requirePermission("sessions.read"),
     handler: handlePatchReadState,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "DELETE",
     pattern: parsePattern("/sessions/:id"),
+    authorization: requirePermission("sessions.delete"),
     handler: handleDeleteSession,
   }),
 ];

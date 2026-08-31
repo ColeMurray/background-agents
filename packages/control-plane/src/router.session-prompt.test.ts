@@ -58,8 +58,17 @@ function userPromptRequest(body: Record<string, unknown>): Promise<Request> {
 function createEnv(sessionFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const statement = {
     bind: vi.fn(() => statement),
-    first: vi.fn(async () => null),
-    all: vi.fn(async () => ({ results: [] })),
+    first: vi.fn(async () => ({
+      user_id: "user-1",
+      suspended_at: null,
+      assigned: 1,
+      role_id: "role_builtin_administrator",
+      role_key: "administrator",
+      role_name: "Administrator",
+    })),
+    all: vi.fn(async () => ({
+      results: [{ permission_id: "sessions.collaborate" }],
+    })),
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
   return {

@@ -18,6 +18,7 @@ import {
   error,
   json,
   parsePattern,
+  requirePermission,
 } from "./shared";
 
 function parseDaysParam(value: string | null): AnalyticsDays | null {
@@ -124,21 +125,25 @@ export const analyticsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVIC
   {
     method: "GET",
     pattern: parsePattern("/analytics/summary"),
+    authorization: requirePermission("analytics.read"),
     handler: handleSummary,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/timeseries"),
+    authorization: requirePermission("analytics.read"),
     handler: handleTimeseries,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/breakdown"),
+    authorization: requirePermission("analytics.read"),
     handler: handleBreakdown,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/pull-requests"),
+    authorization: requirePermission("analytics.read"),
     handler: handlePullRequests,
   },
 ]);

@@ -23,6 +23,7 @@ import {
   error,
   parseJsonBody,
   resolveRepoOrError,
+  requirePermission,
 } from "./shared";
 import {
   environmentSecretsImportBodySchema,
@@ -304,21 +305,25 @@ export const environmentSecretsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SER
   {
     method: "GET",
     pattern: parsePattern("/environments/:id/secrets"),
+    authorization: requirePermission("environments.secrets.manage"),
     handler: handleListEnvironmentSecrets,
   },
   {
     method: "PUT",
     pattern: parsePattern("/environments/:id/secrets"),
+    authorization: requirePermission("environments.secrets.manage"),
     handler: handleSetEnvironmentSecrets,
   },
   {
     method: "POST",
     pattern: parsePattern("/environments/:id/secrets/import"),
+    authorization: requirePermission("environments.secrets.manage"),
     handler: handleImportEnvironmentSecrets,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/environments/:id/secrets/:key"),
+    authorization: requirePermission("environments.secrets.manage"),
     handler: handleDeleteEnvironmentSecret,
   },
 ]);

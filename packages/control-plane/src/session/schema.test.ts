@@ -269,6 +269,23 @@ describe("applyMigrations", () => {
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
   });
 
+  it("adds WebSocket authorization lease state for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("authorization_expires_at INTEGER NOT NULL");
+    expect(SCHEMA_SQL).not.toContain("authorization_version");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 46);
+    expect(typeof migration?.run).toBe("function");
+    const run = migration!.run as (sql: SqlStorage) => void;
+    run(mock.sql);
+    expect(
+      mock.calls.filter(({ query }) => query.includes("ALTER TABLE")).map(({ query }) => query)
+    ).toEqual([
+      expect.stringContaining(
+        "ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0"
+      ),
+    ]);
+  });
+
   it("keeps repository context consistent at the session table boundary", () => {
     expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
     expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");

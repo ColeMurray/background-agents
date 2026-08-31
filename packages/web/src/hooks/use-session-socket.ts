@@ -4,6 +4,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 import {
   ingestLiveSandboxEvent,
   pendingToTokenEvent,
@@ -99,7 +100,8 @@ interface PendingCorrelatedRequest {
  */
 export function useSessionSocket(
   sessionId: string,
-  initialSnapshot: SessionSnapshot
+  initialSnapshot: SessionSnapshot,
+  capabilities: SessionCapabilities
 ): UseSessionSocketReturn {
   const [state, dispatch] = useReducer(
     sessionSocketReducer,
@@ -117,7 +119,11 @@ export function useSessionSocket(
     sandboxAccess,
     clear: clearSandboxAccess,
     refresh: refreshSandboxAccess,
-  } = useSandboxAccess(sessionId);
+  } = useSandboxAccess(
+    sessionId,
+    state.sessionState?.sandboxStatus === "ready",
+    capabilities.sandboxAccess
+  );
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
@@ -228,10 +234,14 @@ export function useSessionSocket(
     dispatch({ type: "socket_closed" });
   }, [settleAllCorrelatedRequests, settleSubscriptionWaiters]);
 
-  const transport = useSessionTransport(sessionId, {
-    onMessage: handleMessage,
-    onClose: handleClose,
-  });
+  const transport = useSessionTransport(
+    sessionId,
+    {
+      onMessage: handleMessage,
+      onClose: handleClose,
+    },
+    capabilities.read
+  );
   const { isOpen, send, reconnect, markHealthy } = transport;
 
   useEffect(() => {
