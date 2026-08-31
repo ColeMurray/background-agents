@@ -6,7 +6,7 @@ ALTER TABLE authorization_audit_events
 ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'
 CHECK (json_valid(metadata_json));
 
-DROP TRIGGER assign_default_role_after_user_insert;
+DROP TRIGGER IF EXISTS assign_default_role_after_user_insert;
 
 CREATE TRIGGER assign_default_role_after_user_insert
 AFTER INSERT ON users
