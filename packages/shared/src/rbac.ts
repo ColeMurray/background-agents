@@ -104,6 +104,7 @@ export function resolveScopedPermission(
 }
 
 const MEMBER_PERMISSIONS = new Set<PermissionId>([
+  "analytics.read",
   "automations.create",
   "automations.manage.own",
   "automations.read",
@@ -125,6 +126,7 @@ const MEMBER_PERMISSIONS = new Set<PermissionId>([
 ]);
 
 const VIEWER_PERMISSIONS = new Set<PermissionId>([
+  "analytics.read",
   "automations.read",
   "environments.read",
   "image_builds.read",

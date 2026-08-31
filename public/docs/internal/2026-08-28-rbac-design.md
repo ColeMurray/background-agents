@@ -223,7 +223,7 @@ The table groups permissions for readability; the registry stores individual ide
 | Obtain sandbox access                                    |  Yes  |      Yes      |   Yes    |   No   |
 | Read automations                                         |  Yes  |      Yes      |   Yes    |  Yes   |
 | Create/manage/trigger automations                        |  Yes  |      Yes      | Own only |   No   |
-| Read analytics                                           |  Yes  |      Yes      |    No    |   No   |
+| Read analytics                                           |  Yes  |      Yes      |   Yes    |  Yes   |
 | Manage models/provider accounts/integrations/SCM/signing |  Yes  |      Yes      |    No    |   No   |
 | Read shared skills and MCP servers                       |  Yes  |      Yes      |   Yes    |  Yes   |
 | Manage shared skills and MCP servers                     |  Yes  |      Yes      |    No    |   No   |

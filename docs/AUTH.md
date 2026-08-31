@@ -52,7 +52,7 @@ Open-Inspect includes four built-in roles.
 | Manage and trigger any automation                 |  Yes  |      Yes      |   No   |   No   |
 | View and manage workspace members                 |  Yes  |      Yes      |   No   |   No   |
 | Transfer workspace ownership                      |  Yes  |      No       |   No   |   No   |
-| View analytics                                    |  Yes  |      Yes      |   No   |   No   |
+| View analytics                                    |  Yes  |      Yes      |  Yes   |  Yes   |
 | View provider accounts                            |  Yes  |      Yes      |  Yes   |   No   |
 | View image-build history                          |  Yes  |      Yes      |   No   |  Yes   |
 | Manage personal skill profiles                    |  Yes  |      Yes      |  Yes   |  Yes   |
@@ -73,14 +73,15 @@ ownership, change who holds the Owner role, or suspend and restore an Owner.
 
 Members can create and use sessions, collaborate in existing sessions, use shared repositories and
 environments, and create automations. They can manage and manually trigger automations they own but
-cannot modify another person's automation or administer shared configuration.
+cannot modify another person's automation or administer shared configuration. They can view
+workspace analytics.
 
 ### Viewer
 
 Viewers have read-only access to shared workspace resources. They can inspect sessions, automations,
-repositories, environments, skills, and MCP servers, and they can manage their personal skill
-profile. They cannot create or prompt sessions, access sandboxes, trigger automations, or change
-shared configuration.
+analytics, repositories, environments, skills, and MCP servers, and they can manage their personal
+skill profile. They cannot create or prompt sessions, access sandboxes, trigger automations, or
+change shared configuration.
 
 ## How Session Access Works
 

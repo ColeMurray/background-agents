@@ -89,6 +89,11 @@ describe("RBAC registry", () => {
     );
   });
 
+  it("grants workspace analytics to Members and Viewers", () => {
+    expect(permissionsForBuiltInRole("member")).toContain("analytics.read");
+    expect(permissionsForBuiltInRole("viewer")).toContain("analytics.read");
+  });
+
   it("requires an assigned role and uses suspension timestamps in public contracts", () => {
     expect(
       effectiveAuthorizationSchema.parse({
