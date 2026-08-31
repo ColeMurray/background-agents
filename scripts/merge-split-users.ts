@@ -12,7 +12,7 @@
  * Dry-run is the default — it prints exact per-table counts and writes
  * nothing. Pass --execute to apply. The merge is idempotent: re-running a
  * completed merge is a zero-count no-op. Execute mode submits the complete
- * graph mutation as one atomic D1 SQL file.
+ * graph mutation as one result-bearing D1 batch.
  *
  * Usage:
  *   node --experimental-transform-types scripts/merge-split-users.ts \
@@ -25,9 +25,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type {
   SqlDatabase,
   SqlResult,
@@ -44,6 +43,19 @@ interface WranglerQueryResult {
   success: boolean;
   meta?: { changes?: number };
 }
+
+/** Minimal process result used to test Wrangler orchestration without spawning. */
+export interface WranglerProcessResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Injectable runner for Wrangler CLI orchestration tests. */
+export type WranglerRunner = (args: string[]) => WranglerProcessResult;
+
+const runWrangler: WranglerRunner = (args) =>
+  spawnSync("npx", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 
 function sqlLiteral(value: unknown): string {
   if (value === null || value === undefined) return "NULL";
@@ -76,11 +88,12 @@ function inlineParams(sql: string, params: unknown[]): string {
   return rendered;
 }
 
-class WranglerD1Database implements SqlDatabase {
+export class WranglerD1Database implements SqlDatabase {
   constructor(
     private readonly databaseName: string,
     private readonly remote: boolean,
-    private readonly verbose: boolean
+    private readonly verbose: boolean,
+    private readonly runner: WranglerRunner = runWrangler
   ) {}
 
   prepare(query: string): SqlStatement {
@@ -111,20 +124,18 @@ class WranglerD1Database implements SqlDatabase {
     return statement;
   }
 
-  // D1 executes one --file submission atomically. Keep this adapter aligned
-  // with SqlDatabase.batch rather than emulating a batch through independent
-  // or non-transactional command calls.
+  // Remote --command sends semicolon-separated statements to D1's /query
+  // batch API. D1 executes the batch transactionally and Wrangler preserves
+  // one positional result (including meta.changes) per statement.
   async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
-    if (statements.length === 0) return [];
     const rendered = statements.map((entry) => (entry as { render(): string }).render());
-    const directory = mkdtempSync(join(tmpdir(), "open-inspect-user-merge-"));
-    const sqlPath = join(directory, "merge.sql");
-    try {
-      writeFileSync(sqlPath, `${rendered.join(";\n")};\n`, { encoding: "utf8", mode: 0o600 });
-      return this.executeOperation(["--file", sqlPath]).map((result) => toSqlResult<T>(result));
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
+    const results = this.execute(rendered);
+    if (results.length !== statements.length) {
+      throw new Error(
+        `Wrangler returned ${results.length} results for ${statements.length} batched statements`
+      );
     }
+    return results.map((result) => toSqlResult<T>(result));
   }
 
   private execute(statements: string[]): WranglerQueryResult[] {
@@ -145,7 +156,7 @@ class WranglerD1Database implements SqlDatabase {
       "--json",
       ...operation,
     ];
-    const child = spawnSync("npx", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const child = this.runner(args);
     if (child.status !== 0) {
       throw new Error(`wrangler d1 execute failed:\n${child.stderr || child.stdout}`);
     }
@@ -247,8 +258,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  const message = error instanceof UserMergeError ? error.message : String(error);
-  console.error(message);
-  process.exitCode = 1;
-});
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : null;
+if (invokedPath === import.meta.url) {
+  main().catch((error: unknown) => {
+    const message = error instanceof UserMergeError ? error.message : String(error);
+    console.error(message);
+    process.exitCode = 1;
+  });
+}

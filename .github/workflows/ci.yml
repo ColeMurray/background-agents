@@ -82,6 +82,9 @@ jobs:
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner
 
+      - name: Test user merge CLI
+        run: npm run test:user-merge-cli
+
       - name: Check Prettier formatting
         run: npm run format:check
 
