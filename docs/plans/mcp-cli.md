@@ -3,9 +3,9 @@
 ## Status
 
 Full V1 product requirements, reconciled with the workspace RBAC implementation merged on
-2026-08-31. Increment 1 is implemented: device login, revocable CLI credentials, repository-less
-text sessions, list/get/prompt/stop/event/wait operations, non-interactive CLI output, and a local
-stdio MCP server. Later increments in this document remain proposed.
+2026-08-31. The V1 implementation now covers device login, revocable CLI credentials, discovery, all
+supported session targets, attachments, session operations and outputs, non-interactive CLI output,
+and the local stdio MCP server. Hosted MCP remains a fast follow.
 
 The public command name in examples is `oi`. The final binary and package names remain a release
 decision and do not change the requirements.
@@ -539,18 +539,25 @@ session-monotonic checkpoint. The snapshot response includes a high-water checkp
 all changes included by that snapshot. Event IDs, revisions, and checkpoints are opaque except for
 comparison of revisions belonging to the same event ID.
 
-The external envelope is a deliberate projection of the current internal event contract:
+The external change page is a deliberate projection of the current internal event contract:
 
 ```json
 {
-  "id": "event-id",
-  "revision": 2,
   "checkpoint": "opaque-checkpoint",
-  "type": "tool_call",
-  "messageId": "message-id",
-  "createdAt": 1788004800000,
-  "updatedAt": 1788004805000,
-  "data": {}
+  "hasMore": false,
+  "changes": [
+    {
+      "kind": "upsert",
+      "revision": "opaque-revision",
+      "event": {
+        "id": "event-id",
+        "type": "tool_call",
+        "messageId": "message-id",
+        "createdAt": 1788004800000,
+        "data": {}
+      }
+    }
+  ]
 }
 ```
 

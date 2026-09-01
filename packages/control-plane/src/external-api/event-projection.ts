@@ -1,95 +1,54 @@
 import {
   externalEventPageSchema,
+  type ExternalJsonValue,
   type ExternalEventPage,
 } from "@open-inspect/shared/types/external-session-api";
-import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import { sandboxEventSchema } from "@open-inspect/shared/types/sandbox-events";
 import { sessionEventChangePageSchema } from "../session/contracts";
 
-interface SafeEventData {
-  [key: string]: boolean | number | string | SafeEventData;
-}
-
-const SAFE_STATUSES = new Set([
-  "pending",
-  "in_progress",
-  "running",
-  "completed",
-  "failed",
-  "error",
-  "ready",
-  "stopped",
+const OMITTED_FIELDS = new Set([
+  "sandboxId",
+  "ackId",
+  "callbackContext",
+  "scmToken",
+  "scmAccessToken",
+  "scmRefreshToken",
 ]);
+const CREDENTIAL_FIELD =
+  /(?:access[_-]?token|refresh[_-]?token|secret|password|authorization|cookie|credential)/i;
 
-function assertNever(value: never): never {
-  throw new Error(`Unsupported event type: ${String(value)}`);
-}
-
-function numericUsage(
-  event: Extract<SandboxEvent, { type: "step_finish" }>
-): SafeEventData | number | undefined {
-  if (typeof event.tokens === "number") return event.tokens;
-  if (!event.tokens) return undefined;
-  const cache: SafeEventData = {};
-  if (typeof event.tokens.cache?.read === "number") cache.read = event.tokens.cache.read;
-  if (typeof event.tokens.cache?.write === "number") cache.write = event.tokens.cache.write;
-  const usage: SafeEventData = {};
-  if (typeof event.tokens.total === "number") usage.total = event.tokens.total;
-  if (typeof event.tokens.input === "number") usage.input = event.tokens.input;
-  if (typeof event.tokens.output === "number") usage.output = event.tokens.output;
-  if (typeof event.tokens.reasoning === "number") usage.reasoning = event.tokens.reasoning;
-  if (Object.keys(cache).length) usage.cache = cache;
-  return usage;
-}
-
-/** Projects only fixed enums, booleans, and numeric metadata. */
-function safeEventData(event: SandboxEvent): SafeEventData {
-  const data: SafeEventData = { type: event.type, timestamp: event.timestamp };
-  switch (event.type) {
-    case "git_sync":
-      data.status = event.status;
-      break;
-    case "step_finish": {
-      if (typeof event.cost === "number") data.cost = event.cost;
-      const tokens = numericUsage(event);
-      if (tokens !== undefined) data.tokens = tokens;
-      if (event.isSubtask !== undefined) data.isSubtask = event.isSubtask;
-      break;
-    }
-    case "step_start":
-    case "error":
-      if (event.isSubtask !== undefined) data.isSubtask = event.isSubtask;
-      break;
-    case "tool_call":
-      if (event.status && SAFE_STATUSES.has(event.status)) data.status = event.status;
-      if (event.isSubtask !== undefined) data.isSubtask = event.isSubtask;
-      break;
-    case "execution_complete":
-      data.success = event.success;
-      break;
-    case "warning":
-      data.scope = event.scope;
-      break;
-    case "heartbeat":
-      if (SAFE_STATUSES.has(event.status)) data.status = event.status;
-      break;
-    case "ready":
-    case "token":
-    case "tool_result":
-    case "context_compacted":
-    case "artifact":
-    case "push_complete":
-    case "push_error":
-    case "session_title":
-    case "user_message":
-      break;
-    default:
-      assertNever(event);
+function redactString(value: string, secrets: ReadonlySet<string>): string {
+  let redacted = value;
+  for (const secret of secrets) {
+    if (secret) redacted = redacted.split(secret).join("[REDACTED]");
   }
-  return data;
+  return redacted;
+}
+
+function safeJson(value: unknown, secrets: ReadonlySet<string>): ExternalJsonValue | undefined {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") return redactString(value, secrets);
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      const projected = safeJson(entry, secrets);
+      return projected === undefined ? [] : [projected];
+    });
+  }
+  if (typeof value !== "object") return undefined;
+  const projected: Record<string, ExternalJsonValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (OMITTED_FIELDS.has(key) || CREDENTIAL_FIELD.test(key)) continue;
+    const safe = safeJson(entry, secrets);
+    if (safe !== undefined) projected[key] = safe;
+  }
+  return projected;
 }
 
 /** Parses internal events and emits an envelope safe without credential material. */
-export function projectExternalEventPage(page: unknown): ExternalEventPage {
+export function projectExternalEventPage(
+  page: unknown,
+  managedSecretValues: ReadonlySet<string> = new Set()
+): ExternalEventPage {
   const parsed = sessionEventChangePageSchema.parse(page);
   return externalEventPageSchema.parse({
     changes: parsed.changes.map((change) => {
@@ -106,7 +65,7 @@ export function projectExternalEventPage(page: unknown): ExternalEventPage {
           type: change.event.type,
           messageId: change.event.messageId,
           createdAt: change.event.createdAt,
-          data: safeEventData(data),
+          data: safeJson(data, managedSecretValues) as Record<string, ExternalJsonValue>,
         },
       };
     }),

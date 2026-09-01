@@ -1,4 +1,5 @@
 import {
+  CLI_EXTERNAL_API_VERSION,
   CLI_EXTERNAL_API_V1_PATH,
   approveCliDeviceAuthorizationRequestSchema,
   cliDeviceAuthorizationExchangeRequestSchema,
@@ -6,7 +7,7 @@ import {
   startCliDeviceAuthorizationRequestSchema,
 } from "@open-inspect/shared/types/cli-auth";
 import { ZodError } from "zod";
-import { generateId, hashToken } from "../auth/crypto";
+import { hashToken } from "../auth/crypto";
 import type { AuthenticationContext } from "../auth/principal";
 import {
   CLI_DEVICE_AUTHORIZATION_LIFETIME_MS,
@@ -31,7 +32,6 @@ import {
 } from "./shared";
 
 const POLL_INTERVAL_MS = 1_000;
-const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MINUTE_MS = 60_000;
 const EXCHANGE_POLL_MARGIN = 30;
 const EXCHANGE_POLLS_PER_LIFETIME =
@@ -54,23 +54,8 @@ export const CLI_AUTH_RATE_LIMITS = {
   capabilityRevokePerIp: { windowMs: 10 * MINUTE_MS, limit: 100 },
 } as const;
 
-function generateUserCode(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  const code = Array.from(
-    bytes,
-    (byte) => USER_CODE_ALPHABET[byte % USER_CODE_ALPHABET.length]
-  ).join("");
-  return `${code.slice(0, 4)}-${code.slice(4)}`;
-}
-
 function deviceAuthorizationService(ctx: RequestContext): CliDeviceAuthorizationService {
-  return new CliDeviceAuthorizationService(new CliAuthStore(ctx.db), {
-    now: Date.now,
-    generateSecret: () => generateId(32),
-    generateUserCode,
-    generateId: () => generateId(16),
-    hash: hashToken,
-  });
+  return new CliDeviceAuthorizationService(new CliAuthStore(ctx.db));
 }
 
 function serviceError(cause: unknown): Response {
@@ -218,7 +203,7 @@ async function revokeIssuedCredential(
 
 async function getPendingAuthorization(
   request: Request,
-  _env: Env,
+  env: Env,
   _match: RegExpMatchArray,
   ctx: UserRouteContext
 ): Promise<Response> {
@@ -234,7 +219,8 @@ async function getPendingAuthorization(
       },
     ]);
     if (limited) return limited;
-    return json(await deviceAuthorizationService(ctx).getPendingAuthorization(input.userCode));
+    const pending = await deviceAuthorizationService(ctx).getPendingAuthorization(input.userCode);
+    return json({ ...pending, installation: { name: env.DEPLOYMENT_NAME } });
   } catch (cause) {
     return serviceError(cause);
   }
@@ -287,6 +273,7 @@ async function getMe(
     installation: { name: env.DEPLOYMENT_NAME },
     user: { id: user.id, displayName: user.displayName, email: user.email },
     credential: { id: authentication.credentialId, expiresAt: authentication.expiresAt },
+    serverVersion: CLI_EXTERNAL_API_VERSION,
   });
 }
 

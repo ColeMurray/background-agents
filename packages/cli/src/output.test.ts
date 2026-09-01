@@ -27,7 +27,7 @@ describe("Output", () => {
       output.failure(new CliError("service", "Unavailable", 503, { idempotencyKey: "retry-id" }));
       expect(JSON.parse(stderr.join(""))).toEqual({
         error: {
-          kind: "service",
+          code: "service_unavailable",
           message: "Unavailable",
           status: 503,
           context: { idempotencyKey: "retry-id" },
@@ -44,7 +44,7 @@ describe("Output", () => {
       })
     );
     expect(stderr).toEqual([
-      'error: {"kind":"transport","message":"Request outcome unknown","context":{"clientRequestId":"retry-id"}}\n',
+      'error: {"code":"service_unavailable","message":"Request outcome unknown","context":{"clientRequestId":"retry-id"}}\n',
     ]);
   });
 });

@@ -25,6 +25,7 @@ const QUERY_PATTERNS = {
   SELECT_KEYS_WITH_VALUES: /^SELECT key, encrypted_value FROM repo_secrets/,
   UPSERT_SECRET: /^INSERT INTO repo_secrets/,
   DELETE_SECRET: /^DELETE FROM repo_secrets/,
+  ARCHIVE_SECRET: /^INSERT OR IGNORE INTO managed_secret_redaction_history/,
 } as const;
 
 function normalizeQuery(query: string): string {
@@ -104,6 +105,8 @@ class FakeD1Database {
       const existed = this.rows.delete(rowKey);
       return { meta: { changes: existed ? 1 : 0 } };
     }
+
+    if (QUERY_PATTERNS.ARCHIVE_SECRET.test(normalized)) return { meta: { changes: 1 } };
 
     throw new Error(`Unexpected mutation query: ${query}`);
   }

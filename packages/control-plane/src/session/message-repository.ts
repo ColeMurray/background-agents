@@ -6,6 +6,7 @@ import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { MessageRow } from "./types";
+import type { CreatedAtIdCursor } from "./list-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
@@ -55,7 +56,7 @@ export type AutofixMessageAdmission =
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {
-  cursor?: string | null;
+  cursor?: CreatedAtIdCursor | null;
   limit: number;
   status?: string | null;
 }
@@ -414,11 +415,11 @@ export class MessageRepository {
     }
 
     if (options.cursor) {
-      query += ` AND created_at < ?`;
-      params.push(parseInt(options.cursor));
+      query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`;
+      params.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
     }
 
-    query += ` ORDER BY created_at DESC LIMIT ?`;
+    query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
     params.push(options.limit + 1);
 
     const result = this.sql.exec(query, ...params);

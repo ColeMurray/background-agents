@@ -77,13 +77,16 @@ export async function dispatchSessionPrompt(
   ctx: SessionRouteContext,
   sessionId: string,
   promptRequest: EnqueuePromptRequest,
-  adaptRuntimeResponse: (response: Response) => Response = (response) => response
+  adaptRuntimeResponse: (response: Response) => Response = (response) => response,
+  preAdmittedModel?: { model: string; reasoningEffort?: string }
 ): Promise<Response> {
-  const admission = await admitPromptModel(ctx, {
-    sessionId,
-    model: promptRequest.model,
-    reasoningEffort: promptRequest.reasoningEffort,
-  });
+  const admission =
+    preAdmittedModel ??
+    (await admitPromptModel(ctx, {
+      sessionId,
+      model: promptRequest.model,
+      reasoningEffort: promptRequest.reasoningEffort,
+    }));
   if (admission instanceof Response) return admission;
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
     method: "POST",

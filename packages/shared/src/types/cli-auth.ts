@@ -2,6 +2,10 @@ import { z } from "zod";
 import { isCanonicalUserId } from "../user-id";
 
 export const CLI_EXTERNAL_API_V1_PATH = "/external/v1/cli";
+export const CLI_EXTERNAL_API_VERSION = "1";
+export const CLI_API_VERSION_HEADER = "X-Open-Inspect-API-Version";
+export const CLI_CLIENT_VERSION_HEADER = "X-Open-Inspect-Client-Version";
+export const CLI_CLIENT_SURFACE_HEADER = "X-Open-Inspect-Client-Surface";
 export const CLI_DEVICE_SECRET_PATTERN = /^[0-9a-f]{64}$/;
 export const CLI_CREDENTIAL_PATTERN = /^oi_cli_[0-9a-f]{64}$/;
 export const CLI_USER_CODE_PATTERN = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/;
@@ -33,6 +37,7 @@ export const approveCliDeviceAuthorizationRequestSchema = z.strictObject({
 });
 
 export const pendingCliDeviceAuthorizationResponseSchema = z.strictObject({
+  installation: z.strictObject({ name: z.string().min(1) }),
   deviceName: z.string().min(1).max(100),
   expiresAt: timestampSchema,
 });
@@ -58,6 +63,7 @@ export const cliMeResponseSchema = z.strictObject({
     email: z.string().nullable(),
   }),
   credential: z.strictObject({ id: z.string().min(1), expiresAt: timestampSchema }),
+  serverVersion: z.string().min(1).optional(),
 });
 
 export type StartCliDeviceAuthorizationRequest = z.infer<

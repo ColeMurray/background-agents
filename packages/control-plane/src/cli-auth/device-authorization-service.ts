@@ -2,6 +2,7 @@ import type {
   CliDeviceAuthorizationExchangeResponse,
   PendingCliDeviceAuthorizationResponse,
 } from "@open-inspect/shared/types/cli-auth";
+import { generateId, hashToken } from "../auth/crypto";
 import type { CliAuthStore } from "../db/cli-auth-store";
 
 export const CLI_DEVICE_AUTHORIZATION_LIFETIME_MS = 10 * 60 * 1000;
@@ -9,13 +10,15 @@ export const CLI_CREDENTIAL_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 export const CLI_DEVICE_ATTEMPT_RETENTION_MS = CLI_CREDENTIAL_LIFETIME_MS;
 export const CLI_CREDENTIAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const CLI_AUTH_PRUNE_LIMIT = 100;
+const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-interface Dependencies {
-  now(): number;
-  generateSecret(): string;
-  generateUserCode(): string;
-  generateId(): string;
-  hash(value: string): Promise<string>;
+function generateUserCode(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const code = Array.from(
+    bytes,
+    (byte) => USER_CODE_ALPHABET[byte % USER_CODE_ALPHABET.length]
+  ).join("");
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
 }
 
 export class CliDeviceAuthorizationError extends Error {
@@ -39,8 +42,7 @@ export class CliDeviceAuthorizationService {
       | "getPendingAuthorization"
       | "pruneExpired"
       | "revokeIssuedCredentialByDeviceSecret"
-    >,
-    private readonly dependencies: Dependencies
+    >
   ) {}
 
   async start(deviceName: string): Promise<{
@@ -48,9 +50,9 @@ export class CliDeviceAuthorizationService {
     userCode: string;
     expiresAt: number;
   }> {
-    const now = this.dependencies.now();
-    const deviceSecret = this.dependencies.generateSecret();
-    const userCode = this.dependencies.generateUserCode();
+    const now = Date.now();
+    const deviceSecret = generateId(32);
+    const userCode = generateUserCode();
     const expiresAt = now + CLI_DEVICE_AUTHORIZATION_LIFETIME_MS;
     await this.store.pruneExpired({
       now,
@@ -59,21 +61,20 @@ export class CliDeviceAuthorizationService {
       limit: CLI_AUTH_PRUNE_LIMIT,
     });
     await this.store.createAttempt({
-      id: this.dependencies.generateId(),
+      id: generateId(),
       deviceName,
-      deviceSecretHash: await this.dependencies.hash(deviceSecret),
-      userCodeHash: await this.dependencies.hash(userCode),
+      deviceSecretHash: await hashToken(deviceSecret),
+      userCodeHash: await hashToken(userCode),
       createdAt: now,
       expiresAt,
     });
     return { deviceSecret, userCode, expiresAt };
   }
 
-  async getPendingAuthorization(userCode: string): Promise<PendingCliDeviceAuthorizationResponse> {
-    const outcome = await this.store.getPendingAuthorization(
-      await this.dependencies.hash(userCode),
-      this.dependencies.now()
-    );
+  async getPendingAuthorization(
+    userCode: string
+  ): Promise<Omit<PendingCliDeviceAuthorizationResponse, "installation">> {
+    const outcome = await this.store.getPendingAuthorization(await hashToken(userCode), Date.now());
     if (outcome.status === "pending") {
       return { deviceName: outcome.deviceName, expiresAt: outcome.expiresAt };
     }
@@ -87,11 +88,7 @@ export class CliDeviceAuthorizationService {
   }
 
   async approve(userCode: string, userId: string): Promise<void> {
-    const outcome = await this.store.approve(
-      await this.dependencies.hash(userCode),
-      userId,
-      this.dependencies.now()
-    );
+    const outcome = await this.store.approve(await hashToken(userCode), userId, Date.now());
     if (outcome === "approved") return;
     if (outcome === "expired") throw new CliDeviceAuthorizationError("Authorization expired", 410);
     if (outcome === "not_found")
@@ -100,16 +97,16 @@ export class CliDeviceAuthorizationService {
   }
 
   async exchange(deviceSecret: string): Promise<CliDeviceAuthorizationExchangeResponse> {
-    const now = this.dependencies.now();
-    const credentialId = this.dependencies.generateId();
-    const claimId = this.dependencies.generateId();
-    const credential = `oi_cli_${this.dependencies.generateSecret()}`;
+    const now = Date.now();
+    const credentialId = generateId();
+    const claimId = generateId();
+    const credential = `oi_cli_${generateId(32)}`;
     const expiresAt = now + CLI_CREDENTIAL_LIFETIME_MS;
     const outcome = await this.store.exchangeApprovedAttempt({
-      deviceSecretHash: await this.dependencies.hash(deviceSecret),
+      deviceSecretHash: await hashToken(deviceSecret),
       claimId,
       credentialId,
-      credentialHash: await this.dependencies.hash(credential),
+      credentialHash: await hashToken(credential),
       now,
       credentialExpiresAt: expiresAt,
     });
@@ -125,8 +122,8 @@ export class CliDeviceAuthorizationService {
 
   async revokeIssuedCredential(deviceSecret: string): Promise<void> {
     await this.store.revokeIssuedCredentialByDeviceSecret(
-      await this.dependencies.hash(deviceSecret),
-      this.dependencies.now()
+      await hashToken(deviceSecret),
+      Date.now()
     );
   }
 }

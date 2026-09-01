@@ -53,7 +53,7 @@ function resolveMediaContentType(
   return getMediaMimeType(artifact);
 }
 
-async function handleMediaGet(
+export async function handleMediaGet(
   request: Request,
   env: Env,
   match: RegExpMatchArray,

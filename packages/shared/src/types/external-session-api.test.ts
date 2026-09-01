@@ -26,15 +26,31 @@ describe("external session API schemas", () => {
     ["repoOwner", "acme"],
     ["repoName", "app"],
     ["repositories", []],
-    ["environmentId", "env-1"],
     ["branch", "main"],
     ["attachments", []],
-    ["skillSelection", { mode: "all" }],
-    ["providerSelections", {}],
     ["provider", "openai"],
   ])("explicitly rejects unsupported create field %s", (field, value) => {
     expect(
       externalCreateSessionRequestSchema.safeParse({ ...validCreate, [field]: value }).success
+    ).toBe(false);
+  });
+
+  it("accepts mutually exclusive V1 targets and execution selections", () => {
+    expect(
+      externalCreateSessionRequestSchema.parse({
+        ...validCreate,
+        environmentId: "env-1",
+        skillSelection: { mode: "all" },
+        providerSelections: {},
+      })
+    ).toMatchObject({ environmentId: "env-1", skillSelection: { mode: "all" } });
+    expect(
+      externalCreateSessionRequestSchema.safeParse({
+        ...validCreate,
+        environmentId: "env-1",
+        repoOwner: "acme",
+        repoName: "app",
+      }).success
     ).toBe(false);
   });
 
@@ -54,7 +70,7 @@ describe("external session API schemas", () => {
     expect(externalCreateSessionRequestSchema.safeParse(withoutReasoning).success).toBe(true);
   });
 
-  it("requires a nonblank text follow-up and clientRequestId", () => {
+  it("requires content or attachments and a clientRequestId", () => {
     expect(
       externalFollowUpRequestSchema.parse({
         content: "Continue",
@@ -72,11 +88,10 @@ describe("external session API schemas", () => {
     ).toBe(false);
     expect(
       externalFollowUpRequestSchema.safeParse({
-        content: "Continue",
         clientRequestId: "request-1",
-        attachments: [],
+        attachments: [{ attachmentId: "attachment-1", name: "image.png" }],
       }).success
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("requires exact success response shapes", () => {
@@ -143,18 +158,18 @@ describe("external session API schemas", () => {
       limit: 200,
     });
     expect(externalEventFeedQuerySchema.safeParse({ after: -1 }).success).toBe(false);
-    expect(externalEventFeedQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
+    expect(externalEventFeedQuerySchema.safeParse({ limit: 501 }).success).toBe(false);
     expect(externalEventFeedQuerySchema.safeParse({ after: 1, cursor: "0:1:1" }).success).toBe(
       false
     );
   });
 
   it("types bounded session-list pagination", () => {
-    expect(externalSessionListQuerySchema.parse({ limit: 200, offset: 50 })).toEqual({
-      limit: 200,
+    expect(externalSessionListQuerySchema.parse({ limit: 100, offset: 50 })).toEqual({
+      limit: 100,
       offset: 50,
     });
-    expect(externalSessionListQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
+    expect(externalSessionListQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
     expect(externalSessionListQuerySchema.safeParse({ offset: -1 }).success).toBe(false);
   });
 });

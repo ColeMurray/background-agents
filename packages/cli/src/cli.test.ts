@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
@@ -129,6 +129,47 @@ describe("CLI commands", () => {
     expect(stdout.join("")).not.toContain(credential);
   });
 
+  it("retries transient device authorization exchange failures", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+    const store = new ConfigStore(directory);
+    const deviceSecret = "d".repeat(64);
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            deviceSecret,
+            userCode: "ABCD-EFGH",
+            verificationUrl: "https://web.example.com/cli/authorize",
+            expiresAt: Date.now() + 60_000,
+            pollIntervalMs: 1,
+          },
+          { status: 201 }
+        )
+      )
+      .mockResolvedValueOnce(Response.json({ error: "unavailable" }, { status: 503 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          status: "authorized",
+          credential,
+          credentialId: "credential-1",
+          expiresAt: Date.now() + 60_000,
+        })
+      );
+
+    await createCli({ store, fetch, sleep: () => Promise.resolve(), stderr: vi.fn() }).parseAsync([
+      "node",
+      "oi",
+      "login",
+      "--no-browser",
+      "--url",
+      "https://api.example.com",
+    ]);
+
+    expect(fetch).toHaveBeenCalledTimes(4);
+    await expect(store.getActiveContext()).resolves.toMatchObject({ credential });
+  });
+
   it("passes bounded list pagination and exposes the continuation offset", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
@@ -203,7 +244,7 @@ describe("CLI commands", () => {
     expect(JSON.parse(stdout.join(""))).toEqual(page);
   });
 
-  it("preserves the local credential when remote logout can be retried", async () => {
+  it("removes the local credential when remote logout can be retried", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
     await store.saveContext("default", {
@@ -215,13 +256,36 @@ describe("CLI commands", () => {
       .fn<typeof globalThis.fetch>()
       .mockResolvedValue(Response.json({ error: "unavailable" }, { status: 503 }));
 
-    await expect(createCli({ store, fetch }).parseAsync(["node", "oi", "logout"])).rejects.toThrow(
-      "503"
-    );
-    await expect(store.getActiveContext()).resolves.toMatchObject({ credential });
+    await expect(
+      createCli({ store, fetch }).parseAsync(["node", "oi", "logout"])
+    ).resolves.toBeDefined();
+    await expect(store.getActiveContext()).rejects.toThrow("Not logged in");
   });
 
-  it.each([429, 500])("keeps logout retryable after HTTP %s", async (status) => {
+  it("reports incomplete remote logout while removing the local active login", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+    const store = new ConfigStore(directory);
+    await store.saveContext("default", {
+      url: "https://api.example.com",
+      credential,
+      expiresAt: Date.now() + 60_000,
+    });
+    const stdout: string[] = [];
+
+    await createCli({
+      store,
+      fetch: vi.fn().mockResolvedValue(Response.json({ error: "unavailable" }, { status: 503 })),
+      stdout: (value) => stdout.push(value),
+    }).parseAsync(["node", "oi", "--output", "json", "logout"]);
+
+    expect(JSON.parse(stdout.join(""))).toMatchObject({
+      loggedOut: "default",
+      remoteRevocationComplete: false,
+    });
+    await expect(store.getActiveContext()).rejects.toThrow("Not logged in");
+  });
+
+  it.each([429, 500])("removes local login after remote HTTP %s", async (status) => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
     await store.saveContext("default", {
@@ -235,11 +299,11 @@ describe("CLI commands", () => {
         store,
         fetch: vi.fn().mockResolvedValue(Response.json({ error: "retry" }, { status })),
       }).parseAsync(["node", "oi", "logout"])
-    ).rejects.toThrow(String(status));
-    await expect(store.getActiveContext()).resolves.toMatchObject({ credential });
+    ).resolves.toBeDefined();
+    await expect(store.getActiveContext()).rejects.toThrow("Not logged in");
   });
 
-  it("keeps logout retryable after a transport failure", async () => {
+  it("removes local login after a transport failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const store = new ConfigStore(directory);
     await store.saveContext("default", {
@@ -253,8 +317,8 @@ describe("CLI commands", () => {
         store,
         fetch: vi.fn().mockRejectedValue(new TypeError("network down")),
       }).parseAsync(["node", "oi", "logout"])
-    ).rejects.toMatchObject({ kind: "transport" });
-    await expect(store.getActiveContext()).resolves.toMatchObject({ credential });
+    ).resolves.toBeDefined();
+    await expect(store.getActiveContext()).rejects.toThrow("Not logged in");
   });
 
   it.each([401, 404, 410])(
@@ -312,6 +376,153 @@ describe("CLI commands", () => {
     expect(request).not.toHaveProperty("reasoningEffort");
   });
 
+  it("accepts positional, stdin, and complete JSON prompt input with idempotency keys", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+    const store = new ConfigStore(directory);
+    await store.saveContext("default", {
+      url: "https://api.example.com",
+      credential,
+      expiresAt: Date.now() + 60_000,
+    });
+    const inputPath = join(directory, "prompt.json");
+    await writeFile(
+      inputPath,
+      JSON.stringify({ content: "From JSON", clientRequestId: "json-key", model: "model/json" })
+    );
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(Response.json({ messageId: "m1", status: "queued" }))
+      );
+
+    await createCli({ store, fetch }).parseAsync([
+      "node",
+      "oi",
+      "session",
+      "prompt",
+      "s1",
+      "Positional prompt",
+      "--idempotency-key",
+      "positional-key",
+    ]);
+    await createCli({ store, fetch, stdin: () => Promise.resolve("From stdin") }).parseAsync([
+      "node",
+      "oi",
+      "session",
+      "prompt",
+      "s1",
+      "-",
+      "--idempotency-key",
+      "stdin-key",
+    ]);
+    await createCli({ store, fetch }).parseAsync([
+      "node",
+      "oi",
+      "session",
+      "prompt",
+      "s1",
+      "--input",
+      inputPath,
+    ]);
+
+    expect(fetch.mock.calls.map((call) => JSON.parse(String(call[1]?.body)))).toEqual([
+      expect.objectContaining({ content: "Positional prompt", clientRequestId: "positional-key" }),
+      expect.objectContaining({ content: "From stdin", clientRequestId: "stdin-key" }),
+      expect.objectContaining({
+        content: "From JSON",
+        clientRequestId: "json-key",
+        model: "model/json",
+      }),
+    ]);
+  });
+
+  it.each(["text", "stream-json"] as const)(
+    "follows the bounded checkpoint feed using %s output",
+    async (format) => {
+      const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+      const store = new ConfigStore(directory);
+      await store.saveContext("default", {
+        url: "https://api.example.com",
+        credential,
+        expiresAt: Date.now() + 60_000,
+      });
+      const stdout: string[] = [];
+      const change = {
+        kind: "upsert",
+        revision: 1,
+        event: {
+          id: "event-1",
+          type: "token",
+          messageId: null,
+          createdAt: 1,
+          data: { text: "hello" },
+        },
+      };
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(Response.json({ changes: [change], checkpoint: 1, hasMore: false }))
+        .mockImplementation(() =>
+          Promise.resolve(Response.json({ changes: [], checkpoint: 1, hasMore: false }))
+        );
+
+      await expect(
+        createCli({
+          store,
+          fetch,
+          stdout: (value) => stdout.push(value),
+          sleep: () => new Promise((resolve) => setTimeout(resolve, 1)),
+        }).parseAsync([
+          "node",
+          "oi",
+          "--output",
+          format,
+          "session",
+          "events",
+          "s1",
+          "--follow",
+          "--after",
+          "0",
+          "--timeout",
+          "3",
+        ])
+      ).rejects.toMatchObject({ kind: "timeout" });
+
+      expect(String(fetch.mock.calls[0]?.[0])).toContain("/events?after=0");
+      expect(String(fetch.mock.calls[0]?.[0])).not.toContain("/events/live");
+      if (format === "stream-json") expect(JSON.parse(stdout[0]!)).toEqual(change);
+      else expect(stdout[0]).toContain("kind: upsert");
+    }
+  );
+
+  it("returns a timeout exit error with the final wait status", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+    const store = new ConfigStore(directory);
+    await store.saveContext("default", {
+      url: "https://api.example.com",
+      credential,
+      expiresAt: Date.now() + 60_000,
+    });
+    const stdout: string[] = [];
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(Response.json({ sessionId: "s1", status: "active", settled: false }))
+      );
+
+    await expect(
+      createCli({
+        store,
+        fetch,
+        stdout: (value) => stdout.push(value),
+        sleep: () => new Promise((resolve) => setTimeout(resolve, 1)),
+      }).parseAsync(["node", "oi", "--output", "json", "session", "wait", "s1", "--timeout", "2"])
+    ).rejects.toMatchObject({
+      kind: "timeout",
+      context: { sessionId: "s1", status: "active" },
+    });
+    expect(stdout).toEqual([]);
+  });
+
   it.each([
     ["create", "idempotencyKey", "--idempotency-key"],
     ["prompt", "clientRequestId", "--client-request-id"],
@@ -350,7 +561,7 @@ describe("CLI commands", () => {
       ).rejects.toThrow();
 
       const envelope = JSON.parse(stderr.join(""));
-      expect(envelope.error.kind).toBe("transport");
+      expect(envelope.error.code).toBe("service_unavailable");
       expect(envelope.error.context[field]).toEqual(
         explicit ?? expect.stringMatching(/^[0-9a-f-]{36}$/)
       );
@@ -394,7 +605,7 @@ describe("CLI commands", () => {
 
   it.each([
     ["text", ["session", "create", "--unknown"]],
-    ["json", ["session", "create"]],
+    ["json", ["session", "create", "--unknown"]],
     ["stream-json", ["session", "create", "--unknown"]],
   ] as const)("routes Commander failures through one %s error envelope", async (format, args) => {
     const stderr: string[] = [];
@@ -412,9 +623,9 @@ describe("CLI commands", () => {
     expect(exit).not.toHaveBeenCalled();
     expect(stderr).toHaveLength(1);
     if (format === "text") {
-      expect(stderr[0]).toMatch(/^error: \{"kind":"validation"/);
+      expect(stderr[0]).toMatch(/^error: \{"code":"invalid_request"/);
     } else {
-      expect(JSON.parse(stderr[0]!)).toMatchObject({ error: { kind: "validation" } });
+      expect(JSON.parse(stderr[0]!)).toMatchObject({ error: { code: "invalid_request" } });
     }
     expect(stderr[0]!.match(/unknown option|required option/g)).toHaveLength(1);
   });
@@ -423,13 +634,13 @@ describe("CLI commands", () => {
     const stderr: string[] = [];
 
     await expect(
-      runCli(["node", "oi", "--output=json", "session", "create"], {
+      runCli(["node", "oi", "--output=json", "session", "create", "--unknown"], {
         stderr: (value) => stderr.push(value),
       })
     ).rejects.toMatchObject({ name: "CommanderError" });
 
     expect(stderr).toHaveLength(1);
-    expect(JSON.parse(stderr[0]!)).toMatchObject({ error: { kind: "validation" } });
+    expect(JSON.parse(stderr[0]!)).toMatchObject({ error: { code: "invalid_request" } });
   });
 
   it("rejects non-HTTP verification URLs and passes metacharacters as URL data", async () => {

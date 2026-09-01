@@ -87,6 +87,7 @@ function createEnv(
           pr_count: 0,
           environment_id: null,
           external_request_fingerprint: null,
+          external_bootstrap_snapshot: null,
           created_at: 1,
           updated_at: 1,
         };

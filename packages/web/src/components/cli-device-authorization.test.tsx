@@ -21,15 +21,22 @@ afterEach(() => {
 });
 
 describe("CliDeviceAuthorization", () => {
-  function pendingResponse(overrides?: Partial<{ deviceName: string; expiresAt: number }>) {
+  function pendingResponse(
+    overrides?: Partial<{
+      installation: { name: string };
+      deviceName: string;
+      expiresAt: number;
+    }>
+  ) {
     return Response.json({
+      installation: { name: "Acme Open-Inspect" },
       deviceName: "Ada's laptop",
       expiresAt: Date.now() + 5 * 60 * 1000,
       ...overrides,
     });
   }
 
-  it("shows verified requesting-device metadata and expiry before enabling approval", async () => {
+  it("shows verified installation, requesting-device metadata, and expiry before approval", async () => {
     vi.mocked(fetch).mockResolvedValue(pendingResponse());
     render(
       <CliDeviceAuthorization
@@ -43,6 +50,8 @@ describe("CliDeviceAuthorization", () => {
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
     expect(screen.getByLabelText("Authorization code")).toHaveTextContent("ABCD-EFGH");
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(await screen.findByText("Acme Open-Inspect")).toBeInTheDocument();
+    expect(screen.getByText("Installation")).toBeInTheDocument();
     expect(await screen.findByText("Ada's laptop")).toBeInTheDocument();
     expect(screen.getByText("Expires")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();

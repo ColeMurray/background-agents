@@ -16,7 +16,7 @@ function page(type: string, data: Record<string, unknown>) {
 }
 
 describe("external event projection", () => {
-  it("emits only fixed safe tool-call metadata", () => {
+  it("preserves useful tool-call data while removing credential fields and managed secrets", () => {
     const projected = projectExternalEventPage(
       page("tool_call", {
         type: "tool_call",
@@ -30,13 +30,24 @@ describe("external event projection", () => {
         childSessionId: "child-1",
         args: { command: "deploy", authorization: "historical-secret" },
         output: "rotated-secret",
-      })
+      }),
+      new Set(["historical-secret", "rotated-secret"])
     );
 
     expect(projected.changes[0]).toMatchObject({
       kind: "upsert",
       event: {
-        data: { type: "tool_call", timestamp: 1, status: "running", isSubtask: true },
+        data: {
+          type: "tool_call",
+          timestamp: 1,
+          status: "running",
+          isSubtask: true,
+          tool: "shell",
+          callId: "call-1",
+          childSessionId: "child-1",
+          args: { command: "deploy" },
+          output: "[REDACTED]",
+        },
       },
     });
     expect(JSON.stringify(projected)).not.toContain("historical-secret");
@@ -53,7 +64,7 @@ describe("external event projection", () => {
     ["warning", { scope: "secrets", message: "non-global-secret" }],
     ["session_title", { title: "historical-secret" }],
     ["user_message", { content: "rotated-secret" }],
-  ])("never exposes free-form strings from %s events", (type, fields) => {
+  ])("redacts managed secrets from %s events", (type, fields) => {
     const projected = projectExternalEventPage(
       page(type, {
         type,
@@ -61,7 +72,14 @@ describe("external event projection", () => {
         sandboxId: "sandbox-1",
         messageId: "message-1",
         ...fields,
-      })
+      }),
+      new Set([
+        "historical-secret",
+        "rotated-secret",
+        "deleted-global-secret",
+        "non-global-secret",
+        "secret-error",
+      ])
     );
     const serialized = JSON.stringify(projected);
     expect(serialized).not.toContain("historical-secret");
@@ -93,8 +111,10 @@ describe("external event projection", () => {
     expect(finish.changes[0].event.data).toEqual({
       type: "step_finish",
       timestamp: 4,
+      messageId: "message-1",
       cost: 0.25,
       tokens: { total: 20, input: 12, output: 8, cache: { read: 3 } },
+      reason: "contains-secret",
     });
 
     expect(

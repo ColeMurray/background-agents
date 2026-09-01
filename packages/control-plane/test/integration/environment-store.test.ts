@@ -155,6 +155,11 @@ describe("EnvironmentStore", () => {
       .bind(row.id)
       .first<{ c: number }>();
     expect(secretCount?.c).toBe(0);
+    expect(
+      await env.DB.prepare("SELECT encrypted_value FROM managed_secret_redaction_history").first<{
+        encrypted_value: string;
+      }>()
+    ).toEqual({ encrypted_value: "cipher" });
     const ready = await env.DB.prepare(
       "SELECT status FROM image_builds WHERE id = 'img_ready'"
     ).first<{ status: string }>();
@@ -195,5 +200,10 @@ describe("EnvironmentStore", () => {
       .bind(row.id)
       .first<{ c: number }>();
     expect(secretCount?.c).toBe(0);
+    expect(
+      await env.DB.prepare("SELECT encrypted_value FROM managed_secret_redaction_history").first<{
+        encrypted_value: string;
+      }>()
+    ).toEqual({ encrypted_value: "cipher" });
   });
 });

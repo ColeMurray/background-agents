@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashToken } from "../../src/auth/crypto";
 import { externalCreateSessionRequestSchema } from "@open-inspect/shared/types/external-session-api";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
+import { EnvironmentSecretsStore } from "../../src/db/environment-secrets";
+import { RepoSecretsStore } from "../../src/db/repo-secrets";
 import { cleanD1Tables } from "./cleanup";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { deriveExternalSessionId } from "../../src/routes/external-sessions";
@@ -38,7 +40,13 @@ async function externalHeaders(roleId = "role_builtin_member"): Promise<Record<s
   )
     .bind("credential-1", await hashToken(credential), USER_ID, Date.now(), Date.now() + 60_000)
     .run();
-  return { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" };
+  return {
+    Authorization: `Bearer ${credential}`,
+    "Content-Type": "application/json",
+    "X-Open-Inspect-API-Version": "1",
+    "X-Open-Inspect-Client-Version": "0.1.0-test",
+    "X-Open-Inspect-Client-Surface": "cli",
+  };
 }
 
 function createBody(overrides: Record<string, unknown> = {}): string {
@@ -60,8 +68,6 @@ describe("external v1 session API", () => {
     for (const body of [
       createBody({ repoOwner: "acme" }),
       createBody({ attachments: [] }),
-      createBody({ skillSelection: { mode: "all" } }),
-      createBody({ providerSelections: {} }),
       createBody({ model: "unknown/model" }),
       createBody({ model: "anthropic/claude-haiku-4-5", reasoningEffort: "low" }),
     ]) {
@@ -83,7 +89,7 @@ describe("external v1 session API", () => {
 
     const deniedCreate = await SELF.fetch(API, { method: "POST", headers, body: createBody() });
     expect(deniedCreate.status).toBe(400);
-    await expect(deniedCreate.json()).resolves.toEqual({
+    await expect(deniedCreate.json()).resolves.toMatchObject({
       error: 'Model "openai/gpt-5.6-sol" is not enabled',
     });
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first()).toEqual({
@@ -119,9 +125,51 @@ describe("external v1 session API", () => {
       }),
     });
     expect(deniedWebPrompt.status).toBe(deniedPrompt.status);
-    await expect(deniedWebPrompt.json()).resolves.toEqual(await deniedPrompt.json());
+    await expect(deniedWebPrompt.json()).resolves.toMatchObject({
+      error: 'Model "openai/gpt-5.6-sol" is not enabled',
+    });
     const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
     expect((await queryDO(stub, "SELECT id FROM messages")).length).toBe(0);
+  });
+
+  it("redacts current repository and environment secrets from external errors", async () => {
+    const headers = await externalHeaders();
+    const created = await SELF.fetch(API, { method: "POST", headers, body: createBody() });
+    const { sessionId } = await created.json<{ sessionId: string }>();
+    const repoSecret = "current-repo-secret";
+    const environmentSecret = "current-environment-secret";
+    await new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!).setSecrets(
+      42,
+      "acme",
+      "repo",
+      { TOKEN: repoSecret }
+    );
+    const now = Date.now();
+    await env.DB.prepare(
+      "INSERT INTO environments (id, name, prebuild_enabled, created_at, updated_at) VALUES (?, ?, 0, ?, ?)"
+    )
+      .bind("env_external_error", "External error", now, now)
+      .run();
+    await new EnvironmentSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!).setSecrets(
+      "env_external_error",
+      { TOKEN: environmentSecret }
+    );
+
+    for (const [index, secret] of [repoSecret, environmentSecret].entries()) {
+      const response = await SELF.fetch(`${API}/${sessionId}/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          content: "Trigger model validation",
+          clientRequestId: `redaction-${index}`,
+          model: secret,
+        }),
+      });
+      expect(response.status).toBe(400);
+      const body = await response.text();
+      expect(body).not.toContain(secret);
+      expect(body).toContain("[REDACTED]");
+    }
   });
 
   it("allows create without reasoning for a non-reasoning model", async () => {
@@ -205,6 +253,202 @@ describe("external v1 session API", () => {
     expect((await queryDO(stub, "SELECT id FROM messages")).length).toBe(1);
   });
 
+  it("reuses an omitted model default after workspace preferences change", async () => {
+    const headers = await externalHeaders();
+    await env.DB.prepare(
+      "INSERT INTO model_preferences (id, enabled_models, updated_at) VALUES ('global', ?, ?)"
+    )
+      .bind(JSON.stringify(["openai/gpt-5.6-sol"]), Date.now())
+      .run();
+    const body = createBody({
+      idempotencyKey: `default-model-retry-${crypto.randomUUID()}`,
+      model: undefined,
+      reasoningEffort: undefined,
+      initialPrompt: "Start with the original default",
+    });
+
+    const first = await SELF.fetch(API, { method: "POST", headers, body });
+    expect(first.status).toBe(201);
+    const result = await first.json<{ sessionId: string; messageId: string }>();
+    await env.DB.prepare("UPDATE model_preferences SET enabled_models = ?, updated_at = ?")
+      .bind(JSON.stringify(["anthropic/claude-sonnet-4-6"]), Date.now())
+      .run();
+
+    const retry = await SELF.fetch(API, { method: "POST", headers, body });
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toEqual(result);
+    expect(
+      await env.DB.prepare("SELECT model, external_bootstrap_snapshot FROM sessions WHERE id = ?")
+        .bind(result.sessionId)
+        .first<{ model: string; external_bootstrap_snapshot: string }>()
+    ).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      external_bootstrap_snapshot: expect.stringContaining('"model":"openai/gpt-5.6-sol"'),
+    });
+    const stub = env.SESSION.get(env.SESSION.idFromName(result.sessionId));
+    expect(await queryDO(stub, "SELECT model FROM session")).toEqual([
+      { model: "openai/gpt-5.6-sol" },
+    ]);
+    expect((await queryDO(stub, "SELECT id FROM messages")).length).toBe(1);
+  });
+
+  it("recovers a D1-only reservation from its original environment bootstrap", async () => {
+    const headers = await externalHeaders();
+    const environmentId = `env-retry-${crypto.randomUUID()}`;
+    const idempotencyKey = `partial-retry-${crypto.randomUUID()}`;
+    const body = createBody({
+      idempotencyKey,
+      environmentId,
+      model: undefined,
+      reasoningEffort: undefined,
+      initialPrompt: "Recover the original operation",
+    });
+    const fingerprint = await hashToken(
+      JSON.stringify(externalCreateSessionRequestSchema.parse(JSON.parse(body)))
+    );
+    const sessionId = await deriveExternalSessionId(
+      USER_ID,
+      idempotencyKey,
+      externalSessionIdSecret()
+    );
+    const now = Date.now();
+    const originalRepositories = [
+      {
+        repoOwner: "acme",
+        repoName: "original",
+        repoId: 101,
+        baseBranch: "main",
+      },
+    ];
+    const snapshot = {
+      sessionId,
+      repoOwner: "acme",
+      repoName: "original",
+      repoId: 101,
+      defaultBranch: "main",
+      branch: null,
+      repositories: originalRepositories,
+      environmentId,
+      title: "External session",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: null,
+      codeServerEnabled: false,
+      vncEnabled: false,
+      sandboxSettings: { sandboxTimeoutMs: 120_000, terminalEnabled: true },
+      participantUserId: USER_ID,
+      platformUserId: USER_ID,
+      scmTokenEncrypted: null,
+      scmRefreshTokenEncrypted: null,
+      requestFingerprint: fingerprint,
+    };
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO environments
+         (id, name, description, prebuild_enabled, channel_associations, created_at, updated_at)
+         VALUES (?, 'Retry environment', NULL, 0, NULL, ?, ?)`
+      ).bind(environmentId, now, now),
+      env.DB.prepare(
+        `INSERT INTO environment_repositories
+         (environment_id, position, repo_owner, repo_name, repo_id, base_branch)
+         VALUES (?, 0, 'acme', 'original', 101, 'main')`
+      ).bind(environmentId),
+      env.DB.prepare(
+        `INSERT INTO integration_environment_settings
+         (integration_id, environment_id, settings, created_at, updated_at)
+         VALUES ('sandbox', ?, ?, ?, ?)`
+      ).bind(
+        environmentId,
+        JSON.stringify({ sandboxTimeoutMs: 120_000, terminalEnabled: true }),
+        now,
+        now
+      ),
+    ]);
+    await new SessionIndexStore(env.DB).create({
+      id: sessionId,
+      title: "External session",
+      repoOwner: "acme",
+      repoName: "original",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: null,
+      baseBranch: "main",
+      repositories: originalRepositories,
+      environmentId,
+      status: "created",
+      userId: USER_ID,
+      externalRequestFingerprint: fingerprint,
+      externalBootstrapSnapshot: JSON.stringify(snapshot),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM environment_repositories WHERE environment_id = ?").bind(
+        environmentId
+      ),
+      env.DB.prepare(
+        `INSERT INTO environment_repositories
+         (environment_id, position, repo_owner, repo_name, repo_id, base_branch)
+         VALUES (?, 0, 'acme', 'changed', 202, 'develop')`
+      ).bind(environmentId),
+      env.DB.prepare(
+        `UPDATE integration_environment_settings
+         SET settings = ?, updated_at = ? WHERE integration_id = 'sandbox' AND environment_id = ?`
+      ).bind(
+        JSON.stringify({ sandboxTimeoutMs: 300_000, terminalEnabled: false }),
+        now + 1,
+        environmentId
+      ),
+      env.DB.prepare(
+        "INSERT INTO model_preferences (id, enabled_models, updated_at) VALUES ('global', ?, ?)"
+      ).bind(JSON.stringify(["anthropic/claude-sonnet-4-6"]), now + 1),
+    ]);
+
+    const retry = await SELF.fetch(API, { method: "POST", headers, body });
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({ sessionId, messageId: expect.any(String) });
+    const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    expect(await queryDO(stub, "SELECT repo_name, model, sandbox_settings FROM session")).toEqual([
+      {
+        repo_name: "original",
+        model: "openai/gpt-5.6-sol",
+        sandbox_settings: JSON.stringify({
+          terminalEnabled: true,
+          sandboxTimeoutMs: 120_000,
+        }),
+      },
+    ]);
+    expect(await queryDO(stub, "SELECT repo_name, base_branch FROM session_repositories")).toEqual([
+      { repo_name: "original", base_branch: "main" },
+    ]);
+    expect(await queryDO(stub, "SELECT content FROM messages")).toEqual([
+      { content: "Recover the original operation" },
+    ]);
+
+    const roleId = `role-no-environment-${crypto.randomUUID()}`;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
+         VALUES (?, NULL, ?, ?, NULL, 0)`
+      ).bind(roleId, roleId, roleId),
+      ...["sessions.create", "sessions.collaborate", "skills.read"].map((permission) =>
+        env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)").bind(
+          roleId,
+          permission
+        )
+      ),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        roleId,
+        USER_ID
+      ),
+    ]);
+    const unauthorizedRetry = await SELF.fetch(API, { method: "POST", headers, body });
+    expect(unauthorizedRetry.status).toBe(403);
+    await expect(unauthorizedRetry.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "environments.use",
+    });
+  });
+
   it("reserves the full request fingerprint before bootstrap and rejects changed crash retries", async () => {
     const headers = await externalHeaders();
     const idempotencyKey = `d1-crash-${crypto.randomUUID()}`;
@@ -239,7 +483,7 @@ describe("external v1 session API", () => {
       body: createBody({ idempotencyKey, initialPrompt: "Changed prompt" }),
     });
     expect(changed.status).toBe(409);
-    await expect(changed.json()).resolves.toEqual({ error: "Idempotency key conflict" });
+    await expect(changed.json()).resolves.toMatchObject({ error: "Idempotency key conflict" });
     const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
     expect(
       await queryDO(
@@ -294,7 +538,7 @@ describe("external v1 session API", () => {
     const winnerIndex = responses.findIndex((response) => response.status === 201);
     const loserIndex = 1 - winnerIndex;
     const winner = await responses[winnerIndex]!.json<{ sessionId: string }>();
-    await expect(responses[loserIndex]!.json()).resolves.toEqual({
+    await expect(responses[loserIndex]!.json()).resolves.toMatchObject({
       error: "Idempotency key conflict",
     });
 
@@ -393,7 +637,7 @@ describe("external v1 session API", () => {
     const retry = await SELF.fetch(API, { method: "POST", headers, body });
 
     expect(retry.status).toBe(409);
-    await expect(retry.json()).resolves.toEqual({
+    await expect(retry.json()).resolves.toMatchObject({
       error: "Session runtime conflict",
       code: "runtime_conflict",
     });
@@ -411,7 +655,7 @@ describe("external v1 session API", () => {
     expect(got.status).toBe(200);
     const session = (await got.json()) as Record<string, unknown>;
     expect(session).toMatchObject({ id: sessionId });
-    expect(session).not.toHaveProperty("repoOwner");
+    expect(session).toMatchObject({ repoOwner: null, repoName: null, repositories: [] });
     expect((await SELF.fetch(`${API}/${sessionId}/stop`, { method: "POST", headers })).status).toBe(
       200
     );
@@ -489,7 +733,6 @@ describe("external v1 session API", () => {
     const created = await SELF.fetch(API, { method: "POST", headers, body: createBody() });
     const { sessionId } = (await created.json()) as { sessionId: string };
     for (const invalid of [
-      { content: "Continue", clientRequestId: "invalid-1", attachments: [] },
       { content: "Continue", clientRequestId: "invalid-2", model: "unknown/model" },
       {
         content: "Continue",
@@ -620,11 +863,18 @@ describe("external v1 session API", () => {
     const projectedEvents = eventBody.changes.map((change) => change.event);
     const toolCall = projectedEvents.find((event) => event.data.type === "tool_call");
     const stepFinish = projectedEvents.find((event) => event.data.type === "step_finish");
-    expect(toolCall?.data).toEqual({ type: "tool_call", timestamp: 1 });
+    expect(toolCall?.data).toEqual({
+      type: "tool_call",
+      timestamp: 1,
+      messageId: "message-1",
+      tool: "shell",
+      callId: "call-1",
+      args: { command: "safe" },
+    });
     expect(JSON.stringify(eventBody)).not.toContain("sandbox-identity");
     expect(JSON.stringify(eventBody)).not.toContain("Bearer credential");
     expect(stepFinish?.data.tokens).toEqual({ input: 7, output: 3 });
-    expect(stepFinish?.data.reason).toBeUndefined();
+    expect(stepFinish?.data.reason).toBe("completed with [REDACTED]");
     expect(JSON.stringify(eventBody)).not.toContain(managedSecret);
     expect(JSON.stringify(eventBody)).not.toContain("rotated-value-456");
 
@@ -827,7 +1077,7 @@ describe("external v1 session API", () => {
     const response = await SELF.fetch(`${API}/${sessionId}/events?after=1`, { headers });
 
     expect(response.status).toBe(410);
-    await expect(response.json()).resolves.toEqual({
+    await expect(response.json()).resolves.toMatchObject({
       error: "Event checkpoint expired",
       code: "event_checkpoint_expired",
     });

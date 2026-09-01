@@ -12,9 +12,13 @@ import { sessionWsTokenRoutes } from "./session-ws-token";
 import { sessionDiffRoutes } from "./session-diffs";
 import { sessionSkillRoutes } from "./session-skills";
 import { externalSessionsRoutes } from "./external-sessions";
+import { externalDiscoveryRoutes } from "./external-discovery";
+import { externalSessionResourceRoutes } from "./external-session-resources";
 
 export const sessionRoutes: Route[] = [
   ...externalSessionsRoutes,
+  ...externalDiscoveryRoutes,
+  ...externalSessionResourceRoutes,
   ...sessionCreateRoutes,
   ...sessionIndexRoutes,
   ...sessionRuntimeProxyRoutes,

@@ -11,6 +11,7 @@ import type { SecretsWriteResult } from "./scoped-secrets";
 import { normalizeKey } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 import type { SqlDatabase } from "./sql-database";
+import { archiveManagedSecretStatements } from "./managed-secret-redaction-history";
 
 export type { SecretMetadata } from "./secrets-validation";
 
@@ -34,9 +35,9 @@ export class RepoSecretsStore {
     const normalized = prepareSecretsForWrite(secrets);
 
     const existingKeys = await this.db
-      .prepare("SELECT key FROM repo_secrets WHERE repo_id = ?")
+      .prepare("SELECT key, encrypted_value FROM repo_secrets WHERE repo_id = ?")
       .bind(repoId)
-      .all<{ key: string }>();
+      .all<{ key: string; encrypted_value: string }>();
     const existingKeySet = new Set((existingKeys.results || []).map((r) => r.key));
 
     const incomingKeys = Object.keys(normalized);
@@ -62,9 +63,13 @@ export class RepoSecretsStore {
         )
         .bind(repoId, owner, name, entry.key, entry.encryptedValue, now, now)
     );
+    const replaced = (existingKeys.results ?? []).filter(({ key }) => key in normalized);
 
     if (statements.length > 0) {
-      await this.db.batch(statements);
+      await this.db.batch([
+        ...archiveManagedSecretStatements(this.db, replaced, now),
+        ...statements,
+      ]);
     }
 
     return { created, updated, keys: incomingKeys };
@@ -103,10 +108,20 @@ export class RepoSecretsStore {
   }
 
   async deleteSecret(repoId: number, key: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM repo_secrets WHERE repo_id = ? AND key = ?")
-      .bind(repoId, normalizeKey(key))
-      .run();
+    const normalized = normalizeKey(key);
+    const existing = (
+      await this.db
+        .prepare("SELECT key, encrypted_value FROM repo_secrets WHERE repo_id = ?")
+        .bind(repoId)
+        .all<{ key: string; encrypted_value: string }>()
+    ).results?.find(({ key: candidate }) => candidate === normalized);
+    if (!existing) return false;
+    const [, result] = await this.db.batch([
+      ...archiveManagedSecretStatements(this.db, [existing], Date.now()),
+      this.db
+        .prepare("DELETE FROM repo_secrets WHERE repo_id = ? AND key = ?")
+        .bind(repoId, normalized),
+    ]);
 
     return (result.meta?.changes ?? 0) > 0;
   }

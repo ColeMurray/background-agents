@@ -7,7 +7,7 @@ import type {
   PendingRevocation,
   StoredContext,
 } from "./config-store.js";
-import { withErrorContext } from "./errors.js";
+import { CliError, withErrorContext } from "./errors.js";
 
 const DEFINITIVELY_INVALID_STATUSES = new Set([401, 404, 410]);
 
@@ -71,24 +71,39 @@ export class CredentialLifecycle {
     };
   }
 
-  async logout(): Promise<NamedContext> {
+  async logout(): Promise<
+    NamedContext & {
+      remoteRevocationComplete: boolean;
+      pendingRevocations: number;
+      pendingDeviceAuthorizations: number;
+    }
+  > {
+    let removed: NamedContext;
+    try {
+      removed = await this.store.removeActiveContext();
+    } catch (cause) {
+      if (!(cause instanceof CliError) || cause.kind !== "auth") throw cause;
+      await this.drainDeviceAuthorizations();
+      await this.drainPendingCredentials();
+      throw cause;
+    }
     const deviceAuthorizations = await this.drainDeviceAuthorizations();
     const credentials = await this.drainPendingCredentials();
-    const failures = [...deviceAuthorizations.failures, ...credentials.failures];
-    let context: NamedContext;
+    let activeRevoked = true;
     try {
-      context = await this.store.getActiveContext();
+      await this.revoke(removed);
     } catch (cause) {
-      failures.push(cause);
-      throw revocationFailure(failures);
+      activeRevoked = isDefinitivelyInvalid(cause);
     }
-    try {
-      await this.revoke(context);
-    } catch (cause) {
-      if (!isDefinitivelyInvalid(cause)) failures.push(cause);
-    }
-    if (failures.length) throw revocationFailure(failures);
-    return this.store.removeActiveContext();
+    return {
+      ...removed,
+      remoteRevocationComplete:
+        activeRevoked &&
+        credentials.failures.length === 0 &&
+        deviceAuthorizations.failures.length === 0,
+      pendingRevocations: credentials.remaining,
+      pendingDeviceAuthorizations: deviceAuthorizations.remaining,
+    };
   }
 
   private async drainPendingCredentials(): Promise<{

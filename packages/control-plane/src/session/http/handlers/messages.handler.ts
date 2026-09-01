@@ -12,6 +12,7 @@ import {
   InvalidEventFeedCursorError,
 } from "../../event-repository";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { parseCreatedAtIdCursor } from "../../list-cursor";
 import {
   PromptQueueFullError,
   PromptRequestConflictError,
@@ -101,13 +102,13 @@ export class MessagesHandler {
     const cursor = cursorValue ? parseEventChangeCursor(cursorValue) : null;
     const after = afterValue === null ? undefined : Number(afterValue);
     const limitValue = url.searchParams.get("limit");
-    const limit = limitValue === null ? 50 : Number(limitValue);
+    const limit = limitValue === null ? 100 : Number(limitValue);
     if (
       (cursorValue && !cursor) ||
       (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) ||
       !Number.isSafeInteger(limit) ||
       limit < 1 ||
-      limit > 200
+      limit > 500
     ) {
       return Response.json({ error: "Invalid event change query" }, { status: 400 });
     }
@@ -132,19 +133,35 @@ export class MessagesHandler {
       return Response.json(this.messageService.getArtifact(artifactId));
     }
 
-    return Response.json(this.messageService.listArtifacts());
+    const rawLimit = url.searchParams.get("limit");
+    if (rawLimit === null) return Response.json(this.messageService.listArtifacts());
+    const limit = Number(rawLimit);
+    const rawCursor = url.searchParams.get("cursor");
+    const cursor = parseCreatedAtIdCursor(rawCursor);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || (rawCursor && !cursor)) {
+      return Response.json({ error: "Invalid artifact pagination" }, { status: 400 });
+    }
+    return Response.json(this.messageService.listArtifacts({ cursor, limit }));
   }
 
   listMessages(url: URL): Response {
-    const cursor = url.searchParams.get("cursor");
+    const rawCursor = url.searchParams.get("cursor");
+    const cursor = parseCreatedAtIdCursor(rawCursor);
     const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 100);
     const status = url.searchParams.get("status");
 
     if (
-      status &&
-      !VALID_MESSAGE_STATUSES.includes(status as (typeof VALID_MESSAGE_STATUSES)[number])
+      (status &&
+        !VALID_MESSAGE_STATUSES.includes(status as (typeof VALID_MESSAGE_STATUSES)[number])) ||
+      (rawCursor !== null && !cursor)
     ) {
-      return Response.json({ error: `Invalid message status: ${status}` }, { status: 400 });
+      return Response.json(
+        {
+          error:
+            rawCursor !== null && !cursor ? "Invalid cursor" : `Invalid message status: ${status}`,
+        },
+        { status: 400 }
+      );
     }
 
     const result = this.messageService.listMessages({ cursor, limit, status });

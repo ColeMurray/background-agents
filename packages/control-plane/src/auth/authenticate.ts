@@ -11,6 +11,12 @@
  */
 
 import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared/service-auth";
+import {
+  CLI_API_VERSION_HEADER,
+  CLI_CLIENT_SURFACE_HEADER,
+  CLI_CLIENT_VERSION_HEADER,
+  CLI_EXTERNAL_API_VERSION,
+} from "@open-inspect/shared/types/cli-auth";
 import { authenticateSession, SessionIntegrityError } from "./user/session-authenticator";
 import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
@@ -45,8 +51,25 @@ export async function authenticate(
     if (signatureHeader !== null) {
       return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
     }
+    const apiVersion = request.headers.get(CLI_API_VERSION_HEADER);
+    const clientVersion = request.headers.get(CLI_CLIENT_VERSION_HEADER);
+    const clientSurface = request.headers.get(CLI_CLIENT_SURFACE_HEADER);
+    if (apiVersion !== CLI_EXTERNAL_API_VERSION) {
+      return { reason: "Incompatible client version", status: 426, failedScheme: "cli-bearer" };
+    }
+    if (!clientVersion?.trim() || !["cli", "mcp"].includes(clientSurface ?? "")) {
+      return { reason: "Invalid client metadata", status: 426, failedScheme: "cli-bearer" };
+    }
     try {
-      return await authenticateCliBearer(request, ctx);
+      const result = await authenticateCliBearer(request, ctx);
+      logger.info("auth.cli.client", {
+        event: "auth.cli.client",
+        client_version: clientVersion,
+        client_surface: clientSurface,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return result;
     } catch (cause) {
       logger.error("CLI credential validation failed", {
         event: "auth.cli.failed",

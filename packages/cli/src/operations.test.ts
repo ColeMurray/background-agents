@@ -164,7 +164,33 @@ describe("Operations", () => {
     ]);
   });
 
-  it("waits until settled and enforces timeout", async () => {
+  it("deduplicates replayed event IDs unless their revision is greater", async () => {
+    const first = upsert(5, event("event-1", 1, "new"));
+    const api = {
+      events: vi
+        .fn()
+        .mockResolvedValueOnce({ changes: [first], checkpoint: 5, hasMore: false })
+        .mockRejectedValueOnce(new CliError("expired", "checkpoint expired"))
+        .mockResolvedValueOnce({
+          changes: [upsert(4, event("event-1", 1, "old")), upsert(6, event("event-1", 1, "newer"))],
+          checkpoint: 6,
+          hasMore: false,
+        }),
+    };
+    const controller = new AbortController();
+    const seen: ExternalEventChange[] = [];
+    const operations = new Operations(api as never, { sleep: () => Promise.resolve() });
+
+    for await (const change of operations.followEvents("s1", { signal: controller.signal })) {
+      seen.push(change);
+      if (seen.length === 2) controller.abort();
+    }
+
+    expect(seen).toEqual([first, upsert(6, event("event-1", 1, "newer"))]);
+    expect(api.events.mock.calls.map((call) => call[1]?.after)).toEqual([undefined, 5, undefined]);
+  });
+
+  it("waits until settled", async () => {
     const api = {
       waitStatus: vi
         .fn()
@@ -175,13 +201,109 @@ describe("Operations", () => {
     await expect(
       operations.wait("s1", { pollIntervalMs: 1, timeoutMs: 100 })
     ).resolves.toMatchObject({ settled: true });
+  });
 
-    const stuck = new Operations(
-      { waitStatus: vi.fn().mockResolvedValue({ settled: false }) } as never,
-      { now: vi.fn().mockReturnValueOnce(0).mockReturnValue(101), sleep: () => Promise.resolve() }
+  it("caps polling sleeps and returns the latest observed status on timeout", async () => {
+    let now = 0;
+    const sleep = vi.fn(async (milliseconds: number) => {
+      now += milliseconds;
+    });
+    const waitStatus = vi.fn().mockResolvedValue({
+      sessionId: "s1",
+      status: "running",
+      settled: false,
+      latestAssistantMessage: { id: "m1", content: "working", completedAt: null },
+    });
+    const operations = new Operations({ waitStatus } as never, { now: () => now, sleep });
+
+    await expect(operations.wait("s1", { pollIntervalMs: 1_000, timeoutMs: 75 })).resolves.toEqual({
+      sessionId: "s1",
+      status: "running",
+      settled: false,
+      timedOut: true,
+      latestAssistantMessage: { id: "m1", content: "working", completedAt: null },
+    });
+    expect(sleep).toHaveBeenCalledWith(75, undefined);
+    expect(waitStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a hanging status fetch at the deadline without a final fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const waitStatus = vi
+        .fn()
+        .mockResolvedValueOnce({ sessionId: "s1", status: "running", settled: false })
+        .mockImplementationOnce(
+          (_id: string, signal: AbortSignal) =>
+            new Promise((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            })
+        );
+      const operations = new Operations({ waitStatus } as never);
+
+      const waiting = operations.wait("s1", { pollIntervalMs: 100, timeoutMs: 250 });
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(waiting).resolves.toEqual({
+        sessionId: "s1",
+        status: "running",
+        settled: false,
+        timedOut: true,
+      });
+      expect(waitStatus).toHaveBeenCalledTimes(2);
+      expect(waitStatus.mock.calls[1]?.[1].aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a hanging initial fetch when no status was observed", async () => {
+    vi.useFakeTimers();
+    try {
+      const waitStatus = vi.fn(
+        (_id: string, signal: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          })
+      );
+      const waiting = new Operations({ waitStatus } as never).wait("s1", { timeoutMs: 50 });
+      const assertion = expect(waiting).rejects.toMatchObject({ kind: "timeout" });
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      await assertion;
+      expect(waitStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves caller abort reasons during a deferred status fetch", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller stopped waiting");
+    const waitStatus = vi.fn(
+      (_id: string, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        })
     );
-    await expect(stuck.wait("s1", { pollIntervalMs: 1, timeoutMs: 100 })).rejects.toThrow(
-      "timed out"
-    );
+    const waiting = new Operations({ waitStatus } as never).wait("s1", {
+      timeoutMs: 10_000,
+      signal: controller.signal,
+    });
+
+    controller.abort(reason);
+
+    await expect(waiting).rejects.toBe(reason);
+  });
+
+  it("treats a zero timeout as immediate and does not start a status fetch", async () => {
+    const waitStatus = vi.fn();
+    const operations = new Operations({ waitStatus } as never);
+
+    await expect(operations.wait("s1", { timeoutMs: 0 })).rejects.toMatchObject({
+      kind: "timeout",
+    });
+    expect(waitStatus).not.toHaveBeenCalled();
   });
 });

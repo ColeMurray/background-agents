@@ -1,6 +1,7 @@
 import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import type { SqlStorage } from "./sql-storage";
 import type { ArtifactRow } from "./types";
+import type { CreatedAtIdCursor } from "./list-cursor";
 
 /** Data for creating an artifact. */
 export interface CreateArtifactData {
@@ -46,8 +47,19 @@ export class ArtifactRepository {
     );
   }
 
-  listArtifacts(): ArtifactRow[] {
-    const result = this.sql.exec(`SELECT * FROM artifacts ORDER BY created_at DESC`);
+  listArtifacts(options?: { cursor: CreatedAtIdCursor | null; limit: number }): ArtifactRow[] {
+    const cursorCondition = options?.cursor
+      ? `WHERE created_at < ? OR (created_at = ? AND id < ?)`
+      : "";
+    const params: Array<string | number> = options?.cursor
+      ? [options.cursor.createdAt, options.cursor.createdAt, options.cursor.id]
+      : [];
+    const limit = options ? `LIMIT ?` : "";
+    if (options) params.push(options.limit + 1);
+    const result = this.sql.exec(
+      `SELECT * FROM artifacts ${cursorCondition} ORDER BY created_at DESC, id DESC ${limit}`.trim(),
+      ...params
+    );
     return result.toArray() as ArtifactRow[];
   }
 

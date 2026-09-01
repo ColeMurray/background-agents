@@ -295,10 +295,15 @@ describe("CredentialLifecycle", () => {
     expect((await restarted.read()).pendingDeviceAuthorizations).toEqual([]);
   });
 
-  it("logout drains pending and active credentials before removing the context", async () => {
+  it("logout removes the active credential before draining pending and active credentials", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
-    await seedOldContext(directory);
-    const initial = new ConfigStore(directory);
+    const localCredentials = memoryStore();
+    const initial = new ConfigStore(directory, { credentialStore: localCredentials });
+    await initial.saveContext("work", {
+      url: "https://old.example.com",
+      credential: oldCredential,
+      expiresAt: 10,
+    });
     await install(
       initial,
       new CredentialLifecycle(
@@ -306,11 +311,14 @@ describe("CredentialLifecycle", () => {
         vi.fn().mockResolvedValue(Response.json({ error: "unavailable" }, { status: 503 }))
       )
     );
-    const restarted = new ConfigStore(directory);
+    const activeCredentialRef = (await initial.read()).contexts.work!.credentialRef;
+    const restarted = new ConfigStore(directory, { credentialStore: localCredentials });
     const seen: string[] = [];
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_request, init) => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (_request, init) => {
+      await expect(restarted.getActiveContext()).rejects.toThrow("Not logged in");
+      expect(localCredentials.values.has(activeCredentialRef)).toBe(false);
       seen.push(new Headers(init?.headers).get("Authorization") ?? "");
-      return Promise.resolve(new Response(null, { status: 204 }));
+      return new Response(null, { status: 204 });
     });
 
     await new CredentialLifecycle(restarted, fetch).logout();
@@ -334,7 +342,7 @@ describe("CredentialLifecycle", () => {
     expect((await restarted.read()).pendingRevocations).toEqual([]);
   });
 
-  it("logout fails and preserves pending and active handles on transient errors", async () => {
+  it("logout removes the active context despite transient remote errors", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     await seedOldContext(directory);
     const initial = new ConfigStore(directory);
@@ -351,13 +359,13 @@ describe("CredentialLifecycle", () => {
       .mockRejectedValueOnce(new TypeError("network down"))
       .mockResolvedValueOnce(Response.json({ error: "limited" }, { status: 429 }));
 
-    await expect(new CredentialLifecycle(restarted, fetch).logout()).rejects.toBeInstanceOf(
-      AggregateError
-    );
-    expect(await restarted.getPendingRevocations()).toMatchObject([{ credential: oldCredential }]);
-    await expect(restarted.getActiveContext()).resolves.toMatchObject({
-      credential: newCredential,
+    await expect(new CredentialLifecycle(restarted, fetch).logout()).resolves.toMatchObject({
+      name: "work",
+      remoteRevocationComplete: false,
+      pendingRevocations: 1,
     });
+    expect(await restarted.getPendingRevocations()).toMatchObject([{ credential: oldCredential }]);
+    await expect(restarted.getActiveContext()).rejects.toThrow("Not logged in");
   });
 
   it("logout clears definitive-invalid pending and active handles after restart", async () => {

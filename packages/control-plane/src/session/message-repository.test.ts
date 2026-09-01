@@ -484,10 +484,15 @@ describe("MessageRepository", () => {
   });
 
   it("builds message list pagination filters", () => {
-    repository.listMessages({ limit: 10, status: "pending", cursor: "5000" });
+    repository.listMessages({
+      limit: 10,
+      status: "pending",
+      cursor: { createdAt: 5000, id: "message-5" },
+    });
     expect(mock.calls[0].query).toContain("status = ?");
-    expect(mock.calls[0].query).toContain("created_at < ?");
-    expect(mock.calls[0].params).toEqual(["pending", 5000, 11]);
+    expect(mock.calls[0].query).toContain("created_at = ? AND id < ?");
+    expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+    expect(mock.calls[0].params).toEqual(["pending", 5000, 5000, "message-5", 11]);
   });
 
   it("selects the latest terminal message", () => {

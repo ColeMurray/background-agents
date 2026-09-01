@@ -5,10 +5,16 @@ import type {
   ExternalFollowUpRequest,
   ExternalSessionListQuery,
 } from "@open-inspect/shared/types/external-session-api";
+import type {
+  ExternalDiffListQuery,
+  ExternalKeysetListQuery,
+  ExternalListQuery,
+} from "@open-inspect/shared/types/external-resources-api";
 import type { ApiClient } from "./api-client.js";
 import { CliError } from "./errors.js";
 
 interface PollOptions {
+  after?: number;
   pollIntervalMs?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -19,7 +25,7 @@ interface OperationsDependencies {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
-const DEFAULT_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
 const MIN_POLL_INTERVAL_MS = 100;
 const MAX_POLL_INTERVAL_MS = 30_000;
 
@@ -40,6 +46,30 @@ export class Operations {
     return this.api.createSession(input);
   }
 
+  listRepositories(options?: ExternalListQuery) {
+    return this.api.listRepositories(options);
+  }
+
+  listEnvironments(options?: ExternalListQuery) {
+    return this.api.listEnvironments(options);
+  }
+
+  getEnvironment(id: string) {
+    return this.api.getEnvironment(id);
+  }
+
+  listModels() {
+    return this.api.listModels();
+  }
+
+  listSkills(options?: ExternalListQuery) {
+    return this.api.listSkills(options);
+  }
+
+  listProviderAccounts(options?: ExternalListQuery) {
+    return this.api.listProviderAccounts(options);
+  }
+
   listSessions(options?: ExternalSessionListQuery & { signal?: AbortSignal }) {
     return this.api.listSessions(options);
   }
@@ -51,6 +81,55 @@ export class Operations {
     return this.api.promptSession(id, input);
   }
 
+  uploadAttachment(id: string, file: Blob, name: string, idempotencyKey?: string) {
+    return this.api.uploadAttachment(id, file, name, idempotencyKey);
+  }
+
+  messages(id: string, options?: { limit?: number; cursor?: string }) {
+    return this.api.messages(id, options);
+  }
+
+  artifacts(id: string, options?: ExternalKeysetListQuery) {
+    return this.api.artifacts(id, options);
+  }
+
+  artifactContent(id: string, artifactId: string, options?: { offset?: number; limit?: number }) {
+    return this.api.artifactContent(id, artifactId, options);
+  }
+
+  diff(id: string, options?: ExternalDiffListQuery) {
+    return this.api.diff(id, options);
+  }
+
+  diffFile(
+    id: string,
+    revisionId: string,
+    fileId: string,
+    options?: { offset?: number; limit?: number }
+  ) {
+    return this.api.diffFile(id, revisionId, fileId, options);
+  }
+
+  pullRequests(id: string, options?: ExternalListQuery) {
+    return this.api.pullRequests(id, options);
+  }
+
+  pullRequest(id: string, pullRequestId: string) {
+    return this.api.pullRequest(id, pullRequestId);
+  }
+
+  children(id: string, options?: ExternalListQuery) {
+    return this.api.children(id, options);
+  }
+
+  child(id: string, childId: string) {
+    return this.api.child(id, childId);
+  }
+
+  promptChild(id: string, childId: string, input: { content: string; clientRequestId: string }) {
+    return this.api.promptChild(id, childId, input);
+  }
+
   stopSession(id: string) {
     return this.api.stopSession(id);
   }
@@ -60,18 +139,29 @@ export class Operations {
 
   async *followEvents(id: string, options: PollOptions = {}): AsyncGenerator<ExternalEventChange> {
     const { interval, deadline } = this.pollSettings(options);
-    let checkpoint: number | undefined;
+    let checkpoint = options.after;
+    const revisions = new Map<string, number>();
     while (!options.signal?.aborted && this.now() <= deadline) {
       let snapshot;
       try {
         snapshot = await this.readEventSnapshot(id, checkpoint, options.signal);
       } catch (cause) {
+        if (cause instanceof CliError && cause.kind === "expired") {
+          checkpoint = undefined;
+          continue;
+        }
         if (!isRetryableFeedError(cause)) throw cause;
-        await this.sleep(interval, options.signal);
+        await this.sleep(retryDelayMs(cause, interval), options.signal);
         continue;
       }
       checkpoint = snapshot.checkpoint;
-      for (const change of snapshot.changes) yield change;
+      for (const change of snapshot.changes) {
+        const eventId = change.kind === "upsert" ? change.event.id : change.eventId;
+        const priorRevision = revisions.get(eventId);
+        if (priorRevision !== undefined && change.revision <= priorRevision) continue;
+        revisions.set(eventId, change.revision);
+        yield change;
+      }
       if (options.signal?.aborted) break;
       await this.sleep(interval, options.signal);
     }
@@ -116,15 +206,31 @@ export class Operations {
     throw signal?.reason ?? new CliError("timeout", "Event polling was aborted");
   }
 
-  async wait(id: string, options: PollOptions = {}): Promise<unknown> {
+  async wait(id: string, options: PollOptions = {}) {
     const { interval, deadline } = this.pollSettings(options);
-    while (!options.signal?.aborted && this.now() <= deadline) {
-      const result = await this.api.waitStatus(id, options.signal);
+    let latest: Awaited<ReturnType<ApiClient["waitStatus"]>> | undefined;
+    while (true) {
+      if (options.signal?.aborted) throw abortReason(options.signal);
+      const remaining = deadline - this.now();
+      if (remaining <= 0) return timedOut(latest);
+
+      const result = await withDeadline(
+        (signal) => this.api.waitStatus(id, signal),
+        remaining,
+        options.signal
+      ).catch((cause) => {
+        if (options.signal?.aborted) throw abortReason(options.signal);
+        if (cause instanceof WaitDeadlineError) return timedOut(latest);
+        throw cause;
+      });
+      if (result.timedOut) return result;
+      latest = result;
       if (result.settled) return result;
-      await this.sleep(interval, options.signal);
+
+      const sleepMs = Math.min(interval, Math.max(0, deadline - this.now()));
+      if (sleepMs === 0) return timedOut(latest);
+      await this.sleep(sleepMs, options.signal);
     }
-    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Operation aborted");
-    throw new CliError("timeout", "Session wait timed out");
   }
 
   private pollSettings(options: PollOptions): { interval: number; deadline: number } {
@@ -152,9 +258,54 @@ function abortableSleep(milliseconds: number, signal?: AbortSignal): Promise<voi
   });
 }
 
+function withDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  milliseconds: number,
+  callerSignal?: AbortSignal
+): Promise<T> {
+  const controller = new AbortController();
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener("abort", () => reject(abortReason(controller.signal)), {
+      once: true,
+    });
+  });
+  const abortFromCaller = () => {
+    if (callerSignal) controller.abort(abortReason(callerSignal));
+  };
+  callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  if (callerSignal?.aborted) abortFromCaller();
+  const timer = setTimeout(
+    () => controller.abort(new WaitDeadlineError()),
+    Math.ceil(milliseconds)
+  );
+  timer.unref();
+
+  return Promise.race([operation(controller.signal), aborted]).finally(() => {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
+  });
+}
+
+class WaitDeadlineError extends Error {}
+
+function timedOut<T extends { settled: boolean }>(latest: T | undefined): T & { timedOut: true } {
+  if (!latest) throw new CliError("timeout", "Session wait timed out before a status was observed");
+  return { ...latest, settled: false, timedOut: true };
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("Operation aborted");
+}
+
 function isRetryableFeedError(cause: unknown): boolean {
   return (
     cause instanceof CliError &&
     (cause.kind === "transport" || cause.kind === "service" || cause.kind === "rate_limited")
   );
+}
+
+function retryDelayMs(cause: unknown, fallback: number): number {
+  if (!(cause instanceof CliError) || cause.kind !== "rate_limited") return fallback;
+  const seconds = Number(cause.context?.retryAfter);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : fallback;
 }

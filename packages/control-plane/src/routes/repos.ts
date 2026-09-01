@@ -138,7 +138,7 @@ async function refreshReposCache(
  * This prevents slow API pagination from blocking the Worker
  * isolate and causing head-of-line blocking for other requests.
  */
-async function handleListRepos(
+export async function handleListRepos(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,

@@ -74,6 +74,10 @@
       "import": "./dist/types/external-session-api.js",
       "types": "./dist/types/external-session-api.d.ts"
     },
+    "./types/external-resources-api": {
+      "import": "./dist/types/external-resources-api.js",
+      "types": "./dist/types/external-resources-api.d.ts"
+    },
     "./types/github-identity": {
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"

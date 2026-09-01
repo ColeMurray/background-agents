@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashToken } from "../auth/crypto";
 import {
   CLI_CREDENTIAL_RETENTION_MS,
   CLI_CREDENTIAL_LIFETIME_MS,
@@ -9,29 +10,27 @@ import {
 } from "./device-authorization-service";
 
 describe("CliDeviceAuthorizationService", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("creates separate human and device secrets and persists only their hashes", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
     const store = {
       createAttempt: vi.fn(async () => undefined),
       pruneExpired: vi.fn(async () => undefined),
     };
-    const service = new CliDeviceAuthorizationService(store as never, {
-      now: () => 1000,
-      generateSecret: () => "a".repeat(64),
-      generateUserCode: () => "ABCD-EFGH",
-      generateId: () => "attempt-id",
-      hash: async (value) => `hash:${value}`,
-    });
+    const service = new CliDeviceAuthorizationService(store as never);
 
-    await expect(service.start("dev laptop")).resolves.toEqual({
-      deviceSecret: "a".repeat(64),
-      userCode: "ABCD-EFGH",
+    const started = await service.start("dev laptop");
+    expect(started).toEqual({
+      deviceSecret: expect.stringMatching(/^[0-9a-f]{64}$/),
+      userCode: expect.stringMatching(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/),
       expiresAt: 1000 + CLI_DEVICE_AUTHORIZATION_LIFETIME_MS,
     });
     expect(store.createAttempt).toHaveBeenCalledWith({
-      id: "attempt-id",
+      id: expect.stringMatching(/^[0-9a-f]{32}$/),
       deviceName: "dev laptop",
-      deviceSecretHash: `hash:${"a".repeat(64)}`,
-      userCodeHash: "hash:ABCD-EFGH",
+      deviceSecretHash: await hashToken(started.deviceSecret),
+      userCodeHash: await hashToken(started.userCode),
       createdAt: 1000,
       expiresAt: 1000 + CLI_DEVICE_AUTHORIZATION_LIFETIME_MS,
     });
@@ -54,16 +53,10 @@ describe("CliDeviceAuthorizationService", () => {
   ] as const)(
     "maps pending lookup state %# without exposing stored fields",
     async (outcome, expected) => {
-      const service = new CliDeviceAuthorizationService(
-        { getPendingAuthorization: vi.fn(async () => outcome) } as never,
-        {
-          now: () => 2000,
-          generateSecret: () => "c".repeat(64),
-          generateUserCode: () => "ABCD-EFGH",
-          generateId: () => "id",
-          hash: async (value) => `hash:${value}`,
-        }
-      );
+      vi.spyOn(Date, "now").mockReturnValue(2000);
+      const service = new CliDeviceAuthorizationService({
+        getPendingAuthorization: vi.fn(async () => outcome),
+      } as never);
       if (typeof expected === "number") {
         await expect(service.getPendingAuthorization("ABCD-EFGH")).rejects.toMatchObject({
           status: expected,
@@ -75,35 +68,32 @@ describe("CliDeviceAuthorizationService", () => {
   );
 
   it("issues a 30-day credential only to the atomic exchange winner", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(2000);
     const store = {
       exchangeApprovedAttempt: vi.fn(async () => ({ status: "issued" })),
     };
-    const values = ["credential-id", "claim-id", "c".repeat(64)];
-    const service = new CliDeviceAuthorizationService(store as never, {
-      now: () => 2000,
-      generateSecret: () => values.pop()!,
-      generateUserCode: () => "ABCD-EFGH",
-      generateId: () => values.shift()!,
-      hash: async (value) => `hash:${value}`,
-    });
+    const service = new CliDeviceAuthorizationService(store as never);
 
-    await expect(service.exchange("a".repeat(64))).resolves.toEqual({
+    const exchanged = await service.exchange("a".repeat(64));
+    expect(exchanged).toEqual({
       status: "authorized",
-      credential: `oi_cli_${"c".repeat(64)}`,
-      credentialId: "credential-id",
+      credential: expect.stringMatching(/^oi_cli_[0-9a-f]{64}$/),
+      credentialId: expect.stringMatching(/^[0-9a-f]{32}$/),
       expiresAt: 2000 + CLI_CREDENTIAL_LIFETIME_MS,
     });
+    if (exchanged.status !== "authorized") throw new Error("Expected an issued credential");
     expect(store.exchangeApprovedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
-        claimId: "claim-id",
-        credentialId: "credential-id",
-        credentialHash: `hash:oi_cli_${"c".repeat(64)}`,
+        claimId: expect.stringMatching(/^[0-9a-f]{32}$/),
+        credentialId: exchanged.credentialId,
+        credentialHash: await hashToken(exchanged.credential),
         credentialExpiresAt: 2000 + CLI_CREDENTIAL_LIFETIME_MS,
       })
     );
   });
 
   it("returns pending but rejects expired or already exchanged attempts", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(2000);
     const store = {
       exchangeApprovedAttempt: vi
         .fn()
@@ -111,13 +101,7 @@ describe("CliDeviceAuthorizationService", () => {
         .mockResolvedValueOnce({ status: "expired" })
         .mockResolvedValueOnce({ status: "consumed" }),
     };
-    const service = new CliDeviceAuthorizationService(store as never, {
-      now: () => 2000,
-      generateSecret: () => "c".repeat(64),
-      generateUserCode: () => "ABCD-EFGH",
-      generateId: () => crypto.randomUUID(),
-      hash: async (value) => `hash:${value}`,
-    });
+    const service = new CliDeviceAuthorizationService(store as never);
 
     await expect(service.exchange("a".repeat(64))).resolves.toEqual({
       status: "pending",
@@ -130,18 +114,13 @@ describe("CliDeviceAuthorizationService", () => {
   });
 
   it("revokes by the hashed device-secret capability without exposing attempt state", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(3000);
     const store = { revokeIssuedCredentialByDeviceSecret: vi.fn(async () => undefined) };
-    const service = new CliDeviceAuthorizationService(store as never, {
-      now: () => 3000,
-      generateSecret: () => "c".repeat(64),
-      generateUserCode: () => "ABCD-EFGH",
-      generateId: () => "id",
-      hash: async (value) => `hash:${value}`,
-    });
+    const service = new CliDeviceAuthorizationService(store as never);
 
     await expect(service.revokeIssuedCredential("a".repeat(64))).resolves.toBeUndefined();
     expect(store.revokeIssuedCredentialByDeviceSecret).toHaveBeenCalledWith(
-      `hash:${"a".repeat(64)}`,
+      await hashToken("a".repeat(64)),
       3000
     );
   });

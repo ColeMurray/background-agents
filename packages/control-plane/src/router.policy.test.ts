@@ -40,7 +40,7 @@ describe("route policy table", () => {
         expect(authentication).toBe("service");
         expect(authorization.services.length).toBeGreaterThan(0);
       } else if (authorization.kind === "active-global") {
-        expect(["user", "user-or-service"]).toContain(authentication);
+        expect(["user", "external-user", "user-or-service"]).toContain(authentication);
       } else {
         expect([
           "user",

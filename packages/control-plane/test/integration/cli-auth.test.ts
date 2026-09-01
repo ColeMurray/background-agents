@@ -1,6 +1,10 @@
 import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CLI_API_VERSION_HEADER,
+  CLI_CLIENT_SURFACE_HEADER,
+  CLI_CLIENT_VERSION_HEADER,
+  CLI_EXTERNAL_API_VERSION,
   cliDeviceAuthorizationExchangeResponseSchema,
   cliMeResponseSchema,
   pendingCliDeviceAuthorizationResponseSchema,
@@ -16,6 +20,15 @@ import { CLI_AUTH_RATE_LIMITS } from "../../src/routes/cli-auth";
 import { serviceFetch } from "./helpers";
 
 const API = "https://cp.test/external/v1/cli";
+const clientMetadata = {
+  [CLI_API_VERSION_HEADER]: CLI_EXTERNAL_API_VERSION,
+  [CLI_CLIENT_VERSION_HEADER]: "integration-test",
+  [CLI_CLIENT_SURFACE_HEADER]: "cli",
+};
+
+function authorization(credential: string) {
+  return { ...clientMetadata, Authorization: `Bearer ${credential}` };
+}
 
 async function start() {
   const response = await SELF.fetch(`${API}/device-authorizations`, {
@@ -64,6 +77,18 @@ describe("external v1 CLI authentication", () => {
     await cleanD1Tables();
   });
 
+  it("discloses the authoritative installation on pending approval", async () => {
+    const started = await start();
+    const pendingDetails = await pending(started.userCode.toLowerCase());
+
+    expect(pendingDetails.status).toBe(200);
+    expect(pendingCliDeviceAuthorizationResponseSchema.parse(await pendingDetails.json())).toEqual({
+      installation: { name: "integration-test" },
+      deviceName: "integration laptop",
+      expiresAt: started.expiresAt,
+    });
+  });
+
   it("stores hashes only and atomically issues one 30-day user credential", async () => {
     const started = await start();
     expect(started.deviceSecret).toMatch(/^[0-9a-f]{64}$/);
@@ -77,13 +102,6 @@ describe("external v1 CLI authentication", () => {
     expect(storedAttempt).toMatchObject({ device_name: "integration laptop" });
     expect(Object.values(storedAttempt!)).not.toContain(started.deviceSecret);
     expect(Object.values(storedAttempt!)).not.toContain(started.userCode);
-
-    const pendingDetails = await pending(started.userCode.toLowerCase());
-    expect(pendingDetails.status).toBe(200);
-    expect(pendingCliDeviceAuthorizationResponseSchema.parse(await pendingDetails.json())).toEqual({
-      deviceName: "integration laptop",
-      expiresAt: started.expiresAt,
-    });
 
     const pendingExchange = await exchange(started.deviceSecret);
     expect(pendingExchange.status).toBe(202);
@@ -119,7 +137,7 @@ describe("external v1 CLI authentication", () => {
     expect(storedCredential).toMatchObject({ user_id: "11111111111111111111111111111111" });
 
     const me = await SELF.fetch(`${API}/me`, {
-      headers: { Authorization: `Bearer ${issued.credential}` },
+      headers: authorization(issued.credential),
     });
     expect(me.status).toBe(200);
     expect(cliMeResponseSchema.parse(await me.json())).toMatchObject({
@@ -140,16 +158,16 @@ describe("external v1 CLI authentication", () => {
     const response = await exchange(started.deviceSecret);
     const issued = cliDeviceAuthorizationExchangeResponseSchema.parse(await response.json());
     if (issued.status !== "authorized") throw new Error("Expected authorized exchange");
-    const authorization = { Authorization: `Bearer ${issued.credential}` };
+    const authorizationHeaders = authorization(issued.credential);
 
     await env.DB.prepare("UPDATE users SET suspended_at = 1").run();
-    const suspended = await SELF.fetch(`${API}/me`, { headers: authorization });
+    const suspended = await SELF.fetch(`${API}/me`, { headers: authorizationHeaders });
     expect(suspended.status).toBe(403);
     await expect(suspended.json()).resolves.toMatchObject({ code: "active_user_required" });
 
     await env.DB.prepare("UPDATE users SET suspended_at = NULL").run();
     await env.DB.prepare("DELETE FROM user_role_assignments").run();
-    const unassigned = await SELF.fetch(`${API}/me`, { headers: authorization });
+    const unassigned = await SELF.fetch(`${API}/me`, { headers: authorizationHeaders });
     expect(unassigned.status).toBe(403);
     await expect(unassigned.json()).resolves.toMatchObject({ code: "assignment_required" });
   });
@@ -166,14 +184,14 @@ describe("external v1 CLI authentication", () => {
     const issuedResponse = await exchange(started.deviceSecret);
     const issued = cliDeviceAuthorizationExchangeResponseSchema.parse(await issuedResponse.json());
     if (issued.status !== "authorized") throw new Error("Expected authorized exchange");
-    const authorization = { Authorization: `Bearer ${issued.credential}` };
+    const authorizationHeaders = authorization(issued.credential);
 
     const revoke = await SELF.fetch(`${API}/credentials/current`, {
       method: "DELETE",
-      headers: authorization,
+      headers: authorizationHeaders,
     });
     expect(revoke.status).toBe(204);
-    expect((await SELF.fetch(`${API}/me`, { headers: authorization })).status).toBe(401);
+    expect((await SELF.fetch(`${API}/me`, { headers: authorizationHeaders })).status).toBe(401);
 
     const second = await start();
     expect((await approve(second.userCode)).status).toBe(204);
@@ -186,7 +204,7 @@ describe("external v1 CLI authentication", () => {
     expect(
       (
         await SELF.fetch(`${API}/me`, {
-          headers: { Authorization: `Bearer ${secondIssued.credential}` },
+          headers: authorization(secondIssued.credential),
         })
       ).status
     ).toBe(401);
@@ -213,7 +231,7 @@ describe("external v1 CLI authentication", () => {
     expect(
       (
         await SELF.fetch(`${API}/me`, {
-          headers: { Authorization: `Bearer ${issued.credential}` },
+          headers: authorization(issued.credential),
         })
       ).status
     ).toBe(401);
@@ -245,7 +263,7 @@ describe("external v1 CLI authentication", () => {
     expect(
       (
         await SELF.fetch(`${API}/me`, {
-          headers: { Authorization: `Bearer ${issued.credential}` },
+          headers: authorization(issued.credential),
         })
       ).status
     ).toBe(401);

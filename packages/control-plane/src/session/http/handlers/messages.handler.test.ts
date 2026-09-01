@@ -187,7 +187,7 @@ describe("MessagesHandler", () => {
           createdAt: 1000,
         },
       ],
-      cursor: "1000",
+      cursor: "opaque-cursor",
       hasMore: false,
     });
 
@@ -195,7 +195,7 @@ describe("MessagesHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       events: [{ id: "e1", type: "token", data: { x: 1 }, messageId: "m1", createdAt: 1000 }],
-      cursor: "1000",
+      cursor: "opaque-cursor",
       hasMore: false,
     });
     expect(messageService.listEvents).toHaveBeenCalledWith({
@@ -263,7 +263,7 @@ describe("MessagesHandler", () => {
     });
   });
 
-  it.each(["?after=-1", "?limit=201", "?cursor=bad", "?after=1&cursor=1%3A2%3A1"])(
+  it.each(["?after=-1", "?limit=501", "?cursor=bad", "?after=1&cursor=1%3A2%3A1"])(
     "rejects invalid event change query %s",
     (search) => {
       const { handler, messageService } = createHandler();
@@ -384,7 +384,7 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
+      cursor: undefined,
       hasMore: false,
     });
 
@@ -410,7 +410,6 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
       hasMore: false,
     });
   });
@@ -431,7 +430,7 @@ describe("MessagesHandler", () => {
           completedAt: null,
         },
       ],
-      cursor: "1000",
+      cursor: undefined,
       hasMore: false,
     });
 

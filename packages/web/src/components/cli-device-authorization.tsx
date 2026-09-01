@@ -1,6 +1,9 @@
 "use client";
 
-import { pendingCliDeviceAuthorizationResponseSchema } from "@open-inspect/shared/types/cli-auth";
+import {
+  pendingCliDeviceAuthorizationResponseSchema,
+  type PendingCliDeviceAuthorizationResponse,
+} from "@open-inspect/shared/types/cli-auth";
 import { useEffect, useRef, useState } from "react";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
@@ -19,7 +22,7 @@ type Result =
 
 type PendingAuthorization =
   | { kind: "loading" }
-  | { kind: "ready"; deviceName: string; expiresAt: number }
+  | ({ kind: "ready" } & PendingCliDeviceAuthorizationResponse)
   | { kind: "error"; message: string };
 
 const ERROR_MESSAGES: Record<number, string> = {
@@ -146,9 +149,22 @@ export function CliDeviceAuthorization({ userCode, user }: CliDeviceAuthorizatio
           A CLI device is requesting access to this {APP_NAME} installation as your account. Only
           approve if you started this request.
         </p>
+        <p className="text-sm text-muted-foreground">
+          The CLI and connected AI clients inherit your current workspace role. They can use every
+          operation that role permits on the external interface, including creating, prompting, and
+          stopping sessions.
+        </p>
       </div>
 
       <dl className="my-7 space-y-4 rounded-lg bg-muted p-5">
+        <div>
+          <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Installation
+          </dt>
+          <dd className="mt-1 font-medium text-foreground">
+            {pending.kind === "ready" ? pending.installation.name : "Checking request..."}
+          </dd>
+        </div>
         <div>
           <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Signed in as

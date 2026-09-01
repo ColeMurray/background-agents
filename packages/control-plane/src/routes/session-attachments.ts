@@ -77,7 +77,7 @@ function attachmentStorageErrorResponse(cause: SessionAttachmentStorageError): R
   }
 }
 
-async function handleAttachmentPost(
+export async function handleAttachmentPost(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
@@ -136,9 +136,25 @@ async function handleAttachmentPost(
     return error("Uploaded file MIME type does not match file contents", 400);
   }
 
-  const attachmentId = generateId();
+  const idempotencyKey = request.headers.get("Idempotency-Key");
+  const attachmentId = idempotencyKey
+    ? `attachment-${await idempotencyFingerprint(sessionId, idempotencyKey)}`
+    : generateId();
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
   const storage = createMediaObjectStorage(env);
+  if (idempotencyKey) {
+    const existing = await storage.get(objectKey);
+    if (existing) {
+      const existingBytes = new Uint8Array(await new Response(existing.body).arrayBuffer());
+      if (!equalBytes(existingBytes, bytes)) {
+        return error("Idempotency key was already used with different attachment content", 409);
+      }
+      return json({
+        attachmentId,
+        mimeType: detected.mimeType,
+      } satisfies SessionAttachmentUploadResponse);
+    }
+  }
   const attachmentStorage = new SessionAttachmentStorageService(
     ctx.sessionRuntime,
     storage,
@@ -180,7 +196,20 @@ async function handleAttachmentPost(
   );
 }
 
-async function handleAttachmentGet(
+async function idempotencyFingerprint(sessionId: string, idempotencyKey: string): Promise<string> {
+  const input = new TextEncoder().encode(`${sessionId}\0${idempotencyKey}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  return [...digest]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+}
+
+export async function handleAttachmentGet(
   request: Request,
   env: Env,
   match: RegExpMatchArray,

@@ -103,6 +103,8 @@ export interface SessionEntry {
   providerAuth?: SessionModelProviderAuthInput[];
   /** Canonical external create request reserved atomically with the session row. */
   externalRequestFingerprint?: string | null;
+  /** Resolved external bootstrap state reserved atomically for deterministic retries. */
+  externalBootstrapSnapshot?: string | null;
 }
 
 interface SessionRow {
@@ -128,6 +130,7 @@ interface SessionRow {
   pr_count: number;
   environment_id: string | null;
   external_request_fingerprint: string | null;
+  external_bootstrap_snapshot: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -183,6 +186,7 @@ function toEntry(row: SessionRow): SessionEntry {
     prCount: row.pr_count,
     environmentId: row.environment_id,
     externalRequestFingerprint: row.external_request_fingerprint,
+    externalBootstrapSnapshot: row.external_bootstrap_snapshot,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -272,8 +276,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, external_request_fingerprint, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, external_request_fingerprint, external_bootstrap_snapshot, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         session.id,
@@ -296,6 +300,7 @@ export class SessionIndexStore {
         session.userId ?? null,
         session.environmentId ?? null,
         session.externalRequestFingerprint ?? null,
+        session.externalBootstrapSnapshot ?? null,
         session.createdAt,
         session.updatedAt
       );

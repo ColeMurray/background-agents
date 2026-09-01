@@ -318,7 +318,12 @@ describe("authenticate — direct CLI bearer", () => {
       expires_at: Date.now() + 60_000,
     });
     const request = new Request("https://cp.test.local/external/v1/cli/me", {
-      headers: { Authorization: `Bearer ${credential}` },
+      headers: {
+        Authorization: `Bearer ${credential}`,
+        "X-Open-Inspect-API-Version": "1",
+        "X-Open-Inspect-Client-Version": "0.1.0-test",
+        "X-Open-Inspect-Client-Surface": "cli",
+      },
     });
 
     const result = await authenticate(request, createEnv(), ctx, { userCredential: "cli" });

@@ -61,15 +61,28 @@ describe("CLI authentication contracts", () => {
   it("limits pending authorization details to safe display metadata", () => {
     expect(
       pendingCliDeviceAuthorizationResponseSchema.parse({
+        installation: { name: "Acme Open-Inspect" },
         deviceName: "dev laptop",
         expiresAt: 1234,
       })
-    ).toEqual({ deviceName: "dev laptop", expiresAt: 1234 });
+    ).toEqual({
+      installation: { name: "Acme Open-Inspect" },
+      deviceName: "dev laptop",
+      expiresAt: 1234,
+    });
     expect(
       pendingCliDeviceAuthorizationResponseSchema.safeParse({
+        installation: { name: "Acme Open-Inspect" },
         deviceName: "dev laptop",
         expiresAt: 1234,
         deviceSecretHash: "secret",
+      }).success
+    ).toBe(false);
+    expect(
+      pendingCliDeviceAuthorizationResponseSchema.safeParse({
+        installation: { name: "Acme Open-Inspect", internalId: "secret" },
+        deviceName: "dev laptop",
+        expiresAt: 1234,
       }).success
     ).toBe(false);
   });

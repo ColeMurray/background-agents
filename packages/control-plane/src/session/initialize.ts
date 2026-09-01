@@ -76,6 +76,8 @@ export interface SessionInitInput {
   /** Complete, immutable provider routing snapshot resolved by the caller. */
   providerAuth: SessionModelProviderAuthInput[];
   requestFingerprint?: string;
+  /** Retry payload for external creates; persisted atomically with the D1 reservation. */
+  externalBootstrapSnapshot?: string;
 }
 
 /**
@@ -159,6 +161,8 @@ export async function initializeSession(
     skillManifest: input.managedSkillsManifest,
     skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
     providerAuth: input.providerAuth,
+    externalRequestFingerprint: input.requestFingerprint,
+    externalBootstrapSnapshot: input.externalBootstrapSnapshot,
   });
 
   // Step 2: DO init

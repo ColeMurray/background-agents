@@ -30,13 +30,21 @@ describe("CLI pending device authorization BFF", () => {
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
-  it("returns only validated safe device metadata", async () => {
+  it("passes through only validated installation and device metadata", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ deviceName: "Ada's laptop", expiresAt: 1234 })
+      Response.json({
+        installation: { name: "Acme Open-Inspect" },
+        deviceName: "Ada's laptop",
+        expiresAt: 1234,
+      })
     );
     const response = await GET(request("abcd-efgh"));
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ deviceName: "Ada's laptop", expiresAt: 1234 });
+    await expect(response.json()).resolves.toEqual({
+      installation: { name: "Acme Open-Inspect" },
+      deviceName: "Ada's laptop",
+      expiresAt: 1234,
+    });
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/external/v1/cli/device-authorizations/pending?user_code=ABCD-EFGH"
     );
@@ -61,7 +69,12 @@ describe("CLI pending device authorization BFF", () => {
   it("rejects malformed or unsafe upstream data", async () => {
     expect((await GET(request("bad"))).status).toBe(400);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ deviceName: "laptop", expiresAt: 1234, deviceSecret: "leak" })
+      Response.json({
+        installation: { name: "Acme Open-Inspect" },
+        deviceName: "laptop",
+        expiresAt: 1234,
+        deviceSecret: "leak",
+      })
     );
     expect((await GET(request("ABCD-EFGH"))).status).toBe(503);
   });

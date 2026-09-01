@@ -113,6 +113,75 @@ describe("ApiClient", () => {
     await expect(client.listSessions({ limit: 201 })).rejects.toMatchObject({ name: "ZodError" });
   });
 
+  it("encodes artifact cursors and revision-bound diff continuations", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(json({ artifacts: [], cursor: "next-artifact", hasMore: true }))
+      .mockResolvedValueOnce(
+        json({
+          version: 1,
+          current: null,
+          lastError: null,
+          unavailableReason: null,
+          hasMore: false,
+        })
+      );
+    const client = new ApiClient({
+      baseUrl: "https://api.example.com",
+      authorize: () => Promise.resolve(credential),
+      fetch,
+    });
+
+    await client.artifacts("s1", { limit: 20, cursor: "artifact cursor" });
+    await client.diff("s1", { limit: 20, offset: 20, revisionId: "revision-1" });
+
+    expect(new URL(String(fetch.mock.calls[0]?.[0])).search).toBe(
+      "?limit=20&cursor=artifact+cursor"
+    );
+    expect(new URL(String(fetch.mock.calls[1]?.[0])).search).toBe(
+      "?limit=20&offset=20&revisionId=revision-1"
+    );
+  });
+
+  it("retrieves bounded binary artifact content and one encoded pull request", async () => {
+    const pullRequest = {
+      id: "pr/1",
+      provider: "github",
+      repoOwner: "owner",
+      repoName: "repo",
+      number: 1,
+      url: "https://github.com/owner/repo/pull/1",
+      state: "open",
+      headBranch: "feature",
+      baseBranch: "main",
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([0, 255, 1]), { headers: { "Content-Type": "image/png" } })
+      )
+      .mockResolvedValueOnce(json(pullRequest));
+    const client = new ApiClient({
+      baseUrl: "https://api.example.com",
+      authorize: () => Promise.resolve(credential),
+      fetch,
+    });
+
+    await expect(client.artifactContent("s/1", "artifact/1")).resolves.toEqual({
+      contentType: "image/png",
+      contentBase64: "AP8B",
+      offset: 0,
+      hasMore: false,
+    });
+    await expect(client.pullRequest("s/1", "pr/1")).resolves.toEqual(pullRequest);
+    expect(new URL(String(fetch.mock.calls[0]?.[0])).pathname).toBe(
+      "/external/v1/sessions/s%2F1/artifacts/artifact%2F1/content"
+    );
+    expect(new URL(String(fetch.mock.calls[1]?.[0])).pathname).toBe(
+      "/external/v1/sessions/s%2F1/pull-requests/pr%2F1"
+    );
+  });
+
   it.each([
     [401, "auth", 2],
     [400, "validation", 3],

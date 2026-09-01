@@ -151,7 +151,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         encryptedPayload: prepared.encryptedPayload,
       }),
     ]);
-    return results[0].meta.changes === 1 && results[1].meta.changes === 1;
+    return results[0].meta.changes >= 1 && results[1].meta.changes === 1;
   }
 
   async completeVerificationCredentialAndAccount(
@@ -166,7 +166,7 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         encryptedPayload: prepared.encryptedPayload,
       }),
     ]);
-    return results[0].meta.changes === 1 && results[1].meta.changes === 1;
+    return results[0].meta.changes >= 1 && results[1].meta.changes === 1;
   }
 
   async finalizeDeviceAuthorizationCreate(
@@ -331,7 +331,13 @@ export class D1ModelProviderAccountAtomicWriter implements ModelProviderAccountA
         reconnectedExisting: true,
       }),
     ]);
-    if (results.every((result) => result.meta.changes === 1)) return { type: "connected" };
+    if (
+      results[0].meta.changes === 1 &&
+      results[1].meta.changes >= 1 &&
+      results[2].meta.changes === 1
+    ) {
+      return { type: "connected" };
+    }
     if (results.some((result) => result.meta.changes !== 0)) {
       throw new Error("Provider authorization reconnect finalization violated atomic invariants");
     }

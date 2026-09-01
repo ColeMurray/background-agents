@@ -13,23 +13,35 @@ async function connectedClient(operations: object) {
 }
 
 describe("MCP server", () => {
-  it("exposes only Increment 1 session tools", async () => {
+  it("exposes the complete V1 tool set", async () => {
     const operations = {
       listSessions: vi.fn().mockResolvedValue({ sessions: [], hasMore: false }),
     };
     const { server, client } = await connectedClient(operations);
 
     const tools = await client.listTools();
+    expect(tools.tools).toHaveLength(19);
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+      "environment_get",
+      "environment_list",
+      "model_list",
+      "provider_account_list",
+      "repository_list",
+      "session_artifacts",
+      "session_child_prompt",
+      "session_children",
       "session_create",
+      "session_diff",
       "session_events",
       "session_get",
       "session_list",
+      "session_messages",
       "session_prompt",
+      "session_pull_requests",
       "session_stop",
       "session_wait",
+      "skill_list",
     ]);
-    expect(tools.tools.some((tool) => /attachment|target/.test(tool.name))).toBe(false);
     expect(
       (await client.callTool({ name: "session_list", arguments: { limit: 25, offset: 50 } }))
         .structuredContent
@@ -38,12 +50,225 @@ describe("MCP server", () => {
       hasMore: false,
     });
     expect(operations.listSessions).toHaveBeenCalledWith({ limit: 25, offset: 50 });
+    expect(tools.tools.every((tool) => tool.outputSchema)).toBe(true);
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("rejects ungranted and over-limit path attachments before side effects", async () => {
+    const operations = {
+      createSession: vi.fn(),
+      promptSession: vi.fn(),
+      uploadAttachment: vi.fn(),
+    };
+    const { server, client } = await connectedClient(operations);
+
+    const noRoots = await client.callTool({
+      name: "session_create",
+      arguments: {
+        idempotencyKey: "create-with-file",
+        attachmentPaths: ["/tmp/image.png"],
+      },
+    });
+    expect(noRoots.isError).toBe(true);
+    expect(operations.createSession).not.toHaveBeenCalled();
+
+    const tooMany = await client.callTool({
+      name: "session_prompt",
+      arguments: {
+        sessionId: "s1",
+        clientRequestId: "prompt-with-files",
+        attachments: Array.from({ length: 6 }, (_, index) => ({
+          attachmentId: `attachment-${index}`,
+          name: `${index}.png`,
+        })),
+        attachmentPaths: ["/tmp/extra.png"],
+      },
+    });
+    expect(tooMany.isError).toBe(true);
+    expect(operations.uploadAttachment).not.toHaveBeenCalled();
+    expect(operations.promptSession).not.toHaveBeenCalled();
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("accepts valid outputs from both modes of the polymorphic read tools", async () => {
+    const artifact = {
+      contentType: "image/png",
+      contentBase64: "AQI=",
+      offset: 0,
+      hasMore: false,
+    };
+    const pullRequest = {
+      id: "pr-1",
+      provider: "github",
+      repoOwner: "open-inspect",
+      repoName: "app",
+      number: 7,
+      url: "https://github.com/open-inspect/app/pull/7",
+      state: "open",
+      headBranch: "feature",
+      baseBranch: "main",
+    };
+    const child = {
+      id: "child-1",
+      title: "Child",
+      status: "active",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: null,
+      repoOwner: "open-inspect",
+      repoName: "app",
+      environmentId: null,
+      parentSessionId: "s1",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const diff = {
+      version: 1,
+      current: null,
+      lastError: null,
+      unavailableReason: null,
+      hasMore: false,
+    };
+    const diffContent = { content: "@@ -1 +1 @@", truncated: false, hasMore: false };
+    const operations = {
+      artifactContent: vi.fn().mockResolvedValue(artifact),
+      artifacts: vi.fn().mockResolvedValue({ artifacts: [], hasMore: false }),
+      diff: vi.fn().mockResolvedValue(diff),
+      diffFile: vi.fn().mockResolvedValue(diffContent),
+      pullRequest: vi.fn().mockResolvedValue(pullRequest),
+      pullRequests: vi.fn().mockResolvedValue({ pullRequests: [], hasMore: false }),
+      child: vi.fn().mockResolvedValue(child),
+      children: vi.fn().mockResolvedValue({ children: [], hasMore: false }),
+    };
+    const { server, client } = await connectedClient(operations);
+
+    await expect(
+      client.callTool({
+        name: "session_artifacts",
+        arguments: { sessionId: "s1", artifactId: "artifact-1" },
+      })
+    ).resolves.toMatchObject({ structuredContent: artifact });
+    await expect(
+      client.callTool({
+        name: "session_pull_requests",
+        arguments: { sessionId: "s1", pullRequestId: "pr-1" },
+      })
+    ).resolves.toMatchObject({ structuredContent: pullRequest });
+    await expect(
+      client.callTool({ name: "session_artifacts", arguments: { sessionId: "s1" } })
+    ).resolves.toMatchObject({ structuredContent: { artifacts: [], hasMore: false } });
+    await expect(
+      client.callTool({ name: "session_diff", arguments: { sessionId: "s1" } })
+    ).resolves.toMatchObject({ structuredContent: diff });
+    await expect(
+      client.callTool({
+        name: "session_diff",
+        arguments: { sessionId: "s1", revisionId: "r1", fileId: "f1" },
+      })
+    ).resolves.toMatchObject({ structuredContent: diffContent });
+    await expect(
+      client.callTool({ name: "session_pull_requests", arguments: { sessionId: "s1" } })
+    ).resolves.toMatchObject({ structuredContent: { pullRequests: [], hasMore: false } });
+    await expect(
+      client.callTool({ name: "session_children", arguments: { sessionId: "s1" } })
+    ).resolves.toMatchObject({ structuredContent: { children: [], hasMore: false } });
+    await expect(
+      client.callTool({
+        name: "session_children",
+        arguments: { sessionId: "s1", childId: "child-1" },
+      })
+    ).resolves.toMatchObject({ structuredContent: child });
+    expect(operations.artifactContent).toHaveBeenCalledWith("s1", "artifact-1", {
+      offset: undefined,
+      limit: undefined,
+    });
+    expect(operations.pullRequest).toHaveBeenCalledWith("s1", "pr-1");
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("rejects empty and mixed polymorphic outputs", async () => {
+    const pullRequest = {
+      id: "pr-1",
+      provider: "github",
+      repoOwner: "open-inspect",
+      repoName: "app",
+      number: 7,
+      url: "https://github.com/open-inspect/app/pull/7",
+      state: "open",
+      headBranch: "feature",
+      baseBranch: "main",
+    };
+    const child = {
+      id: "child-1",
+      title: null,
+      status: "active",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: null,
+      repoOwner: null,
+      repoName: null,
+      environmentId: null,
+      parentSessionId: "s1",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const operations = {
+      artifacts: vi.fn().mockResolvedValue({}),
+      artifactContent: vi.fn().mockResolvedValue({
+        artifacts: [],
+        contentType: "image/png",
+        contentBase64: "AQI=",
+        offset: 0,
+        hasMore: false,
+      }),
+      diff: vi.fn().mockResolvedValue({}),
+      diffFile: vi.fn().mockResolvedValue({
+        version: 1,
+        current: null,
+        lastError: null,
+        unavailableReason: null,
+        content: "patch",
+        truncated: false,
+        hasMore: false,
+      }),
+      pullRequests: vi.fn().mockResolvedValue({}),
+      pullRequest: vi.fn().mockResolvedValue({ ...pullRequest, pullRequests: [], hasMore: false }),
+      children: vi.fn().mockResolvedValue({}),
+      child: vi.fn().mockResolvedValue({ ...child, children: [], hasMore: false }),
+    };
+    const { server, client } = await connectedClient(operations);
+
+    const results = await Promise.all([
+      client.callTool({ name: "session_artifacts", arguments: { sessionId: "s1" } }),
+      client.callTool({
+        name: "session_artifacts",
+        arguments: { sessionId: "s1", artifactId: "artifact-1" },
+      }),
+      client.callTool({ name: "session_diff", arguments: { sessionId: "s1" } }),
+      client.callTool({
+        name: "session_diff",
+        arguments: { sessionId: "s1", revisionId: "r1", fileId: "f1" },
+      }),
+      client.callTool({ name: "session_pull_requests", arguments: { sessionId: "s1" } }),
+      client.callTool({
+        name: "session_pull_requests",
+        arguments: { sessionId: "s1", pullRequestId: "pr-1" },
+      }),
+      client.callTool({ name: "session_children", arguments: { sessionId: "s1" } }),
+      client.callTool({
+        name: "session_children",
+        arguments: { sessionId: "s1", childId: "child-1" },
+      }),
+    ]);
+
+    expect(results.every((result) => result.isError)).toBe(true);
     await Promise.all([client.close(), server.close()]);
   });
 
   it("requires and preserves retry identifiers for create and prompt tools", async () => {
     const operations = {
-      createSession: vi.fn().mockResolvedValue({ sessionId: "s1", status: "created" }),
+      createSession: vi
+        .fn()
+        .mockResolvedValueOnce({ sessionId: "s1", status: "created" })
+        .mockResolvedValueOnce({ sessionId: "s2", messageId: "m2", status: "queued" }),
       promptSession: vi.fn().mockResolvedValue({ messageId: "m1", status: "queued" }),
     };
     const { server, client } = await connectedClient(operations);
@@ -60,12 +285,20 @@ describe("MCP server", () => {
     expect(invalidPrompt.isError).toBe(true);
     expect(operations.createSession).not.toHaveBeenCalled();
     expect(operations.promptSession).not.toHaveBeenCalled();
-    await client.callTool({
+    const created = await client.callTool({
       name: "session_create",
       arguments: {
         title: "T",
         model: "openai/gpt-5.6-sol",
         idempotencyKey: "retry-create",
+      },
+    });
+    const queued = await client.callTool({
+      name: "session_create",
+      arguments: {
+        title: "Queued",
+        model: "openai/gpt-5.6-sol",
+        idempotencyKey: "retry-create-queued",
       },
     });
     await client.callTool({
@@ -76,10 +309,39 @@ describe("MCP server", () => {
     expect(operations.createSession).toHaveBeenCalledWith(
       expect.not.objectContaining({ reasoningEffort: expect.anything() })
     );
+    expect(created.structuredContent).toEqual({ sessionId: "s1", status: "created" });
+    expect(queued.structuredContent).toEqual({
+      sessionId: "s2",
+      messageId: "m2",
+      status: "queued",
+    });
     expect(operations.promptSession).toHaveBeenCalledWith(
       "s1",
       expect.objectContaining({ clientRequestId: "retry-prompt" })
     );
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("rejects incoherent session create outputs", async () => {
+    const operations = {
+      createSession: vi
+        .fn()
+        .mockResolvedValueOnce({ sessionId: "s1", status: "queued" })
+        .mockResolvedValueOnce({ sessionId: "s2", messageId: "m2", status: "created" }),
+    };
+    const { server, client } = await connectedClient(operations);
+
+    const missingMessage = await client.callTool({
+      name: "session_create",
+      arguments: { idempotencyKey: "missing-message" },
+    });
+    const impossibleMessage = await client.callTool({
+      name: "session_create",
+      arguments: { idempotencyKey: "impossible-message" },
+    });
+
+    expect(missingMessage.isError).toBe(true);
+    expect(impossibleMessage.isError).toBe(true);
     await Promise.all([client.close(), server.close()]);
   });
 
@@ -105,7 +367,7 @@ describe("MCP server", () => {
     expect(result).toMatchObject({
       isError: true,
       structuredContent: {
-        error: { kind: "auth", message: "Authentication required", status: 401 },
+        error: { code: "unauthenticated", message: "Authentication required", status: 401 },
       },
     });
     await Promise.all([client.close(), server.close()]);
@@ -147,7 +409,7 @@ describe("MCP server", () => {
     const result = await client.callTool({ name: "session_list", arguments: {} });
     expect(result).toMatchObject({
       isError: true,
-      structuredContent: { error: { kind: "service" } },
+      structuredContent: { error: { code: "service_unavailable" } },
     });
     expect(JSON.stringify(result)).not.toContain("xxx");
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MAX_MCP_RESULT_BYTES);

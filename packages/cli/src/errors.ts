@@ -9,6 +9,9 @@ const CLI_EXIT_CODES = {
   not_found: 8,
   expired: 9,
   rate_limited: 10,
+  forbidden: 11,
+  session_failed: 12,
+  incompatible_client: 13,
 } as const;
 
 export type CliErrorKind = keyof typeof CLI_EXIT_CODES;
@@ -56,12 +59,32 @@ export function errorEnvelope(cause: unknown) {
   const error = classifyError(cause);
   return {
     error: {
-      kind: error.kind,
+      code: publicErrorCode(error),
       message: error.message,
       ...(error.status !== undefined ? { status: error.status } : {}),
       ...(error.context ? { context: error.context } : {}),
     },
   };
+}
+
+export function publicErrorCode(error: CliError): string {
+  if (error.context?.code) return error.context.code;
+  const codes: Record<CliErrorKind, string> = {
+    general: "service_unavailable",
+    auth: "unauthenticated",
+    validation: "invalid_request",
+    conflict: "conflict",
+    timeout: "timeout",
+    transport: "service_unavailable",
+    service: "service_unavailable",
+    not_found: "not_found",
+    expired: "checkpoint_expired",
+    rate_limited: "rate_limited",
+    forbidden: "forbidden",
+    session_failed: "session_failed",
+    incompatible_client: "incompatible_client",
+  };
+  return codes[error.kind];
 }
 
 function safeErrorMessage(cause: unknown): string {
