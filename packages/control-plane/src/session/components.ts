@@ -550,14 +550,18 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Per-request adapters: each token/credential refresh constructs its
   // service around the request-scoped log, so these stay functions.
-  const refreshOpenAIToken = async (sessionRow: SessionRow, requestLog: Logger) => {
+  const refreshOpenAIToken = async (
+    sessionRow: SessionRow,
+    requestLog: Logger,
+    rejectedAccessToken?: string
+  ) => {
     const service = new OpenAITokenRefreshService(
       db!,
       repoSecretsEncryptionKey,
       resolveRepoId,
       requestLog
     );
-    return service.refresh(sessionRow);
+    return service.refresh(sessionRow, rejectedAccessToken);
   };
   const refreshXaiToken = async (sessionRow: SessionRow, requestLog: Logger) => {
     const service = new XaiTokenRefreshService(
@@ -740,8 +744,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, requestLog) =>
       sandboxHandler.verifySandboxToken(request, requestLog),
-    openaiTokenRefresh: (_request, _url, requestLog) =>
-      sandboxHandler.openaiTokenRefresh(requestLog),
+    openaiTokenRefresh: (request, _url, requestLog) =>
+      sandboxHandler.openaiTokenRefresh(requestLog, request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
     scmCredentials: (_request, _url, requestLog) => sandboxHandler.scmCredentials(requestLog),
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),

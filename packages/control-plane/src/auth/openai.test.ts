@@ -170,10 +170,44 @@ describe("openai", () => {
       });
     });
 
-    it.each([403, 404])("maps provider %s to pending", async (status) => {
-      globalThis.fetch = vi.fn().mockResolvedValue(new Response("pending", { status }));
+    it("maps OpenAI's explicit pending response to pending", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            error: {
+              message: "Device authorization is pending. Please try again.",
+              type: "invalid_request_error",
+              code: "deviceauth_authorization_pending",
+            },
+          },
+          { status: 403 }
+        )
+      );
       await expect(checkOpenAIDeviceAuthorization("device-1", "ABCD")).resolves.toEqual({
         status: "pending",
+      });
+    });
+
+    it.each([
+      [403, "deviceauth_feature_disabled"],
+      [404, "deviceauth_not_found"],
+    ])("rejects provider %s error %s instead of treating it as pending", async (status, code) => {
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ error: { message: "Device authorization failed", code } }, { status })
+        );
+
+      await expect(checkOpenAIDeviceAuthorization("device-1", "ABCD")).rejects.toMatchObject({
+        status,
+      });
+    });
+
+    it("rejects an unstructured 403 instead of treating it as pending", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response("Forbidden", { status: 403 }));
+
+      await expect(checkOpenAIDeviceAuthorization("device-1", "ABCD")).rejects.toMatchObject({
+        status: 403,
       });
     });
 

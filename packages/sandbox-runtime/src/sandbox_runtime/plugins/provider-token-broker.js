@@ -34,7 +34,7 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
   let cachedExpiresAt = 0;
   let refreshPromise = null;
 
-  async function refresh(onRefresh) {
+  async function refresh(onRefresh, rejectedAccessToken) {
     const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
     const authToken = process.env.SANDBOX_AUTH_TOKEN;
     const sessionId = getSessionId();
@@ -46,7 +46,11 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
       `${controlPlaneUrl}/sessions/${sessionId}/provider-auth/${provider}/access-token`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${authToken}` },
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ...(rejectedAccessToken && { rejectedAccessToken }) }),
         signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
       }
     );
@@ -64,12 +68,16 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
   }
 
   return {
-    async getAccessToken(onRefresh) {
-      if (cachedResult && cachedExpiresAt - Date.now() > REFRESH_BUFFER_MS) {
+    async getAccessToken(onRefresh, rejectedAccessToken) {
+      if (
+        cachedResult &&
+        cachedResult.accessToken !== rejectedAccessToken &&
+        cachedExpiresAt - Date.now() > REFRESH_BUFFER_MS
+      ) {
         return { ...cachedResult, expiresAt: cachedExpiresAt };
       }
       if (!refreshPromise) {
-        refreshPromise = refresh(onRefresh).finally(() => {
+        refreshPromise = refresh(onRefresh, rejectedAccessToken).finally(() => {
           refreshPromise = null;
         });
       }

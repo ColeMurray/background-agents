@@ -100,7 +100,11 @@ export class ModelProviderAccountBroker {
     );
   }
 
-  async getAccess(accountId: string, expectedProvider: ModelProviderId): Promise<ProviderAccess> {
+  async getAccess(
+    accountId: string,
+    expectedProvider: ModelProviderId,
+    rejectedAccessToken?: string
+  ): Promise<ProviderAccess> {
     const account = await this.requireUsableAccount(accountId, expectedProvider);
     const adapter = this.registry.get(expectedProvider);
     if (!adapter) {
@@ -112,7 +116,11 @@ export class ModelProviderAccountBroker {
     const state = await this.readState(accountId, expectedProvider);
     const credential = this.parseCredential(adapter, state);
     const cached = adapter.cachedAccess(credential);
-    if (cached && cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs) {
+    if (
+      cached &&
+      cached.accessToken !== rejectedAccessToken &&
+      cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs
+    ) {
       await this.touchLastUsed(account);
       return this.toAccess(account, adapter, credential, cached);
     }
@@ -120,9 +128,11 @@ export class ModelProviderAccountBroker {
     const key = `${accountId}:${state.credentialVersion}`;
     const existing = this.inFlight.get(key);
     if (existing) return existing;
-    const promise = this.refreshWithClaim(account, adapter, state).finally(() => {
-      if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
-    });
+    const promise = this.refreshWithClaim(account, adapter, state, rejectedAccessToken).finally(
+      () => {
+        if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
+      }
+    );
     this.inFlight.set(key, promise);
     return promise;
   }
@@ -130,13 +140,18 @@ export class ModelProviderAccountBroker {
   private async refreshWithClaim(
     account: ModelProviderAccount & { status: "active" },
     adapter: ErasedProviderAccountAdapter,
-    initialState: ProviderCredentialState
+    initialState: ProviderCredentialState,
+    rejectedAccessToken?: string
   ): Promise<ProviderAccess> {
     let state = initialState;
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
       const credential = this.parseCredential(adapter, state);
       const cached = adapter.cachedAccess(credential);
-      if (cached && cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs) {
+      if (
+        cached &&
+        cached.accessToken !== rejectedAccessToken &&
+        cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs
+      ) {
         await this.touchLastUsed(account);
         return this.toAccess(account, adapter, credential, cached);
       }
@@ -220,7 +235,7 @@ export class ModelProviderAccountBroker {
         }
         const reread = await this.readState(account.id, account.provider);
         if (reread.credentialVersion !== state.credentialVersion) {
-          return this.accessFromConcurrentUpdate(account, adapter, reread);
+          return this.accessFromConcurrentUpdate(account, adapter, reread, rejectedAccessToken);
         }
         throw this.reconnectError(
           account.provider,
@@ -240,11 +255,16 @@ export class ModelProviderAccountBroker {
   private accessFromConcurrentUpdate(
     account: ModelProviderAccount,
     adapter: ErasedProviderAccountAdapter,
-    state: ProviderCredentialState
+    state: ProviderCredentialState,
+    rejectedAccessToken?: string
   ): ProviderAccess {
     const credential = this.parseCredential(adapter, state);
     const cached = adapter.cachedAccess(credential);
-    if (!cached || cached.accessTokenExpiresAt - this.now() <= adapter.refreshBufferMs) {
+    if (
+      !cached ||
+      cached.accessToken === rejectedAccessToken ||
+      cached.accessTokenExpiresAt - this.now() <= adapter.refreshBufferMs
+    ) {
       throw this.reconnectError(
         account.provider,
         "Concurrent credential replacement has no usable access token"

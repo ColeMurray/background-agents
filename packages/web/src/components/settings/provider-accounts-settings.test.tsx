@@ -21,7 +21,9 @@ const setDefault = vi.fn();
 const startAuthorization = vi.fn();
 const pollAuthorization = vi.fn();
 const cancelAuthorization = vi.fn();
+const connectAccount = vi.fn();
 const reconnectAccount = vi.fn();
+const clearDefault = vi.fn();
 let legacyCredentialsResult: Record<string, unknown>;
 const providers = [
   { provider: "openai" as const, displayName: "OpenAI", subscriptionName: "ChatGPT" },
@@ -64,7 +66,8 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
   useLegacyProviderCredentials: () => legacyCredentialsResult,
   runProviderAccountAction: (...args: unknown[]) => runAction(...args),
   archiveProviderAccount: vi.fn(),
-  connectProviderAccount: vi.fn(),
+  clearProviderAccountDefault: (...args: unknown[]) => clearDefault(...args),
+  connectProviderAccount: (...args: unknown[]) => connectAccount(...args),
   reconnectProviderAccount: (...args: unknown[]) => reconnectAccount(...args),
   renameProviderAccount: vi.fn(),
   setProviderAccountDefault: (...args: unknown[]) => setDefault(...args),
@@ -93,7 +96,9 @@ describe("ProviderAccountsSettings", () => {
     });
     pollAuthorization.mockImplementation(() => new Promise(() => undefined));
     cancelAuthorization.mockResolvedValue(undefined);
+    connectAccount.mockResolvedValue(undefined);
     reconnectAccount.mockResolvedValue(undefined);
+    clearDefault.mockResolvedValue(undefined);
     accountsResult = [account];
     defaultsResult = [];
     allowedPermissions = null;
@@ -165,6 +170,57 @@ describe("ProviderAccountsSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy device code" }));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("ABCD-EFGH"));
+  });
+
+  it("connects OpenAI manually as a device authorization fallback", async () => {
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "ChatGPT manual token" }));
+
+    fireEvent.change(screen.getByLabelText("Account name"), {
+      target: { value: "Fallback ChatGPT" },
+    });
+    fireEvent.change(screen.getByLabelText("Account ID"), { target: { value: "acct-manual" } });
+    fireEvent.change(screen.getByLabelText("Refresh token"), {
+      target: { value: "manual-refresh" },
+    });
+    expect(screen.getByLabelText("Refresh token")).toHaveAttribute("type", "password");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(connectAccount).toHaveBeenCalledWith({
+        provider: "openai",
+        displayName: "Fallback ChatGPT",
+        refreshToken: "manual-refresh",
+        accountId: "acct-manual",
+      })
+    );
+  });
+
+  it("reconnects OpenAI manually with the verified account identity", async () => {
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Reconnect manually" }));
+
+    expect(screen.getByLabelText("Account ID")).toHaveValue("acct_public");
+    fireEvent.change(screen.getByLabelText("Refresh token"), {
+      target: { value: "manual-refresh" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(reconnectAccount).toHaveBeenCalledWith(account.id, {
+        provider: "openai",
+        refreshToken: "manual-refresh",
+        accountId: "acct_public",
+      })
+    );
   });
 
   it("refreshes account state and closes after polling connects", async () => {
@@ -379,10 +435,10 @@ describe("ProviderAccountsSettings", () => {
     expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
       "Use default: Team ChatGPT"
     );
-    expect(screen.getByText("Default for automation")).toBeInTheDocument();
+    expect(screen.getByText("Default account")).toBeInTheDocument();
   });
 
-  it("does not label the stored account as the automation default in API key mode", () => {
+  it("keeps the stored default visible in API key mode", () => {
     defaultsResult = [
       {
         provider: "openai",
@@ -397,9 +453,32 @@ describe("ProviderAccountsSettings", () => {
     render(<ProviderAccountsSettings />);
 
     expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
-      "No account (API key)"
+      "Use API key for automated sessions"
     );
-    expect(screen.queryByText("Default for automation")).not.toBeInTheDocument();
+    expect(screen.getByText("Default account")).toBeInTheDocument();
+  });
+
+  it("clears a stored default from its account row", async () => {
+    defaultsResult = [
+      {
+        provider: "openai",
+        providerAccountId: account.id,
+        unattendedMode: "api_key",
+        createdBy: null,
+        updatedBy: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Clear default" }));
+
+    await waitFor(() => expect(clearDefault).toHaveBeenCalledWith("openai"));
+    expect(refresh).toHaveBeenCalled();
   });
 
   it("sets the provider default from the account row", async () => {

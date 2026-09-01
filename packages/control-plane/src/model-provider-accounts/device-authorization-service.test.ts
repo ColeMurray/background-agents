@@ -233,6 +233,8 @@ describe("ProviderDeviceAuthorizationService polling", () => {
 
     await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({
       status: "failed",
+      error:
+        "OpenAI device authorization failed. Make sure device code authorization for Codex is enabled in ChatGPT settings, then try again.",
     });
     expect(logger.error).toHaveBeenCalledWith("provider_device_authorization.poll_failed", {
       transaction_id: TRANSACTION_ID,

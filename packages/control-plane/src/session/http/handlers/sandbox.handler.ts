@@ -48,7 +48,11 @@ export class SandboxHandler {
     private readonly messenger: SessionMessenger,
     /** Fixed at composition time: managed secrets exist only when D1 is bound. */
     private readonly managedSecretsConfigured: boolean,
-    private readonly refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>,
+    private readonly refreshOpenAIToken: (
+      session: SessionRow,
+      log: Logger,
+      rejectedAccessToken?: string
+    ) => Promise<OpenAIToken>,
     private readonly refreshXaiToken: (
       session: SessionRow,
       log: Logger
@@ -238,7 +242,10 @@ export class SandboxHandler {
     return Response.json({ valid: true }, { status: 200 });
   }
 
-  async openaiTokenRefresh(log: Logger): Promise<Response> {
+  async openaiTokenRefresh(
+    log: Logger,
+    request = new Request("https://internal/openai-token-refresh", { method: "POST" })
+  ): Promise<Response> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
       return Response.json({ error: "No session" }, { status: 404 });
@@ -248,9 +255,23 @@ export class SandboxHandler {
       return Response.json({ error: "Secrets not configured" }, { status: 500 });
     }
 
+    const requestBody = await request.text();
+    let requestPayload: unknown = {};
+    try {
+      if (requestBody) requestPayload = JSON.parse(requestBody);
+    } catch {
+      return Response.json({ error: "Invalid request" }, { status: 400 });
+    }
+    const body = z
+      .strictObject({ rejectedAccessToken: z.string().min(1).max(16_384).optional() })
+      .safeParse(requestPayload);
+    if (!body.success) return Response.json({ error: "Invalid request" }, { status: 400 });
+
     let token: OpenAIToken;
     try {
-      token = await this.refreshOpenAIToken(session, log);
+      token = body.data.rejectedAccessToken
+        ? await this.refreshOpenAIToken(session, log, body.data.rejectedAccessToken)
+        : await this.refreshOpenAIToken(session, log);
     } catch (error) {
       if (error instanceof OpenAITokenNotConfiguredError) {
         return Response.json({ error: error.message }, { status: 404 });

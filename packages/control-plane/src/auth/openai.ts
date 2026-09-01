@@ -45,6 +45,12 @@ const deviceStatusSchema = z.object({
   code_verifier: z.string().min(1).max(4096),
 });
 
+const deviceStatusErrorSchema = z.object({
+  error: z.object({ code: z.string().min(1).max(256) }),
+});
+
+const OPENAI_DEVICE_AUTHORIZATION_PENDING_ERROR = "deviceauth_authorization_pending";
+
 const openAIAccountIdSchema = z.string().trim().min(1);
 const openAIIdentityClaimsSchema = z.object({
   chatgpt_account_id: openAIAccountIdSchema.optional(),
@@ -137,11 +143,19 @@ export async function checkOpenAIDeviceAuthorization(
     headers: { "Content-Type": "application/json", "User-Agent": "Open-Inspect" },
     body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
   });
-  if (response.status === 403 || response.status === 404) {
-    await readBoundedProviderBody(response, () =>
+  if (!response.ok) {
+    const body = await readBoundedProviderBody(response, () =>
       openAIResponseError("device status check")("oversized", response.status)
     );
-    return { status: "pending" };
+    try {
+      const error = deviceStatusErrorSchema.safeParse(JSON.parse(body));
+      if (error.success && error.data.error.code === OPENAI_DEVICE_AUTHORIZATION_PENDING_ERROR) {
+        return { status: "pending" };
+      }
+    } catch {
+      // Non-JSON error responses are handled as provider failures below.
+    }
+    throw openAIResponseError("device status check")("http", response.status);
   }
   const data = await parseProviderResponse(
     response,

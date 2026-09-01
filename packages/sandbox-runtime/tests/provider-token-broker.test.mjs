@@ -29,7 +29,26 @@ test("uses the generic broker route, validates the response, and caches fresh to
     "https://control.test/sessions/session-1/provider-auth/openai/access-token"
   );
   assert.equal(requests[0].init.headers.Authorization, "Bearer sandbox-token");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {});
   assert.ok(requests[0].init.signal instanceof AbortSignal);
+});
+
+test("refreshes only when the cached token is the rejected token", async () => {
+  configureSession();
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    return Response.json({
+      accessToken: requests.length === 1 ? "access-1" : "access-2",
+      expiresIn: 3600,
+    });
+  };
+  const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
+
+  await broker.getAccessToken();
+  assert.equal((await broker.getAccessToken(undefined, "other-token")).accessToken, "access-1");
+  assert.equal((await broker.getAccessToken(undefined, "access-1")).accessToken, "access-2");
+  assert.deepEqual(requests, [{}, { rejectedAccessToken: "access-1" }]);
 });
 
 test("deduplicates concurrent refreshes", async () => {

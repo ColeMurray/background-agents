@@ -177,6 +177,27 @@ describe("ModelProviderAccountBroker", () => {
     expect(stores.credentials.tryBeginExchange).not.toHaveBeenCalled();
   });
 
+  it("refreshes a valid cached token when upstream rejected that exact token", async () => {
+    const { broker, stores, refresh } = setup({
+      credentialStates: [
+        state({
+          payload: {
+            refreshToken: "refresh",
+            accessToken: "rejected",
+            accessTokenExpiresAt: NOW + 600_000,
+          },
+          accessTokenExpiresAt: NOW + 600_000,
+        }),
+      ],
+    });
+
+    await expect(broker.getAccess("account-1", "openai", "rejected")).resolves.toMatchObject({
+      accessToken: "new-access",
+    });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(stores.credentials.tryBeginExchange).toHaveBeenCalledOnce();
+  });
+
   it("coalesces refreshes for the same account and credential version locally", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));

@@ -30,7 +30,7 @@ export class OpenAITokenRefreshService {
     this.broker = new OpenAITokenBroker(db, encryptionKey, log);
   }
 
-  async refresh(session: SessionRow): Promise<OpenAIToken> {
+  async refresh(session: SessionRow, rejectedAccessToken?: string): Promise<OpenAIToken> {
     let sessionScope: OAuthSecretScope | null;
     try {
       sessionScope = await resolveSessionOAuthSecretScope(session, this.ensureRepoId);
@@ -43,6 +43,6 @@ export class OpenAITokenRefreshService {
     const scopes: OAuthSecretScope[] = sessionScope
       ? [sessionScope, { kind: "global" }]
       : [{ kind: "global" }];
-    return this.broker.refreshScopes(scopes);
+    return this.broker.refreshScopes(scopes, rejectedAccessToken);
   }
 }

@@ -10,6 +10,8 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 import {
   archiveProviderAccount,
+  clearProviderAccountDefault,
+  connectProviderAccount,
   reconnectProviderAccount,
   renameProviderAccount,
   runProviderAccountAction,
@@ -59,6 +61,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 type Confirm = { account: ModelProviderAccount; action: "disable" | "archive" } | null;
 type Connection =
   | { kind: "device"; target: ProviderDeviceAuthorizationTarget }
+  | { kind: "manual-openai"; account?: ModelProviderAccount }
   | { kind: "legacy-xai"; account: ModelProviderAccount };
 
 type ConnectionStrategy = {
@@ -165,6 +168,82 @@ function LegacyReconnectForm({
       </div>
       <div className="flex gap-2">
         <Button size="sm" disabled={saving || !refreshToken} onClick={() => onSave(refreshToken)}>
+          Save
+        </Button>
+        <Button size="sm" variant="subtle" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ManualOpenAIForm({
+  account,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  account?: ModelProviderAccount;
+  saving: boolean;
+  onSave: (input: { displayName: string; refreshToken: string; accountId: string }) => void;
+  onCancel: () => void;
+}) {
+  const [displayName, setDisplayName] = useState(account?.displayName ?? "ChatGPT account");
+  const [refreshToken, setRefreshToken] = useState("");
+  const [accountId, setAccountId] = useState(account?.externalAccountId ?? "");
+
+  return (
+    <div className="space-y-3 rounded-md border border-border-muted p-4">
+      <div>
+        <h3 className="font-medium">
+          {account ? `Reconnect ${account.displayName} manually` : "Connect ChatGPT manually"}
+        </h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Use this fallback only when device authorization is unavailable. The refresh token is
+          write-only and the account identity is verified by OpenAI.
+        </p>
+      </div>
+      {!account && (
+        <div>
+          <Label htmlFor="openai-display-name">Account name</Label>
+          <Input
+            id="openai-display-name"
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
+          />
+        </div>
+      )}
+      <div>
+        <Label htmlFor="openai-account-id">Account ID</Label>
+        <Input
+          id="openai-account-id"
+          value={accountId}
+          onChange={(event) => setAccountId(event.target.value)}
+        />
+      </div>
+      <div>
+        <Label htmlFor="openai-refresh-token">Refresh token</Label>
+        <Input
+          id="openai-refresh-token"
+          type="password"
+          autoComplete="off"
+          value={refreshToken}
+          onChange={(event) => setRefreshToken(event.target.value)}
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={saving || !displayName.trim() || !accountId.trim() || !refreshToken}
+          onClick={() =>
+            onSave({
+              displayName: displayName.trim(),
+              refreshToken,
+              accountId: accountId.trim(),
+            })
+          }
+        >
           Save
         </Button>
         <Button size="sm" variant="subtle" onClick={onCancel}>
@@ -287,6 +366,14 @@ export function ProviderAccountsSettings() {
                         <span>{provider.subscriptionName}</span>
                       </DropdownMenuItem>
                     ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      disabled={saving}
+                      onSelect={() => beginConnection({ kind: "manual-openai" })}
+                    >
+                      <SubscriptionProviderIcon provider="openai" className="size-5 text-primary" />
+                      <span>ChatGPT manual token</span>
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
@@ -302,8 +389,6 @@ export function ProviderAccountsSettings() {
                     (item) => item.provider === account.provider
                   );
                   const isDefault = providerDefault?.providerAccountId === account.id;
-                  const isDefaultForAutomation =
-                    isDefault && providerDefault.unattendedMode === "provider_account";
                   const externalAccountId = account.externalAccountId;
                   return (
                     <div key={account.id} className="p-4">
@@ -336,9 +421,9 @@ export function ProviderAccountsSettings() {
                               >
                                 {accountStatusLabel(account.status)}
                               </span>
-                              {isDefaultForAutomation && (
+                              {isDefault && (
                                 <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
-                                  Default for automation
+                                  Default account
                                 </span>
                               )}
                             </div>
@@ -418,6 +503,16 @@ export function ProviderAccountsSettings() {
                                     Reconnect
                                   </DropdownMenuItem>
                                 )}
+                                {account.provider === "openai" && (
+                                  <DropdownMenuItem
+                                    disabled={saving}
+                                    onSelect={() =>
+                                      beginConnection({ kind: "manual-openai", account })
+                                    }
+                                  >
+                                    Reconnect manually
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem
                                   disabled={saving || account.status !== "active"}
                                   onSelect={() =>
@@ -445,6 +540,19 @@ export function ProviderAccountsSettings() {
                                     }
                                   >
                                     Make default
+                                  </DropdownMenuItem>
+                                )}
+                                {isDefault && (
+                                  <DropdownMenuItem
+                                    disabled={saving}
+                                    onSelect={() =>
+                                      void run(
+                                        () => clearProviderAccountDefault(account.provider),
+                                        "Default cleared"
+                                      )
+                                    }
+                                  >
+                                    Clear default
                                   </DropdownMenuItem>
                                 )}
                                 <DropdownMenuItem
@@ -574,7 +682,9 @@ export function ProviderAccountsSettings() {
                               <SelectItem value="provider_account">
                                 Use default: {defaultAccount?.displayName ?? "Unavailable account"}
                               </SelectItem>
-                              <SelectItem value="api_key">No account (API key)</SelectItem>
+                              <SelectItem value="api_key">
+                                Use API key for automated sessions
+                              </SelectItem>
                             </SelectContent>
                           </Select>
                         </>
@@ -631,6 +741,33 @@ export function ProviderAccountsSettings() {
                   refreshToken,
                 }),
               "Account reconnected"
+            )
+          }
+          onCancel={() => setConnection(null)}
+        />
+      )}
+
+      {canManage && connection?.kind === "manual-openai" && (
+        <ManualOpenAIForm
+          key={connection.account?.id ?? "create"}
+          account={connection.account}
+          saving={saving}
+          onSave={({ displayName, refreshToken, accountId }) =>
+            void run(
+              () =>
+                connection.account
+                  ? reconnectProviderAccount(connection.account.id, {
+                      provider: "openai",
+                      refreshToken,
+                      accountId,
+                    })
+                  : connectProviderAccount({
+                      provider: "openai",
+                      displayName,
+                      refreshToken,
+                      accountId,
+                    }),
+              connection.account ? "Account reconnected" : "ChatGPT account connected"
             )
           }
           onCancel={() => setConnection(null)}

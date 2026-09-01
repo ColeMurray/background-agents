@@ -67,7 +67,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     sandboxError: (request: Request) => sandboxHandler.sandboxError(request),
     createMediaArtifact: (request: Request) => sandboxHandler.createMediaArtifact(request),
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
-    openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
+    openaiTokenRefresh: (request?: Request) => sandboxHandler.openaiTokenRefresh(log, request),
     xaiTokenRefresh: () => sandboxHandler.xaiTokenRefresh(log),
     scmCredentials: () => sandboxHandler.scmCredentials(log),
     tunnelUrls: () => sandboxHandler.tunnelUrls(log),
@@ -600,6 +600,24 @@ describe("SandboxHandler", () => {
       account_id: "acct_123",
     });
     expect(refreshOpenAIToken).toHaveBeenCalledWith(session, log);
+  });
+
+  it("forwards an upstream-rejected OpenAI access token for conditional refresh", async () => {
+    const { handler, getSession, refreshOpenAIToken, log } = createHandler();
+    const session = { id: "session-1" } as SessionRow;
+    getSession.mockReturnValue(session);
+    refreshOpenAIToken.mockResolvedValue({ accessToken: "replacement" });
+
+    const response = await handler.openaiTokenRefresh(
+      new Request("https://internal/openai-token-refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rejectedAccessToken: "rejected" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(refreshOpenAIToken).toHaveBeenCalledWith(session, log, "rejected");
   });
 
   it("returns xAI access token payload on success", async () => {

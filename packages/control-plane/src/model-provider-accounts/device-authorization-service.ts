@@ -195,7 +195,7 @@ export class ProviderDeviceAuthorizationService {
     let row = await this.resolveDurableRow(userId, provider, id, this.dependencies.now());
     let now = this.dependencies.now();
     if (row.state === "connected") return this.connected(row);
-    if (this.isTerminal(row)) return this.terminal(row.state);
+    if (this.isTerminal(row)) return this.terminal(row);
     if (row.state === "processing") {
       if (row.processingStartedAt + PROCESSING_CLAIM_TIMEOUT_MS <= now) {
         return this.finishAndResolve(userId, provider, id, "failed", now, row.processingOwner);
@@ -292,7 +292,7 @@ export class ProviderDeviceAuthorizationService {
   ): Promise<ProviderDeviceAuthorizationStatusResponse> {
     const current = await this.resolveDurableRow(userId, provider, id, now);
     if (current.state === "connected") return this.connected(current);
-    if (this.isTerminal(current)) return this.terminal(current.state);
+    if (this.isTerminal(current)) return this.terminal(current);
     return this.pending(current);
   }
 
@@ -359,12 +359,16 @@ export class ProviderDeviceAuthorizationService {
   }
 
   private terminal(
-    state: ProviderAuthorizationTerminalState
+    authorization: Extract<ProviderAuthorization, { state: ProviderAuthorizationTerminalState }>
   ): ProviderDeviceAuthorizationStatusResponse {
+    const { state } = authorization;
     const messages = {
       denied: "Provider authorization was denied.",
       expired: "Provider authorization expired.",
-      failed: "Provider authorization failed. Start a fresh authorization.",
+      failed:
+        authorization.provider === "openai"
+          ? "OpenAI device authorization failed. Make sure device code authorization for Codex is enabled in ChatGPT settings, then try again."
+          : "Provider authorization failed. Start a fresh authorization.",
       cancelled: "Provider authorization was cancelled.",
       superseded: "A newer authorization attempt replaced this one.",
     } as const;

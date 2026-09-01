@@ -69,6 +69,9 @@ const legacyAccessSchema = z.object({
   expires_in: z.number().optional(),
   account_id: z.string().optional(),
 });
+const providerAccessRequestSchema = z.strictObject({
+  rejectedAccessToken: z.string().min(1).max(16_384).optional(),
+});
 const LEGACY_REFRESH_PATH = {
   openai: SessionInternalPaths.openaiTokenRefresh,
   xai: SessionInternalPaths.xaiTokenRefresh,
@@ -83,7 +86,8 @@ function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
     credentials,
     new D1ModelProviderAccountAtomicWriter(ctx.db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY),
     modelProviderAccountAdapterRegistry,
-    { generateId: () => generateId(), now: () => Date.now() }
+    { generateId: () => generateId(), now: () => Date.now() },
+    logger.child({ request_id: ctx.request_id, trace_id: ctx.trace_id })
   );
 }
 
@@ -402,12 +406,17 @@ async function handleLegacyProviderAccess(
   env: Env,
   ctx: SandboxRouteContext,
   sessionId: string,
-  providerId: SubscriptionProviderId
+  providerId: SubscriptionProviderId,
+  rejectedAccessToken?: string
 ): Promise<Response> {
   const response = await createSessionRuntimeClient(env, ctx).fetch(
     sessionId,
     LEGACY_REFRESH_PATH[providerId],
-    { method: "POST" }
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rejectedAccessToken }),
+    }
   );
   if (!response.ok) return response;
   const parsed = legacyAccessSchema.safeParse(await response.json().catch(() => null));
@@ -423,7 +432,7 @@ async function handleLegacyProviderAccess(
 }
 
 async function handleProviderAccess(
-  _request: Request,
+  request: Request,
   env: Env,
   match: RegExpMatchArray,
   ctx: SandboxRouteContext
@@ -432,6 +441,15 @@ async function handleProviderAccess(
   const parsedProvider = provider(match.groups?.provider);
   if (!sessionId) return error("Session ID required", 400);
   if (parsedProvider instanceof Response) return parsedProvider;
+  const requestBody = await request.text();
+  let requestPayload: unknown = {};
+  try {
+    if (requestBody) requestPayload = JSON.parse(requestBody);
+  } catch {
+    return error("Invalid provider access request", 400);
+  }
+  const accessRequest = providerAccessRequestSchema.safeParse(requestPayload);
+  if (!accessRequest.success) return error("Invalid provider access request", 400);
   let binding;
   try {
     binding = await new SessionIndexStore(ctx.db).getProviderAuthForProvider(
@@ -451,7 +469,13 @@ async function handleProviderAccess(
   }
   if (!binding) return error("Session provider account is not configured", 404);
   if (binding.authMode === "legacy_scoped_oauth") {
-    return handleLegacyProviderAccess(env, ctx, sessionId, parsedProvider);
+    return handleLegacyProviderAccess(
+      env,
+      ctx,
+      sessionId,
+      parsedProvider,
+      accessRequest.data.rejectedAccessToken
+    );
   }
   if (binding.authMode === "api_key") {
     return error("Session uses API-key mode for this provider", 409);
@@ -469,7 +493,13 @@ async function handleProviderAccess(
     { now: () => Date.now(), createOwner: () => generateId() }
   );
   try {
-    return json(await broker.getAccess(binding.providerAccountId, parsedProvider));
+    return json(
+      await broker.getAccess(
+        binding.providerAccountId,
+        parsedProvider,
+        accessRequest.data.rejectedAccessToken
+      )
+    );
   } catch (cause) {
     if (cause instanceof ModelProviderAccountBrokerError) {
       const status =

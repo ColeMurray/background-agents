@@ -28,8 +28,23 @@ import {
   providerAccountIneligibility,
   type ProviderAccountOperation,
 } from "./account-lifecycle-policy";
+import type { Logger } from "../logger";
 
 type ErasedProviderAccountAdapter = ModelProviderAccountAdapter<unknown, unknown>;
+
+function providerErrorLogDetails(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return {};
+  const providerError = error as Error & { status?: unknown; errorCode?: unknown };
+  return {
+    provider_error_type: error.constructor.name,
+    ...(typeof providerError.status === "number"
+      ? { provider_error_status: providerError.status }
+      : {}),
+    ...(typeof providerError.errorCode === "string"
+      ? { provider_error_code: providerError.errorCode }
+      : {}),
+  };
+}
 
 export type ModelProviderAccountServiceAccountStore = Pick<
   ModelProviderAccountStore,
@@ -74,7 +89,8 @@ export class ModelProviderAccountService {
     private readonly credentials: ModelProviderAccountServiceCredentialStore,
     private readonly atomicWriter: ModelProviderAccountAtomicWriter,
     private readonly adapters: ModelProviderAccountAdapterRegistry,
-    private readonly dependencies: { generateId: () => string; now: () => number }
+    private readonly dependencies: { generateId: () => string; now: () => number },
+    private readonly logger: Pick<Logger, "error">
   ) {
     this.exchange = new ClaimedProviderCredentialExchange(
       credentials,
@@ -254,6 +270,17 @@ export class ModelProviderAccountService {
         });
       }
       if (cause.phase === "refresh") {
+        const providerError = cause.cause instanceof Error ? cause.cause.cause : undefined;
+        this.logger.error("provider_account.verification_refresh_failed", {
+          event: "provider_account.verification_refresh_failed",
+          provider_account_id: account.id,
+          provider: account.provider,
+          error: cause.cause instanceof Error ? cause.cause : String(cause.cause),
+          ...(cause.cause instanceof ProviderRefreshError
+            ? { refresh_failure_classification: cause.cause.classification }
+            : {}),
+          ...providerErrorLogDetails(providerError),
+        });
         if (
           cause.cause instanceof ProviderRefreshError &&
           cause.cause.classification === "retry_safe"

@@ -44,10 +44,13 @@ export class OpenAITokenBroker {
     return this.refreshScopes([{ kind: "global" }]);
   }
 
-  async refreshScopes(scopes: readonly OAuthSecretScope[]): Promise<OpenAIToken> {
+  async refreshScopes(
+    scopes: readonly OAuthSecretScope[],
+    rejectedAccessToken?: string
+  ): Promise<OpenAIToken> {
     let tokenState: OpenAITokenState | null;
     try {
-      tokenState = await this.readTokenState(scopes);
+      tokenState = await this.readTokenState(scopes, rejectedAccessToken);
     } catch (error) {
       this.log.error("Failed to read OpenAI token state from secrets", {
         error: error instanceof Error ? error.message : String(error),
@@ -72,7 +75,7 @@ export class OpenAITokenBroker {
     } catch (error) {
       if (error instanceof OpenAITokenBrokerError) throw error;
       if (error instanceof OpenAITokenRefreshError && error.status === 401) {
-        return this.handleUnauthorizedRefresh(tokenState, scopes);
+        return this.handleUnauthorizedRefresh(tokenState, scopes, rejectedAccessToken);
       }
 
       this.log.error("OpenAI token refresh failed", {
@@ -84,7 +87,8 @@ export class OpenAITokenBroker {
 
   private stateFromSecrets(
     secrets: Record<string, string>,
-    scope: OAuthSecretScope
+    scope: OAuthSecretScope,
+    rejectedAccessToken?: string
   ): OpenAITokenState | null {
     const refreshToken = secrets.OPENAI_OAUTH_REFRESH_TOKEN;
     if (!refreshToken) return null;
@@ -93,7 +97,11 @@ export class OpenAITokenBroker {
     const expiresAt = Number.parseInt(secrets.OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT || "0", 10);
     const now = Date.now();
 
-    if (cachedToken && expiresAt - now > OPENAI_TOKEN_REFRESH_BUFFER_MS) {
+    if (
+      cachedToken &&
+      cachedToken !== rejectedAccessToken &&
+      expiresAt - now > OPENAI_TOKEN_REFRESH_BUFFER_MS
+    ) {
       return {
         type: "cached",
         accessToken: cachedToken,
@@ -111,10 +119,15 @@ export class OpenAITokenBroker {
   }
 
   private async readTokenState(
-    scopes: readonly OAuthSecretScope[]
+    scopes: readonly OAuthSecretScope[],
+    rejectedAccessToken?: string
   ): Promise<OpenAITokenState | null> {
     for (const scope of scopes) {
-      const state = this.stateFromSecrets(await this.secrets.read(scope), scope);
+      const state = this.stateFromSecrets(
+        await this.secrets.read(scope),
+        scope,
+        rejectedAccessToken
+      );
       if (state) return state;
     }
     return null;
@@ -186,7 +199,8 @@ export class OpenAITokenBroker {
 
   private async handleUnauthorizedRefresh(
     tokenState: Extract<OpenAITokenState, { type: "refresh" }>,
-    scopes: readonly OAuthSecretScope[]
+    scopes: readonly OAuthSecretScope[],
+    rejectedAccessToken?: string
   ): Promise<OpenAIToken> {
     this.log.warn("OpenAI refresh got 401, checking for concurrent rotation", {
       scope: tokenState.scope.kind,
@@ -198,7 +212,7 @@ export class OpenAITokenBroker {
 
       let reread: OpenAITokenState | null;
       try {
-        reread = await this.readTokenState(scopes);
+        reread = await this.readTokenState(scopes, rejectedAccessToken);
       } catch (error) {
         this.log.error("Failed to reread OpenAI token state after 401", {
           poll_attempt: pollIndex + 1,

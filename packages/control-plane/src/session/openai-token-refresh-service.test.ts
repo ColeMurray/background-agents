@@ -205,6 +205,33 @@ describe("OpenAITokenRefreshService", () => {
     expect(mockState.refreshImpl).not.toHaveBeenCalled();
   });
 
+  it("refreshes a cached repo access token rejected by upstream", async () => {
+    const repoId = 123;
+    mockState.repoSecrets.set(repoId, {
+      OPENAI_OAUTH_REFRESH_TOKEN: "refresh-1",
+      OPENAI_OAUTH_ACCESS_TOKEN: "rejected-access",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 15 * 60 * 1000),
+      OPENAI_OAUTH_ACCOUNT_ID: "acct_cached",
+    });
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "replacement-access",
+      refresh_token: "replacement-refresh",
+      expires_in: 3600,
+    });
+    const service = new OpenAITokenRefreshService(
+      TEST_DB,
+      "enc-key",
+      async () => repoId,
+      createLogger()
+    );
+
+    await expect(service.refresh(createSession(), "rejected-access")).resolves.toMatchObject({
+      accessToken: "replacement-access",
+      accountId: "acct_cached",
+    });
+    expect(mockState.refreshImpl).toHaveBeenCalledWith("refresh-1");
+  });
+
   it("returns a cached global access token without consulting session scopes", async () => {
     mockState.globalSecrets = {
       OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh",

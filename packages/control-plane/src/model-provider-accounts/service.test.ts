@@ -7,6 +7,7 @@ import {
   type ProviderConnectionResult,
   type ProviderRefreshResult,
 } from "../auth/model-provider-account-adapters";
+import { OpenAITokenRefreshError } from "../auth/openai";
 import type { ModelProviderAccount } from "../db/model-provider-accounts";
 import type { ModelProviderAccountAtomicWriter } from "../db/model-provider-account-atomic-writer";
 import { XaiModelProviderAccountAdapter } from "../auth/model-provider-account-xai-adapter";
@@ -147,14 +148,16 @@ function stores(account: ModelProviderAccount | null = providerAccount()): {
 function createService(
   store: ReturnType<typeof stores>,
   registry: ModelProviderAccountAdapterRegistry,
-  dependencies: { generateId: () => string; now: () => number }
+  dependencies: { generateId: () => string; now: () => number },
+  logger = { error: vi.fn() }
 ) {
   return new ModelProviderAccountService(
     store.accounts,
     store.credentials,
     store.atomicWriter,
     registry,
-    dependencies
+    dependencies,
+    logger
   );
 }
 
@@ -636,6 +639,39 @@ describe("ModelProviderAccountService", () => {
       });
     }
   );
+
+  it("logs safe OpenAI diagnostics when verification requires reconnection", async () => {
+    const store = stores();
+    const providerAdapter = adapter();
+    const logger = { error: vi.fn() };
+    vi.mocked(providerAdapter.refresh).mockRejectedValue(
+      new ProviderRefreshError("OpenAI refresh was unauthorized", "unauthorized", {
+        cause: new OpenAITokenRefreshError(
+          "OpenAI token refresh failed: 401",
+          401,
+          "invalid_grant"
+        ),
+      })
+    );
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([providerAdapter]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 },
+      logger
+    );
+
+    await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toMatchObject({ status: 409 });
+    expect(logger.error).toHaveBeenCalledWith("provider_account.verification_refresh_failed", {
+      event: "provider_account.verification_refresh_failed",
+      provider_account_id: ACCOUNT_ID,
+      provider: "openai",
+      error: expect.any(ProviderRefreshError),
+      refresh_failure_classification: "unauthorized",
+      provider_error_type: "OpenAITokenRefreshError",
+      provider_error_status: 401,
+      provider_error_code: "invalid_grant",
+    });
+  });
 
   it("maps retry-safe verification refresh failure without requiring reconnect", async () => {
     const store = stores();

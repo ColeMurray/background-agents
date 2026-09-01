@@ -29,7 +29,7 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex",
 ]);
 
-async function ensureAccessToken(getAuth, setAuth) {
+async function ensureAccessToken(getAuth, setAuth, rejectedAccessToken) {
   const result = await tokenBroker.getAccessToken(async (refreshed) => {
     // Update OpenCode's auth state for consistency. The broker cache remains
     // authoritative when the local auth store cannot be updated.
@@ -46,7 +46,7 @@ async function ensureAccessToken(getAuth, setAuth) {
     } catch {
       // Non-fatal: the in-memory cache is the source of truth
     }
-  });
+  }, rejectedAccessToken);
   return {
     accessToken: result.accessToken,
     accountId: result.providerMetadata?.accountId || null,
@@ -168,7 +168,20 @@ export const CodexAuthProxy = async (input) => {
                 ? new URL(CODEX_API_ENDPOINT)
                 : parsed;
 
-            return fetch(url, { ...init, headers });
+            const request = new Request(url, { ...init, headers });
+            const retryRequest = request.clone();
+            const response = await fetch(request);
+            if (response.status !== 401) return response;
+
+            const refreshed = await ensureAccessToken(getAuth, setAuth, accessToken);
+            const retryHeaders = new Headers(retryRequest.headers);
+            retryHeaders.set("authorization", `Bearer ${refreshed.accessToken}`);
+            if (refreshed.accountId) {
+              retryHeaders.set("ChatGPT-Account-Id", refreshed.accountId);
+            } else {
+              retryHeaders.delete("ChatGPT-Account-Id");
+            }
+            return fetch(new Request(retryRequest, { headers: retryHeaders }));
           },
         };
       },
