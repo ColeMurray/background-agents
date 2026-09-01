@@ -1144,6 +1144,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.log.error("Snapshot request failed", {
         error: error instanceof Error ? error : String(error),
         reason,
+        modal_object_id: sandbox.modal_object_id,
       });
     }
 
