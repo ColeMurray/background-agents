@@ -19,8 +19,6 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
-export { MOBILE_LONG_PRESS_MS } from "@/components/session-list-item";
-
 interface SidebarActionButtonProps {
   onClick?: () => void;
 }

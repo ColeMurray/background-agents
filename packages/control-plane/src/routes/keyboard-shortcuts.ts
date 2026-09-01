@@ -1,4 +1,4 @@
-import { updateKeyboardShortcutPreferencesSchema } from "@open-inspect/shared/types/keyboard-shortcuts";
+import { keyboardShortcutPreferencesPayloadSchema } from "@open-inspect/shared/types/keyboard-shortcuts";
 import { KeyboardShortcutPreferencesStore } from "../db/keyboard-shortcut-preferences";
 import type { Env } from "../types";
 import {
@@ -35,7 +35,7 @@ async function updatePreferences(
   } catch {
     return error("Invalid JSON body", 400);
   }
-  const parsed = updateKeyboardShortcutPreferencesSchema.safeParse(body);
+  const parsed = keyboardShortcutPreferencesPayloadSchema.safeParse(body);
   if (!parsed.success) return error("Invalid keyboard shortcuts", 400);
   const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).set(
     ctx.principal.userId,

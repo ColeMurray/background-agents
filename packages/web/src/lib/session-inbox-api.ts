@@ -1,6 +1,5 @@
 import type {
   SessionInboxCategory,
-  SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
   SessionListItem,
@@ -8,7 +7,7 @@ import type {
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
 
-export const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
+const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
 interface SessionInboxQuery {
   category: SessionInboxCategory;
@@ -123,4 +122,4 @@ export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot 
   return applyReadStateToPage(data, sessionId, readState) as T;
 }
 
-export type { SessionInboxItem, SessionInboxPage, SessionInboxSnapshot };
+export type { SessionInboxPage, SessionInboxSnapshot };

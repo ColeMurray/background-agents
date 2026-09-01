@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export const DEFAULT_SESSION_DETAILS_SIDEBAR_OPEN = true;
+const DEFAULT_SESSION_DETAILS_SIDEBAR_OPEN = true;
 const SESSION_DETAILS_SIDEBAR_OPEN_STORAGE_KEY = "open-inspect-session-details-sidebar-open";
 
 export function useSessionDetailsSidebar() {

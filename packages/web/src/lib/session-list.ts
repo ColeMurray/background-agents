@@ -10,7 +10,7 @@ import { z } from "zod";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
-export const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
+const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
 const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = SESSION_LIST_CURRENT_USER;
@@ -52,7 +52,7 @@ const sessionListItemSchema = z.object({
 
 export type SessionListItem = z.infer<typeof sessionListItemSchema>;
 
-export const sessionListResponseSchema = z.object({
+const sessionListResponseSchema = z.object({
   sessions: z.array(sessionListItemSchema),
   hasMore: z.boolean(),
 });
