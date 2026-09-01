@@ -5,6 +5,7 @@ import type {
   SessionInboxSnapshot,
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
+import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
 
 export const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
@@ -53,6 +54,30 @@ function applyTitleToPage(
   };
 }
 
+function applyReadStateToSession(
+  session: SessionListItem,
+  sessionId: string,
+  readState: SessionReadState
+) {
+  return session.id === sessionId ? { ...session, readState } : session;
+}
+
+function applyReadStateToPage(
+  page: SessionInboxPage,
+  sessionId: string,
+  readState: SessionReadState
+): SessionInboxPage {
+  return {
+    ...page,
+    items: page.items.map((item) => ({
+      rootSession: applyReadStateToSession(item.rootSession, sessionId, readState),
+      descendantSessions: item.descendantSessions.map((session) =>
+        applyReadStateToSession(session, sessionId, readState)
+      ),
+    })),
+  };
+}
+
 /**
  * Applies a rename to a cached inbox payload. Inbox keys cache two shapes —
  * the category snapshot and a single paginated page — so the transform
@@ -76,6 +101,26 @@ export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | Se
     };
   }
   return applyTitleToPage(data, sessionId, title) as T;
+}
+
+export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(
+  data: T | undefined,
+  sessionId: string,
+  readState: SessionReadState
+): T | undefined {
+  if (!data) return data;
+  if ("categories" in data) {
+    return {
+      ...data,
+      categories: Object.fromEntries(
+        Object.entries(data.categories).map(([category, page]) => [
+          category,
+          applyReadStateToPage(page, sessionId, readState),
+        ])
+      ) as Record<SessionInboxCategory, SessionInboxPage>,
+    } as T;
+  }
+  return applyReadStateToPage(data, sessionId, readState) as T;
 }
 
 export type { SessionInboxItem, SessionInboxPage, SessionInboxSnapshot };

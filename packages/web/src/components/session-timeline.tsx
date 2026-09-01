@@ -38,8 +38,6 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
-import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
-import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 
 export function SessionTimeline({
@@ -53,8 +51,6 @@ export function SessionTimeline({
   showSkeleton,
   onLoadOlder,
   onOpenMedia,
-  terminalMessageReadObservationEnabled = false,
-  onMarkMessageRead,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -66,8 +62,6 @@ export function SessionTimeline({
   showSkeleton: boolean;
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
-  terminalMessageReadObservationEnabled?: boolean;
-  onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
   const pendingMessageIds = useMemo(
     () =>
@@ -99,11 +93,11 @@ export function SessionTimeline({
     () =>
       buildTimelineVirtualRows({
         items: timelineItems,
-        terminalMessageId: onMarkMessageRead ? latestTerminalMessageId : null,
+        terminalMessageId: latestTerminalMessageId,
         loadingHistory,
         isProcessing,
       }),
-    [isProcessing, latestTerminalMessageId, loadingHistory, onMarkMessageRead, timelineItems]
+    [isProcessing, latestTerminalMessageId, loadingHistory, timelineItems]
   );
   const getVirtualRowKey = useCallback(
     (index: number) => virtualRows[index]?.id ?? index,
@@ -263,16 +257,7 @@ export function SessionTimeline({
       case "thinking":
         return <ThinkingIndicator />;
       case "terminal":
-        if (!onMarkMessageRead) return row.items.map(renderTimelineItem);
-        return (
-          <TerminalMessageReadObserver
-            messageId={row.messageId}
-            enabled={terminalMessageReadObservationEnabled}
-            onMarkMessageRead={onMarkMessageRead}
-          >
-            {row.items.map(renderTimelineItem)}
-          </TerminalMessageReadObserver>
-        );
+        return <div className="space-y-2">{row.items.map(renderTimelineItem)}</div>;
       case "item":
         return renderTimelineItem(row.item);
     }

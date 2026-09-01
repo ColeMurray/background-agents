@@ -2,6 +2,12 @@ import { mutate } from "swr";
 import { browserApiFetch } from "./browser-api-fetch";
 import { applySessionReadState, isSessionListKey, type SessionListResponse } from "./session-list";
 import {
+  applySessionInboxReadStateUpdate,
+  isSessionInboxKey,
+  type SessionInboxPage,
+  type SessionInboxSnapshot,
+} from "./session-inbox-api";
+import {
   sessionReadResultSchema,
   type SessionReadAction,
   type SessionReadResult,
@@ -65,9 +71,16 @@ export function readStateFromResult(result: SessionReadResult): SessionReadState
 
 export function reconcileSessionReadState(result: SessionReadResult): Promise<unknown> {
   const readState = readStateFromResult(result);
-  return mutate<SessionListResponse>(
-    isSessionListKey,
-    (current) => applySessionReadState(current, result.sessionId, readState),
-    { populateCache: true, revalidate: false }
-  );
+  return Promise.all([
+    mutate<SessionListResponse>(
+      isSessionListKey,
+      (current) => applySessionReadState(current, result.sessionId, readState),
+      { populateCache: true, revalidate: false }
+    ),
+    mutate<SessionInboxSnapshot | SessionInboxPage>(
+      isSessionInboxKey,
+      (current) => applySessionInboxReadStateUpdate(current, result.sessionId, readState),
+      { populateCache: true, revalidate: true }
+    ),
+  ]);
 }

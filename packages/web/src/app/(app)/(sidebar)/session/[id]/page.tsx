@@ -7,6 +7,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { useSessionSkills } from "@/hooks/use-session-skills";
 import { SessionTimeline } from "@/components/session-timeline";
+import { SessionReadObserver } from "@/components/session-read-observer";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
@@ -283,7 +284,7 @@ export default function SessionPage() {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
-  const attemptMarkVisibleMessageRead = useCallback(
+  const attemptMarkActiveMessageRead = useCallback(
     async (messageId: string) => {
       try {
         const result = await markMessageRead(sessionId, messageId);
@@ -301,6 +302,13 @@ export default function SessionPage() {
     },
     [sessionId]
   );
+  const latestTerminalMessageId = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.type === "execution_complete" && event.messageId) return event.messageId;
+    }
+    return null;
+  }, [events]);
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -343,13 +351,6 @@ export default function SessionPage() {
               showSkeleton={false}
               onLoadOlder={loadOlderEvents}
               onOpenMedia={setSelectedMediaArtifactId}
-              terminalMessageReadObservationEnabled={
-                !loadingHistory &&
-                !isDetailsOpen &&
-                selectedMediaArtifactId === null &&
-                resolvedDiff === null
-              }
-              onMarkMessageRead={attemptMarkVisibleMessageRead}
             />
           </Panel>
           {showTerminal && (
@@ -413,6 +414,11 @@ export default function SessionPage() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-clip">
+      <SessionReadObserver
+        messageId={latestTerminalMessageId}
+        enabled={ready}
+        onMarkMessageRead={attemptMarkActiveMessageRead}
+      />
       <SessionHeader
         sessionState={sessionState}
         sandboxError={sandboxError}

@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { classifySessionReadAttempt } from "./session-read-state";
+import { mutate } from "swr";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { classifySessionReadAttempt, reconcileSessionReadState } from "./session-read-state";
+
+vi.mock("swr", () => ({ mutate: vi.fn(() => Promise.resolve()) }));
+
+beforeEach(() => {
+  vi.mocked(mutate).mockClear();
+});
 
 describe("classifySessionReadAttempt", () => {
   it.each(["marked_read", "already_read"] as const)("completes after a %s result", (outcome) => {
@@ -33,4 +40,25 @@ describe("classifySessionReadAttempt", () => {
       expect(classifySessionReadAttempt(result)).toBe("retry");
     }
   );
+});
+
+describe("reconcileSessionReadState", () => {
+  it("updates both session-list and inbox caches", async () => {
+    await reconcileSessionReadState({
+      sessionId: "session-1",
+      outcome: "marked_read",
+      unread: false,
+      latestMessageId: "message-1",
+    });
+
+    expect(mutate).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(mutate).mock.calls[0]?.[2]).toEqual({
+      populateCache: true,
+      revalidate: false,
+    });
+    expect(vi.mocked(mutate).mock.calls[1]?.[2]).toEqual({
+      populateCache: true,
+      revalidate: true,
+    });
+  });
 });
