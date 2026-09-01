@@ -2,12 +2,6 @@ import { mutate } from "swr";
 import { browserApiFetch } from "./browser-api-fetch";
 import { applySessionReadState, isSessionListKey, type SessionListResponse } from "./session-list";
 import {
-  applySessionInboxReadStateUpdate,
-  isSessionInboxKey,
-  type SessionInboxPage,
-  type SessionInboxSnapshot,
-} from "./session-inbox-api";
-import {
   sessionReadResultSchema,
   type SessionReadAction,
   type SessionReadResult,
@@ -15,6 +9,11 @@ import {
 } from "@open-inspect/shared/types/sessions";
 
 export type SessionReadAttemptDisposition = "complete" | "retry" | "permanent_failure";
+export const SESSION_READ_STATE_RECONCILED_EVENT = "open-inspect:session-read-state-reconciled";
+export interface SessionReadStateReconciledDetail {
+  sessionId: string;
+  readState: SessionReadState;
+}
 
 export class SessionReadRequestError extends Error {
   constructor(readonly status: number) {
@@ -69,18 +68,19 @@ export function readStateFromResult(result: SessionReadResult): SessionReadState
       };
 }
 
-export function reconcileSessionReadState(result: SessionReadResult): Promise<unknown> {
+export async function reconcileSessionReadState(result: SessionReadResult): Promise<unknown> {
   const readState = readStateFromResult(result);
-  return Promise.all([
-    mutate<SessionListResponse>(
-      isSessionListKey,
-      (current) => applySessionReadState(current, result.sessionId, readState),
-      { populateCache: true, revalidate: false }
-    ),
-    mutate<SessionInboxSnapshot | SessionInboxPage>(
-      isSessionInboxKey,
-      (current) => applySessionInboxReadStateUpdate(current, result.sessionId, readState),
-      { populateCache: true, revalidate: true }
-    ),
-  ]);
+  const mutation = await mutate<SessionListResponse>(
+    isSessionListKey,
+    (current) => applySessionReadState(current, result.sessionId, readState),
+    { populateCache: true, revalidate: false }
+  );
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<SessionReadStateReconciledDetail>(SESSION_READ_STATE_RECONCILED_EVENT, {
+        detail: { sessionId: result.sessionId, readState },
+      })
+    );
+  }
+  return mutation;
 }

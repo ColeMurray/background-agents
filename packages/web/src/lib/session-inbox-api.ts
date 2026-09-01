@@ -1,11 +1,13 @@
 import type {
   SessionInboxCategory,
+  SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
+import { applySessionReadStateToItem } from "./session-list";
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
@@ -53,14 +55,6 @@ function applyTitleToPage(
   };
 }
 
-function applyReadStateToSession(
-  session: SessionListItem,
-  sessionId: string,
-  readState: SessionReadState
-) {
-  return session.id === sessionId ? { ...session, readState } : session;
-}
-
 function applyReadStateToPage(
   page: SessionInboxPage,
   sessionId: string,
@@ -68,12 +62,20 @@ function applyReadStateToPage(
 ): SessionInboxPage {
   return {
     ...page,
-    items: page.items.map((item) => ({
-      rootSession: applyReadStateToSession(item.rootSession, sessionId, readState),
-      descendantSessions: item.descendantSessions.map((session) =>
-        applyReadStateToSession(session, sessionId, readState)
-      ),
-    })),
+    items: page.items.map((item) => applySessionInboxItemReadState(item, sessionId, readState)),
+  };
+}
+
+export function applySessionInboxItemReadState(
+  item: SessionInboxItem,
+  sessionId: string,
+  readState: SessionReadState
+): SessionInboxItem {
+  return {
+    rootSession: applySessionReadStateToItem(item.rootSession, sessionId, readState),
+    descendantSessions: item.descendantSessions.map((session) =>
+      applySessionReadStateToItem(session, sessionId, readState)
+    ),
   };
 }
 
@@ -122,4 +124,4 @@ export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot 
   return applyReadStateToPage(data, sessionId, readState) as T;
 }
 
-export type { SessionInboxPage, SessionInboxSnapshot };
+export type { SessionInboxItem, SessionInboxPage, SessionInboxSnapshot };

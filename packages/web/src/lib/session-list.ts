@@ -120,19 +120,22 @@ export function applySessionReadState(
   if (!data) return data;
   return {
     ...data,
-    sessions: data.sessions.map((session) => {
-      if (session.id !== sessionId) return session;
-      if (!readState) return session;
-      const currentMessageId = session.readState?.latestMessageId;
-      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
-        return session;
-      }
-      return {
-        ...session,
-        readState,
-      };
-    }),
+    sessions: data.sessions.map((session) =>
+      applySessionReadStateToItem(session, sessionId, readState)
+    ),
   };
+}
+
+export function applySessionReadStateToItem<T extends { id: string; readState?: SessionReadState }>(
+  session: T,
+  sessionId: string,
+  readState: SessionReadState | undefined
+): T {
+  if (session.id !== sessionId || !readState) return session;
+  const currentMessageId = session.readState?.latestMessageId;
+  if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId)
+    return session;
+  return { ...session, readState };
 }
 
 export function removeSessionFromList(sessions: SessionListItem[], sessionId: string) {

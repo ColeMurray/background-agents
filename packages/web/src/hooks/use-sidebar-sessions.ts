@@ -12,6 +12,8 @@ import type {
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
 import {
+  applySessionInboxItemReadState,
+  applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
   isSessionInboxKey,
@@ -19,8 +21,10 @@ import {
 import {
   markLatestMessageRead,
   reconcileSessionReadState,
-  readStateFromResult,
+  SESSION_READ_STATE_RECONCILED_EVENT,
+  type SessionReadStateReconciledDetail,
 } from "@/lib/session-read-state";
+import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
 const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
@@ -337,6 +341,41 @@ export function useSidebarSessions() {
     [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
   );
 
+  const reconcileSidebarReadState = useCallback(
+    (sessionId: string, readState: SessionReadState) => {
+      const applyReadState = (item: SessionInboxItem) =>
+        applySessionInboxItemReadState(item, sessionId, readState);
+      updateAttentionRetained((item) => {
+        const updated = applyReadState(item);
+        return updated.rootSession.readState.unread ||
+          updated.descendantSessions.some((session) => session.readState.unread)
+          ? updated
+          : null;
+      });
+      updateInProgressRetained(applyReadState);
+      updateFinishedRetained(applyReadState);
+      void mutate<SessionInboxSnapshot | SessionInboxPage>(
+        isSessionInboxKey,
+        (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
+        { populateCache: true, revalidate: true }
+      ).catch((error) => {
+        console.error("Failed to refresh session inbox after read-state update", error);
+      });
+    },
+    [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
+  );
+
+  useEffect(() => {
+    const handleReadStateReconciled = (event: Event) => {
+      const { sessionId, readState } = (event as CustomEvent<SessionReadStateReconciledDetail>)
+        .detail;
+      reconcileSidebarReadState(sessionId, readState);
+    };
+    window.addEventListener(SESSION_READ_STATE_RECONCILED_EVENT, handleReadStateReconciled);
+    return () =>
+      window.removeEventListener(SESSION_READ_STATE_RECONCILED_EVENT, handleReadStateReconciled);
+  }, [reconcileSidebarReadState]);
+
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
       updateAllRetainedItems((item) =>
@@ -356,33 +395,10 @@ export function useSidebarSessions() {
     [refreshInbox, updateAllRetainedItems]
   );
 
-  const handleMarkLatestMessageRead = useCallback(
-    async (sessionId: string) => {
-      const result = await markLatestMessageRead(sessionId);
-      await reconcileSessionReadState(result);
-      const readState = readStateFromResult(result);
-      const applyReadState = (item: SessionInboxItem): SessionInboxItem => ({
-        rootSession:
-          item.rootSession.id === sessionId ? { ...item.rootSession, readState } : item.rootSession,
-        descendantSessions: item.descendantSessions.map((session) =>
-          session.id === sessionId ? { ...session, readState } : session
-        ),
-      });
-      // Attention membership is unread-driven, so a hierarchy whose last unread
-      // session was just read no longer belongs in a retained attention page.
-      updateAttentionRetained((item) => {
-        const updated = applyReadState(item);
-        return updated.rootSession.readState.unread ||
-          updated.descendantSessions.some((session) => session.readState.unread)
-          ? updated
-          : null;
-      });
-      updateInProgressRetained(applyReadState);
-      updateFinishedRetained(applyReadState);
-      await refreshInbox();
-    },
-    [refreshInbox, updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
-  );
+  const handleMarkLatestMessageRead = useCallback(async (sessionId: string) => {
+    const result = await markLatestMessageRead(sessionId);
+    await reconcileSessionReadState(result);
+  }, []);
 
   return {
     needsAttention: attentionItems.map((item) => item.rootSession),

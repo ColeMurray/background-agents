@@ -8,15 +8,13 @@ const SESSION_READ_MAX_ATTEMPTS = 4;
 
 export function SessionReadObserver({
   messageId,
-  enabled,
   onMarkMessageRead,
 }: {
   messageId: string | null;
-  enabled: boolean;
   onMarkMessageRead: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
   useEffect(() => {
-    if (!enabled || !messageId) return;
+    if (!messageId) return;
 
     let attempts = 0;
     let cancelled = false;
@@ -71,7 +69,7 @@ export function SessionReadObserver({
       window.removeEventListener("focus", handleActivation);
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [enabled, messageId, onMarkMessageRead]);
+  }, [messageId, onMarkMessageRead]);
 
   return null;
 }

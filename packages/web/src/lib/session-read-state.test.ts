@@ -43,7 +43,7 @@ describe("classifySessionReadAttempt", () => {
 });
 
 describe("reconcileSessionReadState", () => {
-  it("updates both session-list and inbox caches", async () => {
+  it("updates session-list caches", async () => {
     await reconcileSessionReadState({
       sessionId: "session-1",
       outcome: "marked_read",
@@ -51,14 +51,10 @@ describe("reconcileSessionReadState", () => {
       latestMessageId: "message-1",
     });
 
-    expect(mutate).toHaveBeenCalledTimes(2);
+    expect(mutate).toHaveBeenCalledOnce();
     expect(vi.mocked(mutate).mock.calls[0]?.[2]).toEqual({
       populateCache: true,
       revalidate: false,
-    });
-    expect(vi.mocked(mutate).mock.calls[1]?.[2]).toEqual({
-      populateCache: true,
-      revalidate: true,
     });
   });
 });

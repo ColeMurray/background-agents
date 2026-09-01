@@ -416,7 +416,6 @@ export default function SessionPage() {
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-clip">
       <SessionReadObserver
         messageId={latestTerminalMessageId}
-        enabled={ready}
         onMarkMessageRead={attemptMarkActiveMessageRead}
       />
       <SessionHeader

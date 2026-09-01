@@ -72,7 +72,7 @@ describe("session inbox API keys", () => {
 });
 
 describe("applySessionInboxReadStateUpdate", () => {
-  const readState = { latestMessageId: "latest-message", unread: false } as const;
+  const readState = { latestMessageId: "old-message", unread: false } as const;
 
   it("updates a matching root session in a page without disturbing unrelated sessions", () => {
     const data: SessionInboxPage = {
@@ -116,5 +116,20 @@ describe("applySessionInboxReadStateUpdate", () => {
     expect(data.categories.needs_attention.items[0].descendantSessions[0].readState.unread).toBe(
       true
     );
+  });
+
+  it("does not let an older result overwrite a newer cached terminal message", () => {
+    const data = page("target");
+    data.items[0].rootSession.readState = {
+      latestMessageId: "newer-message",
+      unread: true,
+    };
+
+    const result = applySessionInboxReadStateUpdate(data, "target", readState);
+
+    expect(result?.items[0].rootSession.readState).toEqual({
+      latestMessageId: "newer-message",
+      unread: true,
+    });
   });
 });
