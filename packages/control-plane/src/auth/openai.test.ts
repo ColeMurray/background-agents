@@ -200,6 +200,7 @@ describe("openai", () => {
 
       await expect(checkOpenAIDeviceAuthorization("device-1", "ABCD")).rejects.toMatchObject({
         status,
+        errorCode: code,
       });
     });
 

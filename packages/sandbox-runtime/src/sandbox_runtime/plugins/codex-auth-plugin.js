@@ -14,7 +14,33 @@ import { createProviderTokenBroker } from "./provider-token-broker.js";
 
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
+const MAX_REPLAY_BODY_BYTES = 16 * 1024 * 1024;
 const tokenBroker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
+
+function replayableBody(body) {
+  if (body == null) return { body: undefined };
+  if (typeof body === "string") {
+    return new TextEncoder().encode(body).byteLength <= MAX_REPLAY_BODY_BYTES ? { body } : null;
+  }
+  if (body instanceof URLSearchParams) {
+    const value = body.toString();
+    return new TextEncoder().encode(value).byteLength <= MAX_REPLAY_BODY_BYTES
+      ? { body: new URLSearchParams(value) }
+      : null;
+  }
+  if (body instanceof Blob) {
+    return body.size <= MAX_REPLAY_BODY_BYTES ? { body } : null;
+  }
+  if (body instanceof ArrayBuffer) {
+    return body.byteLength <= MAX_REPLAY_BODY_BYTES ? { body: body.slice(0) } : null;
+  }
+  if (ArrayBuffer.isView(body)) {
+    return body.byteLength <= MAX_REPLAY_BODY_BYTES
+      ? { body: new Uint8Array(body.buffer, body.byteOffset, body.byteLength).slice() }
+      : null;
+  }
+  return null;
+}
 
 const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex-max",
@@ -168,20 +194,21 @@ export const CodexAuthProxy = async (input) => {
                 ? new URL(CODEX_API_ENDPOINT)
                 : parsed;
 
-            const request = new Request(url, { ...init, headers });
-            const retryRequest = request.clone();
-            const response = await fetch(request);
+            const response = await fetch(url, { ...init, headers });
             if (response.status !== 401) return response;
+            const replay = replayableBody(init?.body);
+            if (!replay) return response;
 
+            await response.body?.cancel();
             const refreshed = await ensureAccessToken(getAuth, setAuth, accessToken);
-            const retryHeaders = new Headers(retryRequest.headers);
+            const retryHeaders = new Headers(headers);
             retryHeaders.set("authorization", `Bearer ${refreshed.accessToken}`);
             if (refreshed.accountId) {
               retryHeaders.set("ChatGPT-Account-Id", refreshed.accountId);
             } else {
               retryHeaders.delete("ChatGPT-Account-Id");
             }
-            return fetch(new Request(retryRequest, { headers: retryHeaders }));
+            return fetch(url, { ...init, headers: retryHeaders, body: replay.body });
           },
         };
       },

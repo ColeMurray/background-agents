@@ -7,6 +7,7 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 
 export type ModelProviderId = SubscriptionProviderId;
+export type ProviderDeviceAuthorizationFailureReason = "device_authorization_disabled";
 export type { ProviderAuthMode };
 
 export type SessionModelProviderAuthInput = SessionModelProviderAuth & {

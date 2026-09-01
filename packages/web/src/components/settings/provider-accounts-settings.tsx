@@ -24,9 +24,12 @@ import {
   ProviderDeviceAuthorizationDialog,
   type ProviderDeviceAuthorizationTarget,
 } from "@/components/settings/provider-device-authorization-dialog";
+import {
+  ProviderManualConnectionEditor,
+  type ManualProviderConnectionTarget,
+} from "@/components/settings/provider-manual-connection-editor";
 import { formatRelativeTime } from "@/lib/time";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { MoreIcon, PlusIcon } from "@/components/ui/icons";
@@ -61,8 +64,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 type Confirm = { account: ModelProviderAccount; action: "disable" | "archive" } | null;
 type Connection =
   | { kind: "device"; target: ProviderDeviceAuthorizationTarget }
-  | { kind: "manual-openai"; account?: ModelProviderAccount }
-  | { kind: "legacy-xai"; account: ModelProviderAccount };
+  | { kind: "manual"; target: ManualProviderConnectionTarget };
 
 type ConnectionStrategy = {
   add: () => Connection;
@@ -95,7 +97,7 @@ const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> 
               displayName: account.displayName,
             },
           }
-        : { kind: "legacy-xai", account },
+        : { kind: "manual", target: { provider: "xai", operation: "reconnect", account } },
   },
 };
 
@@ -134,124 +136,6 @@ function connectionToastMessage(
   return operation === "reconnect"
     ? "Account reconnected"
     : `Existing ${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account reconnected`;
-}
-
-function LegacyReconnectForm({
-  account,
-  saving,
-  onSave,
-  onCancel,
-}: {
-  account: ModelProviderAccount;
-  saving: boolean;
-  onSave: (refreshToken: string) => void;
-  onCancel: () => void;
-}) {
-  const [refreshToken, setRefreshToken] = useState("");
-
-  return (
-    <div className="space-y-3 rounded-md border border-border-muted p-4">
-      <h3 className="font-medium">Reconnect {account.displayName}</h3>
-      <p className="text-xs text-muted-foreground">
-        This legacy account predates device authorization. Enter a fresh xAI refresh token once; new
-        SuperGrok accounts connect through xAI directly.
-      </p>
-      <div>
-        <Label htmlFor="provider-refresh-token">Refresh token</Label>
-        <Input
-          id="provider-refresh-token"
-          type="password"
-          autoComplete="off"
-          value={refreshToken}
-          onChange={(event) => setRefreshToken(event.target.value)}
-        />
-      </div>
-      <div className="flex gap-2">
-        <Button size="sm" disabled={saving || !refreshToken} onClick={() => onSave(refreshToken)}>
-          Save
-        </Button>
-        <Button size="sm" variant="subtle" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function ManualOpenAIForm({
-  account,
-  saving,
-  onSave,
-  onCancel,
-}: {
-  account?: ModelProviderAccount;
-  saving: boolean;
-  onSave: (input: { displayName: string; refreshToken: string; accountId: string }) => void;
-  onCancel: () => void;
-}) {
-  const [displayName, setDisplayName] = useState(account?.displayName ?? "ChatGPT account");
-  const [refreshToken, setRefreshToken] = useState("");
-  const [accountId, setAccountId] = useState(account?.externalAccountId ?? "");
-
-  return (
-    <div className="space-y-3 rounded-md border border-border-muted p-4">
-      <div>
-        <h3 className="font-medium">
-          {account ? `Reconnect ${account.displayName} manually` : "Connect ChatGPT manually"}
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Use this fallback only when device authorization is unavailable. The refresh token is
-          write-only and the account identity is verified by OpenAI.
-        </p>
-      </div>
-      {!account && (
-        <div>
-          <Label htmlFor="openai-display-name">Account name</Label>
-          <Input
-            id="openai-display-name"
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-          />
-        </div>
-      )}
-      <div>
-        <Label htmlFor="openai-account-id">Account ID</Label>
-        <Input
-          id="openai-account-id"
-          value={accountId}
-          onChange={(event) => setAccountId(event.target.value)}
-        />
-      </div>
-      <div>
-        <Label htmlFor="openai-refresh-token">Refresh token</Label>
-        <Input
-          id="openai-refresh-token"
-          type="password"
-          autoComplete="off"
-          value={refreshToken}
-          onChange={(event) => setRefreshToken(event.target.value)}
-        />
-      </div>
-      <div className="flex gap-2">
-        <Button
-          size="sm"
-          disabled={saving || !displayName.trim() || !accountId.trim() || !refreshToken}
-          onClick={() =>
-            onSave({
-              displayName: displayName.trim(),
-              refreshToken,
-              accountId: accountId.trim(),
-            })
-          }
-        >
-          Save
-        </Button>
-        <Button size="sm" variant="subtle" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -369,7 +253,12 @@ export function ProviderAccountsSettings() {
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       disabled={saving}
-                      onSelect={() => beginConnection({ kind: "manual-openai" })}
+                      onSelect={() =>
+                        beginConnection({
+                          kind: "manual",
+                          target: { provider: "openai", operation: "create" },
+                        })
+                      }
                     >
                       <SubscriptionProviderIcon provider="openai" className="size-5 text-primary" />
                       <span>ChatGPT manual token</span>
@@ -507,7 +396,14 @@ export function ProviderAccountsSettings() {
                                   <DropdownMenuItem
                                     disabled={saving}
                                     onSelect={() =>
-                                      beginConnection({ kind: "manual-openai", account })
+                                      beginConnection({
+                                        kind: "manual",
+                                        target: {
+                                          provider: "openai",
+                                          operation: "reconnect",
+                                          account,
+                                        },
+                                      })
                                     }
                                   >
                                     Reconnect manually
@@ -728,46 +624,24 @@ export function ProviderAccountsSettings() {
         />
       )}
 
-      {canManage && connection?.kind === "legacy-xai" && (
-        <LegacyReconnectForm
-          key={connection.account.id}
-          account={connection.account}
-          saving={saving}
-          onSave={(refreshToken) =>
-            void run(
-              () =>
-                reconnectProviderAccount(connection.account.id, {
-                  provider: "xai",
-                  refreshToken,
-                }),
-              "Account reconnected"
-            )
+      {canManage && connection?.kind === "manual" && (
+        <ProviderManualConnectionEditor
+          key={
+            connection.target.operation === "create"
+              ? "openai:create"
+              : connection.target.account.id
           }
-          onCancel={() => setConnection(null)}
-        />
-      )}
-
-      {canManage && connection?.kind === "manual-openai" && (
-        <ManualOpenAIForm
-          key={connection.account?.id ?? "create"}
-          account={connection.account}
+          target={connection.target}
           saving={saving}
-          onSave={({ displayName, refreshToken, accountId }) =>
+          onSubmit={(submission) =>
             void run(
               () =>
-                connection.account
-                  ? reconnectProviderAccount(connection.account.id, {
-                      provider: "openai",
-                      refreshToken,
-                      accountId,
-                    })
-                  : connectProviderAccount({
-                      provider: "openai",
-                      displayName,
-                      refreshToken,
-                      accountId,
-                    }),
-              connection.account ? "Account reconnected" : "ChatGPT account connected"
+                submission.operation === "create"
+                  ? connectProviderAccount(submission.input)
+                  : reconnectProviderAccount(submission.providerAccountId, submission.input),
+              submission.operation === "create"
+                ? "ChatGPT account connected"
+                : "Account reconnected"
             )
           }
           onCancel={() => setConnection(null)}

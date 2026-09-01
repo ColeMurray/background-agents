@@ -4,6 +4,7 @@ import {
   extractOpenAIAccountId,
   openAIAccessTokenLifetimeMs,
   OPENAI_DEVICE_VERIFICATION_URL,
+  OpenAIOAuthError,
   startOpenAIDeviceAuthorization,
   type OpenAITokenResponse,
 } from "./openai";
@@ -66,7 +67,15 @@ export class OpenAIProviderDeviceAuthorization implements ProviderDeviceAuthoriz
   async poll(
     state: OpenAIDeviceAuthorizationState
   ): Promise<ProviderDeviceAuthorizationPollResult<OpenAIProviderCredential>> {
-    const status = await this.dependencies.check(state.deviceAuthId, state.userCode);
+    let status;
+    try {
+      status = await this.dependencies.check(state.deviceAuthId, state.userCode);
+    } catch (error) {
+      if (error instanceof OpenAIOAuthError && error.errorCode === "deviceauth_feature_disabled") {
+        return { status: "failed", failureReason: "device_authorization_disabled" };
+      }
+      throw error;
+    }
     if (status.status === "pending") return { status: "pending" };
     const tokens = await this.dependencies.exchange(status.authorizationCode, status.codeVerifier);
     return { status: "connected", connection: this.connection(tokens) };

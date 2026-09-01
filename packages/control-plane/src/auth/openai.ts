@@ -83,7 +83,8 @@ export class OpenAITokenRefreshError extends Error {
 export class OpenAIOAuthError extends Error {
   constructor(
     message: string,
-    public readonly status: number
+    public readonly status: number,
+    public readonly errorCode?: string
   ) {
     super(message);
   }
@@ -147,13 +148,22 @@ export async function checkOpenAIDeviceAuthorization(
     const body = await readBoundedProviderBody(response, () =>
       openAIResponseError("device status check")("oversized", response.status)
     );
+    let payload: unknown;
     try {
-      const error = deviceStatusErrorSchema.safeParse(JSON.parse(body));
-      if (error.success && error.data.error.code === OPENAI_DEVICE_AUTHORIZATION_PENDING_ERROR) {
+      payload = JSON.parse(body);
+    } catch {
+      throw openAIResponseError("device status check")("http", response.status);
+    }
+    const error = deviceStatusErrorSchema.safeParse(payload);
+    if (error.success) {
+      if (error.data.error.code === OPENAI_DEVICE_AUTHORIZATION_PENDING_ERROR) {
         return { status: "pending" };
       }
-    } catch {
-      // Non-JSON error responses are handled as provider failures below.
+      throw new OpenAIOAuthError(
+        "OpenAI device status check failed",
+        response.status,
+        error.data.error.code
+      );
     }
     throw openAIResponseError("device status check")("http", response.status);
   }

@@ -18,6 +18,7 @@ import type {
   TerminalProviderAuthorization,
 } from "../db/provider-account-authorizations";
 import { ProviderDeviceAuthorizationService } from "./device-authorization-service";
+import type { ProviderDeviceAuthorizationFailureReason } from "./provider-auth-contracts";
 
 const TRANSACTION_ID = "01".repeat(32);
 const ENCRYPTION_KEY = btoa("x".repeat(32));
@@ -82,7 +83,8 @@ function connected(completedAt: number): ConnectedProviderAuthorization {
 function terminal(
   authorization: ProviderAuthorization,
   state: ProviderAuthorizationTerminalState,
-  completedAt: number
+  completedAt: number,
+  failureReason?: ProviderDeviceAuthorizationFailureReason
 ): TerminalProviderAuthorization {
   const common = {
     id: authorization.id,
@@ -94,17 +96,20 @@ function terminal(
     createdAt: authorization.createdAt,
     updatedAt: completedAt,
     completedAt,
-    state,
   };
-  return authorization.operation === "create"
-    ? { ...common, operation: "create", displayName: authorization.displayName }
-    : {
-        ...common,
-        operation: "reconnect",
-        providerAccountId: authorization.providerAccountId,
-        targetAccountStatus: authorization.targetAccountStatus,
-        targetAccountLifecycleVersion: authorization.targetAccountLifecycleVersion,
-      };
+  const target =
+    authorization.operation === "create"
+      ? { operation: "create" as const, displayName: authorization.displayName }
+      : {
+          operation: "reconnect" as const,
+          providerAccountId: authorization.providerAccountId,
+          targetAccountStatus: authorization.targetAccountStatus,
+          targetAccountLifecycleVersion: authorization.targetAccountLifecycleVersion,
+        };
+  if (state === "failed") {
+    return { ...common, ...target, state, failureReason: failureReason ?? null };
+  }
+  return { ...common, ...target, state };
 }
 
 function deviceAuthorization(
@@ -142,9 +147,11 @@ function service(
         _id: string,
         _userId: string,
         state: ProviderAuthorizationTerminalState,
-        completedAt: number
+        completedAt: number,
+        _owner?: string,
+        failureReason?: ProviderDeviceAuthorizationFailureReason
       ) => {
-        current = terminal(current, state, completedAt);
+        current = terminal(current, state, completedAt, failureReason);
         return true;
       }
     ),
@@ -217,7 +224,8 @@ describe("ProviderDeviceAuthorizationService polling", () => {
       "user-1",
       "failed",
       40_000,
-      "old-owner"
+      "old-owner",
+      undefined
     );
   });
 
@@ -233,14 +241,47 @@ describe("ProviderDeviceAuthorizationService polling", () => {
 
     await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({
       status: "failed",
-      error:
-        "OpenAI device authorization failed. Make sure device code authorization for Codex is enabled in ChatGPT settings, then try again.",
+      error: "Provider authorization failed. Start a fresh authorization.",
     });
     expect(logger.error).toHaveBeenCalledWith("provider_device_authorization.poll_failed", {
       transaction_id: TRANSACTION_ID,
       provider: "openai",
       error: expect.any(Error),
     });
+  });
+
+  it("persists actionable guidance only for disabled OpenAI device authorization", async () => {
+    const capability = deviceAuthorization(5_000, {
+      status: "failed",
+      failureReason: "device_authorization_disabled",
+    });
+    const adapters = new ModelProviderAccountAdapterRegistry([
+      new OpenAIModelProviderAccountAdapter(undefined, capability),
+    ]);
+    const encryptedProviderData = await encryptProviderAuthorizationPayload(
+      { deviceAuthId: "device-1" },
+      ENCRYPTION_KEY,
+      { transactionId: TRANSACTION_ID, provider: "openai", stateSchemaVersion: 1 }
+    );
+    const { subject, transactions } = service(
+      10_000,
+      pending({ nextPollAt: 0, encryptedProviderData }),
+      adapters
+    );
+
+    await expect(subject.poll("user-1", "openai", TRANSACTION_ID)).resolves.toMatchObject({
+      status: "failed",
+      error:
+        "OpenAI device authorization failed. Make sure device code authorization for Codex is enabled in ChatGPT settings, then try again.",
+    });
+    expect(transactions.finish).toHaveBeenCalledWith(
+      TRANSACTION_ID,
+      "user-1",
+      "failed",
+      10_000,
+      expect.any(String),
+      "device_authorization_disabled"
+    );
   });
 
   it("bounds a provider-supplied pending interval before persisting it", async () => {

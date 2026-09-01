@@ -171,12 +171,18 @@ export class ModelProviderAccountBroker {
               now: this.now(),
             });
           } catch (cause) {
-            return this.reconcileLostTerminalFence(account, adapter, state, cause);
+            return this.reconcileLostTerminalFence(
+              account,
+              adapter,
+              state,
+              rejectedAccessToken,
+              cause
+            );
           }
           if (fenced) {
             throw this.reconnectError(account.provider, "A credential exchange became stale");
           }
-          return this.reconcileLostTerminalFence(account, adapter, state);
+          return this.reconcileLostTerminalFence(account, adapter, state, rejectedAccessToken);
         }
         await this.sleep(this.pollDelayMs);
         state = await this.readState(account.id, account.provider);
@@ -231,7 +237,7 @@ export class ModelProviderAccountBroker {
           );
         }
         if (error.terminalFence === "lost") {
-          return this.reconcileLostTerminalFence(account, adapter, state);
+          return this.reconcileLostTerminalFence(account, adapter, state, rejectedAccessToken);
         }
         const reread = await this.readState(account.id, account.provider);
         if (reread.credentialVersion !== state.credentialVersion) {
@@ -319,6 +325,7 @@ export class ModelProviderAccountBroker {
     previousAccount: ModelProviderAccount,
     adapter: ErasedProviderAccountAdapter,
     previousState: ProviderCredentialState,
+    rejectedAccessToken?: string,
     fenceError?: unknown
   ): Promise<ProviderAccess> {
     const account = await this.stores.accounts.getById(previousAccount.id);
@@ -347,7 +354,7 @@ export class ModelProviderAccountBroker {
 
     const state = await this.readState(account.id, account.provider);
     if (state.credentialVersion !== previousState.credentialVersion) {
-      return this.accessFromConcurrentUpdate(account, adapter, state);
+      return this.accessFromConcurrentUpdate(account, adapter, state, rejectedAccessToken);
     }
     if (fenceError !== undefined) throw fenceError;
     throw new ModelProviderAccountBrokerError(

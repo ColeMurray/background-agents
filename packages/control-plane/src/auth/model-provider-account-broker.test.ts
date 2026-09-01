@@ -324,6 +324,33 @@ describe("ModelProviderAccountBroker", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("does not reuse a rejected token from a late completion", async () => {
+    const stale = state({
+      exchangeState: "in_flight",
+      exchangeGeneration: 4,
+      exchangeOwner: "slow-owner",
+      exchangeStartedAt: NOW - 20_000,
+    });
+    const completed = state({
+      payload: {
+        refreshToken: "next",
+        accessToken: "rejected",
+        accessTokenExpiresAt: NOW + 600_000,
+      },
+      credentialVersion: 2,
+      exchangeGeneration: 4,
+      accessTokenExpiresAt: NOW + 600_000,
+    });
+    const { broker } = setup({
+      credentialStates: [stale, completed],
+      terminalFailure: vi.fn().mockResolvedValue(false),
+    });
+
+    await expect(broker.getAccess("account-1", "openai", "rejected")).rejects.toMatchObject({
+      code: "reconnect_required",
+    });
+  });
+
   it("reconciles durable state when stale fencing rejects ambiguously", async () => {
     const stale = state({
       exchangeState: "in_flight",

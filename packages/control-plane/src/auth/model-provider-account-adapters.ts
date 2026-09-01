@@ -1,4 +1,7 @@
-import type { ModelProviderId } from "../model-provider-accounts/provider-auth-contracts";
+import type {
+  ModelProviderId,
+  ProviderDeviceAuthorizationFailureReason,
+} from "../model-provider-accounts/provider-auth-contracts";
 
 export const DEFAULT_PROVIDER_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
 export const DEFAULT_PROVIDER_REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -20,7 +23,8 @@ export interface ProviderDeviceAuthorizationStart<TProviderState> {
 export type ProviderDeviceAuthorizationPollResult<TCredential> =
   | { status: "pending"; intervalMs?: number }
   | { status: "connected"; connection: ProviderConnectionResult<TCredential> }
-  | { status: "denied" | "expired" | "failed" };
+  | { status: "denied" | "expired" }
+  | { status: "failed"; failureReason?: ProviderDeviceAuthorizationFailureReason };
 
 export interface ProviderDeviceAuthorizationCapability<TCredential, TProviderState> {
   readonly stateSchemaVersion: number;

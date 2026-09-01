@@ -9,6 +9,8 @@ test("retries once with a refreshed token after an upstream 401", async () => {
   process.env.SESSION_CONFIG = JSON.stringify({ sessionId: "session-1" });
   const brokerBodies = [];
   const upstreamTokens = [];
+  const upstreamBodies = [];
+  let rejectedBodyCancelled = false;
   let brokerRequests = 0;
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
@@ -22,7 +24,17 @@ test("retries once with a refreshed token after an upstream 401", async () => {
       });
     }
     upstreamTokens.push(request.headers.get("authorization"));
-    return new Response(null, { status: upstreamTokens.length === 1 ? 401 : 200 });
+    upstreamBodies.push(await request.text());
+    return upstreamTokens.length === 1
+      ? new Response(
+          new ReadableStream({
+            cancel() {
+              rejectedBodyCancelled = true;
+            },
+          }),
+          { status: 401 }
+        )
+      : new Response(null, { status: 200 });
   };
   const getAuth = async () => ({ type: "oauth", refresh: "managed" });
   const setAuth = async () => undefined;
@@ -36,5 +48,31 @@ test("retries once with a refreshed token after an upstream 401", async () => {
 
   assert.equal(response.status, 200);
   assert.deepEqual(upstreamTokens, ["Bearer access-1", "Bearer access-2"]);
+  assert.deepEqual(upstreamBodies, [
+    JSON.stringify({ model: "gpt-5.4", input: "hello" }),
+    JSON.stringify({ model: "gpt-5.4", input: "hello" }),
+  ]);
+  assert.equal(rejectedBodyCancelled, true);
   assert.deepEqual(brokerBodies, [{}, { rejectedAccessToken: "access-1" }]);
+
+  let streamedUpstreamRequests = 0;
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    assert.equal(request.url.startsWith("https://control.test/"), false);
+    streamedUpstreamRequests++;
+    return new Response("unauthorized", { status: 401 });
+  };
+  const streamedResponse = await loaded.fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("streamed"));
+        controller.close();
+      },
+    }),
+    duplex: "half",
+  });
+
+  assert.equal(streamedResponse.status, 401);
+  assert.equal(streamedUpstreamRequests, 1);
 });

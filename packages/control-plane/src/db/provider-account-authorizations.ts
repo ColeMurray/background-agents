@@ -1,4 +1,7 @@
-import type { ModelProviderId } from "../model-provider-accounts/provider-auth-contracts";
+import type {
+  ModelProviderId,
+  ProviderDeviceAuthorizationFailureReason,
+} from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase } from "./sql-database";
 import {
   modelProviderAccountStatusSchema,
@@ -45,6 +48,7 @@ interface ProviderAuthorizationRow {
   created_at: number;
   updated_at: number;
   completed_at: number | null;
+  failure_reason: string | null;
 }
 
 interface ProviderAuthorizationCommon {
@@ -100,10 +104,18 @@ export type ConnectedProviderAuthorization = ProviderAuthorizationCommon &
   };
 
 export type TerminalProviderAuthorization = ProviderAuthorizationCommon &
-  ProviderAuthorizationTarget & {
-    state: ProviderAuthorizationTerminalState;
-    completedAt: number;
-  };
+  ProviderAuthorizationTarget &
+  (
+    | {
+        state: "failed";
+        completedAt: number;
+        failureReason: ProviderDeviceAuthorizationFailureReason | null;
+      }
+    | {
+        state: Exclude<ProviderAuthorizationTerminalState, "failed">;
+        completedAt: number;
+      }
+  );
 
 export type ProviderAuthorization =
   | InitiatingProviderAuthorization
@@ -224,17 +236,32 @@ function decodeAuthorization(row: ProviderAuthorizationRow): ProviderAuthorizati
       };
     case "denied":
     case "expired":
-    case "failed":
     case "cancelled":
     case "superseded":
       requireProviderStateCleared(row);
       requireNoProcessing(row);
       requireNull(row.result_provider_account_id, "result provider account ID");
       requireNull(row.reconnected_existing, "reconnected result");
+      requireNull(row.failure_reason, "failure reason");
       return {
         ...common,
         ...target,
         state: row.state,
+        completedAt: requiredNumber(row.completed_at, "completion time"),
+      };
+    case "failed":
+      requireProviderStateCleared(row);
+      requireNoProcessing(row);
+      requireNull(row.result_provider_account_id, "result provider account ID");
+      requireNull(row.reconnected_existing, "reconnected result");
+      if (row.failure_reason !== null && row.failure_reason !== "device_authorization_disabled") {
+        throw new Error("Invalid provider authorization failure reason");
+      }
+      return {
+        ...common,
+        ...target,
+        state: "failed",
+        failureReason: row.failure_reason,
         completedAt: requiredNumber(row.completed_at, "completion time"),
       };
     default:
@@ -433,18 +460,19 @@ export class ProviderAccountAuthorizationStore {
     userId: string,
     state: ProviderAuthorizationTerminalState,
     now: number,
-    owner?: string
+    owner?: string,
+    failureReason?: ProviderDeviceAuthorizationFailureReason
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE model_provider_account_authorizations
          SET state = ?, encrypted_provider_data = NULL, provider_state_version = NULL,
              processing_owner = NULL,
-             processing_started_at = NULL, completed_at = ?, updated_at = ?
+             processing_started_at = NULL, failure_reason = ?, completed_at = ?, updated_at = ?
          WHERE id = ? AND user_id = ? AND state IN (${LIVE_STATES_SQL})
            AND (? IS NULL OR processing_owner = ?)`
       )
-      .bind(state, now, now, id, userId, owner ?? null, owner ?? null)
+      .bind(state, failureReason ?? null, now, now, id, userId, owner ?? null, owner ?? null)
       .run();
     return result.meta.changes === 1;
   }

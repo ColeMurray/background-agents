@@ -20,10 +20,14 @@ import {
   type ProviderAuthorizationLive,
   type ProviderAuthorizationLiveState,
   type ProviderAuthorizationTerminalState,
+  type TerminalProviderAuthorization,
 } from "../db/provider-account-authorizations";
 import type { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { Logger } from "../logger";
-import type { ModelProviderId } from "./provider-auth-contracts";
+import type {
+  ModelProviderId,
+  ProviderDeviceAuthorizationFailureReason,
+} from "./provider-auth-contracts";
 import type { ProviderDeviceAuthorizationFinalizer } from "./device-authorization-finalizer";
 
 const TRANSACTION_LIFETIME_MS = 10 * 60 * 1000;
@@ -241,7 +245,15 @@ export class ProviderDeviceAuthorizationService {
         };
       }
       if (result.status !== "connected") {
-        return this.finishAndResolve(userId, provider, id, result.status, now, owner);
+        return this.finishAndResolve(
+          userId,
+          provider,
+          id,
+          result.status,
+          now,
+          owner,
+          result.status === "failed" ? result.failureReason : undefined
+        );
       }
       const finalized = await this.finalizer.finalizeTrustedConnection(
         row,
@@ -278,9 +290,10 @@ export class ProviderDeviceAuthorizationService {
     id: string,
     state: ProviderAuthorizationTerminalState,
     now: number,
-    owner?: string
+    owner?: string,
+    failureReason?: ProviderDeviceAuthorizationFailureReason
   ): Promise<ProviderDeviceAuthorizationStatusResponse> {
-    await this.transactions.finish(id, userId, state, now, owner);
+    await this.transactions.finish(id, userId, state, now, owner, failureReason);
     return this.resolveDurableResponse(userId, provider, id, now);
   }
 
@@ -346,9 +359,7 @@ export class ProviderDeviceAuthorizationService {
     };
   }
 
-  private isTerminal(
-    row: ProviderAuthorization
-  ): row is Extract<ProviderAuthorization, { state: ProviderAuthorizationTerminalState }> {
+  private isTerminal(row: ProviderAuthorization): row is TerminalProviderAuthorization {
     return PROVIDER_AUTHORIZATION_TERMINAL_STATES.includes(
       row.state as ProviderAuthorizationTerminalState
     );
@@ -359,14 +370,15 @@ export class ProviderDeviceAuthorizationService {
   }
 
   private terminal(
-    authorization: Extract<ProviderAuthorization, { state: ProviderAuthorizationTerminalState }>
+    authorization: TerminalProviderAuthorization
   ): ProviderDeviceAuthorizationStatusResponse {
     const { state } = authorization;
     const messages = {
       denied: "Provider authorization was denied.",
       expired: "Provider authorization expired.",
       failed:
-        authorization.provider === "openai"
+        authorization.state === "failed" &&
+        authorization.failureReason === "device_authorization_disabled"
           ? "OpenAI device authorization failed. Make sure device code authorization for Codex is enabled in ChatGPT settings, then try again."
           : "Provider authorization failed. Start a fresh authorization.",
       cancelled: "Provider authorization was cancelled.",

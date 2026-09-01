@@ -450,6 +450,35 @@ describe("provider account device authorization routes", () => {
     }
   );
 
+  it("persists and replays a classified device authorization failure", async () => {
+    const { result } = await start();
+    const transaction = await env.DB.prepare(
+      "SELECT user_id FROM model_provider_account_authorizations WHERE id = ?"
+    )
+      .bind(result.transactionId)
+      .first<{ user_id: string }>();
+    expect(transaction).not.toBeNull();
+    const store = new ProviderAccountAuthorizationStore(env.DB);
+
+    await expect(
+      store.finish(
+        result.transactionId,
+        transaction!.user_id,
+        "failed",
+        Date.now(),
+        undefined,
+        "device_authorization_disabled"
+      )
+    ).resolves.toBe(true);
+
+    await expect(store.getOwned(transaction!.user_id, result.transactionId)).resolves.toMatchObject(
+      {
+        state: "failed",
+        failureReason: "device_authorization_disabled",
+      }
+    );
+  });
+
   it("does not replace credentials or connect when an account is archived before finalization", async () => {
     await ensureAuthenticatedUser();
     await seedAccount();

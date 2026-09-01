@@ -4,7 +4,8 @@ import { XaiModelProviderAccountAdapter } from "./model-provider-account-xai-ada
 import { modelProviderAccountAdapterRegistry } from "./model-provider-account-default-adapters";
 import { ProviderIdentityError } from "./model-provider-account-adapters";
 import type { ModelProviderAccountAdapterRegistry } from "./model-provider-account-adapters";
-import { OpenAITokenRefreshError } from "./openai";
+import { OpenAIOAuthError, OpenAITokenRefreshError } from "./openai";
+import { OpenAIProviderDeviceAuthorization } from "./model-provider-account-openai-device-authorization";
 
 describe("model provider account adapters", () => {
   it("registers OpenAI and xAI", () => {
@@ -90,6 +91,24 @@ describe("model provider account adapters", () => {
     });
     await expect(ambiguous.refresh({ refreshToken: "old" })).rejects.toMatchObject({
       classification: "ambiguous",
+    });
+  });
+
+  it("classifies explicitly disabled OpenAI device authorization", async () => {
+    const authorization = new OpenAIProviderDeviceAuthorization({
+      start: vi.fn(),
+      check: vi
+        .fn()
+        .mockRejectedValue(new OpenAIOAuthError("failed", 403, "deviceauth_feature_disabled")),
+      exchange: vi.fn(),
+      now: () => 1_000,
+    });
+
+    await expect(
+      authorization.poll({ deviceAuthId: "device-1", userCode: "ABCD" })
+    ).resolves.toEqual({
+      status: "failed",
+      failureReason: "device_authorization_disabled",
     });
   });
 
