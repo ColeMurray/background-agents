@@ -26,27 +26,25 @@ async function fetchAuditEvents(path: BrowserApiPath): Promise<AuditEventListRes
 
 /** Loads one audit page and retains opaque cursors for bidirectional navigation. */
 export function useAuditEvents() {
-  const [pageIndex, setPageIndex] = useState(0);
-  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
-  const result = useSWR(auditEventsKey(cursors[pageIndex]), fetchAuditEvents);
+  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
+  const result = useSWR(auditEventsKey(cursorHistory.at(-1)), fetchAuditEvents);
 
   return {
     events: result.data?.events ?? [],
     loading: result.isLoading,
     validating: result.isValidating,
     error: result.error,
-    page: pageIndex + 1,
-    hasPrevious: pageIndex > 0,
+    page: cursorHistory.length + 1,
+    hasPrevious: cursorHistory.length > 0,
     hasNext: result.data?.hasMore ?? false,
-    previous: () => setPageIndex(Math.max(0, pageIndex - 1)),
+    previous: () => setCursorHistory((current) => current.slice(0, -1)),
     next: () => {
       if (!result.data?.hasMore) return;
       const nextCursor = result.data.nextCursor;
-      setCursors((current) => {
-        if (current[pageIndex + 1] === nextCursor) return current;
-        return [...current.slice(0, pageIndex + 1), nextCursor];
+      setCursorHistory((current) => {
+        if (current.at(-1) === nextCursor) return current;
+        return [...current, nextCursor];
       });
-      setPageIndex(pageIndex + 1);
     },
     retry: result.mutate,
   };

@@ -22,10 +22,7 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 export function auditActionLabel(action: string): string {
-  if (ACTION_LABELS[action]) return ACTION_LABELS[action];
-  const segment = action.split(".").at(-1) ?? action;
-  const words = segment.replaceAll("_", " ").trim();
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : action;
+  return ACTION_LABELS[action] ?? action;
 }
 
 function actorSummary(event: AuditEvent): string {
@@ -206,7 +203,7 @@ export function AuditLogSettings() {
           <Button
             size="sm"
             variant="outline"
-            disabled={!audit.hasNext || audit.loading || audit.validating}
+            disabled={!audit.hasNext || audit.loading || audit.validating || Boolean(audit.error)}
             onClick={() => changePage(audit.next)}
           >
             Next

@@ -19,21 +19,20 @@ describe("AuditEventStore integration", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
-  it("lists newest-first, parses metadata, and paginates timestamp ties without gaps", async () => {
+  it("lists newest-first and paginates timestamp ties without gaps", async () => {
     await insertEvent("event-a", 100, { sequence: "a" });
     await insertEvent("event-b", 100, { sequence: "b" });
     await insertEvent("event-c", 100, { sequence: "c" });
     await insertEvent("event-newest", 200, { sequence: "newest" });
     const store = new AuditEventStore(sqlDatabase(env.DB));
 
-    const first = await store.list({ limit: 2 });
-    expect(first.events.map((event) => event.id)).toEqual(["event-newest", "event-c"]);
-    expect(first.events[0].metadata).toMatchObject({ sequence: "newest" });
+    const first = await store.list({ limit: 2, cursor: null });
+    expect(first.rows.map((event) => event.id)).toEqual(["event-newest", "event-c"]);
     expect(first.hasMore).toBe(true);
-    expect(first.nextCursor).toEqual(expect.any(String));
+    expect(first.nextCursor).toEqual({ occurredAt: 100, id: "event-c" });
 
     const second = await store.list({ limit: 2, cursor: first.nextCursor });
-    expect(second.events.map((event) => event.id)).toEqual(["event-b", "event-a"]);
+    expect(second.rows.map((event) => event.id)).toEqual(["event-b", "event-a"]);
     expect(second).toMatchObject({ hasMore: false, nextCursor: null });
   });
 });

@@ -91,7 +91,7 @@ describe("AuditLogSettings", () => {
     expect(screen.getAllByText(/actor-snapshot-id/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/resource-snapshot-id/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/target-snapshot-id/).length).toBeGreaterThan(0);
-    expect(screen.getByText("Custom action")).toBeInTheDocument();
+    expect(screen.getByText("future_namespace.custom_action")).toBeInTheDocument();
     expect(
       screen.getByText(/Service \/ github-bot \/ User actor \/ actor-snapshot-id/)
     ).toBeInTheDocument();
@@ -119,6 +119,7 @@ describe("AuditLogSettings", () => {
   it("keeps cached events visible when a background refresh fails", async () => {
     hook.events = [createEvent("applied")];
     hook.error = new Error("failed");
+    hook.hasNext = true;
     render(<AuditLogSettings />);
 
     expect(screen.getByRole("article")).toBeInTheDocument();
@@ -128,6 +129,7 @@ describe("AuditLogSettings", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(hook.retry).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   });
 
   it("allows returning to a previous page after a later page fails", async () => {

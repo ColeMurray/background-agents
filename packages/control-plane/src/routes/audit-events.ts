@@ -1,4 +1,5 @@
-import { AuditEventStore, InvalidAuditEventCursorError } from "../db/audit-event-store";
+import { encodeAuditEventCursor, parseAuditEventCursor } from "../db/audit-event-cursor";
+import { AuditEventStore, toAuditEvent } from "../db/audit-event-store";
 import type { Env } from "../types";
 import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -37,14 +38,15 @@ async function handleListAuditEvents(
   if (!Number.isSafeInteger(limit) || limit > MAX_AUDIT_EVENT_LIMIT) {
     return error("Invalid limit", 400);
   }
-  if (cursor === "") return error("Invalid cursor", 400);
+  const parsedCursor = parseAuditEventCursor(cursor);
+  if (!parsedCursor.ok) return error(parsedCursor.error, 400);
 
-  try {
-    return json(await new AuditEventStore(ctx.db).list({ limit, cursor }));
-  } catch (cause) {
-    if (cause instanceof InvalidAuditEventCursorError) return error(cause.message, 400);
-    throw cause;
-  }
+  const result = await new AuditEventStore(ctx.db).list({ limit, cursor: parsedCursor.cursor });
+  return json({
+    events: result.rows.map(toAuditEvent),
+    hasMore: result.hasMore,
+    nextCursor: result.nextCursor ? encodeAuditEventCursor(result.nextCursor) : null,
+  });
 }
 
 export const auditEventRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [

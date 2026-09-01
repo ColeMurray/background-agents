@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+export const MAX_AUDIT_EVENT_TIMESTAMP_MS = 8_640_000_000_000_000;
+
+/** Nonnegative millisecond timestamp safe for cursors and JavaScript Date rendering. */
+export const auditEventTimestampSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .safe()
+  .max(MAX_AUDIT_EVENT_TIMESTAMP_MS);
+
 /** Outcomes recorded for workspace operations and authorization decisions. */
 export const auditOperationResultSchema = z.enum(["applied", "no_op", "denied", "rejected"]);
 
@@ -13,7 +23,7 @@ export const auditEventMetadataSchema = z.record(z.string(), z.unknown());
 export const auditEventSchema = z
   .object({
     id: z.string().min(1),
-    occurredAt: z.number().int().nonnegative(),
+    occurredAt: auditEventTimestampSchema,
     requestId: z.string().min(1),
     principalKind: auditPrincipalKindSchema,
     actorUserIdSnapshot: z.string().nullable(),

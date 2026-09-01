@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  InvalidAuditEventCursorError,
-  encodeAuditEventCursor,
-  parseAuditEventCursor,
-  toAuditEvent,
-  type AuditEventRow,
-} from "./audit-event-store";
+import { toAuditEvent, type AuditEventRow } from "./audit-event-store";
 
 const row: AuditEventRow = {
   id: "event-1",
@@ -40,13 +34,5 @@ describe("AuditEventStore boundaries", () => {
       operationResult: "no_op",
       metadata: { future: { value: true } },
     });
-  });
-
-  it("round-trips generated cursors and rejects malformed or non-canonical cursors", () => {
-    const cursor = encodeAuditEventCursor({ occurredAt: 100, id: "event:1" });
-    expect(parseAuditEventCursor(cursor)).toEqual({ occurredAt: 100, id: "event:1" });
-    for (const malformed of ["", "100:event-1", "v2.e30", "v1.%%%", "v1.e30"]) {
-      expect(() => parseAuditEventCursor(malformed)).toThrow(InvalidAuditEventCursorError);
-    }
   });
 });

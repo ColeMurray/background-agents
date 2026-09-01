@@ -170,6 +170,8 @@ export type {
 export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventTimestampSchema,
   auditOperationResultSchema,
   auditPrincipalKindSchema,
   auditEventMetadataSchema,

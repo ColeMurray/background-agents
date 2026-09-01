@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { auditEventListResponseSchema, auditEventSchema } from "./audit-events";
+import {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventListResponseSchema,
+  auditEventSchema,
+} from "./audit-events";
 
 const event = {
   id: "event-1",
@@ -33,6 +37,19 @@ describe("audit event contracts", () => {
   it("rejects unsupported principal and outcome values", () => {
     expect(() => auditEventSchema.parse({ ...event, principalKind: "automation" })).toThrow();
     expect(() => auditEventSchema.parse({ ...event, operationResult: "failed" })).toThrow();
+  });
+
+  it("rejects timestamps that cannot be paginated or rendered as dates", () => {
+    expect(auditEventSchema.parse({ ...event, occurredAt: MAX_AUDIT_EVENT_TIMESTAMP_MS })).toEqual({
+      ...event,
+      occurredAt: MAX_AUDIT_EVENT_TIMESTAMP_MS,
+    });
+    expect(() =>
+      auditEventSchema.parse({ ...event, occurredAt: MAX_AUDIT_EVENT_TIMESTAMP_MS + 1 })
+    ).toThrow();
+    expect(() =>
+      auditEventSchema.parse({ ...event, occurredAt: Number.MAX_SAFE_INTEGER })
+    ).toThrow();
   });
 
   it("enforces the pagination cursor invariant", () => {
