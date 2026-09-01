@@ -429,17 +429,14 @@ export async function resolveInstalledRepo(
 }
 
 /**
- * Parse the request body as JSON, returning the typed result or an error Response.
- *
- * Usage:
- * ```ts
- * const body = await parseJsonBody<{ secrets: Record<string, string> }>(request);
- * if (body instanceof Response) return body;
- * ```
+ * Parse the request body as JSON, returning the untrusted result or an error Response.
+ * Callers must validate the returned value before using fields from it.
  */
-export async function parseJsonBody<T>(request: Request): Promise<T | Response> {
+export async function parseJsonBody(request: Request): Promise<unknown | Response>;
+export async function parseJsonBody<_T>(request: Request): Promise<unknown | Response>;
+export async function parseJsonBody(request: Request): Promise<unknown | Response> {
   try {
-    return (await request.json()) as T;
+    return await request.json();
   } catch {
     return error("Invalid JSON body", 400);
   }

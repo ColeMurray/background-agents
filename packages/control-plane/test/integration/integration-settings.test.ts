@@ -88,6 +88,16 @@ describe("Integration settings API", () => {
       expect(body.settings.defaults.autoReviewOnOpen).toBe(false);
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
     });
+
+    it("rejects non-object settings", async () => {
+      const response = await serviceFetch("https://test.local/integration-settings/github", {
+        method: "PUT",
+        body: JSON.stringify({ settings: [] }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Request body must include settings object" });
+    });
   });
 
   describe("DELETE /integration-settings/github", () => {
@@ -158,6 +168,19 @@ describe("Integration settings API", () => {
       );
       const afterBody = await afterRes.json<{ settings: unknown }>();
       expect(afterBody.settings).toBeNull();
+    });
+
+    it("rejects non-object settings", async () => {
+      const response = await serviceFetch(
+        "https://test.local/integration-settings/github/repos/acme/widgets",
+        {
+          method: "PUT",
+          body: JSON.stringify({ settings: null }),
+        }
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Request body must include settings object" });
     });
 
     it("rejects invalid model ID with 400", async () => {
@@ -752,6 +775,21 @@ describe("Integration settings API", () => {
       );
       const afterDeleteBody = await afterDelete.json<{ settings: unknown }>();
       expect(afterDeleteBody.settings).toBeNull();
+    });
+
+    it("rejects non-object settings", async () => {
+      await seedEnvironment("env_settings_shape");
+
+      const response = await serviceFetch(
+        "https://test.local/integration-settings/sandbox/environments/env_settings_shape",
+        {
+          method: "PUT",
+          body: JSON.stringify({ settings: [] }),
+        }
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Request body must include settings object" });
     });
 
     it("returns 404 for an environment that does not exist", async () => {
