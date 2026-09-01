@@ -64,6 +64,7 @@ describe("AuthorizationStore", () => {
 
   it.each([
     "applied",
+    "no_op",
     "actor_authorization_changed",
     "role_not_found",
     "member_not_found",

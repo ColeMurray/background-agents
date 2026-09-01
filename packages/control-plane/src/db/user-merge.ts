@@ -363,7 +363,7 @@ export async function mergeUsers(
         `INSERT INTO authorization_audit_events
             (id, occurred_at, request_id, principal_kind,
              actor_service_snapshot, action, resource_type, resource_id,
-             target_user_id_snapshot, reason_code)
+             target_user_id_snapshot, reason_code, operation_result, metadata_json)
          VALUES (
            ?,
            CASE WHEN EXISTS (
@@ -380,11 +380,53 @@ export async function mergeUsers(
                AND (survivor.suspended_at IS NULL) = (loser.suspended_at IS NULL)
                AND (role.key IS NULL OR role.key <> 'owner' OR survivor.suspended_at IS NULL)
            ) THEN ? ELSE NULL END,
-           'user-merge', 'service', 'control-plane',
-           'workspace.user_merged', 'user', ?, ?, 'operator_merge'
-         )`
+            'operator-cli:' || ?, 'service', 'operator-cli',
+            'workspace.user_merged', 'user', ?, ?, 'operator_merge', 'applied',
+            json_object(
+              'before', json_object(
+                'survivor', json_object(
+                  'userId', ?,
+                  'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                  'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+                ),
+                'loser', json_object(
+                  'userId', ?,
+                  'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                  'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+                )
+              ),
+              'requested', json_object('survivorUserId', ?, 'loserUserId', ?),
+              'after', json_object(
+                'survivor', json_object(
+                  'userId', ?,
+                  'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                  'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+                ),
+                'loser', NULL
+              )
+            )
+          )`
       )
-      .bind(auditId, loserId, survivorId, occurredAt, survivorId, loserId)
+      .bind(
+        auditId,
+        loserId,
+        survivorId,
+        occurredAt,
+        auditId,
+        survivorId,
+        loserId,
+        survivorId,
+        survivorId,
+        survivorId,
+        loserId,
+        loserId,
+        loserId,
+        survivorId,
+        loserId,
+        survivorId,
+        survivorId,
+        survivorId
+      )
   );
 
   // Dedup before re-pointing: drop loser rows whose target slot the survivor
