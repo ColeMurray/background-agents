@@ -23,7 +23,7 @@ import {
 } from "@/lib/session-read-state";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
-export const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
+const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
 
 export type SessionItem = SessionListItem;
 type SessionCreatorFilter = "all" | "mine";

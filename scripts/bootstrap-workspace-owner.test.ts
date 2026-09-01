@@ -35,7 +35,9 @@ function createDatabase(): DatabaseSync {
       resource_type TEXT NOT NULL,
       resource_id TEXT,
       target_user_id_snapshot TEXT,
-      reason_code TEXT NOT NULL
+      reason_code TEXT NOT NULL,
+      operation_result TEXT NOT NULL,
+      metadata_json TEXT NOT NULL
     );
     INSERT INTO roles (id, key, is_system) VALUES
       ('role_builtin_owner', 'owner', 1),
@@ -69,10 +71,10 @@ function insertPriorAudit(
       `INSERT INTO authorization_audit_events
         (id, occurred_at, request_id, principal_kind,
          actor_service_snapshot, action, resource_type, target_user_id_snapshot,
-         reason_code)
+          reason_code, operation_result, metadata_json)
        VALUES (?, 1, 'operator-cli:history', 'service',
-          'operator-cli', 'workspace.owner_bootstrapped', 'workspace', ?,
-          'operator_cli')`
+           'operator-cli', 'workspace.owner_bootstrapped', 'workspace', ?,
+           'operator_cli', 'applied', '{"legacy":true}')`
     )
     .run(id, targetUserId);
 }
@@ -155,7 +157,7 @@ describe("Owner bootstrap SQL", () => {
           .prepare(
             `SELECT id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
                     actor_service_snapshot, action, resource_type, resource_id,
-                    target_user_id_snapshot, reason_code
+                    target_user_id_snapshot, reason_code, operation_result, metadata_json
              FROM authorization_audit_events`
           )
           .get(),
@@ -172,6 +174,12 @@ describe("Owner bootstrap SQL", () => {
         resource_id: null,
         target_user_id_snapshot: USER_ID,
         reason_code: "operator_cli",
+        operation_result: "applied",
+        metadata_json: JSON.stringify({
+          before: { roleId: "role_builtin_member" },
+          requested: { roleId: "role_builtin_owner" },
+          after: { roleId: "role_builtin_owner" },
+        }),
       }
     );
   });
@@ -304,8 +312,10 @@ describe("Owner bootstrap SQL", () => {
 
     assert.doesNotMatch(
       generated,
-      /workspace_bootstrap|authorization_version|access_status|mutation_id|policy_id|operation_result|decision_outcome|metadata_json|actor_provider|assigned_by|assigned_at/
+      /workspace_bootstrap|authorization_version|access_status|mutation_id|policy_id|decision_outcome|actor_provider|assigned_by|assigned_at/
     );
+    assert.match(generated, /operation_result/);
+    assert.match(generated, /metadata_json/);
     assert.match(generated, /SELECT 1 FROM authorization_audit_events WHERE id = 'audit-exact'/);
   });
 });

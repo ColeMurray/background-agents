@@ -1,7 +1,7 @@
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import type { SqlDatabase } from "./sql-database";
 
-export type PrAutofixDecision = "received" | "queued" | "skipped" | "failed";
+type PrAutofixDecision = "received" | "queued" | "skipped" | "failed";
 
 export interface PrAutofixFeedbackRecord {
   feedbackKey: string;

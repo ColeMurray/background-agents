@@ -130,20 +130,12 @@ async function ensureExternalSessionRuntime(
 function validateExternalSessionReservation(
   session: SessionEntry,
   userId: string,
-  input: {
-    title: string;
-    model: string;
-    reasoningEffort?: string;
-    requestFingerprint: string;
-  }
+  input: { requestFingerprint: string }
 ): Response | null {
   return session.externalRequestFingerprint !== input.requestFingerprint ||
     session.repoOwner !== null ||
     session.repoName !== null ||
-    session.userId !== userId ||
-    session.title !== input.title ||
-    session.model !== input.model ||
-    session.reasoningEffort !== (input.reasoningEffort ?? null)
+    session.userId !== userId
     ? error("Idempotency key conflict", 409)
     : null;
 }

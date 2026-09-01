@@ -81,6 +81,8 @@ describe("route policy table", () => {
     ],
     ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
     ["GET", "/model-preferences", [{ service: "slack-bot" }]],
+    ["GET", "/sessions/session-1/events", [{ service: "slack-bot" }, { service: "linear-bot" }]],
+    ["GET", "/sessions/session-1/artifacts", [{ service: "slack-bot" }, { service: "linear-bot" }]],
   ])("declares the exact actorless grants for %s %s", (method, path, expected) => {
     const authorization = routeFor(method, path)?.authorization;
     expect(["active-user", "active-global"]).toContain(authorization?.kind);
@@ -102,6 +104,8 @@ describe("route policy table", () => {
       routeFor("GET", "/integration-settings/github/resolved/acme/widgets"),
       routeFor("GET", "/integration-settings/slack/watched-channels"),
       routeFor("GET", "/model-preferences"),
+      routeFor("GET", "/sessions/session-1/events"),
+      routeFor("GET", "/sessions/session-1/artifacts"),
       routeFor("POST", "/sessions/session-1/stop"),
       routeFor("GET", "/sessions/session-1/media/artifact-1"),
     ]);
@@ -140,6 +144,11 @@ describe("route policy table", () => {
   it("keeps contextual route requirements explicit", () => {
     expect(routeFor("GET", "/keyboard-shortcuts")?.authorization).toEqual({
       kind: "active-self",
+      auditAllowed: false,
+    });
+    expect(routeFor("PUT", "/keyboard-shortcuts")?.authorization).toEqual({
+      kind: "active-self",
+      auditAllowed: true,
     });
     expect(routeFor("GET", "/model-preferences")?.authorization).toMatchObject({
       kind: "active-global",
@@ -259,12 +268,14 @@ describe("route policy table", () => {
   it("applies active-user policy to browser approval and CLI credential routes", () => {
     expect(
       routeFor("POST", "/external/v1/cli/device-authorizations/approve")?.authorization
-    ).toEqual({ kind: "active-self" });
+    ).toEqual({ kind: "active-self", auditAllowed: false });
     expect(routeFor("GET", "/external/v1/cli/me")?.authorization).toEqual({
       kind: "active-self",
+      auditAllowed: false,
     });
     expect(routeFor("DELETE", "/external/v1/cli/credentials/current")?.authorization).toEqual({
       kind: "active-self",
+      auditAllowed: false,
     });
   });
 
@@ -520,7 +531,8 @@ describe("route principal policy", () => {
       )
     ).toBeNull();
     expect(
-      enforceRoutePrincipal({ kind: "external-user" }, { kind: "user", userId: "user-1" })?.status
+      enforceRoutePrincipal({ kind: "external-user" }, { kind: "user", userId: "user-1" })?.response
+        .status
     ).toBe(403);
   });
 
@@ -538,6 +550,6 @@ describe("route principal policy", () => {
     ],
     [{ kind: "service" } as const, { kind: "user", userId: "user-1" } as const, 403],
   ])("rejects mismatched principals for %o", (authentication, principal, status) => {
-    expect(enforceRoutePrincipal(authentication, principal)?.status).toBe(status);
+    expect(enforceRoutePrincipal(authentication, principal)?.response.status).toBe(status);
   });
 });

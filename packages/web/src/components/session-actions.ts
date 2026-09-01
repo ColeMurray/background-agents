@@ -23,7 +23,7 @@ export interface SessionActionProps {
 }
 
 /** One PR a session-level action can open, ready to render as a link. */
-export interface SessionPrLink {
+interface SessionPrLink {
   id: string;
   url: string;
   /** "#12 · head-branch"; prefixed "owner/name#12" outside the primary repo. */

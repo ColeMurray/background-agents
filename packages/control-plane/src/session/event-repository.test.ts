@@ -73,6 +73,7 @@ describe("EventRepository", () => {
       expect(mock.calls.some(({ query }) => query.includes("INSERT INTO event_changes"))).toBe(
         true
       );
+      expect(mock.calls.some(({ query }) => query.includes("AS time_floor"))).toBe(false);
     });
   });
 
@@ -621,16 +622,16 @@ describe("EventRepository journal retention", () => {
         createdAt: 1,
       });
 
+      expect(() => repository.listEventChanges({ after: 1, limit: 10 })).toThrow(
+        "Event feed checkpoint expired"
+      );
       expect(db.prepare(`SELECT COUNT(*) AS count FROM event_changes`).get()).toEqual({
         count: EVENT_CHANGE_RETENTION_LIMIT,
       });
       expect(db.prepare(`SELECT retention_floor FROM event_feed_state`).get()).toEqual({
-        retention_floor: 3,
+        retention_floor: 2,
       });
-      expect(() => repository.listEventChanges({ after: 2, limit: 10 })).toThrow(
-        "Event feed checkpoint expired"
-      );
-      expect(() => repository.listEventChanges({ after: 3, limit: 10 })).not.toThrow();
+      expect(() => repository.listEventChanges({ after: 2, limit: 10 })).not.toThrow();
     } finally {
       db.close();
     }
@@ -651,7 +652,7 @@ describe("EventRepository journal retention", () => {
 
       expect(
         db.prepare(`SELECT event_id, is_baseline FROM event_changes ORDER BY revision`).all()
-      ).toEqual([{ event_id: "expired", is_baseline: 1 }]);
+      ).toEqual([]);
       expect(db.prepare(`SELECT retention_floor FROM event_feed_state`).get()).toEqual({
         retention_floor: 1,
       });
@@ -674,6 +675,9 @@ describe("EventRepository journal retention", () => {
       repository.upsertTokenEvent("large-message", event, 1);
       repository.upsertTokenEvent("large-message", { ...event, timestamp: 2 }, 2);
 
+      expect(() => repository.listEventChanges({ after: 0, limit: 10 })).toThrow(
+        "Event feed checkpoint expired"
+      );
       expect(db.prepare(`SELECT SUM(journal_bytes) AS bytes FROM event_changes`).get()).toEqual(
         expect.objectContaining({ bytes: expect.any(Number) })
       );
@@ -686,9 +690,6 @@ describe("EventRepository journal retention", () => {
       expect(db.prepare(`SELECT retention_floor FROM event_feed_state`).get()).toEqual({
         retention_floor: 2,
       });
-      expect(() => repository.listEventChanges({ after: 0, limit: 10 })).toThrow(
-        "Event feed checkpoint expired"
-      );
     } finally {
       db.close();
     }
@@ -700,8 +701,8 @@ describe("EventRepository journal retention", () => {
       const baselineBytes = 9 * 1024 * 1024;
       db.exec(`INSERT INTO event_changes
         (revision, kind, event_id, changed_at, journal_bytes) VALUES
-        (1, 'delete', 'one', 0, ${baselineBytes}),
-        (2, 'delete', 'two', 0, ${baselineBytes});
+        (1, 'upsert', 'one', 0, ${baselineBytes}),
+        (2, 'upsert', 'two', 0, ${baselineBytes});
         UPDATE event_feed_state SET current_revision = 2;`);
 
       expect(() => repository.listEventChanges({ after: 0, limit: 10 })).toThrow(
@@ -714,6 +715,32 @@ describe("EventRepository journal retention", () => {
       expect(state.cursor_scope).not.toBe("a".repeat(32));
       expect(state.retention_floor).toBe(2);
       expect(db.prepare(`SELECT COUNT(*) AS count FROM event_changes`).get()).toEqual({ count: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reports expiry when pruning rotates a previously valid cursor scope", () => {
+    const { db, repository } = createRealRepository();
+    try {
+      const baselineBytes = 9 * 1024 * 1024;
+      db.exec(`INSERT INTO event_changes
+        (revision, kind, event_id, changed_at, journal_bytes) VALUES
+        (1, 'upsert', 'one', 0, ${baselineBytes}),
+        (2, 'upsert', 'two', 0, ${baselineBytes});
+        UPDATE event_feed_state SET current_revision = 2;`);
+
+      expect(() =>
+        repository.listEventChanges({
+          cursor: {
+            mode: "changes",
+            scope: "a".repeat(32),
+            checkpoint: 2,
+            revision: 0,
+          },
+          limit: 10,
+        })
+      ).toThrow("Event feed checkpoint expired");
     } finally {
       db.close();
     }

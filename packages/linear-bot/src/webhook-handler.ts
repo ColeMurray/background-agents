@@ -526,6 +526,8 @@ async function handleNewSession(
     clarificationReply,
     actorUserId: sessionActorUserId,
   } = getNewSessionInput(webhook);
+  const launchActorUserId =
+    sessionActorUserId ?? (webhook.action === "created" ? webhook.appUserId : undefined);
   const orgId = webhook.organizationId;
 
   const client = await getAgentSessionLinearClient({
@@ -639,7 +641,7 @@ async function handleNewSession(
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
-      actorUserId: sessionActorUserId,
+      actorUserId: launchActorUserId,
       actorDisplayName,
       actorEmail,
     },
@@ -711,7 +713,7 @@ async function handleNewSession(
     method: "POST",
     url: promptUrl,
     body: promptBody,
-    actor: sessionActorUserId ? `linear:${sessionActorUserId}` : undefined,
+    actor: launchActorUserId ? `linear:${launchActorUserId}` : undefined,
     traceId,
   });
 

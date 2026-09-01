@@ -5,7 +5,7 @@ import { cleanD1Tables } from "./cleanup";
 beforeEach(cleanD1Tables);
 afterEach(cleanD1Tables);
 
-describe("migration 0072: CLI authentication", () => {
+describe("migration 0074: CLI authentication", () => {
   it("creates hash-only attempts and revocable user credentials", async () => {
     const attemptColumns = await env.DB.prepare(
       "PRAGMA table_info(cli_device_authorization_attempts)"

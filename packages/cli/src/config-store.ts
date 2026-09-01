@@ -299,19 +299,12 @@ export class ConfigStore {
       (candidate) => candidate.deviceSecretRef === deviceSecretRef
     );
     if (!pending) return;
-    const credentials = await this.credentials;
-    const deviceSecret = await credentials.get(deviceSecretRef);
-    if (deviceSecret) await credentials.delete(deviceSecretRef);
-    try {
-      await this.update((config) => {
-        config.pendingDeviceAuthorizations = config.pendingDeviceAuthorizations.filter(
-          (candidate) => candidate.deviceSecretRef !== deviceSecretRef
-        );
-      });
-    } catch (cause) {
-      if (deviceSecret) await credentials.set(deviceSecretRef, deviceSecret);
-      throw cause;
-    }
+    await this.update((config) => {
+      config.pendingDeviceAuthorizations = config.pendingDeviceAuthorizations.filter(
+        (candidate) => candidate.deviceSecretRef !== deviceSecretRef
+      );
+    });
+    await (await this.credentials).delete(deviceSecretRef);
   }
 
   async completePendingRevocation(credentialRef: string): Promise<void> {
@@ -320,19 +313,12 @@ export class ConfigStore {
       (candidate) => candidate.credentialRef === credentialRef
     );
     if (!pending) return;
-    const credentials = await this.credentials;
-    const credential = await credentials.get(credentialRef);
-    if (credential) await credentials.delete(credentialRef);
-    try {
-      await this.update((config) => {
-        config.pendingRevocations = config.pendingRevocations.filter(
-          (candidate) => candidate.credentialRef !== credentialRef
-        );
-      });
-    } catch (cause) {
-      if (credential) await credentials.set(credentialRef, credential);
-      throw cause;
-    }
+    await this.update((config) => {
+      config.pendingRevocations = config.pendingRevocations.filter(
+        (candidate) => candidate.credentialRef !== credentialRef
+      );
+    });
+    await (await this.credentials).delete(credentialRef);
   }
 
   async setActiveContext(name: string): Promise<void> {

@@ -23,7 +23,7 @@ import type { Logger } from "../logger";
  * the keyboard. It does not outlast a draft left open overnight — an author
  * returning to one that far stale gets a rejected prompt.
  */
-export const ABANDONED_DRAFT_TTL_MS = 8 * 60 * 60 * 1000;
+const ABANDONED_DRAFT_TTL_MS = 8 * 60 * 60 * 1000;
 
 /**
  * Max drafts to expire per sweep (backpressure); a backlog drains over ticks.
@@ -31,7 +31,7 @@ export const ABANDONED_DRAFT_TTL_MS = 8 * 60 * 60 * 1000;
  * well inside the caller's per-invocation budget. Steady state is a handful per
  * day — the cap only matters for an initial backlog.
  */
-export const ABANDONED_DRAFT_SWEEP_LIMIT = 50;
+const ABANDONED_DRAFT_SWEEP_LIMIT = 50;
 
 /**
  * Bound on a single expiry request. The sweep awaits the whole batch, so one
@@ -39,15 +39,15 @@ export const ABANDONED_DRAFT_SWEEP_LIMIT = 50;
  * abort arrives through the same rejection path as any other failure and is
  * counted as errored, leaving the session for a later sweep.
  */
-export const ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS = 10_000;
+const ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS = 10_000;
 
 /**
  * The full outcome set of `/internal/expire-draft`. Validated at the boundary so
  * protocol drift surfaces as an error rather than being miscounted as routine
  * maintenance.
  */
-export const draftExpiryOutcomeSchema = z.enum(["archived", "not_draft", "has_work"]);
-export type DraftExpiryOutcome = z.infer<typeof draftExpiryOutcomeSchema>;
+const draftExpiryOutcomeSchema = z.enum(["archived", "not_draft", "has_work"]);
+type DraftExpiryOutcome = z.infer<typeof draftExpiryOutcomeSchema>;
 
 /**
  * What the sweep saw for one candidate. `missing` is not one of the protocol

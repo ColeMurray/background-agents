@@ -58,7 +58,9 @@ interface AuditInput {
   resourceId?: string | null;
   targetUserId?: string | null;
   reasonCode: string;
+  noOpReasonCode: string;
   occurredAt: number;
+  metadata: (applied: SqlCondition) => SqlCondition;
 }
 
 interface SqlCondition {
@@ -91,6 +93,7 @@ function anotherUnsuspendedOwner(targetUserId: string): SqlCondition {
 /** Result of an atomic RBAC mutation after authorization and invariant checks. */
 export type AuthorizationMutationOutcome =
   | { status: "applied" }
+  | { status: "no_op" }
   | { status: "actor_authorization_changed" }
   | { status: "role_not_found" }
   | { status: "member_not_found" }
@@ -222,20 +225,28 @@ export class AuthorizationStore {
     const transferGuard = rolePermissionPredicate("workspace.transfer_ownership");
     const targetIsOwner = userIsOwner(input.targetUserId);
     const otherOwnerExists = anotherUnsuspendedOwner(input.targetUserId);
+    const stateChanged: SqlCondition = {
+      sql: `EXISTS (
+        SELECT 1 FROM user_role_assignments
+        WHERE user_id = ? AND role_id <> ?
+      )`,
+      values: [input.targetUserId, input.roleId],
+    };
     const mutation = this.mutationConditions(
       input.actorUserId,
       ["workspace.members.manage"],
       {
         sql: `EXISTS (SELECT 1 FROM roles WHERE id = ?)
             AND EXISTS (SELECT 1 FROM user_role_assignments WHERE user_id = ?)
-            AND (
+            AND (NOT (${stateChanged.sql}) OR (
               ? = ?
               OR NOT (${targetIsOwner.sql})
               OR (${otherOwnerExists.sql})
-            )`,
+            ))`,
         values: [
           input.roleId,
           input.targetUserId,
+          ...stateChanged.values,
           input.roleId,
           OWNER_ROLE_ID,
           ...targetIsOwner.values,
@@ -244,8 +255,16 @@ export class AuthorizationStore {
       },
       {
         actor: {
-          sql: `(? <> ? AND NOT (${targetIsOwner.sql})) OR ${transferGuard.sql}`,
-          values: [input.roleId, OWNER_ROLE_ID, ...targetIsOwner.values, ...transferGuard.values],
+          sql: `NOT (${stateChanged.sql})
+            OR (? <> ? AND NOT (${targetIsOwner.sql}))
+            OR ${transferGuard.sql}`,
+          values: [
+            ...stateChanged.values,
+            input.roleId,
+            OWNER_ROLE_ID,
+            ...targetIsOwner.values,
+            ...transferGuard.values,
+          ],
         },
         notFound: [
           {
@@ -263,10 +282,10 @@ export class AuthorizationStore {
             },
           },
         ],
-      }
+      },
+      stateChanged
     );
     const results = await this.db.batch([
-      mutation.outcome,
       this.auditStatement(
         {
           requestId: input.requestId,
@@ -276,9 +295,29 @@ export class AuthorizationStore {
           resourceId: input.targetUserId,
           targetUserId: input.targetUserId,
           reasonCode: "member_role_updated",
+          noOpReasonCode: "member_role_unchanged",
           occurredAt: input.now,
+          metadata: (applied) => ({
+            sql: `json_object(
+              'before', json_object('roleId', (
+                SELECT role_id FROM user_role_assignments WHERE user_id = ?
+              )),
+              'requested', json_object('roleId', ?),
+              'after', json_object('roleId', CASE
+                WHEN ${applied.sql} THEN ?
+                ELSE (SELECT role_id FROM user_role_assignments WHERE user_id = ?)
+              END)
+            )`,
+            values: [
+              input.targetUserId,
+              input.roleId,
+              ...applied.values,
+              input.roleId,
+              input.targetUserId,
+            ],
+          }),
         },
-        mutation.applied,
+        mutation.outcomeExpression,
         mutation.auditId
       ),
       this.db
@@ -305,6 +344,13 @@ export class AuthorizationStore {
     const transferGuard = rolePermissionPredicate("workspace.transfer_ownership");
     const targetIsOwner = userIsOwner(input.targetUserId);
     const otherOwnerExists = anotherUnsuspendedOwner(input.targetUserId);
+    const stateChanged: SqlCondition = {
+      sql: `EXISTS (
+        SELECT 1 FROM users WHERE id = ?
+          AND ((? = 1 AND suspended_at IS NULL) OR (? = 0 AND suspended_at IS NOT NULL))
+      )`,
+      values: [input.targetUserId, input.suspended ? 1 : 0, input.suspended ? 1 : 0],
+    };
     const mutation = this.mutationConditions(
       input.actorUserId,
       ["workspace.members.manage"],
@@ -314,13 +360,14 @@ export class AuthorizationStore {
             JOIN user_role_assignments ON user_role_assignments.user_id = users.id
             WHERE users.id = ?
           )
-          AND (
+          AND (NOT (${stateChanged.sql}) OR (
             ? = 0
             OR NOT (${targetIsOwner.sql})
             OR (${otherOwnerExists.sql})
-          )`,
+          ))`,
         values: [
           input.targetUserId,
+          ...stateChanged.values,
           input.suspended ? 1 : 0,
           ...targetIsOwner.values,
           ...otherOwnerExists.values,
@@ -328,8 +375,8 @@ export class AuthorizationStore {
       },
       {
         actor: {
-          sql: `NOT (${targetIsOwner.sql}) OR ${transferGuard.sql}`,
-          values: [...targetIsOwner.values, ...transferGuard.values],
+          sql: `NOT (${stateChanged.sql}) OR NOT (${targetIsOwner.sql}) OR ${transferGuard.sql}`,
+          values: [...stateChanged.values, ...targetIsOwner.values, ...transferGuard.values],
         },
         notFound: [
           {
@@ -344,10 +391,10 @@ export class AuthorizationStore {
             },
           },
         ],
-      }
+      },
+      stateChanged
     );
     const statements: SqlStatement[] = [
-      mutation.outcome,
       this.auditStatement(
         {
           requestId: input.requestId,
@@ -357,9 +404,45 @@ export class AuthorizationStore {
           resourceId: input.targetUserId,
           targetUserId: input.targetUserId,
           reasonCode: "member_status_updated",
+          noOpReasonCode: "member_status_unchanged",
           occurredAt: input.now,
+          metadata: (applied) => ({
+            sql: `json_object(
+              'before', json_object(
+                'suspended', CASE
+                  WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = ?) THEN NULL
+                  WHEN (SELECT suspended_at FROM users WHERE id = ?) IS NULL
+                  THEN json('false') ELSE json('true') END,
+                'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+              ),
+              'requested', json_object('suspended', json(?)),
+              'after', json_object(
+                'suspended', CASE WHEN ${applied.sql} THEN json(?) ELSE CASE
+                  WHEN NOT EXISTS (SELECT 1 FROM users WHERE id = ?) THEN NULL
+                  WHEN (SELECT suspended_at FROM users WHERE id = ?) IS NULL
+                  THEN json('false') ELSE json('true') END END,
+                'suspendedAt', CASE
+                  WHEN ${applied.sql} THEN ?
+                  ELSE (SELECT suspended_at FROM users WHERE id = ?)
+                END
+              )
+            )`,
+            values: [
+              input.targetUserId,
+              input.targetUserId,
+              input.targetUserId,
+              input.suspended ? "true" : "false",
+              ...applied.values,
+              input.suspended ? "true" : "false",
+              input.targetUserId,
+              input.targetUserId,
+              ...applied.values,
+              input.suspended ? input.now : null,
+              input.targetUserId,
+            ],
+          }),
         },
-        mutation.applied,
+        mutation.outcomeExpression,
         mutation.auditId
       ),
     ];
@@ -391,13 +474,13 @@ export class AuthorizationStore {
     actorUserId: string,
     permissions: PermissionId[],
     resourceCondition: SqlCondition,
-    options?: {
+    options: {
       actor?: SqlCondition;
       notFound?: Array<{ status: NotFoundStatus; condition: SqlCondition }>;
-    }
+    },
+    stateChanged: SqlCondition
   ): {
-    outcome: SqlStatement;
-    applied: SqlCondition;
+    outcomeExpression: SqlCondition;
     writes: SqlCondition;
     auditId: string;
   } {
@@ -409,41 +492,41 @@ export class AuthorizationStore {
            JOIN roles r ON r.id = ura.role_id
            WHERE u.id = ? AND u.suspended_at IS NULL
                AND ${permissionGuards.map((guard) => guard.sql).join(" AND ")}
-               ${options?.actor ? `AND (${options.actor.sql})` : ""}
+                ${options.actor ? `AND (${options.actor.sql})` : ""}
          )`,
       values: [
         actorUserId,
         ...permissionGuards.flatMap((guard) => guard.values),
-        ...(options?.actor?.values ?? []),
+        ...(options.actor?.values ?? []),
       ],
-    };
-    const applied: SqlCondition = {
-      sql: `(${actor.sql}) AND (${resourceCondition.sql})`,
-      values: [...actor.values, ...resourceCondition.values],
     };
     const auditId = crypto.randomUUID();
     const notFoundCases =
-      options?.notFound
+      options.notFound
         ?.map(({ status, condition }) => `WHEN (${condition.sql}) THEN '${status}'`)
         .join("\n             ") ?? "";
+    const outcomeExpression: SqlCondition = {
+      sql: `CASE
+        WHEN NOT (${actor.sql}) THEN 'actor_authorization_changed'
+        ${notFoundCases}
+        WHEN NOT (${resourceCondition.sql}) THEN 'conflict'
+        WHEN NOT (${stateChanged.sql}) THEN 'no_op'
+        ELSE 'applied'
+      END`,
+      values: [
+        ...actor.values,
+        ...(options.notFound?.flatMap(({ condition }) => condition.values) ?? []),
+        ...resourceCondition.values,
+        ...stateChanged.values,
+      ],
+    };
     return {
-      outcome: this.db
-        .prepare(
-          `SELECT CASE
-             WHEN NOT (${actor.sql}) THEN 'actor_authorization_changed'
-             ${notFoundCases}
-             WHEN NOT (${resourceCondition.sql}) THEN 'conflict'
-             ELSE 'applied'
-           END AS status`
-        )
-        .bind(
-          ...actor.values,
-          ...(options?.notFound?.flatMap(({ condition }) => condition.values) ?? []),
-          ...resourceCondition.values
-        ),
-      applied,
+      outcomeExpression,
       writes: {
-        sql: "EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ?)",
+        sql: `EXISTS (
+          SELECT 1 FROM authorization_audit_events
+          WHERE id = ? AND operation_result = 'applied'
+        )`,
         values: [auditId],
       },
       auditId,
@@ -454,6 +537,7 @@ export class AuthorizationStore {
     const status = (result.results[0] as { status?: unknown } | undefined)?.status;
     if (
       status !== "applied" &&
+      status !== "no_op" &&
       status !== "actor_authorization_changed" &&
       status !== "role_not_found" &&
       status !== "member_not_found" &&
@@ -464,20 +548,43 @@ export class AuthorizationStore {
     return { status };
   }
 
-  private auditStatement(
-    input: AuditInput,
-    condition: SqlCondition,
-    auditId: string
-  ): SqlStatement {
+  private auditStatement(input: AuditInput, outcome: SqlCondition, auditId: string): SqlStatement {
+    const metadata = input.metadata({ sql: "status = 'applied'", values: [] });
     return this.db
       .prepare(
-        `INSERT INTO authorization_audit_events
+        `WITH decision(status) AS (SELECT ${outcome.sql})
+         INSERT INTO authorization_audit_events
           (id, occurred_at, request_id, principal_kind,
            actor_user_id_snapshot, action, resource_type, resource_id,
-           target_user_id_snapshot, reason_code)
-         SELECT ?, ?, ?, 'user', ?, ?, ?, ?, ?, ? WHERE ${condition.sql}`
+            target_user_id_snapshot, reason_code, operation_result, metadata_json)
+          SELECT ?, ?, ?, 'user', ?, ?, ?, ?, ?,
+            CASE status
+              WHEN 'applied' THEN ?
+              WHEN 'no_op' THEN ?
+              WHEN 'actor_authorization_changed' THEN 'actor_authorization_changed'
+              WHEN 'role_not_found' THEN 'role_not_found'
+              WHEN 'member_not_found' THEN 'member_not_found'
+              ELSE 'owner_conflict'
+            END,
+            CASE status
+              WHEN 'applied' THEN 'applied'
+              WHEN 'no_op' THEN 'no_op'
+              WHEN 'actor_authorization_changed' THEN 'denied'
+              ELSE 'rejected'
+            END,
+            ${metadata.sql}
+           FROM decision
+           RETURNING CASE reason_code
+             WHEN ? THEN 'applied'
+             WHEN ? THEN 'no_op'
+             WHEN 'actor_authorization_changed' THEN 'actor_authorization_changed'
+             WHEN 'role_not_found' THEN 'role_not_found'
+             WHEN 'member_not_found' THEN 'member_not_found'
+             ELSE 'conflict'
+           END AS status`
       )
       .bind(
+        ...outcome.values,
         auditId,
         input.occurredAt,
         input.requestId,
@@ -487,7 +594,10 @@ export class AuthorizationStore {
         input.resourceId ?? null,
         input.targetUserId ?? null,
         input.reasonCode,
-        ...condition.values
+        input.noOpReasonCode,
+        ...metadata.values,
+        input.reasonCode,
+        input.noOpReasonCode
       );
   }
 }

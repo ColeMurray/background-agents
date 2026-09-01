@@ -81,6 +81,7 @@ export type RouteAuthorizationRequirement =
     };
 
 type BotServiceName = Exclude<ServiceName, "web">;
+const DEFAULT_AUDIT_ALLOWED = false;
 
 /** Narrow route grant for a trusted service without an acting user. */
 export interface ActorlessServiceGrant {
@@ -97,19 +98,21 @@ type ServiceAuthorization =
 
 /** Declarative authorization policy enforced by the router. */
 export type RouteAuthorization =
-  | { kind: "none" }
-  | { kind: "authenticated" }
-  | { kind: "active-self" }
-  | { kind: "active-global"; service: ServiceAuthorization }
+  | { kind: "none"; auditAllowed: false }
+  | { kind: "authenticated"; auditAllowed: false }
+  | { kind: "active-self"; auditAllowed: boolean }
+  | { kind: "active-global"; service: ServiceAuthorization; auditAllowed: boolean }
   | {
       kind: "active-user";
       allOf: readonly RouteAuthorizationRequirement[];
       service: ServiceAuthorization;
+      auditAllowed: boolean;
     }
   | {
       kind: "service";
       services: readonly BotServiceName[];
       actor: "required" | "optional";
+      auditAllowed: true;
     };
 
 /**
@@ -119,13 +122,61 @@ export type RouteAuthorization =
  * verified by its handler. Only routes whose authentication policy is `public` are publicly
  * accessible.
  */
-export const NO_AUTHORIZATION = { kind: "none" } as const satisfies RouteAuthorization;
+export const NO_AUTHORIZATION = {
+  kind: "none",
+  auditAllowed: DEFAULT_AUDIT_ALLOWED,
+} as const satisfies RouteAuthorization;
 /** Policy requiring any authenticated principal. */
 export const AUTHENTICATED_USER = {
   kind: "authenticated",
+  auditAllowed: DEFAULT_AUDIT_ALLOWED,
 } as const satisfies RouteAuthorization;
 /** Policy requiring an active user to access their own account resource. */
-export const ACTIVE_SELF = { kind: "active-self" } as const satisfies RouteAuthorization;
+export function activeSelf(options?: { auditAllowed?: boolean }): RouteAuthorization {
+  return {
+    kind: "active-self",
+    auditAllowed: options?.auditAllowed ?? DEFAULT_AUDIT_ALLOWED,
+  };
+}
+export const ACTIVE_SELF = activeSelf();
+
+const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
+  "automations.create",
+  "automations.manage.any",
+  "automations.manage.own",
+  "automations.trigger.any",
+  "automations.trigger.own",
+  "commit_signing.manage",
+  "environments.images.manage",
+  "environments.manage",
+  "environments.secrets.manage",
+  "environments.settings.manage",
+  "global_secrets.manage",
+  "integrations.manage",
+  "mcp_servers.manage",
+  "models.preferences.manage",
+  "provider_accounts.manage",
+  "repositories.images.manage",
+  "repositories.secrets.manage",
+  "repositories.settings.manage",
+  "scm_settings.manage",
+  "sessions.collaborate",
+  "sessions.create",
+  "sessions.delete",
+  "sessions.lifecycle",
+  "sessions.sandbox_access",
+  "skill_profiles.manage_own",
+  "skills.manage",
+  "workspace.members.manage",
+  "workspace.transfer_ownership",
+]);
+
+function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): boolean {
+  if (requirement.kind === "permission") {
+    return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
+  }
+  return true;
+}
 
 /** Build a global permission requirement for composition with other requirements. */
 export function permissionRequirement(permission: PermissionId): RouteAuthorizationRequirement {
@@ -140,6 +191,7 @@ export function requirePermission(
   return {
     kind: "active-user",
     allOf: [permissionRequirement(permission)],
+    auditAllowed: AUDITED_ALLOWED_PERMISSIONS.has(permission),
     service:
       options?.service === "deny"
         ? { kind: "deny" }
@@ -155,6 +207,7 @@ export function requireScopedPermission(
   return {
     kind: "active-user",
     allOf: [{ kind: "scoped-permission", stem }],
+    auditAllowed: true,
     service: options?.service === "actor" ? { kind: "actor" } : { kind: "deny" },
   };
 }
@@ -168,21 +221,29 @@ export function requireAutomation(
     kind: "active-user",
     allOf: [{ kind: "automation", operation, automationIdParam }],
     service: { kind: "deny" },
+    auditAllowed: true,
   };
 }
 
 /** Require an active user to satisfy every supplied authorization requirement. */
 export function requireAll(...allOf: readonly RouteAuthorizationRequirement[]): RouteAuthorization {
-  return { kind: "active-user", allOf, service: { kind: "actor" } };
+  return {
+    kind: "active-user",
+    allOf,
+    service: { kind: "actor" },
+    auditAllowed: allOf.some(auditsAllowedRequirement),
+  };
 }
 
 /** Require any active user, with optional actorless service grants. */
 export function activeGlobal(options?: {
   actorlessGrants?: readonly ActorlessServiceGrant[];
+  auditAllowed?: boolean;
 }): RouteAuthorization {
   return {
     kind: "active-global",
     service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
+    auditAllowed: options?.auditAllowed ?? DEFAULT_AUDIT_ALLOWED,
   };
 }
 
@@ -191,7 +252,7 @@ export function serviceAuthorized(
   service: BotServiceName,
   actor: "required" | "optional" = "optional"
 ): RouteAuthorization {
-  return { kind: "service", services: [service], actor };
+  return { kind: "service", services: [service], actor, auditAllowed: true };
 }
 
 type UserPrincipal = Extract<Principal, { kind: "user" }>;

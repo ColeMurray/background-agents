@@ -20,7 +20,7 @@ import {
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
 import { buildSessionHref } from "@/lib/session-list";
 
-export const MOBILE_LONG_PRESS_MS = 450;
+const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 
 /**

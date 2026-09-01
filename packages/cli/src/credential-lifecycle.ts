@@ -42,8 +42,14 @@ export class CredentialLifecycle {
     try {
       staged = await this.store.stageCredential(context);
     } catch (cause) {
+      const failures = [cause];
+      try {
+        await this.revoke(context);
+      } catch (revokeCause) {
+        if (!isDefinitivelyInvalid(revokeCause)) failures.push(revokeCause);
+      }
       const recovered = await this.drainDeviceAuthorizations();
-      throw revocationFailure([cause, ...recovered.failures]);
+      throw revocationFailure([...failures, ...recovered.failures]);
     }
     try {
       await this.store.promoteStagedContext(name, staged, deviceSecretRef);
@@ -99,9 +105,12 @@ export class CredentialLifecycle {
     const failures: unknown[] = [];
     for (const credential of pending) {
       if (!credential.credential) {
-        failures.push(
-          new Error(`Credential not found for pending revocation: ${credential.credentialRef}`)
-        );
+        try {
+          await this.store.completePendingRevocation(credential.credentialRef);
+          remaining -= 1;
+        } catch (cause) {
+          failures.push(cause);
+        }
         continue;
       }
       try {
@@ -137,11 +146,12 @@ export class CredentialLifecycle {
     for (const authorization of pending) {
       if (authorization.state === "recovery") {
         if (!authorization.deviceSecret) {
-          failures.push(
-            new Error(
-              `Device secret not found for pending authorization: ${authorization.deviceSecretRef}`
-            )
-          );
+          try {
+            await this.store.completePendingDeviceAuthorization(authorization.deviceSecretRef);
+            remaining -= 1;
+          } catch (cause) {
+            failures.push(cause);
+          }
           continue;
         }
         try {

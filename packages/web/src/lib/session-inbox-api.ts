@@ -1,13 +1,12 @@
 import type {
   SessionInboxCategory,
-  SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
 import type { BrowserApiPath } from "./browser-api-fetch";
 
-export const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
+const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
 interface SessionInboxQuery {
   category: SessionInboxCategory;
@@ -78,4 +77,4 @@ export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | Se
   return applyTitleToPage(data, sessionId, title) as T;
 }
 
-export type { SessionInboxItem, SessionInboxPage, SessionInboxSnapshot };
+export type { SessionInboxPage, SessionInboxSnapshot };

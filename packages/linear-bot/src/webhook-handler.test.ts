@@ -528,7 +528,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     );
   });
 
-  it("omits actor identity and issue transition for an automation-created session", async () => {
+  it("attributes an automation-created session to the installed app user", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "config:project-repos": JSON.stringify({
@@ -542,6 +542,18 @@ describe("handleAgentSessionEvent environment targets", () => {
 
     await handleAgentSessionEvent(webhook, env, "trace-automation");
 
+    const sessionCall = fetchMock.mock.calls.find(
+      ([input]) => String(input) === "https://internal/sessions"
+    );
+    const promptCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith("/sessions/session-xyz/prompt")
+    );
+    expect(new Headers(sessionCall?.[1]?.headers).get("X-OpenInspect-Actor")).toBe(
+      "linear:app-user-1"
+    );
+    expect(new Headers(promptCall?.[1]?.headers).get("X-OpenInspect-Actor")).toBe(
+      "linear:app-user-1"
+    );
     expect(createSessionBody(fetchMock)).not.toHaveProperty("actorUserId");
     expect(promptBody(fetchMock)).toMatchObject({
       callbackContext: { transitionIssueOnStart: false },

@@ -27,6 +27,7 @@ type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 const EVENT_CHANGE_PRUNE_BATCH_SIZE = 500;
+const EVENT_CHANGE_PRUNE_INTERVAL = 32;
 
 export interface CreateEventData {
   id: string;
@@ -123,7 +124,7 @@ export class EventRepository {
       changedAt,
       eventId
     );
-    this.pruneChanges(changedAt);
+    this.maybePruneChanges(revision, changedAt);
   }
 
   private appendDelete(eventId: string, revision: number, changedAt: number): void {
@@ -135,7 +136,11 @@ export class EventRepository {
       changedAt,
       eventId
     );
-    this.pruneChanges(changedAt);
+    this.maybePruneChanges(revision, changedAt);
+  }
+
+  private maybePruneChanges(revision: number, changedAt: number): void {
+    if (revision % EVENT_CHANGE_PRUNE_INTERVAL === 0) this.pruneChanges(changedAt);
   }
 
   private ensureCurrentVersionRecoverable(eventId: string): void {
@@ -259,6 +264,11 @@ export class EventRepository {
          SELECT MAX(revision) FROM event_changes
          WHERE revision <= ? GROUP BY event_id
        )`,
+      retentionFloor
+    );
+    this.sql.exec(
+      `DELETE FROM event_changes
+       WHERE revision <= ? AND is_baseline = 1 AND kind = 'delete'`,
       retentionFloor
     );
     this.deleteChangesThrough(retentionFloor, true);
@@ -440,8 +450,29 @@ export class EventRepository {
   }
 
   listEventChanges(options: ListEventChangesOptions): EventChangePage {
+    const stateBeforePrune = options.cursor
+      ? (this.sql
+          .exec(
+            `SELECT cursor_scope, current_revision
+             FROM event_feed_state WHERE singleton = 1`
+          )
+          .one() as { cursor_scope: string; current_revision: number })
+      : null;
+    const cursorWasValid =
+      stateBeforePrune !== null &&
+      options.cursor !== undefined &&
+      options.cursor.scope === stateBeforePrune.cursor_scope &&
+      options.cursor.checkpoint <= stateBeforePrune.current_revision &&
+      (options.cursor.mode !== "changes" || options.cursor.revision <= options.cursor.checkpoint);
     this.transactionSync(() => this.pruneChanges(Date.now()));
-    return this.listEventChangesWithinTransaction(options);
+    try {
+      return this.listEventChangesWithinTransaction(options);
+    } catch (cause) {
+      if (cursorWasValid && cause instanceof InvalidEventFeedCursorError) {
+        throw new EventFeedCheckpointExpiredError("Event feed checkpoint expired");
+      }
+      throw cause;
+    }
   }
 
   private listEventChangesWithinTransaction(options: ListEventChangesOptions): EventChangePage {

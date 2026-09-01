@@ -105,10 +105,8 @@ describe("CredentialLifecycle", () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const store = new ConfigStore(directory, { credentialStore: credentials });
-    const lifecycle = new CredentialLifecycle(
-      store,
-      vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
-    );
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const lifecycle = new CredentialLifecycle(store, fetch);
     const deviceSecretRef = await lifecycle.stageDeviceAuthorization({
       url: "https://new.example.com",
       contextName: "work",
@@ -127,9 +125,16 @@ describe("CredentialLifecycle", () => {
       },
     });
     expect(await store.read()).toMatchObject({ activeContext: null, pendingRevocations: [] });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
+      "https://new.example.com/external/v1/cli/credentials/current"
+    );
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      `Bearer ${newCredential}`
+    );
   });
 
-  it("retains the deterministic secret when staging metadata fails and recovers on retry", async () => {
+  it("revokes the issued credential when staging metadata fails", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const failingUpdate = vi
       .fn<ConfigFileUpdater>()
@@ -137,10 +142,8 @@ describe("CredentialLifecycle", () => {
       .mockImplementationOnce(updateJsonFile)
       .mockRejectedValueOnce(new Error("disk full"));
     const store = new ConfigStore(directory, { updateConfigFile: failingUpdate });
-    const lifecycle = new CredentialLifecycle(
-      store,
-      vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
-    );
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const lifecycle = new CredentialLifecycle(store, fetch);
     const error = await install(store, lifecycle).catch((cause) => cause);
     const reference = credentialReference("new-credential");
 
@@ -148,18 +151,10 @@ describe("CredentialLifecycle", () => {
       kind: "service",
       context: { credentialId: "new-credential", credentialRef: reference },
     });
-    await expect(
-      new FileCredentialStore(join(directory, "credentials.json")).get(reference)
-    ).resolves.toBe(newCredential);
-
-    const restarted = new ConfigStore(directory);
-    await expect(install(restarted, new CredentialLifecycle(restarted, vi.fn()))).resolves.toEqual({
-      pendingRevocations: 0,
-      pendingDeviceAuthorizations: 0,
-    });
-    await expect(restarted.getActiveContext()).resolves.toMatchObject({
-      credential: newCredential,
-    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
+      "https://new.example.com/external/v1/cli/credentials/current"
+    );
   });
 
   it("retains both recovery handles when promotion storage and network revocation fail", async () => {
@@ -211,7 +206,7 @@ describe("CredentialLifecycle", () => {
     expect((await restarted.read()).pendingRevocations).toEqual([]);
   });
 
-  it("never capability-revokes after promotion when device-secret cleanup fails", async () => {
+  it("clears the device marker before local cleanup fails after promotion", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const store = new ConfigStore(directory, { credentialStore: credentials });
@@ -230,9 +225,7 @@ describe("CredentialLifecycle", () => {
       pendingRevocations: 0,
       pendingDeviceAuthorizations: 1,
     });
-    expect((await store.read()).pendingDeviceAuthorizations).toMatchObject([
-      { deviceSecretRef, state: "cleanup" },
-    ]);
+    expect((await store.read()).pendingDeviceAuthorizations).toEqual([]);
     await expect(store.getActiveContext()).resolves.toMatchObject({ credential: newCredential });
   });
 
@@ -421,7 +414,7 @@ describe("CredentialLifecycle", () => {
     });
   });
 
-  it("retains the pending marker when local cleanup fails after remote revocation", async () => {
+  it("clears the pending marker before local cleanup after remote revocation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
     const credentials = memoryStore();
     const store = new ConfigStore(directory, { credentialStore: credentials });
@@ -445,6 +438,26 @@ describe("CredentialLifecycle", () => {
         )
       )
     ).resolves.toEqual({ pendingRevocations: 1, pendingDeviceAuthorizations: 0 });
-    expect(await store.getPendingRevocations()).toMatchObject([{ credential: oldCredential }]);
+    expect(await store.getPendingRevocations()).toEqual([]);
+  });
+
+  it("clears stale recovery markers when their local secrets are missing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "oi-cli-test-"));
+    const credentials = memoryStore();
+    const store = new ConfigStore(directory, { credentialStore: credentials });
+    await store.stageCredential(issued());
+    await store.stageDeviceAuthorization({
+      url: "https://new.example.com",
+      contextName: "work",
+      deviceSecret,
+    });
+    credentials.values.clear();
+    const fetch = vi.fn();
+
+    await expect(new CredentialLifecycle(store, fetch).prepareLogin()).resolves.toBeUndefined();
+
+    expect((await store.read()).pendingRevocations).toEqual([]);
+    expect((await store.read()).pendingDeviceAuthorizations).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
