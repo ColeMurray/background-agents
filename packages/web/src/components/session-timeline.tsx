@@ -120,6 +120,7 @@ export function SessionTimeline({
     getItemKey: getVirtualRowKey,
     estimateSize: estimateVirtualRowSize,
   });
+  const totalSize = rowVirtualizer.getTotalSize();
 
   const handleScroll = useCallback(() => {
     hasScrolledRef.current = true;
@@ -154,11 +155,22 @@ export function SessionTimeline({
   }, [onLoadOlder]);
 
   useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) container.scrollTop = container.scrollHeight;
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
     if (isNearBottomRef.current) {
       const container = scrollContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [events, isProcessing]);
+  }, [totalSize]);
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);
@@ -293,7 +305,7 @@ export function SessionTimeline({
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
-          <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+          <div className="relative w-full" style={{ height: `${totalSize}px` }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = virtualRows[virtualRow.index];
               return (

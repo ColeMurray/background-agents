@@ -173,6 +173,23 @@ export * from "./cli-auth";
 export * from "./external-session-api";
 
 export {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventTimestampSchema,
+  auditOperationResultSchema,
+  auditPrincipalKindSchema,
+  auditEventMetadataSchema,
+  auditEventSchema,
+  auditEventListResponseSchema,
+} from "./audit-events";
+export type {
+  AuditOperationResult,
+  AuditPrincipalKind,
+  AuditEventMetadata,
+  AuditEvent,
+  AuditEventListResponse,
+} from "./audit-events";
+
+export {
   MAX_AUTOMATION_REPOSITORIES,
   toRepositoryRef,
   automationRepositoryInputSchema,

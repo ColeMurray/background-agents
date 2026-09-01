@@ -68,6 +68,7 @@ import { imageBuildRoutes } from "./routes/image-builds";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
+import { auditEventRoutes } from "./routes/audit-events";
 import { autofixRoutes } from "./routes/autofix";
 import { skillRoutes } from "./routes/skills";
 import { keyboardShortcutRoutes } from "./routes/keyboard-shortcuts";
@@ -869,6 +870,9 @@ export const routes: Route[] = [
 
   // Analytics
   ...analyticsRoutes,
+
+  // Workspace audit log
+  ...auditEventRoutes,
 
   // Pull request feedback Autofix activity
   ...autofixRoutes,

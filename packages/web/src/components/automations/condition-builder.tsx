@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSlackChannels } from "@/hooks/use-slack-channels";
+import { CONDITION_LABELS } from "./condition-labels";
 
 interface ConditionBuilderProps {
   conditions: TriggerCondition[];
@@ -32,24 +33,6 @@ interface ConditionBuilderProps {
   triggerSource: AutomationEventSource;
   eventType?: string;
 }
-
-export const CONDITION_LABELS: Record<string, string> = {
-  sentry_project: "Sentry Project",
-  sentry_level: "Error Level",
-  jsonpath: "JSONPath Filter",
-  branch: "Head branch",
-  target_branch: "Target branch",
-  label: "Label",
-  path_glob: "Path Glob",
-  actor: "Actor",
-  conclusion: "Conclusion",
-  check_conclusion: "Check Conclusion",
-  workflow_name: "Workflow Name",
-  linear_status: "Linear Status",
-  text_match: "Message Text",
-  slack_channel: "Slack Channel",
-  slack_actor: "Slack User",
-};
 
 const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
 
@@ -148,7 +131,7 @@ export function ConditionBuilder({
     <div className="space-y-3">
       {conditions.map((condition, index) => (
         <div
-          key={index}
+          key={getConditionSemanticKey(condition.type)}
           className="flex items-start gap-2 p-3 border border-border-muted rounded-md bg-card"
         >
           <div className="flex-1 space-y-2">

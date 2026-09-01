@@ -197,6 +197,10 @@
     "./types/cli-auth": {
       "import": "./dist/types/cli-auth.js",
       "types": "./dist/types/cli-auth.d.ts"
+    },
+    "./types/audit-events": {
+      "import": "./dist/types/audit-events.js",
+      "types": "./dist/types/audit-events.d.ts"
     }
   },
   "scripts": {

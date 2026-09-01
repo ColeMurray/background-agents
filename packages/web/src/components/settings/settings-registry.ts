@@ -1,6 +1,7 @@
 import {
   AppearanceIcon,
   BoxIcon,
+  ClockIcon,
   DataControlsIcon,
   FolderIcon,
   GitPrIcon,
@@ -134,6 +135,17 @@ export const SETTINGS_GROUPS = [
         visibility: anyOf("workspace.members.read", "workspace.roles.read"),
         panel: lazyPanel(() =>
           import("./workspace-settings").then(({ WorkspaceSettings }) => WorkspaceSettings)
+        ),
+      },
+      {
+        id: "audit-log",
+        label: "Audit log",
+        description: "Review workspace activity and access decisions",
+        keywords: "audit security history events authorization operations compliance",
+        icon: ClockIcon,
+        visibility: anyOf("workspace.audit.read"),
+        panel: lazyPanel(() =>
+          import("./audit-log-settings").then(({ AuditLogSettings }) => AuditLogSettings)
         ),
       },
       {
