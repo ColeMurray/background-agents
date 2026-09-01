@@ -113,10 +113,11 @@ export const CodexAuthProxy = async (input) => {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput, init) {
             const request = new Request(requestInput, init);
-            request.headers.delete("authorization");
 
             const currentAuth = await getAuth();
             if (currentAuth.type !== "oauth") return fetch(request);
+
+            request.headers.delete("authorization");
 
             // Ensure we have a valid access token
             const { accessToken, accountId } = await ensureAccessToken(getAuth, setAuth);

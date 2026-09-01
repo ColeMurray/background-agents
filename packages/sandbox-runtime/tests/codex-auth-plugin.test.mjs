@@ -40,3 +40,24 @@ test("preserves a source Request while proxying Codex authentication", async () 
   assert.equal(upstreamRequest.headers.get("x-request-header"), "preserved");
   assert.equal(await upstreamRequest.text(), "request-body");
 });
+
+test("preserves caller authorization after switching away from OAuth", async () => {
+  let upstreamRequest;
+  globalThis.fetch = async (input, init) => {
+    upstreamRequest = input instanceof Request ? input : new Request(input, init);
+    return new Response(null, { status: 200 });
+  };
+  let authReadCount = 0;
+  const getAuth = async () =>
+    authReadCount++ === 0 ? { type: "oauth", refresh: "managed" } : { type: "api" };
+  const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
+  const loaded = await plugin.auth.loader(getAuth, { models: {} });
+
+  await loaded.fetch(
+    new Request("https://api.openai.com/v1/responses", {
+      headers: { Authorization: "Bearer caller-token" },
+    })
+  );
+
+  assert.equal(upstreamRequest.headers.get("authorization"), "Bearer caller-token");
+});
