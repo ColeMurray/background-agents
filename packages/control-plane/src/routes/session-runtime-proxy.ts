@@ -357,7 +357,9 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/events",
     internalPath: SessionInternalPaths.events,
-    authorization: requirePermission("sessions.read"),
+    authorization: requirePermission("sessions.read", {
+      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+    }),
     forwardSearch: true,
   }),
   simpleProxyRoute({
@@ -365,7 +367,9 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/artifacts",
     internalPath: SessionInternalPaths.artifacts,
-    authorization: requirePermission("sessions.read"),
+    authorization: requirePermission("sessions.read", {
+      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+    }),
   }),
   simpleProxyRoute({
     policy: GITHUB_USER_OR_SERVICE_ROUTE,
