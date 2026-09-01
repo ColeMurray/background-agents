@@ -49,14 +49,24 @@ export function ProviderManualConnectionEditor({
   }, []);
 
   const submit = () => {
+    const trimmedDisplayName = displayName.trim();
+    const trimmedAccountId = accountId.trim();
+    if (
+      saving ||
+      !refreshToken ||
+      (target.operation === "create" && !trimmedDisplayName) ||
+      (isOpenAI && !trimmedAccountId)
+    ) {
+      return;
+    }
     if (target.operation === "create") {
       onSubmit({
         operation: "create",
         input: {
           provider: "openai",
-          displayName: displayName.trim(),
+          displayName: trimmedDisplayName,
           refreshToken,
-          accountId: accountId.trim(),
+          accountId: trimmedAccountId,
         },
       });
       return;
@@ -66,7 +76,7 @@ export function ProviderManualConnectionEditor({
       providerAccountId: target.account.id,
       input:
         target.provider === "openai"
-          ? { provider: "openai", refreshToken, accountId: accountId.trim() }
+          ? { provider: "openai", refreshToken, accountId: trimmedAccountId }
           : { provider: "xai", refreshToken },
     });
   };

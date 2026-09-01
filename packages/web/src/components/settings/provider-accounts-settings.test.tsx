@@ -226,6 +226,22 @@ describe("ProviderAccountsSettings", () => {
     await act(async () => finishSave());
   });
 
+  it("does not submit invalid manual credentials through the form", async () => {
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "ChatGPT manual token" }));
+    fireEvent.change(screen.getByLabelText("Account name"), { target: { value: " " } });
+    fireEvent.change(screen.getByLabelText("Account ID"), { target: { value: " " } });
+    fireEvent.change(screen.getByLabelText("Refresh token"), { target: { value: "token" } });
+
+    fireEvent.submit(screen.getByRole("button", { name: "Save" }).closest("form")!);
+
+    expect(connectAccount).not.toHaveBeenCalled();
+  });
+
   it("clears manual OpenAI credentials when starting another create attempt", async () => {
     render(<ProviderAccountsSettings />);
     const openManualEditor = async () => {
@@ -433,6 +449,29 @@ describe("ProviderAccountsSettings", () => {
       })
     );
     expect(startAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("restores menu focus after opening manual reconnect from the inline action", async () => {
+    const legacyAccount = {
+      ...account,
+      id: "e".repeat(32),
+      provider: "xai" as const,
+      displayName: "Legacy SuperGrok",
+      externalAccountId: null,
+      status: "reconnect_required" as const,
+    };
+    accountsResult = [legacyAccount];
+    render(<ProviderAccountsSettings />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const menuTrigger = screen.getByRole("button", {
+      name: "More actions for Legacy SuperGrok",
+    });
+    fireEvent.pointerDown(menuTrigger, { button: 0, ctrlKey: false });
+    fireEvent.keyDown(await screen.findByRole("menu"), { key: "Escape" });
+
+    await waitFor(() => expect(menuTrigger).toHaveFocus());
   });
 
   it("keeps the changing countdown outside the live region", async () => {

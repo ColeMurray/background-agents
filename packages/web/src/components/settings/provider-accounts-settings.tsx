@@ -171,9 +171,9 @@ export function ProviderAccountsSettings() {
     }
   }
 
-  function beginConnection(next: Connection) {
+  function beginConnection(next: Connection, preserveDropdownFocus = false) {
     if (operationInFlightRef.current) return;
-    manualConnectionFocusRef.current = next.kind === "manual";
+    manualConnectionFocusRef.current = preserveDropdownFocus && next.kind === "manual";
     setConnectionAttempt((attempt) => attempt + 1);
     setConnection(next);
   }
@@ -255,7 +255,7 @@ export function ProviderAccountsSettings() {
                         key={provider.provider}
                         disabled={saving}
                         onSelect={() =>
-                          beginConnection(CONNECTION_STRATEGIES[provider.provider].add())
+                          beginConnection(CONNECTION_STRATEGIES[provider.provider].add(), true)
                         }
                       >
                         <SubscriptionProviderIcon
@@ -269,10 +269,13 @@ export function ProviderAccountsSettings() {
                     <DropdownMenuItem
                       disabled={saving}
                       onSelect={() =>
-                        beginConnection({
-                          kind: "manual",
-                          target: { provider: "openai", operation: "create" },
-                        })
+                        beginConnection(
+                          {
+                            kind: "manual",
+                            target: { provider: "openai", operation: "create" },
+                          },
+                          true
+                        )
                       }
                     >
                       <SubscriptionProviderIcon provider="openai" className="size-5 text-primary" />
@@ -403,7 +406,8 @@ export function ProviderAccountsSettings() {
                                     disabled={saving}
                                     onSelect={() =>
                                       beginConnection(
-                                        CONNECTION_STRATEGIES[account.provider].reconnect(account)
+                                        CONNECTION_STRATEGIES[account.provider].reconnect(account),
+                                        true
                                       )
                                     }
                                   >
@@ -414,14 +418,17 @@ export function ProviderAccountsSettings() {
                                   <DropdownMenuItem
                                     disabled={saving}
                                     onSelect={() =>
-                                      beginConnection({
-                                        kind: "manual",
-                                        target: {
-                                          provider: "openai",
-                                          operation: "reconnect",
-                                          account,
+                                      beginConnection(
+                                        {
+                                          kind: "manual",
+                                          target: {
+                                            provider: "openai",
+                                            operation: "reconnect",
+                                            account,
+                                          },
                                         },
-                                      })
+                                        true
+                                      )
                                     }
                                   >
                                     Reconnect manually
