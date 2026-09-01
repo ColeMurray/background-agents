@@ -35,6 +35,10 @@ export function isSessionInboxKey(key: unknown): key is string {
   );
 }
 
+export function isSessionInboxPaginationKey(key: unknown): boolean {
+  return Array.isArray(key) && isSessionInboxKey(key[0]);
+}
+
 function applyTitleToSession(session: SessionListItem, sessionId: string, title: string | null) {
   return session.id === sessionId ? { ...session, title } : session;
 }

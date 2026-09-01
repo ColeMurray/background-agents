@@ -4,6 +4,7 @@ import {
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   isSessionInboxKey,
+  isSessionInboxPaginationKey,
   type SessionInboxPage,
   type SessionInboxSnapshot,
 } from "./session-inbox-api";
@@ -68,6 +69,16 @@ describe("session inbox API keys", () => {
     null,
   ])("does not match unrelated key %s", (key) => {
     expect(isSessionInboxKey(key)).toBe(false);
+  });
+
+  it("matches cached pagination tuple keys", () => {
+    expect(
+      isSessionInboxPaginationKey([
+        "/api/sessions/inbox?category=needs_attention&cursor=next",
+        '["user-1",false]',
+      ])
+    ).toBe(true);
+    expect(isSessionInboxPaginationKey(["/api/sessions?status=active", "filter"])).toBe(false);
   });
 });
 

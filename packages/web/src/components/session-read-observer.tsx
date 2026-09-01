@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
 
-const SESSION_READ_RETRY_MS = 2_000;
+export const SESSION_READ_RETRY_MS = 2_000;
 const SESSION_READ_MAX_ATTEMPTS = 4;
 
 export function SessionReadObserver({

@@ -2,11 +2,10 @@
 
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionReadObserver } from "./session-read-observer";
+import { SESSION_READ_RETRY_MS, SessionReadObserver } from "./session-read-observer";
 
-const FIRST_RETRY_DELAY_MS = 2_000;
-const SECOND_RETRY_DELAY_MS = 4_000;
-const THIRD_RETRY_DELAY_MS = 8_000;
+const SECOND_RETRY_DELAY_MS = SESSION_READ_RETRY_MS * 2;
+const THIRD_RETRY_DELAY_MS = SESSION_READ_RETRY_MS * 4;
 const NO_FURTHER_RETRY_WINDOW_MS = 60_000;
 
 beforeEach(() => {
@@ -98,7 +97,7 @@ describe("SessionReadObserver", () => {
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
 
-    await act(async () => vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS));
+    await act(async () => vi.advanceTimersByTimeAsync(SESSION_READ_RETRY_MS));
     expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
 
     await act(async () => vi.advanceTimersByTimeAsync(SECOND_RETRY_DELAY_MS));
@@ -114,7 +113,7 @@ describe("SessionReadObserver", () => {
 
     await act(async () =>
       vi.advanceTimersByTimeAsync(
-        FIRST_RETRY_DELAY_MS +
+        SESSION_READ_RETRY_MS +
           SECOND_RETRY_DELAY_MS +
           THIRD_RETRY_DELAY_MS +
           NO_FURTHER_RETRY_WINDOW_MS

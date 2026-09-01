@@ -17,6 +17,7 @@ import {
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
   isSessionInboxKey,
+  isSessionInboxPaginationKey,
 } from "@/lib/session-inbox-api";
 import {
   markLatestMessageRead,
@@ -172,6 +173,7 @@ function useCategoryPagination(
 
 export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
+  const { mutate: mutateCache } = useSWRConfig();
   const [sessionCreatorFilter, setSessionCreatorFilterState] =
     useState<SessionCreatorFilter | null>(null);
 
@@ -354,15 +356,21 @@ export function useSidebarSessions() {
       });
       updateInProgressRetained(applyReadState);
       updateFinishedRetained(applyReadState);
-      void mutate<SessionInboxSnapshot | SessionInboxPage>(
-        isSessionInboxKey,
-        (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
-        { populateCache: true, revalidate: true }
-      ).catch((error) => {
+      void Promise.all([
+        mutateCache<SessionInboxSnapshot | SessionInboxPage>(
+          isSessionInboxKey,
+          (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
+          { populateCache: true, revalidate: true }
+        ),
+        mutateCache<SessionInboxPage | undefined>(isSessionInboxPaginationKey, () => undefined, {
+          populateCache: true,
+          revalidate: true,
+        }),
+      ]).catch((error) => {
         console.error("Failed to refresh session inbox after read-state update", error);
       });
     },
-    [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
+    [mutateCache, updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
   );
 
   useEffect(() => {

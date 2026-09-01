@@ -77,12 +77,12 @@ function snapshot(
   };
 }
 
-function wrapper(fetcher: (key: string) => unknown) {
+function wrapper(fetcher: (key: string) => unknown, cache = new Map()) {
   return function TestWrapper({ children }: { children: ReactNode }) {
     return (
       <SWRConfig
         value={{
-          provider: () => new Map(),
+          provider: () => cache,
           fetcher,
           dedupingInterval: 0,
           focusThrottleInterval: 0,
@@ -468,5 +468,47 @@ describe("useSidebarSessions", () => {
     );
 
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+  });
+
+  it("invalidates cached pagination before a remount can restore stale unread state", async () => {
+    let sessionRead = false;
+    let paginationRequests = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (!key.includes("category=")) {
+        return snapshot({ needs_attention: page(["attention"], "next") });
+      }
+      paginationRequests += 1;
+      return sessionRead
+        ? { items: [], hasMore: false, nextCursor: null }
+        : { items: [unreadItem("tail-unread")], hasMore: false, nextCursor: null };
+    });
+    const cache = new Map();
+    const TestWrapper = wrapper(fetcher, cache);
+    const first = renderHook(() => useSidebarSessions(), { wrapper: TestWrapper });
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    act(() => first.result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(first.result.current.needsAttention).toHaveLength(2));
+
+    sessionRead = true;
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent<SessionReadStateReconciledDetail>(SESSION_READ_STATE_RECONCILED_EVENT, {
+          detail: {
+            sessionId: "tail-unread",
+            readState: { latestMessageId: "msg-1", unread: false },
+          },
+        })
+      )
+    );
+    first.unmount();
+
+    const second = renderHook(() => useSidebarSessions(), { wrapper: TestWrapper });
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+    act(() => second.result.current.sectionPagination.needsAttention.loadMore());
+
+    await waitFor(() => expect(paginationRequests).toBe(2));
+    await waitFor(() =>
+      expect(second.result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"])
+    );
   });
 });
