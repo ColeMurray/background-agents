@@ -11,14 +11,12 @@ test("retries once with a refreshed token after an upstream 401", async () => {
   const upstreamTokens = [];
   const upstreamBodies = [];
   let rejectedBodyCancelled = false;
-  let brokerRequests = 0;
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     if (request.url.startsWith("https://control.test/")) {
       brokerBodies.push(await request.json());
-      brokerRequests++;
       return Response.json({
-        accessToken: brokerRequests === 1 ? "access-1" : "access-2",
+        accessToken: brokerBodies.length === 1 ? "access-1" : "access-2",
         expiresIn: 3600,
         providerMetadata: { accountId: "acct-1" },
       });
@@ -40,18 +38,16 @@ test("retries once with a refreshed token after an upstream 401", async () => {
   const setAuth = async () => undefined;
   const plugin = await CodexAuthProxy({ client: { auth: { set: setAuth } } });
   const loaded = await plugin.auth.loader(getAuth, { models: {} });
+  const requestBody = JSON.stringify({ model: "gpt-5.4", input: "hello" });
 
   const response = await loaded.fetch("https://api.openai.com/v1/responses", {
     method: "POST",
-    body: JSON.stringify({ model: "gpt-5.4", input: "hello" }),
+    body: requestBody,
   });
 
   assert.equal(response.status, 200);
   assert.deepEqual(upstreamTokens, ["Bearer access-1", "Bearer access-2"]);
-  assert.deepEqual(upstreamBodies, [
-    JSON.stringify({ model: "gpt-5.4", input: "hello" }),
-    JSON.stringify({ model: "gpt-5.4", input: "hello" }),
-  ]);
+  assert.deepEqual(upstreamBodies, [requestBody, requestBody]);
   assert.equal(rejectedBodyCancelled, true);
   assert.deepEqual(brokerBodies, [{}, { forceRefresh: true }]);
 
@@ -76,12 +72,10 @@ test("retries once with a refreshed token after an upstream 401", async () => {
   assert.equal(streamedResponse.status, 401);
   assert.equal(streamedUpstreamRequests, 1);
 
-  let sourceRequestMethod;
-  let sourceRequestBody;
+  let sourceRequest;
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
-    sourceRequestMethod = request.method;
-    sourceRequestBody = await request.text();
+    sourceRequest = [request.method, await request.text()];
     return new Response(null, { status: 200 });
   };
   await loaded.fetch(
@@ -91,6 +85,5 @@ test("retries once with a refreshed token after an upstream 401", async () => {
       duplex: "half",
     })
   );
-  assert.equal(sourceRequestMethod, "POST");
-  assert.equal(sourceRequestBody, "source-request-body");
+  assert.deepEqual(sourceRequest, ["POST", "source-request-body"]);
 });

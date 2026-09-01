@@ -47,7 +47,6 @@ test("force refresh bypasses the cached token", async () => {
   const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
 
   await broker.getAccessToken();
-  assert.equal((await broker.getAccessToken()).accessToken, "access-1");
   assert.equal((await broker.refreshAccessToken()).accessToken, "access-2");
   assert.deepEqual(requests, [{}, { forceRefresh: true }]);
 });

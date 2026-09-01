@@ -41,6 +41,13 @@ export function ProviderManualConnectionEditor({
   const [refreshToken, setRefreshToken] = useState("");
   const [accountId, setAccountId] = useState(account?.externalAccountId ?? "");
   const isOpenAI = target.provider === "openai";
+  const trimmedDisplayName = displayName.trim();
+  const trimmedAccountId = accountId.trim();
+  const submitDisabled =
+    saving ||
+    !refreshToken ||
+    (target.operation === "create" && !trimmedDisplayName) ||
+    (isOpenAI && !trimmedAccountId);
   const initialFocusRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -49,16 +56,7 @@ export function ProviderManualConnectionEditor({
   }, []);
 
   const submit = () => {
-    const trimmedDisplayName = displayName.trim();
-    const trimmedAccountId = accountId.trim();
-    if (
-      saving ||
-      !refreshToken ||
-      (target.operation === "create" && !trimmedDisplayName) ||
-      (isOpenAI && !trimmedAccountId)
-    ) {
-      return;
-    }
+    if (submitDisabled) return;
     if (target.operation === "create") {
       onSubmit({
         operation: "create",
@@ -135,16 +133,7 @@ export function ProviderManualConnectionEditor({
         />
       </div>
       <div className="flex gap-2">
-        <Button
-          type="submit"
-          size="sm"
-          disabled={
-            saving ||
-            !refreshToken ||
-            (target.operation === "create" && !displayName.trim()) ||
-            (isOpenAI && !accountId.trim())
-          }
-        >
+        <Button type="submit" size="sm" disabled={submitDisabled}>
           Save
         </Button>
         <Button type="button" size="sm" variant="subtle" disabled={saving} onClick={onCancel}>

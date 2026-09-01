@@ -12,6 +12,7 @@ import {
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   requirePermission,
+  readBoundedBody,
   parsePattern,
   type Route,
 } from "./shared";
@@ -23,32 +24,6 @@ export const SESSION_DIFF_UPLOAD_BODY_MAX_BYTES = SESSION_DIFF_MAX_BUNDLE_BYTES;
 function routeId(match: RegExpMatchArray, name: string): string | null {
   const value = match.groups?.[name];
   return value && SESSION_DIFF_ID_PATTERN.test(value) ? value : null;
-}
-
-async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array | null> {
-  const declaredLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) return null;
-  const reader = request.body?.getReader();
-  if (!reader) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel("body limit exceeded");
-      return null;
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
 
 async function readBoundedJson(

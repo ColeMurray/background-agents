@@ -17,6 +17,7 @@ import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 
 const ACCOUNT_ID = "22".repeat(16);
+const USER_ID = "11".repeat(16);
 
 async function request(path: string, method: string, body?: unknown): Promise<Response> {
   return serviceFetch(`https://test.local${path}`, {
@@ -276,7 +277,7 @@ describe("provider account device authorization routes", () => {
     await env.DB.prepare(
       "UPDATE model_provider_account_authorizations SET user_id = ? WHERE id = ?"
     )
-      .bind("11111111111111111111111111111111", result.transactionId)
+      .bind(USER_ID, result.transactionId)
       .run();
     const cancelled = await request(
       `/model-provider-accounts/openai/device-authorizations/${result.transactionId}`,
@@ -374,24 +375,16 @@ describe("provider account device authorization routes", () => {
       },
       { error: () => undefined }
     );
-    const started = await service.start("11111111111111111111111111111111", "openai", {
+    const started = await service.start(USER_ID, "openai", {
       operation: "create",
       displayName: "Crossing expiry",
     });
     await makeDue(started.transactionId);
     now = 101_500;
 
-    const initial = await service.poll(
-      "11111111111111111111111111111111",
-      "openai",
-      started.transactionId
-    );
+    const initial = await service.poll(USER_ID, "openai", started.transactionId);
     expect(initial).toMatchObject({ status: "expired", retryable: true });
-    const replay = await service.poll(
-      "11111111111111111111111111111111",
-      "openai",
-      started.transactionId
-    );
+    const replay = await service.poll(USER_ID, "openai", started.transactionId);
     expect(replay).toEqual(initial);
     const transaction = await env.DB.prepare(
       `SELECT state, encrypted_provider_data, provider_state_version
@@ -452,18 +445,12 @@ describe("provider account device authorization routes", () => {
 
   it("persists and replays a classified device authorization failure", async () => {
     const { result } = await start();
-    const transaction = await env.DB.prepare(
-      "SELECT user_id FROM model_provider_account_authorizations WHERE id = ?"
-    )
-      .bind(result.transactionId)
-      .first<{ user_id: string }>();
-    expect(transaction).not.toBeNull();
     const store = new ProviderAccountAuthorizationStore(env.DB);
 
     await expect(
       store.finish(
         result.transactionId,
-        transaction!.user_id,
+        USER_ID,
         "failed",
         Date.now(),
         undefined,
@@ -471,12 +458,10 @@ describe("provider account device authorization routes", () => {
       )
     ).resolves.toBe(true);
 
-    await expect(store.getOwned(transaction!.user_id, result.transactionId)).resolves.toMatchObject(
-      {
-        state: "failed",
-        failureReason: "device_authorization_disabled",
-      }
-    );
+    await expect(store.getOwned(USER_ID, result.transactionId)).resolves.toMatchObject({
+      state: "failed",
+      failureReason: "device_authorization_disabled",
+    });
     await expect(
       env.DB.prepare(
         `UPDATE model_provider_account_authorizations
@@ -502,7 +487,7 @@ describe("provider account device authorization routes", () => {
       .bind(owner, now, result.transactionId)
       .run();
     const transaction = await new ProviderAccountAuthorizationStore(env.DB).getOwned(
-      "11111111111111111111111111111111",
+      USER_ID,
       result.transactionId
     );
     expect(transaction?.state).toBe("processing");
@@ -586,10 +571,7 @@ describe("provider account device authorization routes", () => {
       .bind(owner, now, result.transactionId)
       .run();
     const authorizations = new ProviderAccountAuthorizationStore(env.DB);
-    const transaction = await authorizations.getOwned(
-      "11111111111111111111111111111111",
-      result.transactionId
-    );
+    const transaction = await authorizations.getOwned(USER_ID, result.transactionId);
     expect(transaction?.state).toBe("processing");
 
     // Invalidate the target fence before the writer begins. The rejected call
@@ -661,7 +643,7 @@ describe("provider account device authorization routes", () => {
       .bind(owner, now, result.transactionId)
       .run();
     const transaction = await new ProviderAccountAuthorizationStore(env.DB).getOwned(
-      "11111111111111111111111111111111",
+      USER_ID,
       result.transactionId
     );
     expect(transaction?.state).toBe("processing");

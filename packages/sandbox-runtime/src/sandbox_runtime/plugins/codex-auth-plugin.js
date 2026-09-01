@@ -79,42 +79,6 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex",
 ]);
 
-function storeRefreshedAuth(getAuth, setAuth) {
-  return async (refreshed) => {
-    // Update OpenCode's auth state for consistency. The broker cache remains
-    // authoritative when the local auth store cannot be updated.
-    try {
-      const currentAuth = await getAuth();
-      const accountId = refreshed.providerMetadata?.accountId || null;
-      await setAuth({
-        type: "oauth",
-        refresh: currentAuth?.refresh || "managed-by-control-plane",
-        access: refreshed.accessToken,
-        expires: refreshed.expiresAt,
-        ...(accountId && { accountId }),
-      });
-    } catch {
-      // Non-fatal: the in-memory cache is the source of truth
-    }
-  };
-}
-
-async function ensureAccessToken(getAuth, setAuth) {
-  const result = await tokenBroker.getAccessToken(storeRefreshedAuth(getAuth, setAuth));
-  return {
-    accessToken: result.accessToken,
-    accountId: result.providerMetadata?.accountId || null,
-  };
-}
-
-async function refreshAccessToken(getAuth, setAuth) {
-  const result = await tokenBroker.refreshAccessToken(storeRefreshedAuth(getAuth, setAuth));
-  return {
-    accessToken: result.accessToken,
-    accountId: result.providerMetadata?.accountId || null,
-  };
-}
-
 export const CodexAuthProxy = async (input) => {
   return {
     auth: {
@@ -167,8 +131,22 @@ export const CodexAuthProxy = async (input) => {
           };
         }
 
-        const setAuth = async (body) => {
-          await input.client.auth.set({ path: { id: "openai" }, body });
+        const setAuth = (body) => input.client.auth.set({ path: { id: "openai" }, body });
+        const persistRefreshedAuth = async (refreshed) => {
+          // The broker cache remains authoritative if the local auth update fails.
+          try {
+            const currentAuth = await getAuth();
+            const accountId = refreshed.providerMetadata?.accountId || null;
+            await setAuth({
+              type: "oauth",
+              refresh: currentAuth?.refresh || "managed-by-control-plane",
+              access: refreshed.accessToken,
+              expires: refreshed.expiresAt,
+              ...(accountId && { accountId }),
+            });
+          } catch {
+            // Non-fatal: the in-memory cache is the source of truth
+          }
         };
 
         return {
@@ -178,15 +156,15 @@ export const CodexAuthProxy = async (input) => {
             if (currentAuth.type !== "oauth") return fetch(requestInput, init);
 
             // Ensure we have a valid access token
-            const { accessToken, accountId } = await ensureAccessToken(getAuth, setAuth);
+            const access = await tokenBroker.getAccessToken(persistRefreshedAuth);
+            const accountId = access.providerMetadata?.accountId || null;
 
             // Build headers
             const sourceRequest = requestInput instanceof Request ? requestInput : null;
             const headers = new Headers(init?.headers ?? sourceRequest?.headers);
-            headers.delete("authorization");
 
             // Set real authorization
-            headers.set("authorization", `Bearer ${accessToken}`);
+            headers.set("authorization", `Bearer ${access.accessToken}`);
 
             // Set ChatGPT-Account-Id header
             if (accountId) {
@@ -212,11 +190,12 @@ export const CodexAuthProxy = async (input) => {
             if (!replay) return response;
 
             await response.body?.cancel();
-            const refreshed = await refreshAccessToken(getAuth, setAuth);
+            const refreshed = await tokenBroker.refreshAccessToken(persistRefreshedAuth);
+            const refreshedAccountId = refreshed.providerMetadata?.accountId || null;
             const retryHeaders = new Headers(headers);
             retryHeaders.set("authorization", `Bearer ${refreshed.accessToken}`);
-            if (refreshed.accountId) {
-              retryHeaders.set("ChatGPT-Account-Id", refreshed.accountId);
+            if (refreshedAccountId) {
+              retryHeaders.set("ChatGPT-Account-Id", refreshedAccountId);
             } else {
               retryHeaders.delete("ChatGPT-Account-Id");
             }

@@ -86,7 +86,6 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
   }
 
   function refreshAccessToken(onRefresh) {
-    if (refreshPromise) return refreshPromise;
     return getOrStartRefresh(onRefresh, true);
   }
 
