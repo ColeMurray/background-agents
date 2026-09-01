@@ -896,9 +896,20 @@ describe("getMessageDetails", () => {
     expect(String(url)).toContain("conversations.history");
   });
 
-  it("returns empty files when the message has none or is not found", async () => {
+  it("returns message_not_found when the target is absent from the response", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({ ok: true, messages: [{ ts: "9.9" }] })
+    );
+
+    expect(await getMessageDetails("xoxb-token", "C123", "1.0")).toEqual({
+      ok: false,
+      error: "message_not_found",
+    });
+  });
+
+  it("returns empty details when the target message has no files or attachments", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ ok: true, messages: [{ ts: "1.0" }] })
     );
 
     expect(await getMessageDetails("xoxb-token", "C123", "1.0")).toEqual({

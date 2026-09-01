@@ -262,10 +262,12 @@ function mockSlackFetch(
   options: {
     threadMessages?: unknown[];
     threadRepliesError?: string;
+    messageHistoryResponses?: unknown[][];
     /** HTTP status for files.slack.com downloads (default 200 with bytes). */
     fileDownloadStatus?: number;
   } = {}
 ) {
+  let messageHistoryResponseIndex = 0;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("assistant.threads.setStatus")) {
@@ -288,10 +290,30 @@ function mockSlackFetch(
     }
 
     if (url.includes("conversations.replies")) {
+      const targetTs = new URL(url).searchParams.get("oldest");
       const payload = options.threadRepliesError
         ? { ok: false, error: options.threadRepliesError }
-        : { ok: true, messages: options.threadMessages ?? [] };
+        : {
+            ok: true,
+            messages:
+              options.threadMessages ??
+              (url.includes("inclusive=true") && targetTs ? [{ ts: targetTs }] : []),
+          };
       return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.includes("conversations.history")) {
+      const targetTs = new URL(url).searchParams.get("latest");
+      const configuredResponses = options.messageHistoryResponses;
+      const messages = configuredResponses
+        ? (configuredResponses[
+            Math.min(messageHistoryResponseIndex++, configuredResponses.length - 1)
+          ] ?? [])
+        : [{ ts: targetTs }];
+      return new Response(JSON.stringify({ ok: true, messages }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -1135,6 +1157,105 @@ describe("POST /events", () => {
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0].attachments).toEqual([
       { attachmentId: "att-1", name: "screenshot.png" },
+    ]);
+
+    slackFetch.mockRestore();
+  });
+
+  it("retries top-level mention file lookup before sending the initial prompt", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      messageHistoryResponses: [
+        [],
+        [
+          {
+            ts: "111.222",
+            files: [
+              {
+                id: "F1",
+                name: "bug.png",
+                mimetype: "image/png",
+                url_private: "https://files.slack.com/files-pri/T1-F1/bug.png",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      ],
+    });
+    const env = makeSessionEnv(order);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> inspect this screenshot in acme/app",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const historyCalls = slackFetch.mock.calls.filter(([input]) =>
+      String(input).includes("conversations.history")
+    );
+    expect(historyCalls).toHaveLength(2);
+    expect(order).toContain("filedownload");
+    expect(order.indexOf("attachment")).toBeLessThan(order.indexOf("prompt"));
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)[0]?.attachments).toEqual([
+      { attachmentId: "att-1", name: "bug.png" },
+    ]);
+
+    slackFetch.mockRestore();
+  });
+
+  it("fills partial event file metadata from the top-level message lookup", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order, {
+      messageHistoryResponses: [
+        [
+          {
+            ts: "111.222",
+            files: [
+              {
+                id: "F1",
+                name: "lookup-name.png",
+                mimetype: "image/png",
+                url_private: "https://files.slack.com/files-pri/T1-F1/bug.png",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      ],
+    });
+    const env = makeSessionEnv(order);
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> inspect this screenshot in acme/app",
+        user: "U123",
+        channel: "C123",
+        ts: "111.222",
+        files: [{ id: "F1", name: "event-name.png" }],
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(order).toContain("filedownload");
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)[0]?.attachments).toEqual([
+      { attachmentId: "att-1", name: "event-name.png" },
     ]);
 
     slackFetch.mockRestore();

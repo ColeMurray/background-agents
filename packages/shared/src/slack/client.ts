@@ -621,8 +621,8 @@ const messageWindowPayloadSchema = z.object({
  * `attachments` too — so when an event arrives without them we recover them
  * from conversation history. Pass `threadTs` when the message is a thread
  * reply; otherwise the top-level message at `ts` is fetched. Returns the
- * failure arm on API errors so callers can distinguish "the message has none"
- * from "the lookup failed".
+ * failure arm on API errors or when the target message is absent so callers can
+ * distinguish "the message has none" from "the lookup failed".
  */
 export async function getMessageDetails(
   token: string,
@@ -655,7 +655,8 @@ export async function getMessageDetails(
         });
   if (!res.ok) return res;
   const message = res.messages.find((m) => m.ts === ts);
-  return { ok: true, files: message?.files ?? [], attachments: message?.attachments ?? [] };
+  if (!message) return { ok: false, error: "message_not_found" };
+  return { ok: true, files: message.files ?? [], attachments: message.attachments ?? [] };
 }
 
 const slackUserSchema = z.object({

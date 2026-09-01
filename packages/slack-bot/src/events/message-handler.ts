@@ -53,6 +53,7 @@ import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-iden
 
 const log = createLogger("handler");
 const THREAD_HISTORY_MESSAGE_LIMIT = 10;
+const MESSAGE_DETAILS_RETRY_DELAYS_MS = [100, 250] as const;
 
 interface ThreadHistoryOptions {
   /** ts of the message currently being handled, excluded from the history. */
@@ -117,6 +118,21 @@ interface IncomingMessageContent {
 
 function hasRunnableContent(content: IncomingMessageContent): boolean {
   return Boolean(content.text) || content.images.length > 0 || content.forwarded.hasBody;
+}
+
+function mergeMessageFiles(
+  eventFiles: SlackMessageFile[],
+  lookupFiles: SlackMessageFile[]
+): SlackMessageFile[] {
+  const lookupById = new Map<string, SlackMessageFile>();
+  for (const file of lookupFiles) {
+    if (file.id) lookupById.set(file.id, file);
+  }
+  const eventIds = new Set(eventFiles.map((file) => file.id).filter(Boolean));
+  return [
+    ...eventFiles.map((file) => (file.id ? { ...lookupById.get(file.id), ...file } : file)),
+    ...lookupFiles.filter((file) => !file.id || !eventIds.has(file.id)),
+  ];
 }
 
 interface IncomingMessageParams {
@@ -378,27 +394,41 @@ export async function handleAppMention(
   const detailsPromise: Promise<MessageDetails> =
     eventDetails.files.length && eventDetails.attachments.length
       ? Promise.resolve(eventDetails)
-      : getMessageDetails(env.SLACK_BOT_TOKEN, event.channel, event.ts, event.thread_ts).then(
-          (lookup) => {
-            if (lookup.ok) {
-              return {
-                files: eventDetails.files.length ? eventDetails.files : lookup.files,
-                attachments: eventDetails.attachments.length
-                  ? eventDetails.attachments
-                  : lookup.attachments,
-              };
-            }
-            // Failure is not "the message has none": any images and forwarded
-            // messages are lost here, so make the drop visible in logs.
-            log.warn("slack.attachment.file_lookup_failed", {
-              trace_id: traceId,
-              channel: event.channel,
-              message_ts: event.ts,
-              slack_error: lookup.error,
-            });
-            return eventDetails;
+      : (async () => {
+          let lookup = await getMessageDetails(
+            env.SLACK_BOT_TOKEN,
+            event.channel,
+            event.ts,
+            event.thread_ts
+          );
+          for (const delayMs of MESSAGE_DETAILS_RETRY_DELAYS_MS) {
+            if (lookup.ok || lookup.error !== "message_not_found") break;
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            lookup = await getMessageDetails(
+              env.SLACK_BOT_TOKEN,
+              event.channel,
+              event.ts,
+              event.thread_ts
+            );
           }
-        );
+          if (lookup.ok) {
+            return {
+              files: mergeMessageFiles(eventDetails.files, lookup.files),
+              attachments: eventDetails.attachments.length
+                ? eventDetails.attachments
+                : lookup.attachments,
+            };
+          }
+          // Failure is not "the message has none": any images and forwarded
+          // messages are lost here, so make the drop visible in logs.
+          log.warn("slack.attachment.file_lookup_failed", {
+            trace_id: traceId,
+            channel: event.channel,
+            message_ts: event.ts,
+            slack_error: lookup.error,
+          });
+          return eventDetails;
+        })();
   // Fetched unconditionally: image-only mentions rely on channel context as
   // their main classifier signal, and detailsPromise is awaited anyway.
   const channelInfoPromise = getChannelInfo(env.SLACK_BOT_TOKEN, event.channel).catch(
