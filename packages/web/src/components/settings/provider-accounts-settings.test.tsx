@@ -180,6 +180,7 @@ describe("ProviderAccountsSettings", () => {
     });
     fireEvent.click(await screen.findByRole("menuitem", { name: "ChatGPT manual token" }));
 
+    await waitFor(() => expect(screen.getByLabelText("Account name")).toHaveFocus());
     fireEvent.change(screen.getByLabelText("Account name"), {
       target: { value: "Fallback ChatGPT" },
     });
@@ -198,6 +199,31 @@ describe("ProviderAccountsSettings", () => {
         accountId: "acct-manual",
       })
     );
+  });
+
+  it("keeps the manual editor open while credentials are being saved", async () => {
+    let finishSave!: () => void;
+    connectAccount.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        })
+    );
+    render(<ProviderAccountsSettings />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "ChatGPT manual token" }));
+    fireEvent.change(screen.getByLabelText("Account ID"), { target: { value: "acct-manual" } });
+    fireEvent.change(screen.getByLabelText("Refresh token"), {
+      target: { value: "manual-refresh" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(connectAccount).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await act(async () => finishSave());
   });
 
   it("clears manual OpenAI credentials when starting another create attempt", async () => {

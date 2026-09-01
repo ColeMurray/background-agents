@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ConnectModelProviderAccountRequest,
   ModelProviderAccount,
@@ -41,6 +41,12 @@ export function ProviderManualConnectionEditor({
   const [refreshToken, setRefreshToken] = useState("");
   const [accountId, setAccountId] = useState(account?.externalAccountId ?? "");
   const isOpenAI = target.provider === "openai";
+  const initialFocusRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => initialFocusRef.current?.focus());
+    return () => clearTimeout(timer);
+  }, []);
 
   const submit = () => {
     if (target.operation === "create") {
@@ -66,7 +72,13 @@ export function ProviderManualConnectionEditor({
   };
 
   return (
-    <div className="space-y-3 rounded-md border border-border-muted p-4">
+    <form
+      className="space-y-3 rounded-md border border-border-muted p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
       <div>
         <h3 className="font-medium">
           {target.operation === "create"
@@ -84,6 +96,7 @@ export function ProviderManualConnectionEditor({
           <Label htmlFor="provider-display-name">Account name</Label>
           <Input
             id="provider-display-name"
+            ref={initialFocusRef}
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
           />
@@ -94,6 +107,7 @@ export function ProviderManualConnectionEditor({
           <Label htmlFor="provider-account-id">Account ID</Label>
           <Input
             id="provider-account-id"
+            ref={target.operation === "reconnect" ? initialFocusRef : undefined}
             value={accountId}
             onChange={(event) => setAccountId(event.target.value)}
           />
@@ -103,6 +117,7 @@ export function ProviderManualConnectionEditor({
         <Label htmlFor="provider-refresh-token">Refresh token</Label>
         <Input
           id="provider-refresh-token"
+          ref={!isOpenAI ? initialFocusRef : undefined}
           type="password"
           autoComplete="off"
           value={refreshToken}
@@ -111,6 +126,7 @@ export function ProviderManualConnectionEditor({
       </div>
       <div className="flex gap-2">
         <Button
+          type="submit"
           size="sm"
           disabled={
             saving ||
@@ -118,14 +134,13 @@ export function ProviderManualConnectionEditor({
             (target.operation === "create" && !displayName.trim()) ||
             (isOpenAI && !accountId.trim())
           }
-          onClick={submit}
         >
           Save
         </Button>
-        <Button size="sm" variant="subtle" onClick={onCancel}>
+        <Button type="button" size="sm" variant="subtle" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
       </div>
-    </div>
+    </form>
   );
 }

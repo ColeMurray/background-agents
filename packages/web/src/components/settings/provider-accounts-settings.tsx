@@ -151,6 +151,7 @@ export function ProviderAccountsSettings() {
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [saving, setSaving] = useState(false);
   const operationInFlightRef = useRef(false);
+  const manualConnectionFocusRef = useRef(false);
 
   async function run(operation: () => Promise<unknown>, success: string) {
     if (operationInFlightRef.current) return;
@@ -172,8 +173,15 @@ export function ProviderAccountsSettings() {
 
   function beginConnection(next: Connection) {
     if (operationInFlightRef.current) return;
+    manualConnectionFocusRef.current = next.kind === "manual";
     setConnectionAttempt((attempt) => attempt + 1);
     setConnection(next);
+  }
+
+  function preserveManualConnectionFocus(event: Event) {
+    if (!manualConnectionFocusRef.current) return;
+    manualConnectionFocusRef.current = false;
+    event.preventDefault();
   }
 
   function beginConfirmation(next: Exclude<Confirm, null>) {
@@ -236,7 +244,11 @@ export function ProviderAccountsSettings() {
                       Add account
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-64">
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-64"
+                    onCloseAutoFocus={preserveManualConnectionFocus}
+                  >
                     <DropdownMenuLabel>Subscriptions</DropdownMenuLabel>
                     {providers.map((provider) => (
                       <DropdownMenuItem
@@ -382,7 +394,10 @@ export function ProviderAccountsSettings() {
                                   <MoreIcon className="size-4" />
                                 </Button>
                               </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
+                              <DropdownMenuContent
+                                align="end"
+                                onCloseAutoFocus={preserveManualConnectionFocus}
+                              >
                                 {account.status !== "reconnect_required" && (
                                   <DropdownMenuItem
                                     disabled={saving}
