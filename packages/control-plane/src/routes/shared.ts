@@ -81,6 +81,7 @@ export type RouteAuthorizationRequirement =
     };
 
 type BotServiceName = Exclude<ServiceName, "web">;
+const DEFAULT_AUDIT_ALLOWED = false;
 
 /** Narrow route grant for a trusted service without an acting user. */
 export interface ActorlessServiceGrant {
@@ -123,16 +124,19 @@ export type RouteAuthorization =
  */
 export const NO_AUTHORIZATION = {
   kind: "none",
-  auditAllowed: false,
+  auditAllowed: DEFAULT_AUDIT_ALLOWED,
 } as const satisfies RouteAuthorization;
 /** Policy requiring any authenticated principal. */
 export const AUTHENTICATED_USER = {
   kind: "authenticated",
-  auditAllowed: false,
+  auditAllowed: DEFAULT_AUDIT_ALLOWED,
 } as const satisfies RouteAuthorization;
 /** Policy requiring an active user to access their own account resource. */
 export function activeSelf(options?: { auditAllowed?: boolean }): RouteAuthorization {
-  return { kind: "active-self", auditAllowed: options?.auditAllowed ?? false };
+  return {
+    kind: "active-self",
+    auditAllowed: options?.auditAllowed ?? DEFAULT_AUDIT_ALLOWED,
+  };
 }
 export const ACTIVE_SELF = activeSelf();
 
@@ -239,7 +243,7 @@ export function activeGlobal(options?: {
   return {
     kind: "active-global",
     service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
-    auditAllowed: options?.auditAllowed ?? false,
+    auditAllowed: options?.auditAllowed ?? DEFAULT_AUDIT_ALLOWED,
   };
 }
 

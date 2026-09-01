@@ -1,4 +1,5 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
 import { createLogger } from "../logger";
 
@@ -7,6 +8,7 @@ const logger = createLogger("authorization-audit");
 export type AuthorizationDecisionRequirement =
   | RouteAuthorizationRequirement
   | { kind: "active-user" }
+  | { kind: "actorless-service-grant"; service: ServiceName }
   | { kind: "principal-type" }
   | { kind: "service-capability" }
   | { kind: "sandbox-admission"; sessionId: string };

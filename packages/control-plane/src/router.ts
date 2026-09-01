@@ -540,7 +540,7 @@ function enforceServiceRouteAuthorization(
     actorlessGrantMatches(grant, principal.service, match)
   );
   if (granted) {
-    evidence.requirements.push(requirement);
+    evidence.requirements.push({ kind: "actorless-service-grant", service: principal.service });
     return null;
   }
   return authorizationDenial(
@@ -573,7 +573,6 @@ async function enforcePermissionRequirement(
   const userId = authorizationUserId(ctx);
   if (!userId) {
     evidence.requirements.push(requirement);
-    evidence.effectivePermissions.push(requirement.permission);
     return null;
   }
   if (ctx.authorization?.permissions.includes(requirement.permission)) {
@@ -616,7 +615,6 @@ async function enforceScopedPermissionRequirement(
   const userId = authorizationUserId(ctx);
   if (!userId) {
     evidence.requirements.push(requirement);
-    evidence.effectivePermissions.push(pair.own);
     return null;
   }
   const scope = ctx.authorization

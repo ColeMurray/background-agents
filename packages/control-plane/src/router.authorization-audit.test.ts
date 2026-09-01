@@ -25,6 +25,16 @@ vi.mock("./auth/authenticate", async (importOriginal) => ({
 
 const TEST_ROUTES: Route[] = [
   {
+    authentication: { kind: "user-or-service" },
+    supportedScmProviders: "all",
+    method: "POST",
+    pattern: /^\/audit-test\/actorless-service$/,
+    authorization: requirePermission("sessions.lifecycle", {
+      actorlessGrants: [{ service: "github-bot" }],
+    }),
+    handler: async () => json({ handled: true }),
+  },
+  {
     authentication: { kind: "user" },
     supportedScmProviders: "all",
     method: "POST",
@@ -331,6 +341,28 @@ describe("router authorization decision auditing", () => {
         responseReason: "Human user authentication required",
       },
     });
+  });
+
+  it("does not report a bypassed user permission as effective for an actorless service", async () => {
+    authenticateAs({ kind: "service", service: "github-bot", actor: null });
+    const allowed = createEnv();
+    const response = await handleRequest(
+      new Request("https://test.local/audit-test/actorless-service", { method: "POST" }),
+      allowed.env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+    const metadata = auditRecord(allowed.auditWrites[0]).metadata;
+    expect(metadata).toMatchObject({
+      admission: "service",
+      requirements: [
+        { kind: "actorless-service-grant", service: "github-bot" },
+        { kind: "permission", permission: "sessions.lifecycle" },
+      ],
+    });
+    expect(metadata).not.toHaveProperty("effectivePermissions");
+    expect(metadata).not.toHaveProperty("requiredPermission");
   });
 
   it("audits sensitive protected GETs but not ordinary reads", async () => {
