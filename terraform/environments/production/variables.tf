@@ -368,6 +368,22 @@ variable "provider_accounts_encryption_key" {
   }
 }
 
+variable "external_session_id_secret" {
+  description = "Optional existing stable key for deterministic external session IDs; when blank, Terraform generates and persists a dedicated key"
+  type        = string
+  sensitive   = true
+  nullable    = false
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.external_session_id_secret) == "" ||
+      can(regex("^[A-Za-z0-9+/]{43}=$", trimspace(var.external_session_id_secret)))
+    )
+    error_message = "external_session_id_secret must be blank or a Base64-encoded 32-byte key."
+  }
+}
+
 variable "modal_api_secret" {
   description = "Shared secret for authenticating control plane to Modal API calls (generate with: openssl rand -hex 32)"
   type        = string

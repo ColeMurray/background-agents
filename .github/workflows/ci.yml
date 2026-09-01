@@ -11,6 +11,7 @@ on:
       - "knip.json"
       - "package-lock.json"
       - "package.json"
+      - "packages/cli/**"
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
@@ -33,6 +34,7 @@ on:
       - "knip.json"
       - "package-lock.json"
       - "package.json"
+      - "packages/cli/**"
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
@@ -162,6 +164,31 @@ jobs:
 
       - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
+
+  test-cli:
+    name: Test (CLI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @open-inspect/shared
+
+      - name: Run CLI tests
+        run: npm test -w @open-inspect/cli
 
   test-cp-integration:
     name: Test (control-plane integration ${{ matrix.shard }})

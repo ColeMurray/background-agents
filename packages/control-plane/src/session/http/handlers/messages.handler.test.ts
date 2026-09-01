@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
+import { EventFeedCheckpointExpiredError } from "../../event-repository";
 import type { MessageService } from "../../services/message.service";
+import { encodeEventChangeCursor } from "../../event-stream";
 
 function createHandler() {
   const messageService = {
     enqueuePrompt: vi.fn(),
     stop: vi.fn(),
     listEvents: vi.fn(),
+    listEventChanges: vi.fn(),
     listArtifacts: vi.fn(),
     getArtifact: vi.fn(),
     listMessages: vi.fn(),
@@ -184,7 +187,7 @@ describe("MessagesHandler", () => {
           createdAt: 1000,
         },
       ],
-      cursor: "1000",
+      cursor: "opaque-cursor",
       hasMore: false,
     });
 
@@ -192,7 +195,7 @@ describe("MessagesHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       events: [{ id: "e1", type: "token", data: { x: 1 }, messageId: "m1", createdAt: 1000 }],
-      cursor: "1000",
+      cursor: "opaque-cursor",
       hasMore: false,
     });
     expect(messageService.listEvents).toHaveBeenCalledWith({
@@ -222,6 +225,68 @@ describe("MessagesHandler", () => {
       type: null,
       messageId: null,
     });
+  });
+
+  it("parses bounded event change feeds and continuation cursors", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listEventChanges).mockReturnValue({
+      changes: [],
+      checkpoint: 12,
+      hasMore: false,
+    });
+
+    expect(
+      handler.listEventChanges(new URL("http://internal/internal/event-changes?after=4&limit=20"))
+        .status
+    ).toBe(200);
+    expect(messageService.listEventChanges).toHaveBeenLastCalledWith({
+      after: 4,
+      cursor: undefined,
+      limit: 20,
+    });
+
+    const cursor = {
+      mode: "changes" as const,
+      scope: "a".repeat(32),
+      checkpoint: 12,
+      revision: 8,
+    };
+    handler.listEventChanges(
+      new URL(
+        `http://internal/internal/event-changes?cursor=${encodeURIComponent(encodeEventChangeCursor(cursor))}&limit=20`
+      )
+    );
+    expect(messageService.listEventChanges).toHaveBeenLastCalledWith({
+      after: undefined,
+      cursor,
+      limit: 20,
+    });
+  });
+
+  it.each(["?after=-1", "?limit=501", "?cursor=bad", "?after=1&cursor=1%3A2%3A1"])(
+    "rejects invalid event change query %s",
+    (search) => {
+      const { handler, messageService } = createHandler();
+      const response = handler.listEventChanges(
+        new URL(`http://internal/internal/event-changes${search}`)
+      );
+      expect(response.status).toBe(400);
+      expect(messageService.listEventChanges).not.toHaveBeenCalled();
+    }
+  );
+
+  it("returns 410 when an event checkpoint has expired", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.listEventChanges).mockImplementation(() => {
+      throw new EventFeedCheckpointExpiredError("Event feed checkpoint expired");
+    });
+
+    const response = handler.listEventChanges(
+      new URL("http://internal/internal/event-changes?after=1")
+    );
+
+    expect(response.status).toBe(410);
+    await expect(response.json()).resolves.toEqual({ error: "Event feed checkpoint expired" });
   });
 
   it("returns artifacts from service unchanged", async () => {
@@ -319,7 +384,7 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
+      cursor: undefined,
       hasMore: false,
     });
 
@@ -345,7 +410,6 @@ describe("MessagesHandler", () => {
           completedAt: 1200,
         },
       ],
-      cursor: "1000",
       hasMore: false,
     });
   });
@@ -366,7 +430,7 @@ describe("MessagesHandler", () => {
           completedAt: null,
         },
       ],
-      cursor: "1000",
+      cursor: undefined,
       hasMore: false,
     });
 

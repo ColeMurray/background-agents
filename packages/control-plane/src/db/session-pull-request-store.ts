@@ -178,6 +178,20 @@ export class SessionPullRequestStore {
     return row ? toRecord(row) : null;
   }
 
+  /** List one session's pull requests, newest activity first. */
+  async listBySession(sessionId: string): Promise<SessionPullRequestRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM session_pull_requests
+         WHERE session_id = ?
+         ORDER BY updated_at DESC, artifact_id ASC`
+      )
+      .bind(sessionId)
+      .all<SessionPullRequestRow>();
+
+    return (result.results ?? []).map(toRecord);
+  }
+
   /**
    * The single PR identity boundary. Callers pass everything they know about
    * the PR's identity; the layering lives here, not at call sites:

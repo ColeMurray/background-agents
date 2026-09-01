@@ -91,6 +91,20 @@ describe("mergeUsers", () => {
     await insertScmToken("583231", LOSER);
     await insertSkillProfile("profile-loser", LOSER, "Personal profile");
     await insertAuthSession({ id: "authsess-loser", userId: LOSER });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO cli_credentials
+           (id, token_hash, user_id, created_at, expires_at, revoked_at)
+         VALUES ('cli-active', 'active-hash', ?, 1, 9999999999999, NULL),
+                ('cli-revoked', 'revoked-hash', ?, 1, 9999999999999, 2)`
+      ).bind(LOSER, LOSER),
+      env.DB.prepare(
+        `INSERT INTO cli_device_authorization_attempts
+           (id, device_name, device_secret_hash, user_code_hash, approved_user_id,
+            created_at, expires_at, approved_at)
+         VALUES ('approved-attempt', 'laptop', 'device-hash', 'code-hash', ?, 1, 9999999999999, 2)`
+      ).bind(LOSER),
+    ]);
     // Survivor: the email-owning row the user already signs into.
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com", emailVerified: 1 });
     await insertIdentity({
@@ -112,6 +126,8 @@ describe("mergeUsers", () => {
       identitiesRepointed: 1,
       sessionsRepointed: 1,
       authSessionsDeleted: 1,
+      cliCredentialsRepointed: 2,
+      cliApprovedAttemptsRepointed: 1,
       automationsOwnedRepointed: 1,
       automationsCreatedRepointed: 1,
       scmTokensRepointed: 1,
@@ -138,6 +154,19 @@ describe("mergeUsers", () => {
         userId: string;
       }>()
     ).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT id, user_id, revoked_at FROM cli_credentials ORDER BY id").all()
+    ).toMatchObject({
+      results: [
+        { id: "cli-active", user_id: SURVIVOR, revoked_at: null },
+        { id: "cli-revoked", user_id: SURVIVOR, revoked_at: 2 },
+      ],
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT approved_user_id FROM cli_device_authorization_attempts WHERE id = 'approved-attempt'"
+      ).first()
+    ).toEqual({ approved_user_id: SURVIVOR });
     expect(
       await env.DB.prepare(
         `SELECT user_id, created_by FROM automations WHERE id = 'auto-1'`

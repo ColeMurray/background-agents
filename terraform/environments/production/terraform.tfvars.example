@@ -250,6 +250,10 @@ repo_secrets_encryption_key = ""
 # storing provider account credentials.
 provider_accounts_encryption_key = ""
 
+# Optional stable key for deterministic external session IDs. Leave blank for
+# Terraform to generate and persist one. Never rotate it after creating external sessions.
+external_session_id_secret = ""
+
 # Modal API secret (for control plane -> Modal authentication)
 # Only required when sandbox_provider = "modal"
 # Generate with: openssl rand -hex 32

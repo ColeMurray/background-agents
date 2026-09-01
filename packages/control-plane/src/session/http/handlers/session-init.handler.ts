@@ -31,7 +31,7 @@ const spawnSourceSchema = z.enum([
  * The router constructs this from SessionInitInput — see session/initialize.ts.
  * Note: `userId` here is the participantUserId from SessionInitInput.
  */
-const initRequestSchema = z.object({
+const sessionBootstrapRequestSchema = z.strictObject({
   sessionName: z.string(),
   repoOwner: z.string().nullable(),
   repoName: z.string().nullable(),
@@ -72,9 +72,11 @@ const initRequestSchema = z.object({
    * SandboxSettings later, so the shape is validated at the use site instead.
    */
   sandboxSettings: z.unknown().optional(),
+  /** Adapter-owned request identity included in the canonical bootstrap fingerprint. */
+  requestFingerprint: z.string().optional(),
 });
 
-type InitRequest = z.infer<typeof initRequestSchema>;
+type SessionBootstrapRequest = z.infer<typeof sessionBootstrapRequestSchema>;
 
 /**
  * HTTP boundary for `/internal/init` — the Durable Object side of session
@@ -103,31 +105,28 @@ export class SessionInitHandler {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
 
-    const parseResult = initRequestSchema.safeParse(raw);
+    const parseResult = sessionBootstrapRequestSchema.safeParse(raw);
     if (!parseResult.success) {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
 
-    const body: InitRequest = parseResult.data;
+    const body: SessionBootstrapRequest = parseResult.data;
 
     const sessionId = this.durableObjectId;
     const sessionName = body.sessionName;
     const now = this.now();
-    const repoOwner = body.repoOwner?.trim() || null;
-    const repoName = body.repoName?.trim() || null;
-    const hasRepoOwner = repoOwner !== null;
-    const hasRepoName = repoName !== null;
-    const hasRepoId = body.repoId != null;
-    if (
-      hasRepoOwner !== hasRepoName ||
-      (!hasRepoOwner && hasRepoId) ||
-      (hasRepoOwner && !hasRepoId)
-    ) {
-      return Response.json(
-        { error: "Repository context must include repoOwner, repoName, and repoId together" },
-        { status: 400 }
-      );
-    }
+    const prepared = prepareSessionBootstrap(body, log);
+    if (prepared instanceof Response) return prepared;
+    const {
+      repoOwner,
+      repoName,
+      hasRepoOwner,
+      baseBranch,
+      repositories: memberRepositories,
+      sandboxSettings,
+      model,
+      reasoningEffort,
+    } = prepared;
 
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {
@@ -141,44 +140,28 @@ export class SessionInitHandler {
       }
     }
 
-    const model = getValidModelOrDefault(body.model);
-    if (body.model && !isValidModel(body.model)) {
-      log.warn("Invalid model name, using default", {
-        requested_model: body.model,
-        default_model: model,
-      });
-    }
+    const initializationFingerprint = await createInitializationFingerprint({
+      body,
+      repoOwner,
+      repoName,
+      baseBranch,
+      repositories: memberRepositories,
+      model,
+      reasoningEffort,
+      sandboxSettings,
+      encryptedToken,
+    });
 
-    const reasoningEffort = validateReasoningEffort(model, body.reasoningEffort ?? undefined, log);
-    const baseBranch = hasRepoOwner
-      ? body.branch || body.defaultBranch || DEFAULT_BASE_BRANCH
-      : null;
-
-    const repositories = body.repositories ?? [];
-    if (repositories.length > 0) {
-      const primary = repositories[0];
-      if (
-        !hasRepoOwner ||
-        primary.repoOwner !== repoOwner ||
-        primary.repoName !== repoName ||
-        primary.repoId !== body.repoId ||
-        primary.baseBranch !== baseBranch
-      ) {
-        return Response.json(
-          { error: "repositories[0] must match the scalar repository mirror" },
-          { status: 400 }
-        );
+    const transactionResult = this.sessionCoreRepository.transaction<
+      { kind: "initialized" } | { kind: "existing"; status: string } | { kind: "conflict" }
+    >(() => {
+      const existing = this.sessionCoreRepository.getSession();
+      if (existing) {
+        return this.sessionCoreRepository.getInitializationFingerprint() ===
+          initializationFingerprint
+          ? { kind: "existing", status: existing.status }
+          : { kind: "conflict" };
       }
-    } else if (hasRepoOwner && body.repositories !== undefined) {
-      // An explicit empty list alongside scalar context is a producer bug —
-      // initialize.ts synthesizes a one-entry list for scalar callers.
-      return Response.json(
-        { error: "repositories must include the scalar repository" },
-        { status: 400 }
-      );
-    }
-
-    this.sessionCoreRepository.transaction(() => {
       this.sessionCoreRepository.upsertSession({
         id: sessionId,
         sessionName,
@@ -195,9 +178,7 @@ export class SessionInitHandler {
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
         vncEnabled: body.vncEnabled ?? false,
-        sandboxSettings: body.sandboxSettings
-          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
-          : null,
+        sandboxSettings,
         environmentId: body.environmentId ?? null,
         createdAt: now,
         updatedAt: now,
@@ -205,12 +186,6 @@ export class SessionInitHandler {
 
       // Legacy scalar producers (spawn paths not yet list-aware) still get a
       // member row so spawn/read paths have one source of truth.
-      const memberRepositories: RepositoryRef[] =
-        repositories.length > 0
-          ? repositories
-          : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
-            ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
-            : [];
       this.sessionCoreRepository.replaceSessionRepositories(
         memberRepositories.map((repo, position) => ({
           position,
@@ -243,11 +218,177 @@ export class SessionInitHandler {
         role: "owner",
         joinedAt: now,
       });
+      this.sessionCoreRepository.setInitializationFingerprint(initializationFingerprint);
+      return { kind: "initialized" };
     });
 
-    log.info("Triggering sandbox spawn for new session");
-    this.scheduleWarmSandbox();
+    if (transactionResult.kind === "conflict") {
+      return Response.json({ error: "Session initialization conflict" }, { status: 409 });
+    }
+    if (transactionResult.kind === "existing" && !this.sandboxRepository.getSandbox()) {
+      return Response.json({ error: "Session sandbox not found" }, { status: 409 });
+    }
 
-    return Response.json({ sessionId, status: "created" });
+    if (
+      transactionResult.kind === "initialized" ||
+      this.sandboxRepository.getSandbox()?.status === "pending"
+    ) {
+      log.info("Triggering sandbox spawn for new session");
+      this.scheduleWarmSandbox();
+    }
+
+    return Response.json({
+      sessionId,
+      status: transactionResult.kind === "existing" ? transactionResult.status : "created",
+    });
   }
+
+  async ensure(request: Request, log: Logger): Promise<Response> {
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+    const parsed = sessionBootstrapRequestSchema.safeParse(raw);
+    if (!parsed.success) return Response.json({ error: "Invalid request body" }, { status: 400 });
+    const body = parsed.data;
+    const initialized = await this.init(
+      new Request(request.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      log
+    );
+    if (!initialized.ok) return initialized;
+    const result = (await initialized.json()) as { status: string };
+    return Response.json({ status: "ensured", sessionStatus: result.status });
+  }
+}
+
+interface InitializationFingerprintInput {
+  body: SessionBootstrapRequest;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string | null;
+  repositories: RepositoryRef[];
+  model: string;
+  reasoningEffort: string | null;
+  sandboxSettings: string | null;
+  encryptedToken: string | null;
+}
+
+interface PreparedSessionBootstrap {
+  repoOwner: string | null;
+  repoName: string | null;
+  hasRepoOwner: boolean;
+  baseBranch: string | null;
+  repositories: RepositoryRef[];
+  model: string;
+  reasoningEffort: string | null;
+  sandboxSettings: string | null;
+}
+
+function prepareSessionBootstrap(
+  body: SessionBootstrapRequest,
+  log: Logger
+): PreparedSessionBootstrap | Response {
+  const repoOwner = body.repoOwner?.trim() || null;
+  const repoName = body.repoName?.trim() || null;
+  const hasRepoOwner = repoOwner !== null;
+  const hasRepoName = repoName !== null;
+  const hasRepoId = body.repoId != null;
+  if (
+    hasRepoOwner !== hasRepoName ||
+    (!hasRepoOwner && hasRepoId) ||
+    (hasRepoOwner && !hasRepoId)
+  ) {
+    return Response.json(
+      { error: "Repository context must include repoOwner, repoName, and repoId together" },
+      { status: 400 }
+    );
+  }
+  const baseBranch = hasRepoOwner ? body.branch || body.defaultBranch || DEFAULT_BASE_BRANCH : null;
+  const requestedRepositories = body.repositories ?? [];
+  if (requestedRepositories.length > 0) {
+    const primary = requestedRepositories[0];
+    if (
+      !hasRepoOwner ||
+      primary.repoOwner !== repoOwner ||
+      primary.repoName !== repoName ||
+      primary.repoId !== body.repoId ||
+      primary.baseBranch !== baseBranch
+    ) {
+      return Response.json(
+        { error: "repositories[0] must match the scalar repository mirror" },
+        { status: 400 }
+      );
+    }
+  } else if (hasRepoOwner && body.repositories !== undefined) {
+    return Response.json(
+      { error: "repositories must include the scalar repository" },
+      { status: 400 }
+    );
+  }
+  const model = getValidModelOrDefault(body.model);
+  if (body.model && !isValidModel(body.model)) {
+    log.warn("Invalid model name, using default", {
+      requested_model: body.model,
+      default_model: model,
+    });
+  }
+  return {
+    repoOwner,
+    repoName,
+    hasRepoOwner,
+    baseBranch,
+    repositories:
+      requestedRepositories.length > 0
+        ? requestedRepositories
+        : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
+          ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
+          : [],
+    model,
+    reasoningEffort: validateReasoningEffort(model, body.reasoningEffort ?? undefined, log),
+    sandboxSettings: body.sandboxSettings
+      ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+      : null,
+  };
+}
+
+async function createInitializationFingerprint(
+  input: InitializationFingerprintInput
+): Promise<string> {
+  const { body } = input;
+  const canonical = JSON.stringify({
+    sessionName: body.sessionName,
+    title: body.title ?? null,
+    repoOwner: input.repoOwner,
+    repoName: input.repoName,
+    repoId: body.repoId ?? null,
+    baseBranch: input.baseBranch,
+    repositories: input.repositories,
+    environmentId: body.environmentId ?? null,
+    model: input.model,
+    reasoningEffort: input.reasoningEffort,
+    codeServerEnabled: body.codeServerEnabled ?? false,
+    vncEnabled: body.vncEnabled ?? false,
+    sandboxSettings: input.sandboxSettings,
+    userId: body.userId,
+    canonicalUserId: body.canonicalUserId ?? null,
+    scmLogin: body.scmLogin ?? null,
+    scmName: body.scmName ?? null,
+    scmEmail: body.scmEmail ?? null,
+    scmUserId: body.scmUserId ?? null,
+    scmCredential: body.scmToken ?? input.encryptedToken,
+    scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
+    scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
+    parentSessionId: body.parentSessionId ?? null,
+    spawnSource: body.spawnSource ?? "user",
+    spawnDepth: body.spawnDepth ?? 0,
+    requestFingerprint: body.requestFingerprint ?? null,
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

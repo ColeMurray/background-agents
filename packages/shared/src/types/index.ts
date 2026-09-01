@@ -169,6 +169,9 @@ export type {
 } from "./automations";
 export type { AutomationTriggerType } from "../triggers/types";
 
+export * from "./cli-auth";
+export * from "./external-session-api";
+
 export {
   MAX_AUDIT_EVENT_TIMESTAMP_MS,
   auditEventTimestampSchema,

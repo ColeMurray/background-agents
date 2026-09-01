@@ -6,6 +6,7 @@ import {
   promptContentSchema,
 } from "@open-inspect/shared/types/prompts";
 import { z } from "zod";
+import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 
 export const enqueuePromptRequestSchema = z
   .object({
@@ -15,6 +16,7 @@ export const enqueuePromptRequestSchema = z
     source: messageSourceSchema,
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
+    clientRequestId: clientRequestIdSchema.optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
     // Trusted SCM enrichment resolved by the router at prompt time.

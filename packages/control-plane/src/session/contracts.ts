@@ -4,6 +4,13 @@
  */
 
 import { z } from "zod";
+import { eventResponseSchema } from "@open-inspect/shared/types/sandbox-events";
+import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
+
+export const sessionBootstrapEnsureResponseSchema = z.strictObject({
+  status: z.literal("ensured"),
+  sessionStatus: sessionStatusSchema,
+});
 
 /** SCM display fields forwarded from the authenticated route to the Session runtime. */
 export const sessionScmDisplayFieldsSchema = z.object({
@@ -14,6 +21,7 @@ export const sessionScmDisplayFieldsSchema = z.object({
 
 export const SessionInternalPaths = {
   init: "/internal/init",
+  ensureBootstrap: "/internal/ensure-bootstrap",
   state: "/internal/state",
   snapshot: "/internal/snapshot",
   sandboxAccess: "/internal/sandbox-access",
@@ -26,6 +34,7 @@ export const SessionInternalPaths = {
   attachments: "/internal/attachments",
   participants: "/internal/participants",
   events: "/internal/events",
+  eventChanges: "/internal/event-changes",
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
   createPr: "/internal/create-pr",
@@ -55,6 +64,33 @@ export const SessionInternalPaths = {
   diffResolveFile: "/internal/diff-resolve-file",
   diffRetry: "/internal/diff-retry",
 } as const;
+
+export const sessionEventChangePageSchema = z
+  .strictObject({
+    changes: z.array(
+      z.discriminatedUnion("kind", [
+        z.strictObject({
+          kind: z.literal("upsert"),
+          revision: z.number().int().positive(),
+          event: eventResponseSchema,
+        }),
+        z.strictObject({
+          kind: z.literal("delete"),
+          revision: z.number().int().positive(),
+          eventId: z.string().min(1),
+        }),
+      ])
+    ),
+    checkpoint: z.number().int().nonnegative(),
+    cursor: z.string().min(1).optional(),
+    hasMore: z.boolean(),
+  })
+  .refine((page) => !page.hasMore || page.cursor !== undefined, {
+    message: "cursor is required when hasMore is true",
+    path: ["cursor"],
+  });
+
+export type SessionEventChangePage = z.infer<typeof sessionEventChangePageSchema>;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];
 

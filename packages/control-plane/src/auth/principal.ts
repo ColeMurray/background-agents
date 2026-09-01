@@ -26,15 +26,19 @@ export interface ResolvedIdentity {
   participantUserId: string;
 }
 
-/** Provider-independent evidence used to authenticate a browser request. */
-export interface AuthenticationContext {
-  mechanism: "browser_session";
-  credentialId: string;
-  channel: {
-    kind: "sig1";
-    service: "web";
-  };
-}
+/** Provider-independent evidence describing how a human principal authenticated. */
+export type AuthenticationContext =
+  | {
+      mechanism: "browser_session";
+      credentialId: string;
+      channel: { kind: "sig1"; service: "web" };
+    }
+  | {
+      mechanism: "cli_credential";
+      credentialId: string;
+      expiresAt: number;
+      channel: { kind: "direct_bearer" };
+    };
 
 export type Principal =
   | { kind: "user"; userId: string }

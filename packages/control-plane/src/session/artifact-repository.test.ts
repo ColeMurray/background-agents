@@ -74,12 +74,20 @@ describe("ArtifactRepository", () => {
 
   it("lists artifacts in descending creation order", () => {
     repository.listArtifacts();
-    expect(mock.calls[0].query).toContain("ORDER BY created_at DESC");
+    expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
   });
 
   it("returns an empty artifact list when none exist", () => {
-    mock.setRows(`SELECT * FROM artifacts ORDER BY created_at DESC`, []);
+    mock.setRows(`SELECT * FROM artifacts  ORDER BY created_at DESC, id DESC`, []);
     expect(repository.listArtifacts()).toEqual([]);
+  });
+
+  it("uses both creation time and id for a page continuation", () => {
+    repository.listArtifacts({ cursor: { createdAt: 1000, id: "art-2" }, limit: 2 });
+
+    expect(mock.calls[0].query).toContain("created_at = ? AND id < ?");
+    expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+    expect(mock.calls[0].params).toEqual([1000, 1000, "art-2", 3]);
   });
 
   it("queries artifacts by id", () => {

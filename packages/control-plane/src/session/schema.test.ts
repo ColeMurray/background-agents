@@ -4,6 +4,7 @@
 
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { EventRepository } from "./event-repository";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 
@@ -587,6 +588,238 @@ describe("applyMigrations", () => {
           .prepare("INSERT INTO messages (id, status, created_at, started_at) VALUES (?, ?, ?, ?)")
           .run("queued", "pending", 160, null)
       ).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("backfills monotonic event change revisions", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 47);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        timeline_sequence INTEGER NOT NULL UNIQUE
+      )`);
+      db.exec(`INSERT INTO events (id, timeline_sequence) VALUES ('first', 2), ('second', 7)`);
+
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+
+      expect(
+        db.prepare("SELECT id, change_revision FROM events ORDER BY change_revision").all()
+      ).toEqual([
+        { id: "first", change_revision: 2 },
+        { id: "second", change_revision: 7 },
+      ]);
+      expect(db.prepare("SELECT revision FROM event_revision_state WHERE id = 1").get()).toEqual({
+        revision: 7,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("migrates current events into the immutable journal deterministically", () => {
+    const revisionMigration = MIGRATIONS.find((entry) => entry.id === 47)!;
+    const journalMigration = MIGRATIONS.find((entry) => entry.id === 48)!;
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        data TEXT NOT NULL,
+        message_id TEXT,
+        created_at INTEGER NOT NULL,
+        timeline_sequence INTEGER NOT NULL UNIQUE
+      )`);
+      db.exec(`INSERT INTO events VALUES
+        ('later', 'token', '{}', NULL, 20, 1),
+        ('earlier', 'token', '{}', NULL, 10, 2)`);
+      (revisionMigration.run as (sql: SqlStorage) => void)(sql);
+      (journalMigration.run as (sql: SqlStorage) => void)(sql);
+      expect(() => (journalMigration.run as (sql: SqlStorage) => void)(sql)).not.toThrow();
+
+      expect(
+        db.prepare("SELECT revision, kind, event_id FROM event_changes ORDER BY revision").all()
+      ).toEqual([
+        { revision: 1, kind: "upsert", event_id: "earlier" },
+        { revision: 2, kind: "upsert", event_id: "later" },
+      ]);
+      expect(db.prepare("PRAGMA table_info(events)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "change_revision" })])
+      );
+      expect(() =>
+        db.prepare("INSERT INTO event_changes (kind, event_id) VALUES ('upsert', 'invalid')").run()
+      ).toThrow();
+      expect(
+        db.prepare("SELECT length(cursor_scope) AS length FROM event_feed_state").get()
+      ).toEqual({ length: 32 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves legacy versions and safely retries the bounded-journal migration", () => {
+    const revisionMigration = MIGRATIONS.find((entry) => entry.id === 47)!;
+    const journalMigration = MIGRATIONS.find((entry) => entry.id === 48)!;
+    const boundedMigration = MIGRATIONS.find((entry) => entry.id === 50)!;
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        data TEXT NOT NULL,
+        message_id TEXT,
+        created_at INTEGER NOT NULL,
+        timeline_sequence INTEGER NOT NULL UNIQUE
+      )`);
+      db.exec(`INSERT INTO events VALUES
+        ('first', 'token', '{"content":"latest"}', 'message-1', 10, 1),
+        ('second', 'tool_call', '{}', 'message-1', 20, 2)`);
+      (revisionMigration.run as (sql: SqlStorage) => void)(sql);
+      (journalMigration.run as (sql: SqlStorage) => void)(sql);
+      db.exec(`INSERT INTO event_changes
+        (kind, event_id, type, data, message_id, created_at, timeline_sequence)
+        VALUES ('upsert', 'first', 'token', '{"content":"latest"}', 'message-1', 10, 1)`);
+
+      const run = boundedMigration.run as (sql: SqlStorage) => void;
+      run(sql);
+      db.exec(`ALTER TABLE event_changes RENAME TO event_changes_versioned`);
+      expect(() => run(sql)).not.toThrow();
+
+      expect(
+        db
+          .prepare(`SELECT event_id, revision, kind, data FROM event_changes ORDER BY revision ASC`)
+          .all()
+      ).toEqual([
+        {
+          event_id: "first",
+          revision: 1,
+          kind: "upsert",
+          data: '{"content":"latest"}',
+        },
+        { event_id: "second", revision: 2, kind: "upsert", data: "{}" },
+        {
+          event_id: "first",
+          revision: 3,
+          kind: "upsert",
+          data: '{"content":"latest"}',
+        },
+      ]);
+      expect(
+        db
+          .prepare(
+            `SELECT current_revision, retention_floor FROM event_feed_state WHERE singleton = 1`
+          )
+          .get()
+      ).toEqual({ current_revision: 3, retention_floor: 0 });
+      expect(db.prepare(`SELECT id, change_revision FROM events ORDER BY id`).all()).toEqual([
+        { id: "first", change_revision: 3 },
+        { id: "second", change_revision: 2 },
+      ]);
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM event_changes`).get()).toEqual({ count: 3 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("gives fresh and migrated databases the same event feed columns", () => {
+    const fresh = new DatabaseSync(":memory:");
+    const migrated = new DatabaseSync(":memory:");
+    try {
+      initSchema(createDatabaseSql(fresh));
+      migrated.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        data TEXT NOT NULL,
+        message_id TEXT,
+        created_at INTEGER NOT NULL,
+        timeline_sequence INTEGER NOT NULL UNIQUE
+      )`);
+      const sql = createDatabaseSql(migrated);
+      for (const id of [47, 48, 50]) {
+        const migration = MIGRATIONS.find((entry) => entry.id === id)!;
+        (migration.run as (sql: SqlStorage) => void)(sql);
+      }
+
+      for (const table of ["events", "event_changes", "event_feed_state"]) {
+        const columns = (db: DatabaseSync) =>
+          db
+            .prepare(`PRAGMA table_info(${table})`)
+            .all()
+            .map(({ name, type, notnull, dflt_value, pk }) => ({
+              name,
+              type,
+              notnull,
+              dflt_value,
+              pk,
+            }));
+        expect(columns(migrated)).toEqual(columns(fresh));
+      }
+    } finally {
+      fresh.close();
+      migrated.close();
+    }
+  });
+
+  it("rotates scope and rejects cursors from the prior coalesced journal", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 51)!;
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    const oldScope = "a".repeat(32);
+    try {
+      db.exec(`CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        data TEXT NOT NULL,
+        message_id TEXT,
+        created_at INTEGER NOT NULL,
+        timeline_sequence INTEGER NOT NULL UNIQUE,
+        change_revision INTEGER
+      );
+      CREATE TABLE event_feed_state (
+        singleton INTEGER PRIMARY KEY,
+        cursor_scope TEXT NOT NULL,
+        current_revision INTEGER NOT NULL DEFAULT 0,
+        retention_floor INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE event_changes (
+        event_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        type TEXT,
+        data TEXT,
+        message_id TEXT,
+        created_at INTEGER,
+        timeline_sequence INTEGER,
+        changed_at INTEGER NOT NULL
+      );
+      INSERT INTO event_feed_state VALUES (1, '${oldScope}', 2, 0);
+      INSERT INTO events VALUES ('event-1', 'token', '{}', NULL, 1, 1, 2);
+      INSERT INTO event_changes VALUES
+        ('event-1', 2, 'upsert', 'token', '{}', NULL, 1, 1, 1);`);
+
+      (migration.run as (sql: SqlStorage) => void)(sql);
+
+      const state = db
+        .prepare(`SELECT cursor_scope, current_revision, retention_floor FROM event_feed_state`)
+        .get() as { cursor_scope: string; current_revision: number; retention_floor: number };
+      expect(state).toMatchObject({ current_revision: 2, retention_floor: 2 });
+      expect(state.cursor_scope).not.toBe(oldScope);
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM event_changes`).get()).toEqual({ count: 0 });
+
+      const repository = new EventRepository(sql, (closure) => closure());
+      expect(() =>
+        repository.listEventChanges({
+          cursor: { mode: "changes", scope: oldScope, checkpoint: 2, revision: 1 },
+          limit: 10,
+        })
+      ).toThrow("Invalid event feed cursor");
     } finally {
       db.close();
     }

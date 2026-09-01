@@ -23,9 +23,9 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
  * - Idempotent: re-running a completed merge is a zero-count no-op. The
  *   execute path requires an atomic SqlDatabase batch so no partial graph can
  *   become externally visible.
- * - Browser sessions (`auth_sessions`) issued to the loser are deleted. An
- *   issued bearer credential is never rewritten to authenticate as another
- *   canonical user.
+ * - Browser sessions (`auth_sessions`) issued to the loser are deleted. CLI
+ *   credentials transfer to the canonical survivor without changing their
+ *   active/revoked state.
  * - Verification never transfers to an unproven address: the loser's email
  *   (and its `email_verified` flag) backfills the survivor only when the
  *   survivor has no email of its own.
@@ -62,6 +62,8 @@ const USER_MERGE_COUNT_KEYS = [
   "readStatesRepointed",
   "sessionsRepointed",
   "authSessionsDeleted",
+  "cliCredentialsRepointed",
+  "cliApprovedAttemptsRepointed",
   "automationsOwnedRepointed",
   "automationsCreatedRepointed",
   "scmTokensRepointed",
@@ -175,6 +177,12 @@ const BEFORE_SKILL_PROFILE_OPERATIONS = [
   }),
   regularRepoint("sessionsRepointed", "sessions"),
   regularDelete("authSessionsDeleted", "auth_sessions", "userId"),
+  regularRepoint("cliCredentialsRepointed", "cli_credentials"),
+  regularRepoint(
+    "cliApprovedAttemptsRepointed",
+    "cli_device_authorization_attempts",
+    "approved_user_id"
+  ),
   regularRepoint("automationsOwnedRepointed", "automations"),
   regularRepoint("automationsCreatedRepointed", "automations", "created_by"),
   regularRepoint("scmTokensRepointed", "user_scm_tokens"),

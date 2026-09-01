@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
-import { encryptToken, decryptToken, generateEncryptionKey, generateId, hashToken } from "./crypto";
+import {
+  encryptToken,
+  decryptToken,
+  generateEncryptionKey,
+  generateId,
+  hashToken,
+  hmacToken,
+} from "./crypto";
 
 describe("crypto", () => {
   describe("generateEncryptionKey", () => {
@@ -150,6 +157,18 @@ describe("crypto", () => {
 
       // SHA-256 of empty string is a known value
       expect(hash).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    });
+  });
+
+  describe("hmacToken", () => {
+    it("is deterministic for one installation key and separated across keys", async () => {
+      const value = "external-session\0user-1\0request-1";
+      const key = generateEncryptionKey();
+      const first = await hmacToken(value, key);
+
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
+      expect(await hmacToken(value, key)).toBe(first);
+      expect(await hmacToken(value, generateEncryptionKey())).not.toBe(first);
     });
   });
 

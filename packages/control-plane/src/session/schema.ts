@@ -47,6 +47,62 @@ const SESSION_ALARM_STATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_alarm_
   cancelled INTEGER NOT NULL DEFAULT 0
 );`;
 
+const EVENT_CHANGES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS event_changes (
+  revision INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('upsert', 'delete')),
+  event_id TEXT NOT NULL,
+  type TEXT,
+  data TEXT,
+  message_id TEXT,
+  created_at INTEGER,
+  timeline_sequence INTEGER,
+  CHECK (
+    (kind = 'upsert' AND type IS NOT NULL AND data IS NOT NULL
+      AND created_at IS NOT NULL AND timeline_sequence IS NOT NULL)
+    OR
+    (kind = 'delete' AND type IS NULL AND data IS NULL
+      AND message_id IS NULL AND created_at IS NULL AND timeline_sequence IS NULL)
+  )
+)`;
+
+const EVENT_FEED_STATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS event_feed_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  cursor_scope TEXT NOT NULL
+)`;
+
+const CURRENT_EVENT_CHANGES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS event_changes (
+  revision INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('upsert', 'delete')),
+  event_id TEXT NOT NULL,
+  type TEXT,
+  data TEXT,
+  message_id TEXT,
+  created_at INTEGER,
+  timeline_sequence INTEGER,
+  changed_at INTEGER NOT NULL,
+  journal_bytes INTEGER NOT NULL CHECK (journal_bytes >= 0),
+  is_baseline INTEGER NOT NULL DEFAULT 0 CHECK (is_baseline IN (0, 1)),
+  CHECK (
+    (kind = 'upsert' AND type IS NOT NULL AND data IS NOT NULL
+      AND created_at IS NOT NULL AND timeline_sequence IS NOT NULL)
+    OR
+    (kind = 'delete' AND type IS NULL AND data IS NULL
+      AND message_id IS NULL AND created_at IS NULL AND timeline_sequence IS NULL)
+  )
+)`;
+
+const CURRENT_EVENT_FEED_STATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS event_feed_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  cursor_scope TEXT NOT NULL,
+  current_revision INTEGER NOT NULL DEFAULT 0,
+  retention_floor INTEGER NOT NULL DEFAULT 0
+)`;
+
+const SESSION_BOOTSTRAP_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_bootstrap (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  initialization_fingerprint TEXT NOT NULL
+)`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -135,8 +191,16 @@ CREATE TABLE IF NOT EXISTS events (
   data TEXT NOT NULL,                               -- JSON payload
   message_id TEXT,
   created_at INTEGER NOT NULL,
-  timeline_sequence INTEGER NOT NULL UNIQUE
+  timeline_sequence INTEGER NOT NULL UNIQUE,
+  change_revision INTEGER
 );
+
+${CURRENT_EVENT_CHANGES_TABLE_SQL};
+${CURRENT_EVENT_FEED_STATE_TABLE_SQL};
+INSERT OR IGNORE INTO event_feed_state (singleton, cursor_scope)
+VALUES (1, lower(hex(randomblob(16))));
+
+${SESSION_BOOTSTRAP_TABLE_SQL};
 
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -226,11 +290,18 @@ CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence);
+CREATE INDEX IF NOT EXISTS idx_event_changes_event_revision
+ON event_changes(event_id, revision);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
 import { createLogger } from "../logger";
 import type { SqlStorage } from "./sql-storage";
+import {
+  EVENT_CHANGE_JOURNAL_BYTE_LIMIT,
+  EVENT_CHANGE_RETENTION_LIMIT,
+  EVENT_CHANGE_RETENTION_MS,
+} from "./types";
 
 const schemaLog = createLogger("schema");
 
@@ -630,7 +701,238 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       );
     },
   },
+  {
+    id: 47,
+    description: "Add monotonic event change revisions",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE events ADD COLUMN change_revision INTEGER`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS event_revision_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL
+      )`);
+      sql.exec(`UPDATE events SET change_revision = timeline_sequence
+        WHERE change_revision IS NULL`);
+      sql.exec(`INSERT OR IGNORE INTO event_revision_state (id, revision)
+        SELECT 1, COALESCE(MAX(change_revision), 0) FROM events`);
+      sql.exec(`UPDATE event_revision_state SET revision =
+        MAX(revision, COALESCE((SELECT MAX(change_revision) FROM events), 0)) WHERE id = 1`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_change_revision
+        ON events(change_revision)`);
+    },
+  },
+  {
+    id: 48,
+    description: "Add immutable event change journal",
+    run: (sql) => {
+      sql.exec(EVENT_CHANGES_TABLE_SQL);
+      sql.exec(EVENT_FEED_STATE_TABLE_SQL);
+      sql.exec(`INSERT OR IGNORE INTO event_feed_state (singleton, cursor_scope)
+        VALUES (1, lower(hex(randomblob(16))))`);
+      sql.exec(`INSERT INTO event_changes
+        (kind, event_id, type, data, message_id, created_at, timeline_sequence)
+        SELECT 'upsert', id, type, data, message_id, created_at, timeline_sequence
+        FROM events
+        WHERE NOT EXISTS (SELECT 1 FROM event_changes)
+        ORDER BY created_at ASC, timeline_sequence ASC`);
+      sql.exec(`DROP INDEX IF EXISTS idx_events_change_revision`);
+      if (tableHasColumn(sql, "events", "change_revision")) {
+        sql.exec(`ALTER TABLE events DROP COLUMN change_revision`);
+      }
+      sql.exec(`DROP TABLE IF EXISTS event_revision_state`);
+    },
+  },
+  {
+    id: 49,
+    description: "Persist canonical session initialization fingerprint",
+    run: SESSION_BOOTSTRAP_TABLE_SQL,
+  },
+  {
+    id: 50,
+    description: "Bound the immutable event version journal",
+    run: migrateEventVersionJournal,
+  },
+  {
+    id: 51,
+    description: "Restore immutable event versions after journal compaction",
+    run: migrateEventVersionJournal,
+  },
 ];
+
+function migrateEventVersionJournal(sql: SqlStorage): void {
+  if (!tableHasColumn(sql, "events", "change_revision")) {
+    runMigration(sql, `ALTER TABLE events ADD COLUMN change_revision INTEGER`);
+  }
+  if (!tableHasColumn(sql, "event_feed_state", "current_revision")) {
+    runMigration(
+      sql,
+      `ALTER TABLE event_feed_state ADD COLUMN current_revision INTEGER NOT NULL DEFAULT 0`
+    );
+  }
+  if (!tableHasColumn(sql, "event_feed_state", "retention_floor")) {
+    runMigration(
+      sql,
+      `ALTER TABLE event_feed_state ADD COLUMN retention_floor INTEGER NOT NULL DEFAULT 0`
+    );
+  }
+
+  const hasEventChanges = tableExists(sql, "event_changes");
+  const hasVersionedChanges = tableExists(sql, "event_changes_versioned");
+  const hasCompactedChanges = tableExists(sql, "event_changes_compacted");
+  if (!hasEventChanges && !hasVersionedChanges && !hasCompactedChanges) return;
+  if (!hasEventChanges && hasVersionedChanges) {
+    sql.exec(`ALTER TABLE event_changes_versioned RENAME TO event_changes`);
+  } else if (!hasEventChanges && hasCompactedChanges) {
+    sql.exec(`ALTER TABLE event_changes_compacted RENAME TO event_changes`);
+  }
+
+  if (
+    !tableHasColumn(sql, "event_changes", "journal_bytes") ||
+    !tableHasColumn(sql, "event_changes", "is_baseline")
+  ) {
+    const hasChangedAt = tableHasColumn(sql, "event_changes", "changed_at");
+    const hasJournalBytes = tableHasColumn(sql, "event_changes", "journal_bytes");
+    const hasBaselineMarker = tableHasColumn(sql, "event_changes", "is_baseline");
+    const historyWasCoalesced = hasChangedAt && !hasJournalBytes;
+    const currentRevision =
+      (
+        sql
+          .exec(`SELECT COALESCE(MAX(revision), 0) AS revision FROM event_changes`)
+          .toArray()[0] as { revision: number } | undefined
+      )?.revision ?? 0;
+    const existingFloor =
+      (
+        sql
+          .exec(`SELECT retention_floor FROM event_feed_state WHERE singleton = 1`)
+          .toArray()[0] as { retention_floor: number } | undefined
+      )?.retention_floor ?? 0;
+    const countFloor = Math.max(existingFloor, currentRevision - EVENT_CHANGE_RETENTION_LIMIT);
+    sql.exec(`DROP TABLE IF EXISTS event_changes_versioned`);
+    sql.exec(CURRENT_EVENT_CHANGES_TABLE_SQL.replace("event_changes", "event_changes_versioned"));
+    sql.exec(
+      `INSERT INTO event_changes_versioned
+       (revision, kind, event_id, type, data, message_id, created_at, timeline_sequence,
+        changed_at, journal_bytes, is_baseline)
+       SELECT revision, kind, event_id, type, data, message_id, created_at, timeline_sequence,
+         ${hasChangedAt ? "changed_at" : "?"},
+         ${
+           hasJournalBytes
+             ? "journal_bytes"
+             : `64 + length(CAST(event_id AS BLOB)) + COALESCE(length(CAST(type AS BLOB)), 0)
+           + COALESCE(length(CAST(data AS BLOB)), 0)
+           + COALESCE(length(CAST(message_id AS BLOB)), 0)`
+         },
+         ${hasBaselineMarker ? "is_baseline" : "0"}
+       FROM event_changes
+       WHERE revision > ? OR revision IN (
+         SELECT MAX(revision) FROM event_changes
+         WHERE revision <= ? GROUP BY event_id
+       )
+       ORDER BY revision ASC`,
+      ...(hasChangedAt ? [] : [Date.now()]),
+      countFloor,
+      countFloor
+    );
+    const byteFloor =
+      (
+        sql
+          .exec(
+            `SELECT MAX(revision) AS revision FROM (
+            SELECT revision, SUM(journal_bytes) OVER (ORDER BY revision DESC) AS retained_bytes
+            FROM event_changes_versioned
+          ) WHERE retained_bytes > ?`,
+            EVENT_CHANGE_JOURNAL_BYTE_LIMIT
+          )
+          .toArray()[0] as { revision: number | null } | undefined
+      )?.revision ?? 0;
+    const timeFloor =
+      (
+        sql
+          .exec(
+            `SELECT MAX(revision) AS revision FROM event_changes_versioned WHERE changed_at <= ?`,
+            Date.now() - EVENT_CHANGE_RETENTION_MS
+          )
+          .toArray()[0] as { revision: number | null } | undefined
+      )?.revision ?? 0;
+    const retentionFloor = Math.max(countFloor, byteFloor, timeFloor);
+    if (retentionFloor > 0) {
+      sql.exec(
+        `UPDATE event_changes_versioned SET is_baseline = 1
+        WHERE revision IN (
+          SELECT MAX(revision) FROM event_changes_versioned
+          WHERE revision <= ? GROUP BY event_id
+        )`,
+        retentionFloor
+      );
+      sql.exec(
+        `DELETE FROM event_changes_versioned
+        WHERE revision <= ? AND is_baseline = 0`,
+        retentionFloor
+      );
+    }
+    const retained = (sql
+      .exec(
+        `SELECT COALESCE(SUM(journal_bytes), 0) AS total_bytes,
+        COUNT(*) AS total_count,
+        COALESCE(SUM(CASE WHEN is_baseline = 1 THEN journal_bytes ELSE 0 END), 0)
+          AS baseline_bytes
+        FROM event_changes_versioned`
+      )
+      .toArray()[0] as
+      | { total_bytes: number; total_count: number; baseline_bytes: number }
+      | undefined) ?? { total_bytes: 0, total_count: 0, baseline_bytes: 0 };
+    const mustRotateHistory =
+      historyWasCoalesced ||
+      retained.baseline_bytes > EVENT_CHANGE_JOURNAL_BYTE_LIMIT ||
+      retained.total_bytes > EVENT_CHANGE_JOURNAL_BYTE_LIMIT ||
+      retained.total_count > EVENT_CHANGE_RETENTION_LIMIT;
+    sql.exec(
+      `UPDATE event_feed_state SET
+         current_revision = MAX(current_revision, ?),
+         retention_floor = MAX(retention_floor, ?)
+       WHERE singleton = 1`,
+      currentRevision,
+      retentionFloor
+    );
+    sql.exec(`DROP TABLE event_changes`);
+    sql.exec(`ALTER TABLE event_changes_versioned RENAME TO event_changes`);
+    if (mustRotateHistory) {
+      sql.exec(`UPDATE event_feed_state SET
+        cursor_scope = lower(hex(randomblob(16))),
+        retention_floor = current_revision
+        WHERE singleton = 1`);
+      sql.exec(`DELETE FROM event_changes`);
+    }
+  }
+
+  const currentRevision =
+    (
+      sql.exec(`SELECT COALESCE(MAX(revision), 0) AS revision FROM event_changes`).toArray()[0] as
+        | { revision: number }
+        | undefined
+    )?.revision ?? 0;
+  sql.exec(
+    `UPDATE event_feed_state SET current_revision = MAX(
+       current_revision, ?, COALESCE((SELECT MAX(change_revision) FROM events), 0)
+     ) WHERE singleton = 1`,
+    currentRevision
+  );
+  sql.exec(`UPDATE events
+    SET change_revision = (
+      SELECT MAX(revision) FROM event_changes WHERE event_id = events.id AND kind = 'upsert'
+    ) WHERE change_revision IS NULL`);
+  sql.exec(`UPDATE events
+    SET change_revision =
+      (SELECT current_revision FROM event_feed_state WHERE singleton = 1) + timeline_sequence
+    WHERE change_revision IS NULL`);
+  sql.exec(`UPDATE event_feed_state
+    SET current_revision = MAX(
+      current_revision, COALESCE((SELECT MAX(change_revision) FROM events), 0)
+    ) WHERE singleton = 1`);
+  sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_change_revision
+    ON events(change_revision)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_event_changes_event_revision
+    ON event_changes(event_id, revision)`);
+}
 
 /**
  * Run a migration statement, only ignoring "column already exists" errors.
@@ -648,6 +950,19 @@ function runMigration(sql: SqlStorage, statement: string): void {
     schemaLog.error("Migration failed", { statement, error: msg });
     throw e;
   }
+}
+
+function tableHasColumn(sql: SqlStorage, table: string, column: string): boolean {
+  return (sql.exec(`PRAGMA table_info(${table})`).toArray() as Array<{ name: string }>).some(
+    (entry) => entry.name === column
+  );
+}
+
+function tableExists(sql: SqlStorage, table: string): boolean {
+  return Boolean(
+    sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table).toArray()
+      .length
+  );
 }
 
 /**

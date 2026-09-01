@@ -128,6 +128,10 @@ export const sessionAttachmentRowSchema = z.object({
 
 export type SessionAttachmentRow = z.infer<typeof sessionAttachmentRowSchema>;
 
+export const EVENT_CHANGE_RETENTION_LIMIT = 50_000;
+export const EVENT_CHANGE_RETENTION_MS = 24 * 60 * 60 * 1000;
+export const EVENT_CHANGE_JOURNAL_BYTE_LIMIT = 16 * 1024 * 1024;
+
 export interface EventRow {
   id: string;
   type: EventType;
@@ -135,6 +139,21 @@ export interface EventRow {
   message_id: string | null;
   created_at: number;
   timeline_sequence?: number;
+  change_revision?: number;
+}
+
+export interface EventChangeRow {
+  revision: number;
+  kind: "upsert" | "delete";
+  event_id: string;
+  type: EventType | null;
+  data: string | null;
+  message_id: string | null;
+  created_at: number | null;
+  timeline_sequence: number | null;
+  changed_at?: number;
+  journal_bytes?: number;
+  is_baseline?: number;
 }
 
 export interface ArtifactRow {

@@ -11,6 +11,7 @@ import type { SecretsWriteResult } from "./scoped-secrets";
 import { normalizeKey } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 import type { SqlDatabase } from "./sql-database";
+import { archiveManagedSecretStatements } from "./managed-secret-redaction-history";
 
 const log = createLogger("global-secrets");
 
@@ -25,8 +26,8 @@ export class GlobalSecretsStore {
     const normalized = prepareSecretsForWrite(secrets);
 
     const existingKeys = await this.db
-      .prepare("SELECT key FROM global_secrets")
-      .all<{ key: string }>();
+      .prepare("SELECT key, encrypted_value FROM global_secrets")
+      .all<{ key: string; encrypted_value: string }>();
     const existingKeySet = new Set((existingKeys.results || []).map((r) => r.key));
 
     const incomingKeys = Object.keys(normalized);
@@ -49,9 +50,13 @@ export class GlobalSecretsStore {
         )
         .bind(entry.key, entry.encryptedValue, now, now)
     );
+    const replaced = (existingKeys.results ?? []).filter(({ key }) => key in normalized);
 
     if (statements.length > 0) {
-      await this.db.batch(statements);
+      await this.db.batch([
+        ...archiveManagedSecretStatements(this.db, replaced, now),
+        ...statements,
+      ]);
     }
 
     return { created, updated, keys: incomingKeys };
@@ -85,10 +90,17 @@ export class GlobalSecretsStore {
   }
 
   async deleteSecret(key: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM global_secrets WHERE key = ?")
-      .bind(normalizeKey(key))
-      .run();
+    const normalized = normalizeKey(key);
+    const existing = (
+      await this.db
+        .prepare("SELECT key, encrypted_value FROM global_secrets")
+        .all<{ key: string; encrypted_value: string }>()
+    ).results?.find(({ key: candidate }) => candidate === normalized);
+    if (!existing) return false;
+    const [, result] = await this.db.batch([
+      ...archiveManagedSecretStatements(this.db, [existing], Date.now()),
+      this.db.prepare("DELETE FROM global_secrets WHERE key = ?").bind(normalized),
+    ]);
 
     return (result.meta?.changes ?? 0) > 0;
   }

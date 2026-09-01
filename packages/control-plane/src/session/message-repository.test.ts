@@ -14,6 +14,7 @@ function createMockSql() {
   const matchingData: Array<{ pattern: RegExp; rows: unknown[] }> = [];
   let oneValue: unknown = null;
   let rowsWritten = 0;
+  let eventRevision = 0;
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
@@ -25,7 +26,14 @@ function createMockSql() {
             data.get(query) ?? matchingData.find(({ pattern }) => pattern.test(query))?.rows ?? []
           );
         },
-        one: () => oneValue,
+        one: () =>
+          query.includes("RETURNING current_revision")
+            ? { current_revision: ++eventRevision }
+            : query.includes("AS time_floor")
+              ? { existing_floor: 0, time_floor: null, count_floor: 0, byte_floor: 0 }
+              : query.includes("AS baseline_bytes")
+                ? { baseline_bytes: 0, baseline_count: 0, total_bytes: 0, total_count: 0 }
+                : oneValue,
         get rowsWritten() {
           return consumed ? rowsWritten : 0;
         },
@@ -390,7 +398,9 @@ describe("MessageRepository", () => {
     expect(mock.calls[0].query).toContain("status = 'processing'");
     expect(mock.calls[0].query).toContain("status = 'pending'");
     expect(mock.calls[0].query).toContain("NOT EXISTS");
-    expect(mock.calls[1].params[0]).toBe("user_message:msg-1");
+    expect(mock.calls.find(({ query }) => query.includes("INSERT INTO events"))?.params[0]).toBe(
+      "user_message:msg-1"
+    );
   });
 
   it("does not create a user event when the processing claim is lost", () => {
@@ -410,10 +420,15 @@ describe("MessageRepository", () => {
     mock.setMatchingData(/UPDATE messages SET status = 'pending'[\s\S]*RETURNING id/, [
       { id: "msg-1" },
     ]);
+    mock.setMatchingData(/DELETE FROM events[\s\S]*RETURNING id/, [{ id: "user_message:msg-1" }]);
     repository.updateMessageToPending("msg-1");
     expect(mock.calls[0].query).toContain("status = 'pending'");
     expect(mock.calls[0].params).toEqual(["msg-1"]);
     expect(mock.calls[1].params).toEqual(["user_message:msg-1"]);
+    const journalWrite = mock.calls.find(({ query }) =>
+      query.includes("INSERT INTO event_changes")
+    );
+    expect(journalWrite?.params.slice(0, 2)).toEqual([1, "user_message:msg-1"]);
   });
 
   it("atomically records message completion and its canonical event", () => {
@@ -435,7 +450,9 @@ describe("MessageRepository", () => {
       status: "completed",
     });
     expect(transactionSyncCalls).toBe(1);
-    expect(mock.calls[2].params[0]).toBe("execution_complete:msg-1");
+    expect(mock.calls.find(({ query }) => query.includes("INSERT INTO events"))?.params[0]).toBe(
+      "execution_complete:msg-1"
+    );
   });
 
   it("does not complete a message in another state", () => {
@@ -467,10 +484,15 @@ describe("MessageRepository", () => {
   });
 
   it("builds message list pagination filters", () => {
-    repository.listMessages({ limit: 10, status: "pending", cursor: "5000" });
+    repository.listMessages({
+      limit: 10,
+      status: "pending",
+      cursor: { createdAt: 5000, id: "message-5" },
+    });
     expect(mock.calls[0].query).toContain("status = ?");
-    expect(mock.calls[0].query).toContain("created_at < ?");
-    expect(mock.calls[0].params).toEqual(["pending", 5000, 11]);
+    expect(mock.calls[0].query).toContain("created_at = ? AND id < ?");
+    expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+    expect(mock.calls[0].params).toEqual(["pending", 5000, 5000, "message-5", 11]);
   });
 
   it("selects the latest terminal message", () => {

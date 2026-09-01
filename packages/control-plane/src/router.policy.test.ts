@@ -35,16 +35,19 @@ describe("route policy table", () => {
           authentication
         );
       } else if (authorization.kind === "authenticated" || authorization.kind === "active-self") {
-        expect(authentication).toBe("user");
+        expect(["user", "external-user"]).toContain(authentication);
       } else if (authorization.kind === "service") {
         expect(authentication).toBe("service");
         expect(authorization.services.length).toBeGreaterThan(0);
       } else if (authorization.kind === "active-global") {
-        expect(["user", "user-or-service"]).toContain(authentication);
+        expect(["user", "external-user", "user-or-service"]).toContain(authentication);
       } else {
-        expect(["user", "user-or-service", "user-or-service-with-sandbox-fallback"]).toContain(
-          authentication
-        );
+        expect([
+          "user",
+          "external-user",
+          "user-or-service",
+          "user-or-service-with-sandbox-fallback",
+        ]).toContain(authentication);
         expect(authorization.allOf.length).toBeGreaterThan(0);
         for (const requirement of authorization.allOf) {
           if (requirement.kind === "automation") {
@@ -243,6 +246,13 @@ describe("route policy table", () => {
 
   it.each([
     ["GET", "/health", "public"],
+    ["POST", "/external/v1/cli/device-authorizations", "public"],
+    ["POST", "/external/v1/cli/device-authorizations/exchange", "public"],
+    ["POST", "/external/v1/cli/device-authorizations/revoke", "public"],
+    ["GET", "/external/v1/cli/device-authorizations/pending", "user"],
+    ["POST", "/external/v1/cli/device-authorizations/approve", "user"],
+    ["GET", "/external/v1/cli/me", "external-user"],
+    ["DELETE", "/external/v1/cli/credentials/current", "external-user"],
     ["POST", "/webhooks/sentry/automation-1", "handler-authenticated"],
     ["POST", "/webhooks/automation/automation-1", "handler-authenticated"],
     ["POST", "/image-builds/build-complete", "handler-authenticated"],
@@ -263,6 +273,39 @@ describe("route policy table", () => {
     ["PUT", "/model-provider-account-defaults/openai", "user"],
   ])("owns the auth policy for %s %s", (method, path, expectedKind) => {
     expect(routeFor(method, path)?.authentication.kind).toBe(expectedKind);
+  });
+
+  it("applies active-user policy to browser approval and CLI credential routes", () => {
+    expect(
+      routeFor("POST", "/external/v1/cli/device-authorizations/approve")?.authorization
+    ).toEqual({ kind: "active-self", auditAllowed: false });
+    expect(routeFor("GET", "/external/v1/cli/me")?.authorization).toEqual({
+      kind: "active-self",
+      auditAllowed: false,
+    });
+    expect(routeFor("DELETE", "/external/v1/cli/credentials/current")?.authorization).toEqual({
+      kind: "active-self",
+      auditAllowed: false,
+    });
+  });
+
+  it.each([
+    ["POST", "/external/v1/sessions", "sessions.create"],
+    ["GET", "/external/v1/sessions", "sessions.read"],
+    ["GET", "/external/v1/sessions/session-1", "sessions.read"],
+    ["POST", "/external/v1/sessions/session-1/messages", "sessions.collaborate"],
+    ["POST", "/external/v1/sessions/session-1/stop", "sessions.lifecycle"],
+    ["GET", "/external/v1/sessions/session-1/events", "sessions.read"],
+    ["GET", "/external/v1/sessions/session-1/wait", "sessions.read"],
+  ])("keeps external v1 session route %s %s CLI-only", (method, path, permission) => {
+    const route = routeFor(method, path);
+    expect(route?.authentication).toEqual({ kind: "external-user" });
+    expect(route?.supportedScmProviders).toBe("all");
+    expect(route?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission }],
+      service: { kind: "deny" },
+    });
   });
 
   it.each([
@@ -482,6 +525,25 @@ describe("route principal policy", () => {
     ],
   ])("accepts matching principals for %o", (authentication, principal) => {
     expect(enforceRoutePrincipal(authentication, principal)).toBeNull();
+  });
+
+  it("requires CLI credential provenance for external users", () => {
+    expect(
+      enforceRoutePrincipal(
+        { kind: "external-user" },
+        { kind: "user", userId: "user-1" },
+        {
+          mechanism: "cli_credential",
+          credentialId: "credential-1",
+          expiresAt: Date.now() + 1_000,
+          channel: { kind: "direct_bearer" },
+        }
+      )
+    ).toBeNull();
+    expect(
+      enforceRoutePrincipal({ kind: "external-user" }, { kind: "user", userId: "user-1" })?.response
+        .status
+    ).toBe(403);
   });
 
   it.each([

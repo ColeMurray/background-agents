@@ -24,6 +24,7 @@ import type { SecretsWriteResult } from "./scoped-secrets";
 import { normalizeKey, validateKey } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { archiveManagedSecretStatements } from "./managed-secret-redaction-history";
 
 const log = createLogger("environment-secrets");
 
@@ -54,9 +55,20 @@ export class EnvironmentSecretsStore {
     const statements = entries.map((entry) =>
       this.bindUpsert(environmentId, entry.key, entry.encryptedValue, now)
     );
+    const existing = await this.db
+      .prepare(
+        `SELECT key, encrypted_value FROM environment_secrets
+         WHERE environment_id = ?`
+      )
+      .bind(environmentId)
+      .all<{ key: string; encrypted_value: string }>();
+    const replaced = (existing.results ?? []).filter(({ key }) => key in normalized);
 
     if (statements.length > 0) {
-      await this.db.batch(statements);
+      await this.db.batch([
+        ...archiveManagedSecretStatements(this.db, replaced, now),
+        ...statements,
+      ]);
     }
 
     return { created, updated, keys: incomingKeys };
@@ -95,10 +107,20 @@ export class EnvironmentSecretsStore {
   }
 
   async deleteSecret(environmentId: string, key: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM environment_secrets WHERE environment_id = ? AND key = ?")
-      .bind(environmentId, normalizeKey(key))
-      .run();
+    const normalized = normalizeKey(key);
+    const existing = (
+      await this.db
+        .prepare("SELECT key, encrypted_value FROM environment_secrets WHERE environment_id = ?")
+        .bind(environmentId)
+        .all<{ key: string; encrypted_value: string }>()
+    ).results?.find(({ key: candidate }) => candidate === normalized);
+    if (!existing) return false;
+    const [, result] = await this.db.batch([
+      ...archiveManagedSecretStatements(this.db, [existing], Date.now()),
+      this.db
+        .prepare("DELETE FROM environment_secrets WHERE environment_id = ? AND key = ?")
+        .bind(environmentId, normalized),
+    ]);
 
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -151,8 +173,23 @@ export class EnvironmentSecretsStore {
       else created++;
       return this.bindUpsert(environmentId, row.key, row.encrypted_value, now);
     });
+    const replaced = await this.db
+      .prepare(
+        `SELECT key, encrypted_value FROM environment_secrets
+         WHERE environment_id = ?`
+      )
+      .bind(environmentId)
+      .all<{ key: string; encrypted_value: string }>();
+    const incomingKeys = new Set(rows.map(({ key }) => key));
 
-    await this.db.batch(statements);
+    await this.db.batch([
+      ...archiveManagedSecretStatements(
+        this.db,
+        (replaced.results ?? []).filter(({ key }) => incomingKeys.has(key)),
+        now
+      ),
+      ...statements,
+    ]);
     return { created, updated, keys: rows.map((r) => r.key) };
   }
 

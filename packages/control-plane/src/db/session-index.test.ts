@@ -25,6 +25,8 @@ type SessionRow = {
   message_count: number;
   pr_count: number;
   environment_id: string | null;
+  external_request_fingerprint: string | null;
+  external_bootstrap_snapshot: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -210,6 +212,8 @@ class FakeD1Database {
         scmLogin,
         userId,
         environmentId,
+        externalRequestFingerprint,
+        externalBootstrapSnapshot,
         createdAt,
         updatedAt,
       ] = args as [
@@ -227,6 +231,8 @@ class FakeD1Database {
         string | null,
         "user" | "agent" | "automation",
         number,
+        string | null,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -263,6 +269,8 @@ class FakeD1Database {
           message_count: 0,
           pr_count: 0,
           environment_id: environmentId,
+          external_request_fingerprint: externalRequestFingerprint,
+          external_bootstrap_snapshot: externalBootstrapSnapshot,
           created_at: createdAt,
           updated_at: updatedAt,
         });
@@ -503,6 +511,8 @@ describe("SessionIndexStore", () => {
       const result = await store.get("test-id");
       expect(result).toEqual({
         ...session,
+        externalRequestFingerprint: null,
+        externalBootstrapSnapshot: null,
         // Defaults applied for missing optional fields
         parentSessionId: null,
         spawnSource: "user",

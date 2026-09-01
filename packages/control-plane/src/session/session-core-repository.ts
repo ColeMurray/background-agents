@@ -61,6 +61,21 @@ export class SessionCoreRepository {
     return rows[0] ?? null;
   }
 
+  getInitializationFingerprint(): string | null {
+    const rows = this.sql
+      .exec(`SELECT initialization_fingerprint FROM session_bootstrap WHERE singleton = 1`)
+      .toArray() as Array<{ initialization_fingerprint: string }>;
+    return rows[0]?.initialization_fingerprint ?? null;
+  }
+
+  setInitializationFingerprint(fingerprint: string): void {
+    this.sql.exec(
+      `INSERT INTO session_bootstrap (singleton, initialization_fingerprint) VALUES (1, ?)
+       ON CONFLICT(singleton) DO UPDATE SET initialization_fingerprint = excluded.initialization_fingerprint`,
+      fingerprint
+    );
+  }
+
   upsertSession(data: UpsertSessionData): void {
     const hasRepoOwner = data.repoOwner !== null;
     const hasRepoName = data.repoName !== null;

@@ -10,6 +10,7 @@ describe("createSessionInternalRoutes", () => {
   it("builds the expected method/path mapping", () => {
     const routes = createSessionInternalRoutes({
       init: noopHandler(),
+      ensureBootstrap: noopHandler(),
       state: noopHandler(),
       snapshot: noopHandler(),
       sandboxAccess: noopHandler(),
@@ -22,6 +23,7 @@ describe("createSessionInternalRoutes", () => {
       recordAttachment: noopHandler(),
       listParticipants: noopHandler(),
       listEvents: noopHandler(),
+      listEventChanges: noopHandler(),
       listArtifacts: noopHandler(),
       listMessages: noopHandler(),
       createPr: noopHandler(),
@@ -55,6 +57,7 @@ describe("createSessionInternalRoutes", () => {
     expect(methodPathSet).toEqual(
       new Set([
         `POST ${SessionInternalPaths.init}`,
+        `POST ${SessionInternalPaths.ensureBootstrap}`,
         `GET ${SessionInternalPaths.snapshot}`,
         `GET ${SessionInternalPaths.sandboxAccess}`,
         `GET ${SessionInternalPaths.state}`,
@@ -67,6 +70,7 @@ describe("createSessionInternalRoutes", () => {
         `POST ${SessionInternalPaths.attachments}`,
         `GET ${SessionInternalPaths.participants}`,
         `GET ${SessionInternalPaths.events}`,
+        `GET ${SessionInternalPaths.eventChanges}`,
         `GET ${SessionInternalPaths.artifacts}`,
         `GET ${SessionInternalPaths.messages}`,
         `POST ${SessionInternalPaths.createPr}`,

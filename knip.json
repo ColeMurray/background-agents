@@ -28,6 +28,10 @@
         "src/types/repositories.ts": ["duplicates"]
       }
     },
+    "packages/cli": {
+      "entry": ["src/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
     "packages/control-plane": {
       "entry": ["test/integration/**/*.test.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
