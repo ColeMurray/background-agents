@@ -92,6 +92,7 @@ export function SessionTimeline({
     return null;
   }, [events]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const isNearBottomRef = useRef(true);
@@ -152,6 +153,19 @@ export function SessionTimeline({
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [onLoadOlder]);
+
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    const content = scrollContentRef.current;
+    if (!container || !content || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) container.scrollTop = container.scrollHeight;
+    });
+    observer.observe(container);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [showSkeleton]);
 
   useLayoutEffect(() => {
     if (isNearBottomRef.current) {
@@ -293,7 +307,11 @@ export function SessionTimeline({
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
-          <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+          <div
+            ref={scrollContentRef}
+            className="relative w-full"
+            style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+          >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = virtualRows[virtualRow.index];
               return (

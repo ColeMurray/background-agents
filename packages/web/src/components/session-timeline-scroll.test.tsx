@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useLayoutEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@/types/session";
@@ -60,6 +60,103 @@ function toolEvent(
 }
 
 describe("timeline auto-scrolling", () => {
+  it("stays at the bottom through viewport and content resizing", () => {
+    const observers: Array<{
+      callback: ResizeObserverCallback;
+      targets: Set<Element>;
+    }> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        readonly targets = new Set<Element>();
+
+        constructor(callback: ResizeObserverCallback) {
+          observers.push({ callback, targets: this.targets });
+        }
+
+        observe(target: Element) {
+          this.targets.add(target);
+        }
+
+        unobserve(target: Element) {
+          this.targets.delete(target);
+        }
+
+        disconnect() {
+          this.targets.clear();
+        }
+      }
+    );
+
+    let clientHeight = 600;
+    let scrollHeight = 1_000;
+    let scrollTop = 0;
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.classList.contains("overflow-y-auto") ? clientHeight : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.classList.contains("overflow-y-auto") ? scrollHeight : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollTop", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.classList.contains("overflow-y-auto") ? scrollTop : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollTop", "set").mockImplementation(function (
+      this: HTMLElement,
+      value: number
+    ) {
+      if (this.classList.contains("overflow-y-auto")) {
+        scrollTop = Math.min(value, scrollHeight - clientHeight);
+      }
+    });
+
+    const { container } = render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          {
+            type: "user_message",
+            content: "hello",
+            messageId: "message-1",
+            timestamp: 1,
+          },
+        ]}
+      />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    const content = timeline.querySelector<HTMLElement>("[data-index]")!.parentElement!;
+    const notifyResize = (target: Element) => {
+      for (const observer of observers) {
+        if (observer.targets.has(target)) {
+          observer.callback([{ target } as ResizeObserverEntry], {} as ResizeObserver);
+        }
+      }
+    };
+    expect(scrollTop).toBe(400);
+
+    clientHeight = 300;
+    act(() => notifyResize(timeline));
+
+    expect(scrollTop).toBe(700);
+
+    scrollHeight = 1_300;
+    act(() => notifyResize(content));
+
+    expect(scrollTop).toBe(1_000);
+
+    scrollTop = 200;
+    fireEvent.scroll(timeline);
+    scrollHeight = 1_500;
+    act(() => notifyResize(content));
+
+    expect(scrollTop).toBe(200);
+  });
+
   it("preserves the visible row position when history is prepended", () => {
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
       this: HTMLElement
