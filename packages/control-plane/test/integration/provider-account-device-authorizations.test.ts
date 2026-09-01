@@ -477,6 +477,15 @@ describe("provider account device authorization routes", () => {
         failureReason: "device_authorization_disabled",
       }
     );
+    await expect(
+      env.DB.prepare(
+        `UPDATE model_provider_account_authorizations
+         SET state = 'denied'
+         WHERE id = ?`
+      )
+        .bind(result.transactionId)
+        .run()
+    ).rejects.toThrow();
   });
 
   it("does not replace credentials or connect when an account is archived before finalization", async () => {
