@@ -1214,7 +1214,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("fills partial event file metadata from the top-level message lookup", async () => {
+  it("fills partial event file metadata when the event also carries attachments", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {
       messageHistoryResponses: [
@@ -1245,6 +1245,7 @@ describe("POST /events", () => {
         channel: "C123",
         ts: "111.222",
         files: [{ id: "F1", name: "event-name.png" }],
+        attachments: [{ is_msg_unfurl: true }],
       }),
       env,
       ctx

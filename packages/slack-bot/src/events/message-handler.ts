@@ -391,44 +391,49 @@ export async function handleAppMention(
     files: event.files ?? [],
     attachments: event.attachments ?? [],
   };
-  const detailsPromise: Promise<MessageDetails> =
-    eventDetails.files.length && eventDetails.attachments.length
-      ? Promise.resolve(eventDetails)
-      : (async () => {
-          let lookup = await getMessageDetails(
+  const hasCompleteEventDetails =
+    eventDetails.files.length > 0 &&
+    eventDetails.attachments.length > 0 &&
+    eventDetails.files.every(
+      (file) => file.mimetype && (file.url_private_download || file.url_private)
+    );
+  const detailsPromise: Promise<MessageDetails> = hasCompleteEventDetails
+    ? Promise.resolve(eventDetails)
+    : (async () => {
+        let lookup = await getMessageDetails(
+          env.SLACK_BOT_TOKEN,
+          event.channel,
+          event.ts,
+          event.thread_ts
+        );
+        for (const delayMs of MESSAGE_DETAILS_RETRY_DELAYS_MS) {
+          if (lookup.ok || lookup.error !== "message_not_found") break;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          lookup = await getMessageDetails(
             env.SLACK_BOT_TOKEN,
             event.channel,
             event.ts,
             event.thread_ts
           );
-          for (const delayMs of MESSAGE_DETAILS_RETRY_DELAYS_MS) {
-            if (lookup.ok || lookup.error !== "message_not_found") break;
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-            lookup = await getMessageDetails(
-              env.SLACK_BOT_TOKEN,
-              event.channel,
-              event.ts,
-              event.thread_ts
-            );
-          }
-          if (lookup.ok) {
-            return {
-              files: mergeMessageFiles(eventDetails.files, lookup.files),
-              attachments: eventDetails.attachments.length
-                ? eventDetails.attachments
-                : lookup.attachments,
-            };
-          }
-          // Failure is not "the message has none": any images and forwarded
-          // messages are lost here, so make the drop visible in logs.
-          log.warn("slack.attachment.file_lookup_failed", {
-            trace_id: traceId,
-            channel: event.channel,
-            message_ts: event.ts,
-            slack_error: lookup.error,
-          });
-          return eventDetails;
-        })();
+        }
+        if (lookup.ok) {
+          return {
+            files: mergeMessageFiles(eventDetails.files, lookup.files),
+            attachments: eventDetails.attachments.length
+              ? eventDetails.attachments
+              : lookup.attachments,
+          };
+        }
+        // Failure is not "the message has none": any images and forwarded
+        // messages are lost here, so make the drop visible in logs.
+        log.warn("slack.attachment.file_lookup_failed", {
+          trace_id: traceId,
+          channel: event.channel,
+          message_ts: event.ts,
+          slack_error: lookup.error,
+        });
+        return eventDetails;
+      })();
   // Fetched unconditionally: image-only mentions rely on channel context as
   // their main classifier signal, and detailsPromise is awaited anyway.
   const channelInfoPromise = getChannelInfo(env.SLACK_BOT_TOKEN, event.channel).catch(
