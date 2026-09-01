@@ -421,7 +421,7 @@ describe("provider account sandbox broker route", () => {
     await env.DB.prepare(
       `INSERT INTO model_provider_accounts
         (id, provider, display_name, external_account_id, status, created_at, updated_at)
-        VALUES (?, 'openai', 'Pinned OpenAI', 'acct-pinned', 'active', ?, ?)`
+        VALUES (?, 'openai', 'Pinned OpenAI', 'acct-integration', 'active', ?, ?)`
     )
       .bind(OPENAI_ACCOUNT_ID, now, now)
       .run();
@@ -430,10 +430,10 @@ describe("provider account sandbox broker route", () => {
       provider: "openai",
       credentialSchemaVersion: 1,
       payload: {
-        refreshToken: "never-returned",
+        refreshToken: "integration-openai",
         accessToken: "brokered-access-token",
         accessTokenExpiresAt: now + 60 * 60 * 1000,
-        accountId: "acct-pinned",
+        accountId: "acct-integration",
       },
       accessTokenExpiresAt: now + 60 * 60 * 1000,
       now,
@@ -464,9 +464,27 @@ describe("provider account sandbox broker route", () => {
     const body = await response.json<Record<string, unknown>>();
     expect(body).toMatchObject({
       accessToken: "brokered-access-token",
-      externalAccountId: "acct-pinned",
+      externalAccountId: "acct-integration",
     });
-    expect(JSON.stringify(body)).not.toContain("never-returned");
+    expect(JSON.stringify(body)).not.toContain("integration-openai");
+
+    const recovered = await SELF.fetch(
+      `https://test.local/sessions/${sessionName}/provider-auth/openai/access-token`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${sandboxToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ rejectedAccessToken: "brokered-access-token" }),
+      }
+    );
+    const recoveredBody = await recovered.json<Record<string, unknown>>();
+    expect(recovered.status, JSON.stringify(recoveredBody)).toBe(200);
+    expect(recoveredBody).not.toMatchObject({
+      accessToken: "brokered-access-token",
+    });
+
     const legacyBypass = await SELF.fetch(
       `https://test.local/sessions/${sessionName}/openai-token-refresh`,
       {

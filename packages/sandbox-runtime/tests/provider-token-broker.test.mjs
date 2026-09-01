@@ -47,9 +47,20 @@ test("refreshes only when the cached token is the rejected token", async () => {
   const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
 
   await broker.getAccessToken();
-  assert.equal((await broker.getAccessToken(undefined, "other-token")).accessToken, "access-1");
-  assert.equal((await broker.getAccessToken(undefined, "access-1")).accessToken, "access-2");
+  assert.equal((await broker.recoverAccessToken("other-token")).accessToken, "access-1");
+  assert.equal((await broker.recoverAccessToken("access-1")).accessToken, "access-2");
   assert.deepEqual(requests, [{}, { rejectedAccessToken: "access-1" }]);
+});
+
+test("rejects a recovery response containing the rejected token", async () => {
+  configureSession();
+  globalThis.fetch = async () => Response.json({ accessToken: "still-rejected", expiresIn: 3600 });
+  const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
+
+  await assert.rejects(
+    broker.recoverAccessToken("still-rejected"),
+    /returned the rejected access token/
+  );
 });
 
 test("deduplicates concurrent refreshes", async () => {
@@ -104,8 +115,8 @@ test("deduplicates replacement refreshes after an in-flight token is rejected", 
 
   const ordinary = broker.getAccessToken();
   const afterRejection = [
-    broker.getAccessToken(undefined, "rejected"),
-    broker.getAccessToken(undefined, "rejected"),
+    broker.recoverAccessToken("rejected"),
+    broker.recoverAccessToken("rejected"),
   ];
   assert.equal(requestCount, 1);
   releaseCallback();

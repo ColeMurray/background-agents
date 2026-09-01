@@ -191,11 +191,29 @@ describe("ModelProviderAccountBroker", () => {
       ],
     });
 
-    await expect(broker.getAccess("account-1", "openai", "rejected")).resolves.toMatchObject({
+    await expect(broker.recoverAccess("account-1", "openai", "rejected")).resolves.toMatchObject({
       accessToken: "new-access",
     });
     expect(refresh).toHaveBeenCalledOnce();
     expect(stores.credentials.tryBeginExchange).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a refresh result containing the rejected access token", async () => {
+    const refresh = vi.fn().mockResolvedValue({
+      credential: {
+        refreshToken: "next",
+        accessToken: "rejected",
+        accessTokenExpiresAt: NOW + 600_000,
+      },
+      accessToken: "rejected",
+      accessTokenExpiresAt: NOW + 600_000,
+      externalAccountId: "external-1",
+    });
+    const { broker } = setup({ refresh, credentialStates: [state()] });
+
+    await expect(broker.recoverAccess("account-1", "openai", "rejected")).rejects.toMatchObject({
+      code: "upstream_retry_safe",
+    });
   });
 
   it("coalesces refreshes for the same account and credential version locally", async () => {
@@ -346,7 +364,7 @@ describe("ModelProviderAccountBroker", () => {
       terminalFailure: vi.fn().mockResolvedValue(false),
     });
 
-    await expect(broker.getAccess("account-1", "openai", "rejected")).rejects.toMatchObject({
+    await expect(broker.recoverAccess("account-1", "openai", "rejected")).rejects.toMatchObject({
       code: "reconnect_required",
     });
   });

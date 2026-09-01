@@ -79,8 +79,8 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex",
 ]);
 
-async function ensureAccessToken(getAuth, setAuth, rejectedAccessToken) {
-  const result = await tokenBroker.getAccessToken(async (refreshed) => {
+function storeRefreshedAuth(getAuth, setAuth) {
+  return async (refreshed) => {
     // Update OpenCode's auth state for consistency. The broker cache remains
     // authoritative when the local auth store cannot be updated.
     try {
@@ -96,7 +96,22 @@ async function ensureAccessToken(getAuth, setAuth, rejectedAccessToken) {
     } catch {
       // Non-fatal: the in-memory cache is the source of truth
     }
-  }, rejectedAccessToken);
+  };
+}
+
+async function ensureAccessToken(getAuth, setAuth) {
+  const result = await tokenBroker.getAccessToken(storeRefreshedAuth(getAuth, setAuth));
+  return {
+    accessToken: result.accessToken,
+    accountId: result.providerMetadata?.accountId || null,
+  };
+}
+
+async function recoverAccessToken(getAuth, setAuth, rejectedAccessToken) {
+  const result = await tokenBroker.recoverAccessToken(
+    rejectedAccessToken,
+    storeRefreshedAuth(getAuth, setAuth)
+  );
   return {
     accessToken: result.accessToken,
     accountId: result.providerMetadata?.accountId || null,
@@ -200,7 +215,7 @@ export const CodexAuthProxy = async (input) => {
             if (!replay) return response;
 
             await response.body?.cancel();
-            const refreshed = await ensureAccessToken(getAuth, setAuth, accessToken);
+            const refreshed = await recoverAccessToken(getAuth, setAuth, accessToken);
             const retryHeaders = new Headers(headers);
             retryHeaders.set("authorization", `Bearer ${refreshed.accessToken}`);
             if (refreshed.accountId) {

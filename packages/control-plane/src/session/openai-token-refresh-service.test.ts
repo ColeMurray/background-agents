@@ -225,11 +225,30 @@ describe("OpenAITokenRefreshService", () => {
       createLogger()
     );
 
-    await expect(service.refresh(createSession(), "rejected-access")).resolves.toMatchObject({
+    await expect(service.recover(createSession(), "rejected-access")).resolves.toMatchObject({
       accessToken: "replacement-access",
       accountId: "acct_cached",
     });
     expect(mockState.refreshImpl).toHaveBeenCalledWith("refresh-1");
+  });
+
+  it("rejects a recovery response containing the rejected access token", async () => {
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "refresh-1" };
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "rejected-access",
+      refresh_token: "replacement-refresh",
+      expires_in: 3600,
+    });
+    const service = new OpenAITokenRefreshService(
+      TEST_DB,
+      "enc-key",
+      async () => 123,
+      createLogger()
+    );
+
+    await expect(service.recover(createSession(), "rejected-access")).rejects.toBeInstanceOf(
+      OpenAITokenUpstreamError
+    );
   });
 
   it("returns a cached global access token without consulting session scopes", async () => {

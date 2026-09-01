@@ -436,7 +436,7 @@ async function handleLegacyProviderAccess(
   ctx: SandboxRouteContext,
   sessionId: string,
   providerId: SubscriptionProviderId,
-  rejectedAccessToken?: string
+  rejectedAccessToken: string | null
 ): Promise<Response> {
   const response = await createSessionRuntimeClient(env, ctx).fetch(
     sessionId,
@@ -444,7 +444,7 @@ async function handleLegacyProviderAccess(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rejectedAccessToken }),
+      body: JSON.stringify(rejectedAccessToken ? { rejectedAccessToken } : {}),
     }
   );
   if (!response.ok) return response;
@@ -504,7 +504,7 @@ async function handleProviderAccess(
       ctx,
       sessionId,
       parsedProvider,
-      accessRequest.data.rejectedAccessToken
+      accessRequest.data.rejectedAccessToken ?? null
     );
   }
   if (binding.authMode === "api_key") {
@@ -523,13 +523,14 @@ async function handleProviderAccess(
     { now: () => Date.now(), createOwner: () => generateId() }
   );
   try {
-    return json(
-      await broker.getAccess(
-        binding.providerAccountId,
-        parsedProvider,
-        accessRequest.data.rejectedAccessToken
-      )
-    );
+    const access = accessRequest.data.rejectedAccessToken
+      ? await broker.recoverAccess(
+          binding.providerAccountId,
+          parsedProvider,
+          accessRequest.data.rejectedAccessToken
+        )
+      : await broker.getAccess(binding.providerAccountId, parsedProvider);
+    return json(access);
   } catch (cause) {
     if (cause instanceof ModelProviderAccountBrokerError) {
       const status =

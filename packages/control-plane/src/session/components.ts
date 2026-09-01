@@ -550,19 +550,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Per-request adapters: each token/credential refresh constructs its
   // service around the request-scoped log, so these stay functions.
-  const refreshOpenAIToken = async (
+  const openAITokenService = (requestLog: Logger) =>
+    new OpenAITokenRefreshService(db!, repoSecretsEncryptionKey, resolveRepoId, requestLog);
+  const refreshOpenAIToken = (sessionRow: SessionRow, requestLog: Logger) =>
+    openAITokenService(requestLog).refresh(sessionRow);
+  const recoverOpenAIToken = (
     sessionRow: SessionRow,
     requestLog: Logger,
-    rejectedAccessToken?: string
-  ) => {
-    const service = new OpenAITokenRefreshService(
-      db!,
-      repoSecretsEncryptionKey,
-      resolveRepoId,
-      requestLog
-    );
-    return service.refresh(sessionRow, rejectedAccessToken);
-  };
+    rejectedAccessToken: string
+  ) => openAITokenService(requestLog).recover(sessionRow, rejectedAccessToken);
   const refreshXaiToken = async (sessionRow: SessionRow, requestLog: Logger) => {
     const service = new XaiTokenRefreshService(
       db!,
@@ -585,6 +581,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     Boolean(db),
     refreshOpenAIToken,
+    recoverOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,

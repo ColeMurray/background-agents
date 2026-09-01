@@ -26,6 +26,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
   const isValidSandboxToken = vi.fn();
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
+  const recoverOpenAIToken = vi.fn();
   const refreshXaiToken = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
@@ -52,6 +53,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     messenger,
     managedSecretsConfigured,
     refreshOpenAIToken,
+    recoverOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,
@@ -82,6 +84,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     isValidSandboxToken,
     getSession,
     refreshOpenAIToken,
+    recoverOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     broadcast,
@@ -603,10 +606,10 @@ describe("SandboxHandler", () => {
   });
 
   it("forwards an upstream-rejected OpenAI access token for conditional refresh", async () => {
-    const { handler, getSession, refreshOpenAIToken, log } = createHandler();
+    const { handler, getSession, recoverOpenAIToken, log } = createHandler();
     const session = { id: "session-1" } as SessionRow;
     getSession.mockReturnValue(session);
-    refreshOpenAIToken.mockResolvedValue({ accessToken: "replacement" });
+    recoverOpenAIToken.mockResolvedValue({ accessToken: "replacement" });
 
     const response = await handler.openaiTokenRefresh(
       new Request("https://internal/openai-token-refresh", {
@@ -617,7 +620,7 @@ describe("SandboxHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(refreshOpenAIToken).toHaveBeenCalledWith(session, log, "rejected");
+    expect(recoverOpenAIToken).toHaveBeenCalledWith(session, log, "rejected");
   });
 
   it("returns xAI access token payload on success", async () => {

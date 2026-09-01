@@ -44,9 +44,24 @@ export class OpenAITokenBroker {
     return this.refreshScopes([{ kind: "global" }]);
   }
 
-  async refreshScopes(
+  refreshScopes(scopes: readonly OAuthSecretScope[]): Promise<OpenAIToken> {
+    return this.resolveScopes(scopes, null);
+  }
+
+  async recoverScopes(
     scopes: readonly OAuthSecretScope[],
-    rejectedAccessToken?: string
+    rejectedAccessToken: string
+  ): Promise<OpenAIToken> {
+    const token = await this.resolveScopes(scopes, rejectedAccessToken);
+    if (token.accessToken === rejectedAccessToken) {
+      throw new OpenAITokenUpstreamError("OpenAI refresh returned the rejected access token");
+    }
+    return token;
+  }
+
+  private async resolveScopes(
+    scopes: readonly OAuthSecretScope[],
+    rejectedAccessToken: string | null
   ): Promise<OpenAIToken> {
     let tokenState: OpenAITokenState | null;
     try {
@@ -88,7 +103,7 @@ export class OpenAITokenBroker {
   private stateFromSecrets(
     secrets: Record<string, string>,
     scope: OAuthSecretScope,
-    rejectedAccessToken?: string
+    rejectedAccessToken: string | null
   ): OpenAITokenState | null {
     const refreshToken = secrets.OPENAI_OAUTH_REFRESH_TOKEN;
     if (!refreshToken) return null;
@@ -120,7 +135,7 @@ export class OpenAITokenBroker {
 
   private async readTokenState(
     scopes: readonly OAuthSecretScope[],
-    rejectedAccessToken?: string
+    rejectedAccessToken: string | null
   ): Promise<OpenAITokenState | null> {
     for (const scope of scopes) {
       const state = this.stateFromSecrets(
@@ -200,7 +215,7 @@ export class OpenAITokenBroker {
   private async handleUnauthorizedRefresh(
     tokenState: Extract<OpenAITokenState, { type: "refresh" }>,
     scopes: readonly OAuthSecretScope[],
-    rejectedAccessToken?: string
+    rejectedAccessToken: string | null
   ): Promise<OpenAIToken> {
     this.log.warn("OpenAI refresh got 401, checking for concurrent rotation", {
       scope: tokenState.scope.kind,

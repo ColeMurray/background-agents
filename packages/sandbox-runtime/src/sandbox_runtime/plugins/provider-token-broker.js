@@ -77,20 +77,31 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
     return refreshPromise;
   }
 
+  async function resolveAccessToken(onRefresh, rejectedAccessToken) {
+    if (refreshPromise) {
+      const result = await refreshPromise;
+      if (result.accessToken !== rejectedAccessToken) return result;
+    }
+    if (
+      cachedResult &&
+      cachedResult.accessToken !== rejectedAccessToken &&
+      cachedExpiresAt - Date.now() > REFRESH_BUFFER_MS
+    ) {
+      return { ...cachedResult, expiresAt: cachedExpiresAt };
+    }
+    return getOrStartRefresh(onRefresh, rejectedAccessToken);
+  }
+
   return {
-    async getAccessToken(onRefresh, rejectedAccessToken) {
-      if (refreshPromise) {
-        const result = await refreshPromise;
-        if (result.accessToken !== rejectedAccessToken) return result;
+    getAccessToken(onRefresh) {
+      return resolveAccessToken(onRefresh, null);
+    },
+    async recoverAccessToken(rejectedAccessToken, onRefresh) {
+      const result = await resolveAccessToken(onRefresh, rejectedAccessToken);
+      if (result.accessToken === rejectedAccessToken) {
+        throw new Error(`${providerLabel} token broker returned the rejected access token`);
       }
-      if (
-        cachedResult &&
-        cachedResult.accessToken !== rejectedAccessToken &&
-        cachedExpiresAt - Date.now() > REFRESH_BUFFER_MS
-      ) {
-        return { ...cachedResult, expiresAt: cachedExpiresAt };
-      }
-      return getOrStartRefresh(onRefresh, rejectedAccessToken);
+      return result;
     },
   };
 }

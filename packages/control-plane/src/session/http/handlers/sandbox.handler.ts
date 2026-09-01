@@ -48,10 +48,11 @@ export class SandboxHandler {
     private readonly messenger: SessionMessenger,
     /** Fixed at composition time: managed secrets exist only when D1 is bound. */
     private readonly managedSecretsConfigured: boolean,
-    private readonly refreshOpenAIToken: (
+    private readonly refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>,
+    private readonly recoverOpenAIToken: (
       session: SessionRow,
       log: Logger,
-      rejectedAccessToken?: string
+      rejectedAccessToken: string
     ) => Promise<OpenAIToken>,
     private readonly refreshXaiToken: (
       session: SessionRow,
@@ -270,7 +271,7 @@ export class SandboxHandler {
     let token: OpenAIToken;
     try {
       token = body.data.rejectedAccessToken
-        ? await this.refreshOpenAIToken(session, log, body.data.rejectedAccessToken)
+        ? await this.recoverOpenAIToken(session, log, body.data.rejectedAccessToken)
         : await this.refreshOpenAIToken(session, log);
     } catch (error) {
       if (error instanceof OpenAITokenNotConfiguredError) {

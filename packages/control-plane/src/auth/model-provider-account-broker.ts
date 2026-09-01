@@ -100,10 +100,29 @@ export class ModelProviderAccountBroker {
     );
   }
 
-  async getAccess(
+  async getAccess(accountId: string, expectedProvider: ModelProviderId): Promise<ProviderAccess> {
+    return this.resolveAccess(accountId, expectedProvider, null);
+  }
+
+  async recoverAccess(
     accountId: string,
     expectedProvider: ModelProviderId,
-    rejectedAccessToken?: string
+    rejectedAccessToken: string
+  ): Promise<ProviderAccess> {
+    const access = await this.resolveAccess(accountId, expectedProvider, rejectedAccessToken);
+    if (access.accessToken === rejectedAccessToken) {
+      throw new ModelProviderAccountBrokerError(
+        "upstream_retry_safe",
+        `${expectedProvider} refresh returned the rejected access token`
+      );
+    }
+    return access;
+  }
+
+  private async resolveAccess(
+    accountId: string,
+    expectedProvider: ModelProviderId,
+    rejectedAccessToken: string | null
   ): Promise<ProviderAccess> {
     const account = await this.requireUsableAccount(accountId, expectedProvider);
     const adapter = this.registry.get(expectedProvider);
@@ -127,7 +146,11 @@ export class ModelProviderAccountBroker {
 
     const key = `${accountId}:${state.credentialVersion}`;
     const existing = this.inFlight.get(key);
-    if (existing) return existing;
+    if (existing) {
+      const access = await existing;
+      if (access.accessToken !== rejectedAccessToken) return access;
+      return this.resolveAccess(accountId, expectedProvider, rejectedAccessToken);
+    }
     const promise = this.refreshWithClaim(account, adapter, state, rejectedAccessToken).finally(
       () => {
         if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
@@ -141,7 +164,7 @@ export class ModelProviderAccountBroker {
     account: ModelProviderAccount & { status: "active" },
     adapter: ErasedProviderAccountAdapter,
     initialState: ProviderCredentialState,
-    rejectedAccessToken?: string
+    rejectedAccessToken: string | null
   ): Promise<ProviderAccess> {
     let state = initialState;
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
@@ -262,7 +285,7 @@ export class ModelProviderAccountBroker {
     account: ModelProviderAccount,
     adapter: ErasedProviderAccountAdapter,
     state: ProviderCredentialState,
-    rejectedAccessToken?: string
+    rejectedAccessToken: string | null
   ): ProviderAccess {
     const credential = this.parseCredential(adapter, state);
     const cached = adapter.cachedAccess(credential);
@@ -325,7 +348,7 @@ export class ModelProviderAccountBroker {
     previousAccount: ModelProviderAccount,
     adapter: ErasedProviderAccountAdapter,
     previousState: ProviderCredentialState,
-    rejectedAccessToken?: string,
+    rejectedAccessToken: string | null,
     fenceError?: unknown
   ): Promise<ProviderAccess> {
     const account = await this.stores.accounts.getById(previousAccount.id);
