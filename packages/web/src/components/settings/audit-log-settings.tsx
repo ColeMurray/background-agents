@@ -21,7 +21,7 @@ const ACTION_LABELS: Record<string, string> = {
   "workspace.member_status_updated": "Member status updated",
 };
 
-export function auditActionLabel(action: string): string {
+function auditActionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action;
 }
 
