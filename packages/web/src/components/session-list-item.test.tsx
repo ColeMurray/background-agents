@@ -5,7 +5,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
-import { SessionListItem } from "./session-list-item";
+import { ChildSessionListItem, SessionListItem } from "./session-list-item";
 
 expect.extend(matchers);
 
@@ -92,4 +92,24 @@ it("keeps mark-as-read available without sessions.lifecycle", async () => {
   expect(await screen.findByRole("menuitem", { name: "Mark as read" })).toBeInTheDocument();
   expect(screen.queryByRole("menuitem", { name: "Rename" })).not.toBeInTheDocument();
   expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+});
+
+it("keeps an open child session menu trigger measurable", async () => {
+  render(
+    <ChildSessionListItem
+      session={{ ...session(true), parentSessionId: "parent-session" }}
+      isActive={false}
+      isMobile={false}
+      depth={1}
+      onMarkLatestMessageRead={vi.fn()}
+    />
+  );
+
+  const trigger = screen.getByRole("button", { name: "Session actions" });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+
+  expect(await screen.findByRole("menuitem", { name: "Mark as read" })).toBeInTheDocument();
+  expect(trigger).toHaveAttribute("data-state", "open");
+  expect(trigger).toHaveClass("flex");
+  expect(trigger).not.toHaveClass("hidden");
 });
