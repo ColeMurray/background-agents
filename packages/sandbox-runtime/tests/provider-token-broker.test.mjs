@@ -75,18 +75,24 @@ test("deduplicates concurrent refreshes", async () => {
   );
 });
 
-test("does not serve or join a token being rejected during an in-flight refresh", async () => {
+test("deduplicates replacement refreshes after an in-flight token is rejected", async () => {
   configureSession();
   let requestCount = 0;
   let callbackStarted;
   let releaseCallback;
+  let replacementStarted;
+  let resolveReplacement;
   const started = new Promise((resolve) => (callbackStarted = resolve));
   const callbackGate = new Promise((resolve) => (releaseCallback = resolve));
-  globalThis.fetch = async () => {
+  const replacementRequest = new Promise((resolve) => (replacementStarted = resolve));
+  globalThis.fetch = () => {
     requestCount++;
-    return Response.json({
-      accessToken: requestCount === 1 ? "rejected" : "replacement",
-      expiresIn: 3600,
+    if (requestCount === 1) {
+      return Promise.resolve(Response.json({ accessToken: "rejected", expiresIn: 3600 }));
+    }
+    replacementStarted();
+    return new Promise((resolve) => {
+      resolveReplacement = resolve;
     });
   };
   const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
@@ -97,13 +103,22 @@ test("does not serve or join a token being rejected during an in-flight refresh"
   await started;
 
   const ordinary = broker.getAccessToken();
-  const afterRejection = broker.getAccessToken(undefined, "rejected");
+  const afterRejection = [
+    broker.getAccessToken(undefined, "rejected"),
+    broker.getAccessToken(undefined, "rejected"),
+  ];
   assert.equal(requestCount, 1);
   releaseCallback();
+  await replacementRequest;
+  assert.equal(requestCount, 2);
+  resolveReplacement(Response.json({ accessToken: "replacement", expiresIn: 3600 }));
 
   assert.equal((await initial).accessToken, "rejected");
   assert.equal((await ordinary).accessToken, "rejected");
-  assert.equal((await afterRejection).accessToken, "replacement");
+  assert.deepEqual(
+    (await Promise.all(afterRejection)).map(({ accessToken }) => accessToken),
+    ["replacement", "replacement"]
+  );
   assert.equal(requestCount, 2);
 });
 

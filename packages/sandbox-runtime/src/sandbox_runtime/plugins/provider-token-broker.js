@@ -68,6 +68,15 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
     return { ...result, expiresAt: cachedExpiresAt };
   }
 
+  function getOrStartRefresh(onRefresh, rejectedAccessToken) {
+    if (!refreshPromise) {
+      refreshPromise = refresh(onRefresh, rejectedAccessToken).finally(() => {
+        refreshPromise = null;
+      });
+    }
+    return refreshPromise;
+  }
+
   return {
     async getAccessToken(onRefresh, rejectedAccessToken) {
       if (refreshPromise) {
@@ -81,10 +90,7 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
       ) {
         return { ...cachedResult, expiresAt: cachedExpiresAt };
       }
-      refreshPromise = refresh(onRefresh, rejectedAccessToken).finally(() => {
-        refreshPromise = null;
-      });
-      return refreshPromise;
+      return getOrStartRefresh(onRefresh, rejectedAccessToken);
     },
   };
 }
