@@ -114,3 +114,22 @@ export interface AnalyticsPullRequestsResponse {
   repos: AnalyticsPullRequestRepoEntry[];
   sources: AnalyticsPullRequestSourceEntry[];
 }
+
+/** One coherently-windowed analytics dashboard snapshot. */
+export interface AnalyticsDashboardResponse {
+  /** Request time used to anchor the window and open-PR age calculations. */
+  generatedAt: number;
+  /** Half-open interval [startAt, endAt) shared by every windowed metric. */
+  window: {
+    days: AnalyticsDays;
+    startAt: number;
+    endAt: number;
+  };
+  summary: AnalyticsSummaryResponse;
+  timeseries: AnalyticsTimeseriesResponse;
+  breakdowns: {
+    repository: AnalyticsBreakdownResponse;
+    user: AnalyticsBreakdownResponse;
+  };
+  pullRequests: AnalyticsPullRequestsResponse;
+}

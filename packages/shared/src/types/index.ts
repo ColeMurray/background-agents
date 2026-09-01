@@ -284,6 +284,7 @@ export type {
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
+  AnalyticsDashboardResponse,
 } from "./analytics";
 
 export {

@@ -352,6 +352,7 @@ describe("route policy table", () => {
   it.each([
     ["GET", "/scm-settings"],
     ["GET", "/analytics/summary"],
+    ["GET", "/analytics/dashboard"],
     ["GET", "/skills"],
     ["GET", "/skill-profiles"],
     ["GET", "/sessions/session-1"],

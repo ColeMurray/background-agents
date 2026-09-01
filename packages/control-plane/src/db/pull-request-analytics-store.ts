@@ -12,7 +12,7 @@
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
-import type { SqlDatabase, SqlResult } from "./sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 
 /** `now` anchors the open-inventory age computation. */
 export interface PullRequestAnalyticsFilters {
@@ -96,20 +96,15 @@ export class PullRequestAnalyticsStore {
    * in the cohort funnel.
    */
   async get(filters: PullRequestAnalyticsFilters): Promise<AnalyticsPullRequestsResponse> {
+    return this.decode(await this.db.batch(this.prepare(filters)));
+  }
+
+  prepare(filters: PullRequestAnalyticsFilters): SqlStatement[] {
     const prCreatedAt = prCreatedAtExpr();
     const cohortWindow = `${prCreatedAt} >= ? AND ${prCreatedAt} < ?`;
     const cohortBinds = [filters.startAt, filters.endAt];
 
-    const [
-      funnelResult,
-      costResult,
-      mergesResult,
-      inventoryResult,
-      createdResult,
-      mergedResult,
-      reposResult,
-      sourcesResult,
-    ] = await this.db.batch([
+    return [
       this.db
         .prepare(
           `SELECT
@@ -195,7 +190,20 @@ export class PullRequestAnalyticsStore {
              ORDER BY created DESC, source ASC`
         )
         .bind(...cohortBinds),
-    ]);
+    ];
+  }
+
+  decode(results: SqlResult[]): AnalyticsPullRequestsResponse {
+    const [
+      funnelResult,
+      costResult,
+      mergesResult,
+      inventoryResult,
+      createdResult,
+      mergedResult,
+      reposResult,
+      sourcesResult,
+    ] = results;
 
     const funnel = firstRow<FunnelRow>(funnelResult);
     const cost = firstRow<CostRow>(costResult);

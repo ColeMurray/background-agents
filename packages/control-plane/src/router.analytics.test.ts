@@ -6,21 +6,15 @@ import {
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
 
-const mockStore = {
-  getSummary: vi.fn(),
-  getTimeseries: vi.fn(),
-  getBreakdown: vi.fn(),
+const mockDashboardStore = {
+  get: vi.fn(),
 };
 
-vi.mock("./db/analytics-store", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    AnalyticsStore: vi.fn().mockImplementation(function () {
-      return mockStore;
-    }),
-  };
-});
+vi.mock("./db/analytics-dashboard-store", () => ({
+  AnalyticsDashboardStore: vi.fn().mockImplementation(function () {
+    return mockDashboardStore;
+  }),
+}));
 
 describe("analytics router integration", () => {
   beforeEach(() => {
@@ -28,21 +22,7 @@ describe("analytics router integration", () => {
   });
 
   it("does not let an actorless service read analytics", async () => {
-    mockStore.getSummary.mockResolvedValue({
-      totalSessions: 1,
-      activeUsers: 1,
-      totalCost: 0,
-      avgCost: 0,
-      totalPrs: 0,
-      statusBreakdown: {
-        created: 1,
-        active: 0,
-        completed: 0,
-        failed: 0,
-        archived: 0,
-        cancelled: 0,
-      },
-    });
+    mockDashboardStore.get.mockResolvedValue({});
 
     const env = {
       ...TEST_SERVICE_SECRETS,
@@ -56,7 +36,7 @@ describe("analytics router integration", () => {
     };
 
     const response = await handleRequest(
-      await signedServiceRequest("https://test.local/analytics/summary", {
+      await signedServiceRequest("https://test.local/analytics/dashboard", {
         service: "linear-bot",
       }),
       env as never,
@@ -65,6 +45,6 @@ describe("analytics router integration", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
-    expect(mockStore.getSummary).not.toHaveBeenCalled();
+    expect(mockDashboardStore.get).not.toHaveBeenCalled();
   });
 });
