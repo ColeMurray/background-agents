@@ -161,6 +161,16 @@ describe("route policy table", () => {
       allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "deny" },
     });
+    expect(routeFor("GET", "/audit-events")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "workspace.audit.read" }],
+        service: { kind: "deny" },
+        auditAllowed: false,
+      },
+      cacheControl: "private, no-store",
+    });
     expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [{ kind: "permission", permission: "sessions.read" }],

@@ -170,6 +170,21 @@ export type {
 export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  auditOperationResultSchema,
+  auditPrincipalKindSchema,
+  auditEventMetadataSchema,
+  auditEventSchema,
+  auditEventListResponseSchema,
+} from "./audit-events";
+export type {
+  AuditOperationResult,
+  AuditPrincipalKind,
+  AuditEventMetadata,
+  AuditEvent,
+  AuditEventListResponse,
+} from "./audit-events";
+
+export {
   MAX_AUTOMATION_REPOSITORIES,
   toRepositoryRef,
   automationRepositoryInputSchema,
