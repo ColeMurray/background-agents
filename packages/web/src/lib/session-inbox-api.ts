@@ -1,10 +1,13 @@
 import type {
   SessionInboxCategory,
+  SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
+import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
+import { applySessionReadStateToItem } from "./session-list";
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
@@ -32,6 +35,10 @@ export function isSessionInboxKey(key: unknown): key is string {
   );
 }
 
+export function isSessionInboxPaginationKey(key: unknown): boolean {
+  return Array.isArray(key) && isSessionInboxKey(key[0]);
+}
+
 function applyTitleToSession(session: SessionListItem, sessionId: string, title: string | null) {
   return session.id === sessionId ? { ...session, title } : session;
 }
@@ -49,6 +56,30 @@ function applyTitleToPage(
         applyTitleToSession(session, sessionId, title)
       ),
     })),
+  };
+}
+
+function applyReadStateToPage(
+  page: SessionInboxPage,
+  sessionId: string,
+  readState: SessionReadState
+): SessionInboxPage {
+  return {
+    ...page,
+    items: page.items.map((item) => applySessionInboxItemReadState(item, sessionId, readState)),
+  };
+}
+
+export function applySessionInboxItemReadState(
+  item: SessionInboxItem,
+  sessionId: string,
+  readState: SessionReadState
+): SessionInboxItem {
+  return {
+    rootSession: applySessionReadStateToItem(item.rootSession, sessionId, readState),
+    descendantSessions: item.descendantSessions.map((session) =>
+      applySessionReadStateToItem(session, sessionId, readState)
+    ),
   };
 }
 
@@ -77,4 +108,24 @@ export function applySessionInboxTitleUpdate<T extends SessionInboxSnapshot | Se
   return applyTitleToPage(data, sessionId, title) as T;
 }
 
-export type { SessionInboxPage, SessionInboxSnapshot };
+export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot | SessionInboxPage>(
+  data: T | undefined,
+  sessionId: string,
+  readState: SessionReadState
+): T | undefined {
+  if (!data) return data;
+  if ("categories" in data) {
+    return {
+      ...data,
+      categories: Object.fromEntries(
+        Object.entries(data.categories).map(([category, page]) => [
+          category,
+          applyReadStateToPage(page, sessionId, readState),
+        ])
+      ) as Record<SessionInboxCategory, SessionInboxPage>,
+    } as T;
+  }
+  return applyReadStateToPage(data, sessionId, readState) as T;
+}
+
+export type { SessionInboxItem, SessionInboxPage, SessionInboxSnapshot };

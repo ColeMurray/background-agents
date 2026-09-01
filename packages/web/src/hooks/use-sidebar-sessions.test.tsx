@@ -10,6 +10,10 @@ import type {
   SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import { useSidebarSessions } from "./use-sidebar-sessions";
+import {
+  SESSION_READ_STATE_RECONCILED_EVENT,
+  type SessionReadStateReconciledDetail,
+} from "@/lib/session-read-state";
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
@@ -25,7 +29,6 @@ vi.mock("@/lib/session-read-state", async (importOriginal) => {
       unread: false,
       latestMessageId: "msg-1",
     }),
-    reconcileSessionReadState: async () => undefined,
   };
 });
 
@@ -53,7 +56,7 @@ function unreadItem(id: string): SessionInboxItem {
   const base = item(id);
   return {
     ...base,
-    rootSession: { ...base.rootSession, readState: { latestMessageId: "msg-0", unread: true } },
+    rootSession: { ...base.rootSession, readState: { latestMessageId: "msg-1", unread: true } },
   };
 }
 
@@ -74,12 +77,12 @@ function snapshot(
   };
 }
 
-function wrapper(fetcher: (key: string) => unknown) {
+function wrapper(fetcher: (key: string) => unknown, cache = new Map()) {
   return function TestWrapper({ children }: { children: ReactNode }) {
     return (
       <SWRConfig
         value={{
-          provider: () => new Map(),
+          provider: () => cache,
           fetcher,
           dedupingInterval: 0,
           focusThrottleInterval: 0,
@@ -440,5 +443,72 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"]);
     const remainingTail = result.current.needsAttention.find(({ id }) => id === "tail-other");
     expect(remainingTail?.readState.unread).toBe(true);
+  });
+
+  it("reconciles retained pages when read state changes outside the sidebar", async () => {
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? { items: [unreadItem("tail-unread")], hasMore: false, nextCursor: null }
+        : snapshot({ needs_attention: page(["attention"], "next") })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent<SessionReadStateReconciledDetail>(SESSION_READ_STATE_RECONCILED_EVENT, {
+          detail: {
+            sessionId: "tail-unread",
+            readState: { latestMessageId: "msg-1", unread: false },
+          },
+        })
+      )
+    );
+
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+  });
+
+  it("invalidates cached pagination before a remount can restore stale unread state", async () => {
+    let sessionRead = false;
+    let paginationRequests = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (!key.includes("category=")) {
+        return snapshot({ needs_attention: page(["attention"], "next") });
+      }
+      paginationRequests += 1;
+      return sessionRead
+        ? { items: [], hasMore: false, nextCursor: null }
+        : { items: [unreadItem("tail-unread")], hasMore: false, nextCursor: null };
+    });
+    const cache = new Map();
+    const TestWrapper = wrapper(fetcher, cache);
+    const first = renderHook(() => useSidebarSessions(), { wrapper: TestWrapper });
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    act(() => first.result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(first.result.current.needsAttention).toHaveLength(2));
+
+    sessionRead = true;
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent<SessionReadStateReconciledDetail>(SESSION_READ_STATE_RECONCILED_EVENT, {
+          detail: {
+            sessionId: "tail-unread",
+            readState: { latestMessageId: "msg-1", unread: false },
+          },
+        })
+      )
+    );
+    first.unmount();
+
+    const second = renderHook(() => useSidebarSessions(), { wrapper: TestWrapper });
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+    act(() => second.result.current.sectionPagination.needsAttention.loadMore());
+
+    await waitFor(() => expect(paginationRequests).toBe(2));
+    await waitFor(() =>
+      expect(second.result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"])
+    );
   });
 });
