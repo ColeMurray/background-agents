@@ -75,6 +75,36 @@ describe("SessionReadObserver", () => {
     expect(onMarkMessageRead.mock.calls).toEqual([["message-1"], ["message-2"]]);
   });
 
+  it.each(["complete", "permanent_failure"] as const)(
+    "does not retry a %s outcome after later activation",
+    async (disposition) => {
+      const onMarkMessageRead = vi.fn(async () => disposition);
+      render(<SessionReadObserver messageId="message-1" onMarkMessageRead={onMarkMessageRead} />);
+      await act(async () => {});
+
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+
+      expect(onMarkMessageRead).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("replaces a pending backoff with one activation-triggered retry", async () => {
+    vi.useFakeTimers();
+    const onMarkMessageRead = vi.fn(async () => "retry" as const);
+    render(<SessionReadObserver messageId="message-1" onMarkMessageRead={onMarkMessageRead} />);
+    await act(async () => {});
+
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS));
+    expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(SECOND_RETRY_DELAY_MS));
+    expect(onMarkMessageRead).toHaveBeenCalledTimes(3);
+  });
+
   it("bounds retries to four attempts", async () => {
     vi.useFakeTimers();
     const onMarkMessageRead = vi.fn(async () => "retry" as const);

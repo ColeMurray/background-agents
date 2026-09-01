@@ -18,12 +18,14 @@ export function SessionReadObserver({
 
     let attempts = 0;
     let cancelled = false;
+    let settled = false;
     let requestInFlight = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const attempt = async () => {
       if (
         cancelled ||
+        settled ||
         requestInFlight ||
         attempts >= SESSION_READ_MAX_ATTEMPTS ||
         document.visibilityState !== "visible" ||
@@ -43,7 +45,9 @@ export function SessionReadObserver({
       } finally {
         requestInFlight = false;
       }
-      if (cancelled || disposition !== "retry" || attempts >= SESSION_READ_MAX_ATTEMPTS) return;
+      if (cancelled) return;
+      settled = disposition !== "retry";
+      if (settled || attempts >= SESSION_READ_MAX_ATTEMPTS) return;
 
       retryTimer = setTimeout(
         () => {
@@ -55,6 +59,9 @@ export function SessionReadObserver({
     };
 
     const handleActivation = () => {
+      if (settled) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
       if (attempts >= SESSION_READ_MAX_ATTEMPTS) attempts = 0;
       void attempt();
     };
