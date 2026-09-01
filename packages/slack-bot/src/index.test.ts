@@ -257,13 +257,15 @@ function makeSessionEnv(
   return env;
 }
 
+const DEFAULT_FILE_DOWNLOAD_STATUS = 200;
+
 function mockSlackFetch(
   order: string[] = [],
   options: {
     threadMessages?: unknown[];
     threadRepliesError?: string;
     messageHistoryResponses?: unknown[][];
-    /** HTTP status for files.slack.com downloads (default 200 with bytes). */
+    /** HTTP status for files.slack.com downloads. Defaults to DEFAULT_FILE_DOWNLOAD_STATUS. */
     fileDownloadStatus?: number;
   } = {}
 ) {
@@ -321,10 +323,11 @@ function mockSlackFetch(
 
     if (url.includes("files.slack.com")) {
       order.push("filedownload");
-      if (options.fileDownloadStatus && options.fileDownloadStatus !== 200) {
-        return new Response("denied", { status: options.fileDownloadStatus });
+      const status = options.fileDownloadStatus ?? DEFAULT_FILE_DOWNLOAD_STATUS;
+      if (status !== DEFAULT_FILE_DOWNLOAD_STATUS) {
+        return new Response("denied", { status });
       }
-      return new Response(new Uint8Array(16).fill(1), { status: 200 });
+      return new Response(new Uint8Array(16).fill(1), { status: DEFAULT_FILE_DOWNLOAD_STATUS });
     }
 
     if (url.includes("chat.postMessage")) {

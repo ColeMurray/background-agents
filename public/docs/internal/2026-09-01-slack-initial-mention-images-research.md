@@ -1,10 +1,13 @@
 # Research: Slack Initial Mention Images
 
-**Date:** 2026-09-01 **Status:** Research only **Scope:** Trace image handling for Slack mentions
-that create a session and compare it with image handling on follow-up mentions.
+**Date:** 2026-09-01 **Status:** Historical pre-fix research **Scope:** Trace image handling for
+Slack mentions that create a session and compare it with image handling on follow-up mentions.
 
 This document is intentionally research-only. It does not include recommendations, implementation
 plans, proposed code/API/schema changes, task breakdowns, estimates, or rollout steps.
+
+The behavior, gaps, and test coverage below describe the repository before PR #1693. They are
+retained as historical evidence for the investigation and do not describe the post-fix branch.
 
 ## Summary
 
@@ -29,7 +32,7 @@ objects without a supported MIME type.
 2. How does the follow-up path differ from the first-mention path?
 3. Which existing tests cover these workflows, and which reported scenario is not covered?
 
-## Current Behavior
+## Pre-Fix Behavior
 
 Every `app_mention` is validated with optional `files` and `attachments` arrays. The handler strips
 the bot mention and attempts a one-message Slack API lookup when either array is absent or empty.
@@ -98,7 +101,7 @@ follow-up branch is present in this downstream path.
 - A separately delivered channel-message event cannot recover an image omitted by the mention path
   because bot mentions are filtered from channel-trigger processing.
 
-## Known Gaps and Risks
+## Pre-Fix Gaps and Risks
 
 - A successful one-message lookup that does not contain the target timestamp is indistinguishable
   from a target message that contains no files.
