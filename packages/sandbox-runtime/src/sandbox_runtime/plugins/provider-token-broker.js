@@ -51,6 +51,7 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ ...(rejectedAccessToken && { rejectedAccessToken }) }),
+        redirect: "error",
         signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
       }
     );
@@ -69,6 +70,10 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
 
   return {
     async getAccessToken(onRefresh, rejectedAccessToken) {
+      if (refreshPromise) {
+        const result = await refreshPromise;
+        if (result.accessToken !== rejectedAccessToken) return result;
+      }
       if (
         cachedResult &&
         cachedResult.accessToken !== rejectedAccessToken &&
@@ -76,11 +81,9 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
       ) {
         return { ...cachedResult, expiresAt: cachedExpiresAt };
       }
-      if (!refreshPromise) {
-        refreshPromise = refresh(onRefresh, rejectedAccessToken).finally(() => {
-          refreshPromise = null;
-        });
-      }
+      refreshPromise = refresh(onRefresh, rejectedAccessToken).finally(() => {
+        refreshPromise = null;
+      });
       return refreshPromise;
     },
   };

@@ -370,6 +370,14 @@ describe("provider account sandbox broker route", () => {
     expect(absentBinding.status).toBe(404);
     expect(absentBinding.headers.get("Cache-Control")).toBe("no-store");
 
+    const oversized = await SELF.fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sandboxToken}` },
+      body: "x".repeat(16_385),
+    });
+    expect(oversized.status).toBe(413);
+    expect(oversized.headers.get("Cache-Control")).toBe("no-store");
+
     const unsupportedProvider = await SELF.fetch(
       `https://test.local/sessions/${sessionName}/provider-auth/anthropic/access-token`,
       {

@@ -72,11 +72,40 @@ const legacyAccessSchema = z.object({
 const providerAccessRequestSchema = z.strictObject({
   rejectedAccessToken: z.string().min(1).max(16_384).optional(),
 });
+const PROVIDER_ACCESS_REQUEST_MAX_BYTES = 16_384;
 const LEGACY_REFRESH_PATH = {
   openai: SessionInternalPaths.openaiTokenRefresh,
   xai: SessionInternalPaths.xaiTokenRefresh,
 } as const;
 const providerAuthorizationLogger = createLogger("provider-device-authorization");
+
+async function readProviderAccessRequest(request: Request): Promise<string | null> {
+  const declaredLength = Number(request.headers.get("Content-Length"));
+  if (Number.isFinite(declaredLength) && declaredLength > PROVIDER_ACCESS_REQUEST_MAX_BYTES) {
+    return null;
+  }
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > PROVIDER_ACCESS_REQUEST_MAX_BYTES) {
+      await reader.cancel("body limit exceeded");
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
 
 function service(env: Env, ctx: RequestContext): ModelProviderAccountService {
   const accounts = new ModelProviderAccountStore(ctx.db);
@@ -441,7 +470,8 @@ async function handleProviderAccess(
   const parsedProvider = provider(match.groups?.provider);
   if (!sessionId) return error("Session ID required", 400);
   if (parsedProvider instanceof Response) return parsedProvider;
-  const requestBody = await request.text();
+  const requestBody = await readProviderAccessRequest(request);
+  if (requestBody === null) return error("Provider access request too large", 413);
   let requestPayload: unknown = {};
   try {
     if (requestBody) requestPayload = JSON.parse(requestBody);

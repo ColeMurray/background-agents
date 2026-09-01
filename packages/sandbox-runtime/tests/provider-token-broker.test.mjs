@@ -30,6 +30,7 @@ test("uses the generic broker route, validates the response, and caches fresh to
   );
   assert.equal(requests[0].init.headers.Authorization, "Bearer sandbox-token");
   assert.deepEqual(JSON.parse(requests[0].init.body), {});
+  assert.equal(requests[0].init.redirect, "error");
   assert.ok(requests[0].init.signal instanceof AbortSignal);
 });
 
@@ -72,6 +73,38 @@ test("deduplicates concurrent refreshes", async () => {
     (await Promise.all([first, second])).map(({ accessToken }) => accessToken),
     ["shared", "shared"]
   );
+});
+
+test("does not serve or join a token being rejected during an in-flight refresh", async () => {
+  configureSession();
+  let requestCount = 0;
+  let callbackStarted;
+  let releaseCallback;
+  const started = new Promise((resolve) => (callbackStarted = resolve));
+  const callbackGate = new Promise((resolve) => (releaseCallback = resolve));
+  globalThis.fetch = async () => {
+    requestCount++;
+    return Response.json({
+      accessToken: requestCount === 1 ? "rejected" : "replacement",
+      expiresIn: 3600,
+    });
+  };
+  const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
+  const initial = broker.getAccessToken(async () => {
+    callbackStarted();
+    await callbackGate;
+  });
+  await started;
+
+  const ordinary = broker.getAccessToken();
+  const afterRejection = broker.getAccessToken(undefined, "rejected");
+  assert.equal(requestCount, 1);
+  releaseCallback();
+
+  assert.equal((await initial).accessToken, "rejected");
+  assert.equal((await ordinary).accessToken, "rejected");
+  assert.equal((await afterRejection).accessToken, "replacement");
+  assert.equal(requestCount, 2);
 });
 
 test("clears a failed in-flight refresh so a later request can retry", async () => {

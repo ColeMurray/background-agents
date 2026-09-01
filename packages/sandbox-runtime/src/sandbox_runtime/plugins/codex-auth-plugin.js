@@ -42,6 +42,30 @@ function replayableBody(body) {
   return null;
 }
 
+function requestInit(request, overrides) {
+  if (!(request instanceof Request)) return { ...overrides };
+  const overrideFields = { ...overrides };
+  delete overrideFields.body;
+  const method = overrides?.method ?? request.method;
+  const body = overrides && "body" in overrides ? overrides.body : request.body;
+  return {
+    method,
+    cache: request.cache,
+    credentials: request.credentials,
+    integrity: request.integrity,
+    keepalive: request.keepalive,
+    mode: request.mode,
+    redirect: request.redirect,
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+    signal: request.signal,
+    ...overrideFields,
+    ...(method !== "GET" && method !== "HEAD" && body != null
+      ? { body, duplex: request.duplex ?? "half" }
+      : {}),
+  };
+}
+
 const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex-max",
   "gpt-5.1-codex-mini",
@@ -138,21 +162,6 @@ export const CodexAuthProxy = async (input) => {
         return {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput, init) {
-            // Remove dummy API key authorization header
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.delete("authorization");
-                init.headers.delete("Authorization");
-              } else if (Array.isArray(init.headers)) {
-                init.headers = init.headers.filter(
-                  ([key]) => key.toLowerCase() !== "authorization"
-                );
-              } else {
-                delete init.headers["authorization"];
-                delete init.headers["Authorization"];
-              }
-            }
-
             const currentAuth = await getAuth();
             if (currentAuth.type !== "oauth") return fetch(requestInput, init);
 
@@ -160,20 +169,9 @@ export const CodexAuthProxy = async (input) => {
             const { accessToken, accountId } = await ensureAccessToken(getAuth, setAuth);
 
             // Build headers
-            const headers = new Headers();
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.forEach((value, key) => headers.set(key, value));
-              } else if (Array.isArray(init.headers)) {
-                for (const [key, value] of init.headers) {
-                  if (value !== undefined) headers.set(key, String(value));
-                }
-              } else {
-                for (const [key, value] of Object.entries(init.headers)) {
-                  if (value !== undefined) headers.set(key, String(value));
-                }
-              }
-            }
+            const sourceRequest = requestInput instanceof Request ? requestInput : null;
+            const headers = new Headers(init?.headers ?? sourceRequest?.headers);
+            headers.delete("authorization");
 
             // Set real authorization
             headers.set("authorization", `Bearer ${accessToken}`);
@@ -194,9 +192,11 @@ export const CodexAuthProxy = async (input) => {
                 ? new URL(CODEX_API_ENDPOINT)
                 : parsed;
 
-            const response = await fetch(url, { ...init, headers });
+            const upstreamInit = requestInit(sourceRequest, init);
+            upstreamInit.headers = headers;
+            const response = await fetch(url, upstreamInit);
             if (response.status !== 401) return response;
-            const replay = replayableBody(init?.body);
+            const replay = replayableBody(upstreamInit.body);
             if (!replay) return response;
 
             await response.body?.cancel();
@@ -208,7 +208,7 @@ export const CodexAuthProxy = async (input) => {
             } else {
               retryHeaders.delete("ChatGPT-Account-Id");
             }
-            return fetch(url, { ...init, headers: retryHeaders, body: replay.body });
+            return fetch(url, { ...upstreamInit, headers: retryHeaders, body: replay.body });
           },
         };
       },

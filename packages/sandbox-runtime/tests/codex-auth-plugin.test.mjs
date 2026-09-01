@@ -75,4 +75,22 @@ test("retries once with a refreshed token after an upstream 401", async () => {
 
   assert.equal(streamedResponse.status, 401);
   assert.equal(streamedUpstreamRequests, 1);
+
+  let sourceRequestMethod;
+  let sourceRequestBody;
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    sourceRequestMethod = request.method;
+    sourceRequestBody = await request.text();
+    return new Response(null, { status: 200 });
+  };
+  await loaded.fetch(
+    new Request("https://api.openai.com/v1/responses", {
+      method: "POST",
+      body: "source-request-body",
+      duplex: "half",
+    })
+  );
+  assert.equal(sourceRequestMethod, "POST");
+  assert.equal(sourceRequestBody, "source-request-body");
 });
