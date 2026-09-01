@@ -1,6 +1,10 @@
 import { mutate } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { classifySessionReadAttempt, reconcileSessionReadState } from "./session-read-state";
+import {
+  classifySessionReadAttempt,
+  reconcileSessionReadState,
+  subscribeSessionReadStateReconciliation,
+} from "./session-read-state";
 
 vi.mock("swr", () => ({ mutate: vi.fn(() => Promise.resolve()) }));
 
@@ -56,5 +60,32 @@ describe("reconcileSessionReadState", () => {
       populateCache: true,
       revalidate: false,
     });
+  });
+
+  it("waits for registered cache reconcilers", async () => {
+    let finishReconciliation!: () => void;
+    const pendingReconciliation = new Promise<void>((resolve) => {
+      finishReconciliation = resolve;
+    });
+    const reconcile = vi.fn(() => pendingReconciliation);
+    const unsubscribe = subscribeSessionReadStateReconciliation(reconcile);
+
+    const result = reconcileSessionReadState({
+      sessionId: "session-1",
+      outcome: "marked_read",
+      unread: false,
+      latestMessageId: "message-1",
+    });
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledOnce());
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishReconciliation();
+    await result;
+    unsubscribe();
   });
 });

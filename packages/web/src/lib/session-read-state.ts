@@ -9,10 +9,20 @@ import {
 } from "@open-inspect/shared/types/sessions";
 
 export type SessionReadAttemptDisposition = "complete" | "retry" | "permanent_failure";
-export const SESSION_READ_STATE_RECONCILED_EVENT = "open-inspect:session-read-state-reconciled";
 export interface SessionReadStateReconciledDetail {
   sessionId: string;
   readState: SessionReadState;
+}
+type SessionReadStateReconciler = (
+  detail: SessionReadStateReconciledDetail
+) => Promise<unknown> | unknown;
+const readStateReconcilers = new Set<SessionReadStateReconciler>();
+
+export function subscribeSessionReadStateReconciliation(
+  reconcile: SessionReadStateReconciler
+): () => void {
+  readStateReconcilers.add(reconcile);
+  return () => readStateReconcilers.delete(reconcile);
 }
 
 export class SessionReadRequestError extends Error {
@@ -75,12 +85,10 @@ export async function reconcileSessionReadState(result: SessionReadResult): Prom
     (current) => applySessionReadState(current, result.sessionId, readState),
     { populateCache: true, revalidate: false }
   );
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent<SessionReadStateReconciledDetail>(SESSION_READ_STATE_RECONCILED_EVENT, {
-        detail: { sessionId: result.sessionId, readState },
-      })
-    );
-  }
+  await Promise.all(
+    [...readStateReconcilers].map((reconcile) =>
+      reconcile({ sessionId: result.sessionId, readState })
+    )
+  );
   return mutation;
 }

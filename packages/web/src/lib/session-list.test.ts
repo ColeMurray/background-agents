@@ -125,6 +125,30 @@ describe("applySessionReadState", () => {
       latestMessageId: "message-b",
     });
   });
+
+  it("does not restore unread state for the same terminal message", () => {
+    const data: SessionListResponse = {
+      sessions: [
+        session("session-1", {
+          readState: {
+            unread: false,
+            latestMessageId: "message-a",
+          },
+        }),
+      ],
+      hasMore: false,
+    };
+
+    expect(
+      applySessionReadState(data, "session-1", {
+        unread: true,
+        latestMessageId: "message-a",
+      })?.sessions[0].readState
+    ).toEqual({
+      unread: false,
+      latestMessageId: "message-a",
+    });
+  });
 });
 
 describe("buildSessionSearchValue", () => {

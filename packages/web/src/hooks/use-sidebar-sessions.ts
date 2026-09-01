@@ -13,7 +13,6 @@ import type {
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import {
-  applySessionInboxItemReadState,
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
@@ -23,8 +22,7 @@ import {
 import {
   markLatestMessageRead,
   reconcileSessionReadState,
-  SESSION_READ_STATE_RECONCILED_EVENT,
-  type SessionReadStateReconciledDetail,
+  subscribeSessionReadStateReconciliation,
 } from "@/lib/session-read-state";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
@@ -136,9 +134,7 @@ function useCategoryPagination(
     [error, paginationRequest, refreshSnapshot, retryPage]
   );
 
-  // Archive and read-state mutations revalidate the head snapshot, but pages
-  // loaded through `Load more` live only in this retained state — reconcile
-  // them in place or they keep rendering the pre-mutation rows.
+  // Pages loaded through `Load more` live only in this retained state.
   const updateRetainedItems = useCallback(
     (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
       setAdditionalPagesState((state) => ({
@@ -157,6 +153,10 @@ function useCategoryPagination(
     },
     []
   );
+  const resetRetainedPages = useCallback(() => {
+    setAdditionalPagesState({ filterIdentity, pages: [] });
+    setPaginationRequest(null);
+  }, [filterIdentity]);
 
   return {
     firstPageItems: firstPage?.items ?? [],
@@ -168,6 +168,7 @@ function useCategoryPagination(
     loadMore,
     retry,
     updateRetainedItems,
+    resetRetainedPages,
   };
 }
 
@@ -334,6 +335,9 @@ export function useSidebarSessions() {
   const updateAttentionRetained = attention.updateRetainedItems;
   const updateInProgressRetained = inProgress.updateRetainedItems;
   const updateFinishedRetained = finished.updateRetainedItems;
+  const resetAttentionRetained = attention.resetRetainedPages;
+  const resetInProgressRetained = inProgress.resetRetainedPages;
+  const resetFinishedRetained = finished.resetRetainedPages;
   const updateAllRetainedItems = useCallback(
     (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
       updateAttentionRetained(update);
@@ -344,19 +348,11 @@ export function useSidebarSessions() {
   );
 
   const reconcileSidebarReadState = useCallback(
-    (sessionId: string, readState: SessionReadState) => {
-      const applyReadState = (item: SessionInboxItem) =>
-        applySessionInboxItemReadState(item, sessionId, readState);
-      updateAttentionRetained((item) => {
-        const updated = applyReadState(item);
-        return updated.rootSession.readState.unread ||
-          updated.descendantSessions.some((session) => session.readState.unread)
-          ? updated
-          : null;
-      });
-      updateInProgressRetained(applyReadState);
-      updateFinishedRetained(applyReadState);
-      void Promise.all([
+    ({ sessionId, readState }: { sessionId: string; readState: SessionReadState }) => {
+      resetAttentionRetained();
+      resetInProgressRetained();
+      resetFinishedRetained();
+      return Promise.all([
         mutateCache<SessionInboxSnapshot | SessionInboxPage>(
           isSessionInboxKey,
           (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
@@ -366,22 +362,13 @@ export function useSidebarSessions() {
           populateCache: true,
           revalidate: true,
         }),
-      ]).catch((error) => {
-        console.error("Failed to refresh session inbox after read-state update", error);
-      });
+      ]);
     },
-    [mutateCache, updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
+    [mutateCache, resetAttentionRetained, resetFinishedRetained, resetInProgressRetained]
   );
 
   useEffect(() => {
-    const handleReadStateReconciled = (event: Event) => {
-      const { sessionId, readState } = (event as CustomEvent<SessionReadStateReconciledDetail>)
-        .detail;
-      reconcileSidebarReadState(sessionId, readState);
-    };
-    window.addEventListener(SESSION_READ_STATE_RECONCILED_EVENT, handleReadStateReconciled);
-    return () =>
-      window.removeEventListener(SESSION_READ_STATE_RECONCILED_EVENT, handleReadStateReconciled);
+    return subscribeSessionReadStateReconciliation(reconcileSidebarReadState);
   }, [reconcileSidebarReadState]);
 
   const handleSessionArchived = useCallback(

@@ -129,6 +129,46 @@ describe("applySessionInboxReadStateUpdate", () => {
     );
   });
 
+  it("moves a fully read active hierarchy from attention to in progress", () => {
+    const data: SessionInboxSnapshot = {
+      categories: {
+        needs_attention: page("target"),
+        in_progress: page("progress-root"),
+        finished: page("finished-root"),
+      },
+    };
+
+    const result = applySessionInboxReadStateUpdate(data, "target", readState);
+
+    expect(result?.categories.needs_attention.items).toEqual([]);
+    expect(result?.categories.in_progress.items.map((item) => item.rootSession.id)).toEqual([
+      "target",
+      "progress-root",
+    ]);
+  });
+
+  it("moves a fully read finished descendant hierarchy from attention to finished", () => {
+    const attentionPage = page("target-root", ["target-child"]);
+    attentionPage.items[0].rootSession.status = "completed";
+    attentionPage.items[0].rootSession.readState.unread = false;
+    attentionPage.items[0].descendantSessions[0].status = "completed";
+    const data: SessionInboxSnapshot = {
+      categories: {
+        needs_attention: attentionPage,
+        in_progress: page("progress-root"),
+        finished: page("finished-root"),
+      },
+    };
+
+    const result = applySessionInboxReadStateUpdate(data, "target-child", readState);
+
+    expect(result?.categories.needs_attention.items).toEqual([]);
+    expect(result?.categories.finished.items.map((item) => item.rootSession.id)).toEqual([
+      "target-root",
+      "finished-root",
+    ]);
+  });
+
   it("does not let an older result overwrite a newer cached terminal message", () => {
     const data = page("target");
     data.items[0].rootSession.readState = {

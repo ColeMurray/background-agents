@@ -70,6 +70,22 @@ function applyReadStateToPage(
   };
 }
 
+function latestHierarchyUpdate(item: SessionInboxItem): number {
+  return Math.max(
+    item.rootSession.updatedAt,
+    ...item.descendantSessions.map(({ updatedAt }) => updatedAt)
+  );
+}
+
+function destinationCategory(
+  item: SessionInboxItem
+): Exclude<SessionInboxCategory, "needs_attention"> {
+  return item.rootSession.status === "active" ||
+    item.descendantSessions.some(({ status }) => status === "active")
+    ? "in_progress"
+    : "finished";
+}
+
 export function applySessionInboxItemReadState(
   item: SessionInboxItem,
   sessionId: string,
@@ -115,14 +131,42 @@ export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot 
 ): T | undefined {
   if (!data) return data;
   if ("categories" in data) {
+    const categories = Object.fromEntries(
+      Object.entries(data.categories).map(([category, page]) => [
+        category,
+        applyReadStateToPage(page, sessionId, readState),
+      ])
+    ) as Record<SessionInboxCategory, SessionInboxPage>;
+    const attentionItem = categories.needs_attention.items.find(
+      (item) =>
+        item.rootSession.id === sessionId ||
+        item.descendantSessions.some((session) => session.id === sessionId)
+    );
+    if (
+      attentionItem &&
+      !attentionItem.rootSession.readState.unread &&
+      attentionItem.descendantSessions.every((session) => !session.readState.unread)
+    ) {
+      categories.needs_attention = {
+        ...categories.needs_attention,
+        items: categories.needs_attention.items.filter(
+          (item) => item.rootSession.id !== attentionItem.rootSession.id
+        ),
+      };
+      const destination = destinationCategory(attentionItem);
+      categories[destination] = {
+        ...categories[destination],
+        items: [
+          attentionItem,
+          ...categories[destination].items.filter(
+            (item) => item.rootSession.id !== attentionItem.rootSession.id
+          ),
+        ].sort((a, b) => latestHierarchyUpdate(b) - latestHierarchyUpdate(a)),
+      };
+    }
     return {
       ...data,
-      categories: Object.fromEntries(
-        Object.entries(data.categories).map(([category, page]) => [
-          category,
-          applyReadStateToPage(page, sessionId, readState),
-        ])
-      ) as Record<SessionInboxCategory, SessionInboxPage>,
+      categories,
     } as T;
   }
   return applyReadStateToPage(data, sessionId, readState) as T;

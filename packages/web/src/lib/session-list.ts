@@ -135,6 +135,7 @@ export function applySessionReadStateToItem<T extends { id: string; readState?: 
   const currentMessageId = session.readState?.latestMessageId;
   if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId)
     return session;
+  if (session.readState?.unread === false && readState.unread) return session;
   return { ...session, readState };
 }
 

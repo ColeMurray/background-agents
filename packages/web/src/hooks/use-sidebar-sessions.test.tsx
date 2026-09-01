@@ -10,10 +10,7 @@ import type {
   SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import { useSidebarSessions } from "./use-sidebar-sessions";
-import {
-  SESSION_READ_STATE_RECONCILED_EVENT,
-  type SessionReadStateReconciledDetail,
-} from "@/lib/session-read-state";
+import { reconcileSessionReadState } from "@/lib/session-read-state";
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
@@ -421,7 +418,7 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-b"]);
   });
 
-  it("reconciles read state on retained pages when a session is marked read", async () => {
+  it("resets retained pages when a session is marked read", async () => {
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")
         ? {
@@ -438,11 +435,7 @@ describe("useSidebarSessions", () => {
 
     await act(async () => result.current.handleMarkLatestMessageRead("tail-unread"));
 
-    // The freshly read hierarchy leaves the retained attention page; the still
-    // unread one stays with its read state intact.
-    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"]);
-    const remainingTail = result.current.needsAttention.find(({ id }) => id === "tail-other");
-    expect(remainingTail?.readState.unread).toBe(true);
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
   });
 
   it("reconciles retained pages when read state changes outside the sidebar", async () => {
@@ -456,18 +449,72 @@ describe("useSidebarSessions", () => {
     act(() => result.current.sectionPagination.needsAttention.loadMore());
     await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
 
-    act(() =>
-      window.dispatchEvent(
-        new CustomEvent<SessionReadStateReconciledDetail>(SESSION_READ_STATE_RECONCILED_EVENT, {
-          detail: {
-            sessionId: "tail-unread",
-            readState: { latestMessageId: "msg-1", unread: false },
-          },
-        })
-      )
+    await act(() =>
+      reconcileSessionReadState({
+        sessionId: "tail-unread",
+        outcome: "marked_read",
+        latestMessageId: "msg-1",
+        unread: false,
+      })
     );
 
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+  });
+
+  it("resets destination pagination when an attention tail changes category", async () => {
+    let sessionRead = false;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=needs_attention")) {
+        return { items: [unreadItem("moving")], hasMore: false, nextCursor: null };
+      }
+      if (key.includes("category=in_progress")) {
+        return page([
+          key.includes("new-progress-next") ? "new-progress-tail" : "old-progress-tail",
+        ]);
+      }
+      return sessionRead
+        ? snapshot({
+            needs_attention: page(["attention"]),
+            in_progress: page(["moving", "running"], "new-progress-next"),
+          })
+        : snapshot({
+            needs_attention: page(["attention"], "attention-next"),
+            in_progress: page(["running"], "progress-next"),
+          });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    act(() => result.current.sectionPagination.inProgress.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+    await waitFor(() => expect(result.current.inProgress).toHaveLength(2));
+
+    sessionRead = true;
+    await act(() =>
+      reconcileSessionReadState({
+        sessionId: "moving",
+        outcome: "marked_read",
+        latestMessageId: "msg-2",
+        unread: false,
+      })
+    );
+
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["moving", "running"])
+    );
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+
+    act(() => result.current.sectionPagination.inProgress.loadMore());
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual([
+        "moving",
+        "running",
+        "new-progress-tail",
+      ])
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/sessions/inbox?category=in_progress&cursor=new-progress-next"
+    );
   });
 
   it("invalidates cached pagination before a remount can restore stale unread state", async () => {
@@ -490,15 +537,13 @@ describe("useSidebarSessions", () => {
     await waitFor(() => expect(first.result.current.needsAttention).toHaveLength(2));
 
     sessionRead = true;
-    act(() =>
-      window.dispatchEvent(
-        new CustomEvent<SessionReadStateReconciledDetail>(SESSION_READ_STATE_RECONCILED_EVENT, {
-          detail: {
-            sessionId: "tail-unread",
-            readState: { latestMessageId: "msg-1", unread: false },
-          },
-        })
-      )
+    await act(() =>
+      reconcileSessionReadState({
+        sessionId: "tail-unread",
+        outcome: "marked_read",
+        latestMessageId: "msg-1",
+        unread: false,
+      })
     );
     first.unmount();
 
