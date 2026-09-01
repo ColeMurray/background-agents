@@ -381,59 +381,49 @@ export async function handleAppMention(
   if (messageText)
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
 
-  // app_mention events don't carry the message's `files` array and may arrive
-  // without its `attachments`, so when either is missing we recover the message
-  // from conversation history — overlapped with the channel-info fetch to keep
-  // the extra round trip off the critical path. Whatever the event did carry
-  // wins; the lookup only fills gaps.
+  // app_mention events can omit or truncate file and attachment metadata, so
+  // always recover the canonical message from conversation history. Event
+  // values still win when present, and remain the fallback if lookup fails.
   type MessageDetails = { files: SlackMessageFile[]; attachments: SlackMessageAttachment[] };
   const eventDetails: MessageDetails = {
     files: event.files ?? [],
     attachments: event.attachments ?? [],
   };
-  const hasCompleteEventDetails =
-    eventDetails.files.length > 0 &&
-    eventDetails.attachments.length > 0 &&
-    eventDetails.files.every(
-      (file) => file.mimetype && (file.url_private_download || file.url_private)
+  const detailsPromise: Promise<MessageDetails> = (async () => {
+    let lookup = await getMessageDetails(
+      env.SLACK_BOT_TOKEN,
+      event.channel,
+      event.ts,
+      event.thread_ts
     );
-  const detailsPromise: Promise<MessageDetails> = hasCompleteEventDetails
-    ? Promise.resolve(eventDetails)
-    : (async () => {
-        let lookup = await getMessageDetails(
-          env.SLACK_BOT_TOKEN,
-          event.channel,
-          event.ts,
-          event.thread_ts
-        );
-        for (const delayMs of MESSAGE_DETAILS_RETRY_DELAYS_MS) {
-          if (lookup.ok || lookup.error !== "message_not_found") break;
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          lookup = await getMessageDetails(
-            env.SLACK_BOT_TOKEN,
-            event.channel,
-            event.ts,
-            event.thread_ts
-          );
-        }
-        if (lookup.ok) {
-          return {
-            files: mergeMessageFiles(eventDetails.files, lookup.files),
-            attachments: eventDetails.attachments.length
-              ? eventDetails.attachments
-              : lookup.attachments,
-          };
-        }
-        // Failure is not "the message has none": any images and forwarded
-        // messages are lost here, so make the drop visible in logs.
-        log.warn("slack.attachment.file_lookup_failed", {
-          trace_id: traceId,
-          channel: event.channel,
-          message_ts: event.ts,
-          slack_error: lookup.error,
-        });
-        return eventDetails;
-      })();
+    for (const delayMs of MESSAGE_DETAILS_RETRY_DELAYS_MS) {
+      if (lookup.ok || lookup.error !== "message_not_found") break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      lookup = await getMessageDetails(
+        env.SLACK_BOT_TOKEN,
+        event.channel,
+        event.ts,
+        event.thread_ts
+      );
+    }
+    if (lookup.ok) {
+      return {
+        files: mergeMessageFiles(eventDetails.files, lookup.files),
+        attachments: eventDetails.attachments.length
+          ? eventDetails.attachments
+          : lookup.attachments,
+      };
+    }
+    // Failure is not "the message has none": any images and forwarded
+    // messages are lost here, so make the drop visible in logs.
+    log.warn("slack.attachment.file_lookup_failed", {
+      trace_id: traceId,
+      channel: event.channel,
+      message_ts: event.ts,
+      slack_error: lookup.error,
+    });
+    return eventDetails;
+  })();
   // Fetched unconditionally: image-only mentions rely on channel context as
   // their main classifier signal, and detailsPromise is awaited anyway.
   const channelInfoPromise = getChannelInfo(env.SLACK_BOT_TOKEN, event.channel).catch(
