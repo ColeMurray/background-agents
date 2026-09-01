@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,12 @@ const hook = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-audit-events", () => ({ useAuditEvents: () => hook }));
+
+const scrollIntoView = vi.fn();
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+  configurable: true,
+  value: scrollIntoView,
+});
 
 function createEvent(
   operationResult: "applied" | "no_op" | "denied" | "rejected",
@@ -59,6 +65,7 @@ beforeEach(() => {
   hook.previous.mockReset();
   hook.next.mockReset();
   hook.retry.mockReset();
+  scrollIntoView.mockReset();
 });
 
 afterEach(cleanup);
@@ -109,6 +116,20 @@ describe("AuditLogSettings", () => {
     expect(hook.retry).toHaveBeenCalledOnce();
   });
 
+  it("keeps cached events visible when a background refresh fails", async () => {
+    hook.events = [createEvent("applied")];
+    hook.error = new Error("failed");
+    render(<AuditLogSettings />);
+
+    expect(screen.getByRole("article")).toBeInTheDocument();
+    expect(screen.queryByText("Unable to load the audit log.")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Unable to refresh the audit log. Showing the most recently loaded events."
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(hook.retry).toHaveBeenCalledOnce();
+  });
+
   it("allows returning to a previous page after a later page fails", async () => {
     hook.error = new Error("failed");
     hook.page = 2;
@@ -150,5 +171,25 @@ describe("AuditLogSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(hook.previous).toHaveBeenCalledOnce();
     expect(hook.next).toHaveBeenCalledOnce();
+  });
+
+  it("moves focus and scroll context after a requested page loads", async () => {
+    hook.events = [createEvent("applied")];
+    hook.hasNext = true;
+    const { rerender } = render(<AuditLogSettings />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    hook.page = 2;
+    hook.loading = true;
+    hook.events = [];
+    rerender(<AuditLogSettings />);
+    expect(screen.getByRole("heading", { name: "Audit log" })).not.toHaveFocus();
+
+    hook.loading = false;
+    hook.events = [createEvent("applied", { id: "event-page-2" })];
+    rerender(<AuditLogSettings />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Audit log" })).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
   });
 });

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { AuditEvent, AuditOperationResult } from "@open-inspect/shared/types/audit-events";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -112,15 +113,48 @@ function AuditEventCard({ event }: { event: AuditEvent }) {
 /** Read-only, cursor-paginated view of durable workspace audit events. */
 export function AuditLogSettings() {
   const audit = useAuditEvents();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusAfterPaginationRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusAfterPaginationRef.current || audit.loading || audit.error) return;
+    focusAfterPaginationRef.current = false;
+    headingRef.current?.focus({ preventScroll: true });
+    headingRef.current?.scrollIntoView({ block: "start" });
+  }, [audit.error, audit.loading, audit.page]);
+
+  const changePage = (navigate: () => void) => {
+    focusAfterPaginationRef.current = true;
+    navigate();
+  };
 
   return (
     <section aria-labelledby="audit-log-heading">
-      <h2 id="audit-log-heading" className="mb-1 text-xl font-semibold text-foreground">
+      <h2
+        ref={headingRef}
+        id="audit-log-heading"
+        tabIndex={-1}
+        className="mb-1 rounded-sm text-xl font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         Audit log
       </h2>
       <p className="mb-6 text-sm text-muted-foreground">
         Review workspace operations and authorization decisions. Events are shown newest first.
       </p>
+
+      {audit.error && audit.events.length > 0 && (
+        <div
+          role="status"
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive-border px-4 py-3"
+        >
+          <p className="text-sm text-destructive">
+            Unable to refresh the audit log. Showing the most recently loaded events.
+          </p>
+          <Button size="sm" variant="outline" onClick={() => void audit.retry()}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       {audit.loading ? (
         <div className="rounded-md border border-border-muted py-12 text-center" aria-live="polite">
@@ -130,7 +164,7 @@ export function AuditLogSettings() {
           />
           <p className="mt-3 text-sm text-muted-foreground">Loading audit events...</p>
         </div>
-      ) : audit.error ? (
+      ) : audit.error && audit.events.length === 0 ? (
         <div role="alert" className="rounded-md border border-destructive-border p-5">
           <p className="text-sm font-medium text-destructive">Unable to load the audit log.</p>
           <p className="mt-1 text-xs text-muted-foreground">Try the request again.</p>
@@ -162,7 +196,7 @@ export function AuditLogSettings() {
             size="sm"
             variant="outline"
             disabled={!audit.hasPrevious || audit.loading || audit.validating}
-            onClick={audit.previous}
+            onClick={() => changePage(audit.previous)}
           >
             Previous
           </Button>
@@ -173,7 +207,7 @@ export function AuditLogSettings() {
             size="sm"
             variant="outline"
             disabled={!audit.hasNext || audit.loading || audit.validating}
-            onClick={audit.next}
+            onClick={() => changePage(audit.next)}
           >
             Next
           </Button>
