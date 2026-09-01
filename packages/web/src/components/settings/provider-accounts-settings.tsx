@@ -147,6 +147,7 @@ export function ProviderAccountsSettings() {
   const { providers, accounts, defaults, loading, error, refresh } = useProviderAccounts();
   const legacyCredentials = useLegacyProviderCredentials();
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [saving, setSaving] = useState(false);
   const operationInFlightRef = useRef(false);
@@ -170,7 +171,9 @@ export function ProviderAccountsSettings() {
   }
 
   function beginConnection(next: Connection) {
-    if (!operationInFlightRef.current) setConnection(next);
+    if (operationInFlightRef.current) return;
+    setConnectionAttempt((attempt) => attempt + 1);
+    setConnection(next);
   }
 
   function beginConfirmation(next: Exclude<Confirm, null>) {
@@ -628,7 +631,7 @@ export function ProviderAccountsSettings() {
         <ProviderManualConnectionEditor
           key={
             connection.target.operation === "create"
-              ? "openai:create"
+              ? `openai:create:${connectionAttempt}`
               : connection.target.account.id
           }
           target={connection.target}

@@ -200,6 +200,29 @@ describe("ProviderAccountsSettings", () => {
     );
   });
 
+  it("clears manual OpenAI credentials when starting another create attempt", async () => {
+    render(<ProviderAccountsSettings />);
+    const openManualEditor = async () => {
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
+        button: 0,
+        ctrlKey: false,
+      });
+      fireEvent.click(await screen.findByRole("menuitem", { name: "ChatGPT manual token" }));
+    };
+    await openManualEditor();
+    fireEvent.change(screen.getByLabelText("Account name"), { target: { value: "Previous" } });
+    fireEvent.change(screen.getByLabelText("Account ID"), { target: { value: "acct-previous" } });
+    fireEvent.change(screen.getByLabelText("Refresh token"), {
+      target: { value: "previous-secret" },
+    });
+
+    await openManualEditor();
+
+    expect(screen.getByLabelText("Account name")).toHaveValue("ChatGPT account");
+    expect(screen.getByLabelText("Account ID")).toHaveValue("");
+    expect(screen.getByLabelText("Refresh token")).toHaveValue("");
+  });
+
   it("reconnects OpenAI manually with the verified account identity", async () => {
     render(<ProviderAccountsSettings />);
     fireEvent.pointerDown(screen.getByRole("button", { name: "More actions for Team ChatGPT" }), {
