@@ -34,7 +34,7 @@ test("uses the generic broker route, validates the response, and caches fresh to
   assert.ok(requests[0].init.signal instanceof AbortSignal);
 });
 
-test("refreshes only when the cached token is the rejected token", async () => {
+test("force refresh bypasses the cached token", async () => {
   configureSession();
   const requests = [];
   globalThis.fetch = async (_url, init) => {
@@ -47,20 +47,9 @@ test("refreshes only when the cached token is the rejected token", async () => {
   const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
 
   await broker.getAccessToken();
-  assert.equal((await broker.recoverAccessToken("other-token")).accessToken, "access-1");
-  assert.equal((await broker.recoverAccessToken("access-1")).accessToken, "access-2");
-  assert.deepEqual(requests, [{}, { rejectedAccessToken: "access-1" }]);
-});
-
-test("rejects a recovery response containing the rejected token", async () => {
-  configureSession();
-  globalThis.fetch = async () => Response.json({ accessToken: "still-rejected", expiresIn: 3600 });
-  const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
-
-  await assert.rejects(
-    broker.recoverAccessToken("still-rejected"),
-    /returned the rejected access token/
-  );
+  assert.equal((await broker.getAccessToken()).accessToken, "access-1");
+  assert.equal((await broker.refreshAccessToken()).accessToken, "access-2");
+  assert.deepEqual(requests, [{}, { forceRefresh: true }]);
 });
 
 test("deduplicates concurrent refreshes", async () => {
@@ -86,48 +75,28 @@ test("deduplicates concurrent refreshes", async () => {
   );
 });
 
-test("deduplicates replacement refreshes after an in-flight token is rejected", async () => {
+test("deduplicates concurrent force refreshes", async () => {
   configureSession();
   let requestCount = 0;
-  let callbackStarted;
-  let releaseCallback;
-  let replacementStarted;
   let resolveReplacement;
-  const started = new Promise((resolve) => (callbackStarted = resolve));
-  const callbackGate = new Promise((resolve) => (releaseCallback = resolve));
-  const replacementRequest = new Promise((resolve) => (replacementStarted = resolve));
   globalThis.fetch = () => {
     requestCount++;
     if (requestCount === 1) {
-      return Promise.resolve(Response.json({ accessToken: "rejected", expiresIn: 3600 }));
+      return Promise.resolve(Response.json({ accessToken: "initial", expiresIn: 3600 }));
     }
-    replacementStarted();
     return new Promise((resolve) => {
       resolveReplacement = resolve;
     });
   };
   const broker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
-  const initial = broker.getAccessToken(async () => {
-    callbackStarted();
-    await callbackGate;
-  });
-  await started;
+  await broker.getAccessToken();
 
-  const ordinary = broker.getAccessToken();
-  const afterRejection = [
-    broker.recoverAccessToken("rejected"),
-    broker.recoverAccessToken("rejected"),
-  ];
-  assert.equal(requestCount, 1);
-  releaseCallback();
-  await replacementRequest;
+  const forced = [broker.refreshAccessToken(), broker.refreshAccessToken()];
   assert.equal(requestCount, 2);
   resolveReplacement(Response.json({ accessToken: "replacement", expiresIn: 3600 }));
 
-  assert.equal((await initial).accessToken, "rejected");
-  assert.equal((await ordinary).accessToken, "rejected");
   assert.deepEqual(
-    (await Promise.all(afterRejection)).map(({ accessToken }) => accessToken),
+    (await Promise.all(forced)).map(({ accessToken }) => accessToken),
     ["replacement", "replacement"]
   );
   assert.equal(requestCount, 2);

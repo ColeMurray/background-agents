@@ -554,11 +554,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new OpenAITokenRefreshService(db!, repoSecretsEncryptionKey, resolveRepoId, requestLog);
   const refreshOpenAIToken = (sessionRow: SessionRow, requestLog: Logger) =>
     openAITokenService(requestLog).refresh(sessionRow);
-  const recoverOpenAIToken = (
-    sessionRow: SessionRow,
-    requestLog: Logger,
-    rejectedAccessToken: string
-  ) => openAITokenService(requestLog).recover(sessionRow, rejectedAccessToken);
+  const forceRefreshOpenAIToken = (sessionRow: SessionRow, requestLog: Logger) =>
+    openAITokenService(requestLog).forceRefresh(sessionRow);
   const refreshXaiToken = async (sessionRow: SessionRow, requestLog: Logger) => {
     const service = new XaiTokenRefreshService(
       db!,
@@ -581,7 +578,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     Boolean(db),
     refreshOpenAIToken,
-    recoverOpenAIToken,
+    forceRefreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,

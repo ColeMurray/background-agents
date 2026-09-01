@@ -107,11 +107,8 @@ async function ensureAccessToken(getAuth, setAuth) {
   };
 }
 
-async function recoverAccessToken(getAuth, setAuth, rejectedAccessToken) {
-  const result = await tokenBroker.recoverAccessToken(
-    rejectedAccessToken,
-    storeRefreshedAuth(getAuth, setAuth)
-  );
+async function refreshAccessToken(getAuth, setAuth) {
+  const result = await tokenBroker.refreshAccessToken(storeRefreshedAuth(getAuth, setAuth));
   return {
     accessToken: result.accessToken,
     accountId: result.providerMetadata?.accountId || null,
@@ -215,7 +212,7 @@ export const CodexAuthProxy = async (input) => {
             if (!replay) return response;
 
             await response.body?.cancel();
-            const refreshed = await recoverAccessToken(getAuth, setAuth, accessToken);
+            const refreshed = await refreshAccessToken(getAuth, setAuth);
             const retryHeaders = new Headers(headers);
             retryHeaders.set("authorization", `Bearer ${refreshed.accessToken}`);
             if (refreshed.accountId) {

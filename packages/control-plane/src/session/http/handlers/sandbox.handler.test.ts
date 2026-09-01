@@ -26,7 +26,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
   const isValidSandboxToken = vi.fn();
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
-  const recoverOpenAIToken = vi.fn();
+  const forceRefreshOpenAIToken = vi.fn();
   const refreshXaiToken = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
@@ -53,7 +53,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     messenger,
     managedSecretsConfigured,
     refreshOpenAIToken,
-    recoverOpenAIToken,
+    forceRefreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     isValidSandboxToken,
@@ -84,7 +84,7 @@ function createHandler({ managedSecretsConfigured = true } = {}) {
     isValidSandboxToken,
     getSession,
     refreshOpenAIToken,
-    recoverOpenAIToken,
+    forceRefreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
     broadcast,
@@ -605,22 +605,22 @@ describe("SandboxHandler", () => {
     expect(refreshOpenAIToken).toHaveBeenCalledWith(session, log);
   });
 
-  it("forwards an upstream-rejected OpenAI access token for conditional refresh", async () => {
-    const { handler, getSession, recoverOpenAIToken, log } = createHandler();
+  it("force refreshes an OpenAI access token when requested", async () => {
+    const { handler, getSession, forceRefreshOpenAIToken, log } = createHandler();
     const session = { id: "session-1" } as SessionRow;
     getSession.mockReturnValue(session);
-    recoverOpenAIToken.mockResolvedValue({ accessToken: "replacement" });
+    forceRefreshOpenAIToken.mockResolvedValue({ accessToken: "replacement" });
 
     const response = await handler.openaiTokenRefresh(
       new Request("https://internal/openai-token-refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rejectedAccessToken: "rejected" }),
+        body: JSON.stringify({ forceRefresh: true }),
       })
     );
 
     expect(response.status).toBe(200);
-    expect(recoverOpenAIToken).toHaveBeenCalledWith(session, log, "rejected");
+    expect(forceRefreshOpenAIToken).toHaveBeenCalledWith(session, log);
   });
 
   it("returns xAI access token payload on success", async () => {

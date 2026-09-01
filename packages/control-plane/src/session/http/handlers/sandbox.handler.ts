@@ -49,10 +49,9 @@ export class SandboxHandler {
     /** Fixed at composition time: managed secrets exist only when D1 is bound. */
     private readonly managedSecretsConfigured: boolean,
     private readonly refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>,
-    private readonly recoverOpenAIToken: (
+    private readonly forceRefreshOpenAIToken: (
       session: SessionRow,
-      log: Logger,
-      rejectedAccessToken: string
+      log: Logger
     ) => Promise<OpenAIToken>,
     private readonly refreshXaiToken: (
       session: SessionRow,
@@ -264,14 +263,14 @@ export class SandboxHandler {
       return Response.json({ error: "Invalid request" }, { status: 400 });
     }
     const body = z
-      .strictObject({ rejectedAccessToken: z.string().min(1).max(16_384).optional() })
+      .strictObject({ forceRefresh: z.literal(true).optional() })
       .safeParse(requestPayload);
     if (!body.success) return Response.json({ error: "Invalid request" }, { status: 400 });
 
     let token: OpenAIToken;
     try {
-      token = body.data.rejectedAccessToken
-        ? await this.recoverOpenAIToken(session, log, body.data.rejectedAccessToken)
+      token = body.data.forceRefresh
+        ? await this.forceRefreshOpenAIToken(session, log)
         : await this.refreshOpenAIToken(session, log);
     } catch (error) {
       if (error instanceof OpenAITokenNotConfiguredError) {

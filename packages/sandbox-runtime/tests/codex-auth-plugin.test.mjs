@@ -53,7 +53,7 @@ test("retries once with a refreshed token after an upstream 401", async () => {
     JSON.stringify({ model: "gpt-5.4", input: "hello" }),
   ]);
   assert.equal(rejectedBodyCancelled, true);
-  assert.deepEqual(brokerBodies, [{}, { rejectedAccessToken: "access-1" }]);
+  assert.deepEqual(brokerBodies, [{}, { forceRefresh: true }]);
 
   let streamedUpstreamRequests = 0;
   globalThis.fetch = async (input, init) => {

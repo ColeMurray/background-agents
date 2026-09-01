@@ -34,7 +34,7 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
   let cachedExpiresAt = 0;
   let refreshPromise = null;
 
-  async function refresh(onRefresh, rejectedAccessToken) {
+  async function refresh(onRefresh, forceRefresh) {
     const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
     const authToken = process.env.SANDBOX_AUTH_TOKEN;
     const sessionId = getSessionId();
@@ -50,7 +50,7 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
           Authorization: `Bearer ${authToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ...(rejectedAccessToken && { rejectedAccessToken }) }),
+        body: JSON.stringify({ ...(forceRefresh && { forceRefresh: true }) }),
         redirect: "error",
         signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
       }
@@ -68,40 +68,30 @@ export function createProviderTokenBroker({ provider, providerLabel }) {
     return { ...result, expiresAt: cachedExpiresAt };
   }
 
-  function getOrStartRefresh(onRefresh, rejectedAccessToken) {
+  function getOrStartRefresh(onRefresh, forceRefresh) {
     if (!refreshPromise) {
-      refreshPromise = refresh(onRefresh, rejectedAccessToken).finally(() => {
+      refreshPromise = refresh(onRefresh, forceRefresh).finally(() => {
         refreshPromise = null;
       });
     }
     return refreshPromise;
   }
 
-  async function resolveAccessToken(onRefresh, rejectedAccessToken) {
-    if (refreshPromise) {
-      const result = await refreshPromise;
-      if (result.accessToken !== rejectedAccessToken) return result;
-    }
-    if (
-      cachedResult &&
-      cachedResult.accessToken !== rejectedAccessToken &&
-      cachedExpiresAt - Date.now() > REFRESH_BUFFER_MS
-    ) {
+  function getAccessToken(onRefresh) {
+    if (refreshPromise) return refreshPromise;
+    if (cachedResult && cachedExpiresAt - Date.now() > REFRESH_BUFFER_MS) {
       return { ...cachedResult, expiresAt: cachedExpiresAt };
     }
-    return getOrStartRefresh(onRefresh, rejectedAccessToken);
+    return getOrStartRefresh(onRefresh, false);
+  }
+
+  function refreshAccessToken(onRefresh) {
+    if (refreshPromise) return refreshPromise;
+    return getOrStartRefresh(onRefresh, true);
   }
 
   return {
-    getAccessToken(onRefresh) {
-      return resolveAccessToken(onRefresh, null);
-    },
-    async recoverAccessToken(rejectedAccessToken, onRefresh) {
-      const result = await resolveAccessToken(onRefresh, rejectedAccessToken);
-      if (result.accessToken === rejectedAccessToken) {
-        throw new Error(`${providerLabel} token broker returned the rejected access token`);
-      }
-      return result;
-    },
+    getAccessToken,
+    refreshAccessToken,
   };
 }

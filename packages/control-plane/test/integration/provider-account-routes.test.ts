@@ -476,7 +476,7 @@ describe("provider account sandbox broker route", () => {
           Authorization: `Bearer ${sandboxToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ rejectedAccessToken: "brokered-access-token" }),
+        body: JSON.stringify({ forceRefresh: true }),
       }
     );
     const recoveredBody = await recovered.json<Record<string, unknown>>();

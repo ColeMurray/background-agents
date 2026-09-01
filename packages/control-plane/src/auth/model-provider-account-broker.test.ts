@@ -177,7 +177,7 @@ describe("ModelProviderAccountBroker", () => {
     expect(stores.credentials.tryBeginExchange).not.toHaveBeenCalled();
   });
 
-  it("refreshes a valid cached token when upstream rejected that exact token", async () => {
+  it("force refreshes a valid cached token", async () => {
     const { broker, stores, refresh } = setup({
       credentialStates: [
         state({
@@ -191,29 +191,11 @@ describe("ModelProviderAccountBroker", () => {
       ],
     });
 
-    await expect(broker.recoverAccess("account-1", "openai", "rejected")).resolves.toMatchObject({
+    await expect(broker.refreshAccess("account-1", "openai")).resolves.toMatchObject({
       accessToken: "new-access",
     });
     expect(refresh).toHaveBeenCalledOnce();
     expect(stores.credentials.tryBeginExchange).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a refresh result containing the rejected access token", async () => {
-    const refresh = vi.fn().mockResolvedValue({
-      credential: {
-        refreshToken: "next",
-        accessToken: "rejected",
-        accessTokenExpiresAt: NOW + 600_000,
-      },
-      accessToken: "rejected",
-      accessTokenExpiresAt: NOW + 600_000,
-      externalAccountId: "external-1",
-    });
-    const { broker } = setup({ refresh, credentialStates: [state()] });
-
-    await expect(broker.recoverAccess("account-1", "openai", "rejected")).rejects.toMatchObject({
-      code: "upstream_retry_safe",
-    });
   });
 
   it("coalesces refreshes for the same account and credential version locally", async () => {
@@ -342,7 +324,7 @@ describe("ModelProviderAccountBroker", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("does not reuse a rejected token from a late completion", async () => {
+  it("uses a late completion during a force refresh", async () => {
     const stale = state({
       exchangeState: "in_flight",
       exchangeGeneration: 4,
@@ -352,7 +334,7 @@ describe("ModelProviderAccountBroker", () => {
     const completed = state({
       payload: {
         refreshToken: "next",
-        accessToken: "rejected",
+        accessToken: "late-force",
         accessTokenExpiresAt: NOW + 600_000,
       },
       credentialVersion: 2,
@@ -364,8 +346,8 @@ describe("ModelProviderAccountBroker", () => {
       terminalFailure: vi.fn().mockResolvedValue(false),
     });
 
-    await expect(broker.recoverAccess("account-1", "openai", "rejected")).rejects.toMatchObject({
-      code: "reconnect_required",
+    await expect(broker.refreshAccess("account-1", "openai")).resolves.toMatchObject({
+      accessToken: "late-force",
     });
   });
 

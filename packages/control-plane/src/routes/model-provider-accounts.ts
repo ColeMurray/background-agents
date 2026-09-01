@@ -70,7 +70,7 @@ const legacyAccessSchema = z.object({
   account_id: z.string().optional(),
 });
 const providerAccessRequestSchema = z.strictObject({
-  rejectedAccessToken: z.string().min(1).max(16_384).optional(),
+  forceRefresh: z.literal(true).optional(),
 });
 const PROVIDER_ACCESS_REQUEST_MAX_BYTES = 16_384;
 const LEGACY_REFRESH_PATH = {
@@ -436,7 +436,7 @@ async function handleLegacyProviderAccess(
   ctx: SandboxRouteContext,
   sessionId: string,
   providerId: SubscriptionProviderId,
-  rejectedAccessToken: string | null
+  forceRefresh: boolean
 ): Promise<Response> {
   const response = await createSessionRuntimeClient(env, ctx).fetch(
     sessionId,
@@ -444,7 +444,7 @@ async function handleLegacyProviderAccess(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(rejectedAccessToken ? { rejectedAccessToken } : {}),
+      body: JSON.stringify(forceRefresh ? { forceRefresh: true } : {}),
     }
   );
   if (!response.ok) return response;
@@ -504,7 +504,7 @@ async function handleProviderAccess(
       ctx,
       sessionId,
       parsedProvider,
-      accessRequest.data.rejectedAccessToken ?? null
+      accessRequest.data.forceRefresh ?? false
     );
   }
   if (binding.authMode === "api_key") {
@@ -523,12 +523,8 @@ async function handleProviderAccess(
     { now: () => Date.now(), createOwner: () => generateId() }
   );
   try {
-    const access = accessRequest.data.rejectedAccessToken
-      ? await broker.recoverAccess(
-          binding.providerAccountId,
-          parsedProvider,
-          accessRequest.data.rejectedAccessToken
-        )
+    const access = accessRequest.data.forceRefresh
+      ? await broker.refreshAccess(binding.providerAccountId, parsedProvider)
       : await broker.getAccess(binding.providerAccountId, parsedProvider);
     return json(access);
   } catch (cause) {

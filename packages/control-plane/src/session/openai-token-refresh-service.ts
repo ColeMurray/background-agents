@@ -31,17 +31,14 @@ export class OpenAITokenRefreshService {
   }
 
   refresh(session: SessionRow): Promise<OpenAIToken> {
-    return this.resolve(session, null);
+    return this.resolve(session, false);
   }
 
-  recover(session: SessionRow, rejectedAccessToken: string): Promise<OpenAIToken> {
-    return this.resolve(session, rejectedAccessToken);
+  forceRefresh(session: SessionRow): Promise<OpenAIToken> {
+    return this.resolve(session, true);
   }
 
-  private async resolve(
-    session: SessionRow,
-    rejectedAccessToken: string | null
-  ): Promise<OpenAIToken> {
+  private async resolve(session: SessionRow, forceRefresh: boolean): Promise<OpenAIToken> {
     let sessionScope: OAuthSecretScope | null;
     try {
       sessionScope = await resolveSessionOAuthSecretScope(session, this.ensureRepoId);
@@ -54,8 +51,8 @@ export class OpenAITokenRefreshService {
     const scopes: OAuthSecretScope[] = sessionScope
       ? [sessionScope, { kind: "global" }]
       : [{ kind: "global" }];
-    return rejectedAccessToken
-      ? this.broker.recoverScopes(scopes, rejectedAccessToken)
+    return forceRefresh
+      ? this.broker.forceRefreshScopes(scopes)
       : this.broker.refreshScopes(scopes);
   }
 }
