@@ -13,7 +13,7 @@ import { dispatchMatchedRoute } from "./route-dispatch";
 import { withCorsAndTraceHeaders } from "./request-lifecycle";
 import type { Env } from "../types";
 
-export type ControlPlaneHonoEnv = {
+type ControlPlaneHonoEnv = {
   Bindings: Env;
   Variables: {
     requestContext: RequestContext;
@@ -68,8 +68,7 @@ function contextFor(
   });
 }
 
-/** Build the Hono application over a route catalog without the Worker-level guards. */
-export function createControlPlaneApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
+function createHonoApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
   for (const route of catalog) assertRouteContract(route);
 
   const app = new Hono<ControlPlaneHonoEnv>({
@@ -146,7 +145,7 @@ export function createControlPlaneApp(catalog: readonly Route[]): Hono<ControlPl
  * intentionally undecorated and Hono implicitly maps HEAD to GET.
  */
 export function createControlPlaneHttpHandler(catalog: readonly Route[]): ControlPlaneHttpHandler {
-  const app = createControlPlaneApp(catalog);
+  const app = createHonoApp(catalog);
 
   return async (request, env, executionCtx) => {
     requestStartedAt.set(request, Date.now());
