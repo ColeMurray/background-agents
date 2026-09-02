@@ -8,6 +8,8 @@ import { hashSessionSkillManifest, SKILL_RESOLVER_VERSION } from "../skills/cont
 import { SkillStore } from "./skills";
 import type { SqlDatabase } from "./sql-database";
 
+const LEGACY_SESSION_SKILL_SELECTION = { mode: "all" as const };
+
 /** Snapshot rows preserve resolution-time provenance independently of the mutable catalog. */
 interface ManifestRow {
   session_id: string;
@@ -102,14 +104,13 @@ export class SessionSkillStore {
         .bind(sessionId)
         .first<{ created_at: number }>();
       if (!session) return null;
-      const selection = { mode: "all" as const };
       manifest = {
         session_id: sessionId,
-        selection_mode: selection.mode,
+        selection_mode: LEGACY_SESSION_SKILL_SELECTION.mode,
         profile_id: null,
         profile_name: null,
         resolver_version: SKILL_RESOLVER_VERSION,
-        manifest_sha256: await hashSessionSkillManifest(selection, []),
+        manifest_sha256: await hashSessionSkillManifest(LEGACY_SESSION_SKILL_SELECTION, []),
         resolved_at: session.created_at,
       };
     }
