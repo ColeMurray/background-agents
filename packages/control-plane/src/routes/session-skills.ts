@@ -29,8 +29,19 @@ async function handleSessionSkillsView(
 ): Promise<Response> {
   const id = sessionId(match);
   if (id instanceof Response) return id;
-  const view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
-  if (!view) return error("Session skill manifest not found", 404);
+  let view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
+  if (!view) {
+    const session = await new SessionIndexStore(ctx.db).get(id);
+    if (!session) return error("Session skill manifest not found", 404);
+    const selection = { mode: "all" as const };
+    view = {
+      manifestSha256: await hashSessionSkillManifest(selection, []),
+      resolverVersion: 1,
+      selection,
+      resolvedAt: session.createdAt,
+      skills: [],
+    };
+  }
   const response = json(view);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
