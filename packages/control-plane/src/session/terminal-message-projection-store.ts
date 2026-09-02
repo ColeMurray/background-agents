@@ -11,9 +11,15 @@ export interface PendingTerminalMessageProjection {
 
 export interface TerminalMessageProjectionStore {
   pending(): PendingTerminalMessageProjection | null;
-  /** Keeps whichever message is newer by `(createdAt, id)`. */
+  /** Keeps whichever message is newer by `(createdAt, id)`; the same message keeps its retry metadata. */
   setPending(entry: PendingTerminalMessageProjection): void;
-  recordFailedAttempt(update: { attempts: number; nextAttemptAt: number }): void;
+  /** Applies only while the named message is still the pending one. */
+  recordFailedAttempt(update: {
+    messageId: string;
+    messageCreatedAt: number;
+    attempts: number;
+    nextAttemptAt: number;
+  }): void;
   /** Drops the pending entry unless it is newer than the message that landed. */
   clearThrough(message: { messageId: string; messageCreatedAt: number }): void;
 }
@@ -61,7 +67,7 @@ export class PersistedTerminalMessageProjectionStore implements TerminalMessageP
        WHERE excluded.message_created_at > message_created_at
           OR (
             excluded.message_created_at = message_created_at
-            AND excluded.message_id >= message_id
+            AND excluded.message_id > message_id
           )`,
       entry.messageId,
       entry.messageCreatedAt,
@@ -71,13 +77,20 @@ export class PersistedTerminalMessageProjectionStore implements TerminalMessageP
     );
   }
 
-  recordFailedAttempt(update: { attempts: number; nextAttemptAt: number }): void {
+  recordFailedAttempt(update: {
+    messageId: string;
+    messageCreatedAt: number;
+    attempts: number;
+    nextAttemptAt: number;
+  }): void {
     this.sql.exec(
       `UPDATE terminal_message_projection_pending
        SET attempts = ?, next_attempt_at = ?
-       WHERE singleton = 1`,
+       WHERE singleton = 1 AND message_id = ? AND message_created_at = ?`,
       update.attempts,
-      update.nextAttemptAt
+      update.nextAttemptAt,
+      update.messageId,
+      update.messageCreatedAt
     );
   }
 

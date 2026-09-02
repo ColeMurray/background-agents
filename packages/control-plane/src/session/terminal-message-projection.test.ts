@@ -18,10 +18,22 @@ function createMemoryStore(initial: PendingTerminalMessageProjection | null = nu
   const store: TerminalMessageProjectionStore = {
     pending: () => entry,
     setPending: (next) => {
-      entry = next;
+      if (
+        !entry ||
+        next.messageCreatedAt > entry.messageCreatedAt ||
+        (next.messageCreatedAt === entry.messageCreatedAt && next.messageId > entry.messageId)
+      ) {
+        entry = next;
+      }
     },
     recordFailedAttempt: (update) => {
-      if (entry) entry = { ...entry, ...update };
+      if (
+        entry &&
+        entry.messageId === update.messageId &&
+        entry.messageCreatedAt === update.messageCreatedAt
+      ) {
+        entry = { ...entry, attempts: update.attempts, nextAttemptAt: update.nextAttemptAt };
+      }
     },
     clearThrough: (message) => {
       if (
@@ -56,7 +68,7 @@ function createProjection(
     now: () => options.now ?? 10_000,
     log: log as unknown as Logger,
   });
-  return { projection, log, alarmScheduler, pending: memory.pending };
+  return { projection, log, alarmScheduler, pending: memory.pending, store: memory.store };
 }
 
 describe("SessionTerminalMessageProjection", () => {
@@ -101,6 +113,23 @@ describe("SessionTerminalMessageProjection", () => {
       "session_terminal_message.projection_deferred",
       expect.objectContaining({ message_id: "message-1", next_attempt_at: 15_000 })
     );
+  });
+
+  it("keeps turn settlement alive when arming the retry alarm fails", async () => {
+    const recordLatestTerminalMessage = vi.fn().mockRejectedValue(new Error("unavailable"));
+    const { projection, log, alarmScheduler, pending } = createProjection(
+      recordLatestTerminalMessage
+    );
+    alarmScheduler.schedule.mockRejectedValue(new Error("alarm storage down"));
+
+    await expect(projection.recordTerminalMessage(input)).resolves.toBeUndefined();
+
+    expect(pending()).toEqual({ ...input, attempts: 0, nextAttemptAt: 15_000 });
+    expect(log.warn).toHaveBeenCalledWith(
+      "session_terminal_message.projection_retry_arm_failed",
+      expect.objectContaining({ message_id: "message-1", next_attempt_at: 15_000 })
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it("clears a deferred projection once a newer message lands inline", async () => {
@@ -190,6 +219,47 @@ describe("SessionTerminalMessageProjection", () => {
       expect(pending()).toEqual({ ...input, attempts: 3, nextAttemptAt: 50_000 });
       expect(alarmScheduler.schedule).toHaveBeenCalledExactlyOnceWith(50_000);
       expect(log.error).not.toHaveBeenCalled();
+    });
+
+    it("leaves a newer message that replaced the entry mid-attempt untouched", async () => {
+      let rejectAttempt!: (error: Error) => void;
+      const recordLatestTerminalMessage = vi.fn(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectAttempt = reject;
+          })
+      );
+      const { projection, pending, store } = createProjection(recordLatestTerminalMessage, {
+        pending: { ...input, attempts: 6, nextAttemptAt: 10_000 },
+      });
+      const newer = {
+        messageId: "message-2",
+        messageCreatedAt: 3_000,
+        terminalMessageCompletedAt: 4_000,
+        attempts: 0,
+        nextAttemptAt: 15_000,
+      };
+
+      const flush = projection.flushPending();
+      await vi.waitFor(() => expect(recordLatestTerminalMessage).toHaveBeenCalledOnce());
+      store.setPending(newer);
+      rejectAttempt(new Error("still down"));
+      await flush;
+
+      expect(pending()).toEqual(newer);
+    });
+
+    it("survives a failed alarm arm after a failed retry", async () => {
+      const recordLatestTerminalMessage = vi.fn().mockRejectedValue(new Error("still down"));
+      const { projection, alarmScheduler, pending } = createProjection(
+        recordLatestTerminalMessage,
+        { pending: { ...input, attempts: 1, nextAttemptAt: 10_000 } }
+      );
+      alarmScheduler.schedule.mockRejectedValue(new Error("alarm storage down"));
+
+      await expect(projection.flushPending()).resolves.toBeUndefined();
+
+      expect(pending()).toEqual({ ...input, attempts: 2, nextAttemptAt: 30_000 });
     });
 
     it("caps the backoff delay", async () => {

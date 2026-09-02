@@ -58,7 +58,7 @@ export class SessionTerminalMessageProjection {
     } catch (error) {
       const nextAttemptAt = this.deps.now() + deferredRetryDelayMs(0);
       this.deps.store.setPending({ ...input, attempts: 0, nextAttemptAt });
-      await this.deps.alarmScheduler.schedule(nextAttemptAt);
+      await this.armRetry(nextAttemptAt, sessionId, input.messageId);
       this.deps.log.warn("session_terminal_message.projection_deferred", {
         session_id: sessionId,
         message_id: input.messageId,
@@ -75,7 +75,7 @@ export class SessionTerminalMessageProjection {
     const now = this.deps.now();
     if (pending.nextAttemptAt > now) {
       // The alarm slot is shared; whoever fired it may have consumed this deadline.
-      await this.deps.alarmScheduler.schedule(pending.nextAttemptAt);
+      await this.armRetry(pending.nextAttemptAt, this.deps.getSessionId(), pending.messageId);
       return;
     }
     const sessionId = this.deps.getSessionId();
@@ -102,8 +102,10 @@ export class SessionTerminalMessageProjection {
         return;
       }
       const nextAttemptAt = now + deferredRetryDelayMs(attempts);
-      this.deps.store.recordFailedAttempt({ attempts, nextAttemptAt });
-      await this.deps.alarmScheduler.schedule(nextAttemptAt);
+      // A newer message may have replaced the entry during the await; its
+      // own retry metadata must survive this attempt.
+      this.deps.store.recordFailedAttempt({ messageId, messageCreatedAt, attempts, nextAttemptAt });
+      await this.armRetry(nextAttemptAt, sessionId, messageId);
       this.deps.log.warn("session_terminal_message.projection_retry_scheduled", {
         session_id: sessionId,
         message_id: messageId,
@@ -124,6 +126,26 @@ export class SessionTerminalMessageProjection {
   /** Re-arm the retry deadline after the runtime restarts. */
   async rearm(): Promise<void> {
     const pending = this.deps.store.pending();
-    if (pending) await this.deps.alarmScheduler.schedule(pending.nextAttemptAt);
+    if (pending) {
+      await this.armRetry(pending.nextAttemptAt, this.deps.getSessionId(), pending.messageId);
+    }
+  }
+
+  /**
+   * The pending entry is already persisted, so a failed arm is recoverable
+   * by rehydration or the next alarm. It must never fail the caller: on the
+   * completion path that would abort turn settlement after the local commit.
+   */
+  private async armRetry(at: number, sessionId: string | null, messageId: string): Promise<void> {
+    try {
+      await this.deps.alarmScheduler.schedule(at);
+    } catch (error) {
+      this.deps.log.warn("session_terminal_message.projection_retry_arm_failed", {
+        session_id: sessionId,
+        message_id: messageId,
+        next_attempt_at: at,
+        error,
+      });
+    }
   }
 }

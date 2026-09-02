@@ -50,24 +50,26 @@ describe("PersistedTerminalMessageProjectionStore", () => {
     expect(store.pending()).toEqual(older);
   });
 
-  it("keeps only the newest message", () => {
+  it("keeps only the newest message and its retry metadata", () => {
     const store = createStore();
-    store.setPending(newer);
+    store.setPending({ ...newer, attempts: 3, nextAttemptAt: 9_000 });
     store.setPending(older);
-    expect(store.pending()).toEqual(newer);
+    expect(store.pending()).toEqual({ ...newer, attempts: 3, nextAttemptAt: 9_000 });
 
-    const restarted = { ...newer, attempts: 3, nextAttemptAt: 9_000 };
-    store.setPending(restarted);
-    expect(store.pending()).toEqual(restarted);
+    store.setPending(newer);
+    expect(store.pending()).toEqual({ ...newer, attempts: 3, nextAttemptAt: 9_000 });
   });
 
-  it("records failed attempts in place", () => {
+  it("records a failed attempt only for the message that was attempted", () => {
     const store = createStore();
     store.setPending(older);
 
-    store.recordFailedAttempt({ attempts: 2, nextAttemptAt: 20_000 });
-
+    store.recordFailedAttempt({ ...older, attempts: 2, nextAttemptAt: 20_000 });
     expect(store.pending()).toEqual({ ...older, attempts: 2, nextAttemptAt: 20_000 });
+
+    store.setPending(newer);
+    store.recordFailedAttempt({ ...older, attempts: 3, nextAttemptAt: 40_000 });
+    expect(store.pending()).toEqual(newer);
   });
 
   it("clears through a landed message but not past a newer one", () => {
