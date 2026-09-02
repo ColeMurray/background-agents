@@ -307,6 +307,7 @@ export interface SandboxLifecycle {
 export type UnresponsiveSandboxTrigger =
   | "prompt_dispatch_send_failed"
   | "stop_send_failed"
+  | "stop_alarm_failed"
   | "stop_confirmation_timeout";
 
 export type SandboxAlarmResult = "no_action" | "sandbox_failed" | "sandbox_terminated";
@@ -1462,6 +1463,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     const closeReason = {
       prompt_dispatch_send_failed: "Prompt dispatch send failed",
       stop_send_failed: "Stop command send failed",
+      stop_alarm_failed: "Stop confirmation alarm failed",
       stop_confirmation_timeout: "Stop confirmation timed out",
     }[trigger];
     this.wsManager.detachSandboxWebSocket(1011, closeReason);

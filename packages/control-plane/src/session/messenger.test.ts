@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { SandboxDeliveryUnavailableError, SessionMessengerImpl } from "./messenger";
 
 function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boolean } = {}) {
-  const clientA = { readyState: WebSocket.OPEN } as WebSocket;
-  const clientB = { readyState: WebSocket.OPEN } as WebSocket;
+  const clientA = { readyState: WebSocket.OPEN, url: "ws://client-a" } as WebSocket;
+  const clientB = { readyState: WebSocket.OPEN, url: "ws://client-b" } as WebSocket;
   const sandbox =
     overrides.sandboxSocket === undefined
       ? ({ readyState: WebSocket.OPEN } as WebSocket)
@@ -17,6 +17,7 @@ function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boo
     ),
     getSandboxSocket: vi.fn(() => sandbox),
     send: vi.fn(() => overrides.sendResult ?? true),
+    supportsClientCapability: vi.fn((_ws: WebSocket, _capability: "session_budget") => true),
   };
   return { messenger: new SessionMessengerImpl(wsManager), wsManager, clientA, clientB, sandbox };
 }
@@ -34,6 +35,23 @@ describe("SessionMessengerImpl", () => {
     );
     expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
     expect(wsManager.send).toHaveBeenCalledWith(clientB, message);
+  });
+
+  it("only broadcasts budget protocol messages to capable clients", () => {
+    const { messenger, wsManager, clientA, clientB } = harness();
+    wsManager.supportsClientCapability.mockImplementation((ws) => ws === clientA);
+    const message = {
+      type: "budget_status",
+      totalCost: 5,
+      maxSessionCostUsd: 10,
+      budgetExhausted: false,
+      costTrackingUnavailable: false,
+    } as const;
+
+    messenger.broadcast(message);
+
+    expect(wsManager.send).toHaveBeenCalledWith(clientA, message);
+    expect(wsManager.send).not.toHaveBeenCalledWith(clientB, message);
   });
 
   it("sends a command to the connected sandbox socket", async () => {

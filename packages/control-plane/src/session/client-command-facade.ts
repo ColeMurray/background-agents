@@ -26,6 +26,7 @@ export class SessionClientCommandFacade implements SessionClientCommands<WebSock
   constructor(
     private readonly authenticator: SessionConnectionAuthenticator,
     private readonly prompts: SessionMessageQueue,
+    private readonly stop: () => Promise<void>,
     private readonly presence: PresenceService,
     private readonly events: SessionEventStream
   ) {}
@@ -43,7 +44,7 @@ export class SessionClientCommandFacade implements SessionClientCommands<WebSock
   }
 
   stopExecution(): Promise<void> {
-    return this.prompts.stopExecution();
+    return this.stop();
   }
 
   notifyTyping(): Promise<void> {

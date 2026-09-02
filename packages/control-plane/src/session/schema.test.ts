@@ -76,6 +76,12 @@ describe("applyMigrations", () => {
     vi.setSystemTime(1000);
   });
 
+  it("has unique, strictly increasing migration ids", () => {
+    const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+  });
+
   it("runs all migrations on a fresh DO", () => {
     // No applied IDs → SELECT returns empty
     applyMigrations(mock.sql);
@@ -482,6 +488,51 @@ describe("applyMigrations", () => {
     expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
       "ADD COLUMN stop_confirmation_deadline INTEGER"
     );
+  });
+
+  it("adds session budget fields for fresh and migrated sessions", () => {
+    const sessionTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS session")[1]?.split(");")[0];
+    expect(sessionTable).toContain("max_cost_usd REAL");
+    expect(sessionTable).toContain("cost_warning_sent INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).toContain("cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0");
+
+    expect(SCHEMA_SQL).toContain("reported_cost_usd REAL NOT NULL DEFAULT 0");
+    expect(SCHEMA_SQL).toContain("capabilities TEXT NOT NULL DEFAULT '[]'");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 48);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY)");
+      db.exec(`CREATE TABLE ws_client_mapping (
+        ws_id TEXT PRIMARY KEY,
+        authorization_expires_at INTEGER NOT NULL DEFAULT 0
+      )`);
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+      expect(db.prepare("PRAGMA table_info(session)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "max_cost_usd", type: "REAL" }),
+          expect.objectContaining({ name: "cost_warning_sent", type: "INTEGER" }),
+          expect.objectContaining({ name: "budget_exhausted", type: "INTEGER" }),
+          expect.objectContaining({ name: "cost_tracking_unavailable", type: "INTEGER" }),
+        ])
+      );
+      expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "capabilities", type: "TEXT" })])
+      );
+      expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "reported_cost_usd", type: "REAL" }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it("adds Autofix admission metadata and indexes for fresh and migrated sessions", () => {

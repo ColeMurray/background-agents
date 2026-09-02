@@ -26,6 +26,7 @@ import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import { parseClientCapabilities } from "./ws-client-mapping-repository";
 import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 
 /**
@@ -235,6 +236,7 @@ export class SessionConnectionAuthenticator {
     data: {
       token: string;
       clientId: string;
+      capabilities?: ClientInfo["capabilities"];
     }
   ): Promise<void> {
     const { wsManager, participantService, presenceService, log } = this.deps;
@@ -331,6 +333,7 @@ export class SessionConnectionAuthenticator {
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
+        capabilities: data.capabilities ?? [],
         authorizationExpiresAt,
         ws,
       };
@@ -341,7 +344,8 @@ export class SessionConnectionAuthenticator {
             ws,
             clientInfo,
             enrichment,
-            authorization.authorization.permissions.includes("sessions.sandbox_access")
+            authorization.authorization.permissions.includes("sessions.sandbox_access"),
+            participant.role === "owner"
           )
         );
         if (!activated) {
@@ -382,7 +386,8 @@ export class SessionConnectionAuthenticator {
     ws: WebSocket,
     client: ClientInfo,
     enrichment: Parameters<SessionSnapshotReader["readSessionSnapshot"]>[0],
-    canAccessSandbox: boolean
+    canAccessSandbox: boolean,
+    canManageBudget: boolean
   ): boolean {
     const { wsManager, snapshotReader } = this.deps;
     const snapshot = snapshotReader.readSessionSnapshot(enrichment);
@@ -402,6 +407,7 @@ export class SessionConnectionAuthenticator {
           name: client.name,
           avatar: client.avatar,
         },
+        canManageBudget,
       } satisfies ServerMessage)
     ) {
       return false;
@@ -443,6 +449,7 @@ export class SessionConnectionAuthenticator {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
+      capabilities: parseClientCapabilities(mapping.capabilities),
       authorizationExpiresAt: mapping.authorization_expires_at,
       ws,
     };

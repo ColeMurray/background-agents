@@ -41,6 +41,9 @@ function createDeadlineStore(
     setPending: vi.fn((value: number) => {
       pending = value;
     }),
+    setPendingEarliest: vi.fn((value: number) => {
+      pending = pending === null ? value : Math.min(pending, value);
+    }),
     activate: vi.fn(() => {
       cancelled = false;
     }),
@@ -357,6 +360,11 @@ describe("PersistedAlarmDeadlineStore", () => {
     initSchema(sql);
     const deadlines = new PersistedAlarmDeadlineStore(sql);
 
+    deadlines.setPending(2_000);
+    deadlines.setPendingEarliest(3_000);
+    expect(deadlines.pending()).toBe(2_000);
+    deadlines.setPendingEarliest(1_000);
+    expect(deadlines.pending()).toBe(1_000);
     deadlines.setPending(2_000);
     expect(deadlines.beginDelivery()).toBe(2_000);
     deadlines.setPending(3_000);

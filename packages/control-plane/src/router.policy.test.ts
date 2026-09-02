@@ -12,11 +12,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(171);
+    expect(routes).toHaveLength(172);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(130);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(171);
+    expect(new Set(paths).size).toBe(131);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(172);
 
     for (const route of routes) {
       expect(route.pattern.source).toBe(parsePattern(route.path).source);

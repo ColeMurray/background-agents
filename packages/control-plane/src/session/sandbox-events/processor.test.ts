@@ -18,6 +18,7 @@ import type { EventRepository } from "../event-repository";
 import type { MessageRepository } from "../message-repository";
 import type { SessionStatusService } from "../session-status-service";
 import type { SessionWebSocketManager } from "../websocket-manager";
+import type { SessionBudgetService } from "../budget-service";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -37,7 +38,7 @@ function createProcessor() {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
     getProcessingMessage,
-    addSessionCost: vi.fn(),
+    addSessionCost: vi.fn(() => 1.25),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
       getProcessingMessage.mockReturnValue(null);
       return {
@@ -89,6 +90,10 @@ function createProcessor() {
     child: vi.fn(),
   };
   const backgroundTasks = createTestBackgroundTasks();
+  const budgetService = {
+    ingestStepFinish: vi.fn(async () => {}),
+    ingestExecutionComplete: vi.fn(async (_event: unknown, _now: number) => {}),
+  };
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
@@ -99,11 +104,11 @@ function createProcessor() {
     wsManager as unknown as SessionWebSocketManager,
     new SandboxStreamingEventHandler(
       backgroundTasks,
-      repository as unknown as SessionCoreRepository,
       eventRepository,
       callbackService as unknown as CallbackNotificationService,
       messenger,
-      updateLastActivity
+      updateLastActivity,
+      budgetService as unknown as SessionBudgetService
     ),
     new SandboxArtifactEventHandler(
       artifactRepository,
@@ -123,7 +128,8 @@ function createProcessor() {
       updateLastActivity,
       scheduleInactivityCheck,
       processMessageQueue,
-      broadcastPromptQueue
+      broadcastPromptQueue,
+      (event, now) => budgetService.ingestExecutionComplete(event, now)
     ),
     new SandboxRuntimeEventHandler(
       repository as unknown as SessionCoreRepository,
@@ -157,6 +163,7 @@ function createProcessor() {
     applySessionTitleUpdate,
     backgroundTasks,
     log,
+    budgetService,
   };
 }
 
@@ -391,7 +398,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
   });
 
-  it("adds step_finish cost to session aggregate and broadcasts event", async () => {
+  it("routes step_finish through atomic budget ingestion", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {
       type: "step_finish",
@@ -403,9 +410,31 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123, expect.any(Number));
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("records unavailable cost tracking for positive-token steps without cost", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "step_finish",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      tokens: { input: 10 },
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with NaN cost", async () => {
@@ -420,9 +449,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with negative cost", async () => {
@@ -437,8 +468,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with Infinity cost", async () => {
@@ -453,9 +487,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("completes processing message and schedules post-completion work", async () => {

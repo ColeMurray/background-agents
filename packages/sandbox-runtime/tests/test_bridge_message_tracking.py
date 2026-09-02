@@ -174,11 +174,40 @@ class TestHandlePartTranslation:
             {
                 "type": "step_finish",
                 "cost": 0.001,
+                "messageCostUsd": 0.001,
                 "tokens": 150,
                 "reason": "end_turn",
                 "messageId": "cp-message-123",
             }
         ]
+
+    def test_step_finish_omits_unknown_cost(self, bridge: AgentBridge):
+        stream = bridge._ensure_prompt_stream()
+        events = stream._handle_part(
+            make_state("cp-message-123"),
+            {"type": "step-finish", "id": "step-1", "cost": None, "tokens": 150},
+            None,
+        )
+
+        assert "cost" not in events[0]
+        assert events[0]["messageCostUsd"] == 0.0
+
+    def test_step_finish_reports_cumulative_turn_cost(self, bridge: AgentBridge):
+        """Each step carries the turn total; a re-emitted part replaces its own cost."""
+        stream = bridge._ensure_prompt_stream()
+        state = make_state("cp-message-123")
+
+        first = stream._handle_part(state, {"type": "step-finish", "id": "s1", "cost": 0.5}, None)
+        second = stream._handle_part(state, {"type": "step-finish", "id": "s2", "cost": 0.25}, None)
+        corrected = stream._handle_part(
+            state, {"type": "step-finish", "id": "s1", "cost": 0.75}, None
+        )
+        unpriced = stream._handle_part(state, {"type": "step-finish", "id": "s3"}, None)
+
+        assert first[0]["messageCostUsd"] == 0.5
+        assert second[0]["messageCostUsd"] == 0.75
+        assert corrected[0]["messageCostUsd"] == 1.0
+        assert unpriced[0]["messageCostUsd"] == 1.0
 
 
 class TestBuildPromptRequestBody:

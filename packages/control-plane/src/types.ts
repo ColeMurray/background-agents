@@ -3,6 +3,7 @@
  */
 
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
+import type { ClientCapability } from "@open-inspect/shared/types/websocket";
 
 // Environment bindings
 export interface Env {
@@ -123,5 +124,6 @@ export interface ClientInfo {
   /** Wall-clock time when this connection's authorization lease expires. */
   authorizationExpiresAt: number;
   ws: WebSocket;
+  capabilities?: ClientCapability[];
   lastFetchHistoryAtMs?: number;
 }

@@ -110,7 +110,7 @@ describe("SessionCoreRepository", () => {
       });
 
       expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO session");
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO NOTHING");
       expect(mock.calls[0].params).toEqual([
         "sess-1",
         "test-session",
@@ -127,6 +127,7 @@ describe("SessionCoreRepository", () => {
         0,
         0,
         0,
+        null,
         null,
         null,
         1000,
@@ -236,13 +237,33 @@ describe("SessionCoreRepository", () => {
   });
 
   describe("addSessionCost", () => {
-    it("increments total_cost and updates updated_at for the current session", () => {
-      repo.addSessionCost(0.0123, 5000);
+    it("increments total_cost and returns the accumulated value", () => {
+      mock.setOne({ total_cost: 1.25 });
+      expect(repo.addSessionCost(0.0123, 5000)).toBe(1.25);
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
       expect(mock.calls[0].query).toContain("updated_at = ?");
+      expect(mock.calls[0].query).toContain("RETURNING total_cost");
       expect(mock.calls[0].params).toEqual([0.0123, 5000]);
+    });
+  });
+
+  describe("budget state", () => {
+    it("updates the live limit and clears latches", () => {
+      repo.setSessionBudget(20, { warningSent: false, exhausted: false }, 5000);
+
+      expect(mock.calls[0].query).toContain("max_cost_usd = ?");
+      expect(mock.calls[0].query).toContain("cost_warning_sent = ?");
+      expect(mock.calls[0].query).toContain("budget_exhausted = ?");
+      expect(mock.calls[0].params).toEqual([20, 0, 0, 5000]);
+    });
+
+    it("latches unavailable cost tracking", () => {
+      repo.markCostTrackingUnavailable(5000);
+
+      expect(mock.calls[0].query).toContain("cost_tracking_unavailable = 1");
+      expect(mock.calls[0].params).toEqual([5000]);
     });
   });
 

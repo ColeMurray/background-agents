@@ -47,6 +47,7 @@ export function SessionDetailsOverlay({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget,
   capabilities,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
@@ -176,6 +177,7 @@ export function SessionDetailsOverlay({
       diffLoading={diffLoading}
       selectedDiff={selectedDiff}
       onOpenDiff={onOpenDiff}
+      canManageBudget={canManageBudget}
       capabilities={capabilities}
     />
   );

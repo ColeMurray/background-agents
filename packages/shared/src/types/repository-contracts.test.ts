@@ -246,6 +246,17 @@ describe("warning event schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts control-plane budget warnings", () => {
+    expect(
+      sandboxEventSchema.safeParse({
+        type: "warning",
+        scope: "budget",
+        message: "Session cost reached 80% of its limit",
+        timestamp: 1,
+      }).success
+    ).toBe(true);
+  });
+
   it("rejects unknown scopes", () => {
     const result = sandboxEventSchema.safeParse({
       type: "warning",

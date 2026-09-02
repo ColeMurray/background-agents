@@ -91,6 +91,9 @@ class _PromptState:
     pending_drop_logged: bool = False
     child_activity: ChildActivityCorrelator = field(default_factory=ChildActivityCorrelator)
     emitted_error_messages: set[str] = field(default_factory=set)
+    # Priced step costs keyed by OpenCode part id. Last write wins, so a part
+    # OpenCode re-emits with a corrected cost replaces its earlier value.
+    step_costs: dict[str, float] = field(default_factory=dict)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
@@ -103,6 +106,10 @@ class _PromptState:
             # OpenCode creates for this prompt can predate it.
             int(self.start_time * 1000),
         )
+
+    def message_cost_usd(self) -> float:
+        """Cumulative priced cost of this turn, including subtask steps."""
+        return sum(self.step_costs.values())
 
 
 class _Disposition(Enum):
@@ -671,15 +678,19 @@ class OpenCodePromptStream:
             )
 
         elif part_type == "step-finish":
-            events.append(
-                {
-                    "type": "step_finish",
-                    "cost": part.get("cost"),
-                    "tokens": part.get("tokens"),
-                    "reason": part.get("reason"),
-                    "messageId": state.message_id,
-                }
-            )
+            cost = part.get("cost")
+            if isinstance(cost, int | float) and not isinstance(cost, bool):
+                state.step_costs[str(part.get("id", ""))] = float(cost)
+            finish_event = {
+                "type": "step_finish",
+                "tokens": part.get("tokens"),
+                "reason": part.get("reason"),
+                "messageId": state.message_id,
+                "messageCostUsd": state.message_cost_usd(),
+            }
+            if cost is not None:
+                finish_event["cost"] = cost
+            events.append(finish_event)
 
         if is_subtask:
             child_session_id = part.get("sessionID", "")

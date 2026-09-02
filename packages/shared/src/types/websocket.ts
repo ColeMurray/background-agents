@@ -3,6 +3,10 @@ import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
 
 export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
 
+export const SESSION_BUDGET_CAPABILITY = "session_budget" as const;
+export const clientCapabilitySchema = z.literal(SESSION_BUDGET_CAPABILITY);
+export type ClientCapability = z.infer<typeof clientCapabilitySchema>;
+
 /** Standard close code for a transient server-side failure. */
 export const WS_CLOSE_INTERNAL_ERROR = 1011;
 
@@ -17,6 +21,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("subscribe"),
     token: z.string(),
     clientId: z.string(),
+    capabilities: z.array(clientCapabilitySchema).optional(),
   }),
   webPromptPayloadSchema.extend({
     type: z.literal("prompt"),

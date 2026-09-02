@@ -4,7 +4,7 @@ import type { BackgroundTasks } from "../../platform-ports";
 import type { CallbackNotificationService } from "../callback-notification-service";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
-import type { SessionCoreRepository } from "../session-core-repository";
+import type { SessionBudgetService } from "../budget-service";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
 /**
@@ -18,11 +18,11 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
 export class SandboxStreamingEventHandler {
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
-    private readonly repository: SessionCoreRepository,
     private readonly eventRepository: EventRepository,
     private readonly callbackService: CallbackNotificationService,
     private readonly messenger: SessionMessenger,
-    private readonly updateLastActivity: (timestamp: number) => void
+    private readonly updateLastActivity: (timestamp: number) => void,
+    private readonly budgetService: SessionBudgetService
   ) {}
 
   handleToken(event: Extract<SandboxEvent, { type: "token" }>, context: SandboxEventContext): void {
@@ -47,20 +47,15 @@ export class SandboxStreamingEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
   }
 
-  handleStep(
+  async handleStep(
     event: Extract<SandboxEvent, { type: "step_start" | "step_finish" }>,
     context: SandboxEventContext
-  ): void {
+  ): Promise<void> {
     this.updateLastActivity(context.now);
-    if (
-      event.type === "step_finish" &&
-      typeof event.cost === "number" &&
-      Number.isFinite(event.cost) &&
-      event.cost > 0
-    ) {
-      this.repository.addSessionCost(event.cost, context.now);
-    }
     this.messenger.broadcast({ type: "sandbox_event", event });
+    if (event.type === "step_finish") {
+      await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
+    }
   }
 
   handleToolCall(

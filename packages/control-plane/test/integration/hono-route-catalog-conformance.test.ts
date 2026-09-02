@@ -39,7 +39,7 @@ describe("Hono route catalog conformance", () => {
       };
     });
 
-    expect(manifest).toHaveLength(171);
+    expect(manifest).toHaveLength(172);
     // One compact, reviewable line per frozen route keeps the fixture explicit
     // without thousands of snapshot-only formatting lines.
     expect(manifest.map((entry) => JSON.stringify(entry))).toMatchSnapshot();

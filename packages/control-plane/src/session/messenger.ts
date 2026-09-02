@@ -10,6 +10,7 @@
  */
 
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import { SESSION_BUDGET_CAPABILITY } from "@open-inspect/shared/types/websocket";
 import type { SandboxCommand } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
@@ -20,8 +21,17 @@ import type { SessionWebSocketManager } from "./websocket-manager";
  */
 type DeliverySockets = Pick<
   SessionWebSocketManager,
-  "forEachClientSocket" | "getSandboxSocket" | "send"
+  "forEachClientSocket" | "getSandboxSocket" | "send" | "supportsClientCapability"
 >;
+
+function requiresBudgetCapability(message: ServerMessage): boolean {
+  return (
+    message.type === "budget_status" ||
+    (message.type === "sandbox_event" &&
+      message.event.type === "warning" &&
+      message.event.scope === "budget")
+  );
+}
 
 export class SandboxDeliveryUnavailableError extends Error {
   constructor(message = "No sandbox connected") {
@@ -44,6 +54,12 @@ export class SessionMessengerImpl implements SessionMessenger {
   broadcast(message: ServerMessage): void {
     // Best effort; the registry handles per-client send failures.
     this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
+      if (
+        requiresBudgetCapability(message) &&
+        !this.wsManager.supportsClientCapability(ws, SESSION_BUDGET_CAPABILITY)
+      ) {
+        return;
+      }
       this.wsManager.send(ws, message);
     });
   }

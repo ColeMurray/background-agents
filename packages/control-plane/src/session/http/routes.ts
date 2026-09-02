@@ -41,6 +41,7 @@ export interface SessionInternalRouteHandlers {
   pullRequestsRefresh: SessionInternalRouteHandler;
   wsToken: SessionInternalRouteHandler;
   updateTitle: SessionInternalRouteHandler;
+  budget: SessionInternalRouteHandler;
   archive: SessionInternalRouteHandler;
   unarchive: SessionInternalRouteHandler;
   expireDraft: SessionInternalRouteHandler;
@@ -110,6 +111,7 @@ export function createSessionInternalRoutes(
     },
     { method: "POST", path: SessionInternalPaths.wsToken, handler: handlers.wsToken },
     { method: "POST", path: SessionInternalPaths.updateTitle, handler: handlers.updateTitle },
+    { method: "POST", path: SessionInternalPaths.budget, handler: handlers.budget },
     { method: "POST", path: SessionInternalPaths.archive, handler: handlers.archive },
     { method: "POST", path: SessionInternalPaths.unarchive, handler: handlers.unarchive },
     { method: "POST", path: SessionInternalPaths.expireDraft, handler: handlers.expireDraft },

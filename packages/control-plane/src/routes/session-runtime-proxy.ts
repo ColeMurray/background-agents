@@ -3,6 +3,7 @@ import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
 } from "@open-inspect/shared/types/sessions";
+import { sessionBudgetUpdateSchema } from "@open-inspect/shared/types/session-api";
 import {
   redactSessionSnapshotSandboxAccess,
   sessionSnapshotSchema,
@@ -315,6 +316,38 @@ function lifecycleProxyRoute(
   );
 }
 
+const budgetProxyRoute = defineRoute(
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  sessionRoute({
+    method: "PATCH",
+    path: "/sessions/:id/budget",
+    authorization: requirePermission("sessions.lifecycle"),
+    handler: async (request, _env, match, ctx) => {
+      const sessionId = getSessionId(match);
+      if (sessionId instanceof Response) return sessionId;
+
+      const rawBody = await parseJsonBody<unknown>(request);
+      if (rawBody instanceof Response) return rawBody;
+      if (!isObjectBody(rawBody)) return error("Invalid budget request", 400);
+
+      const parsed = sessionBudgetUpdateSchema.safeParse(rawBody);
+      if (!parsed.success) return error("Invalid budget request", 400);
+
+      const session = await new SessionIndexStore(ctx.db).get(sessionId);
+      if (!session) return error("Session not found", 404);
+      if (!ctx.authorization?.userId || session.userId !== ctx.authorization.userId) {
+        return error("Only the session owner can change the cost limit", 403);
+      }
+
+      return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.budget, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+      });
+    },
+  })
+);
+
 export const sessionRuntimeProxyRoutes: Route[] = [
   simpleProxyRoute({
     policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -432,4 +465,5 @@ export const sessionRuntimeProxyRoutes: Route[] = [
   lifecycleProxyRoute("PATCH", "/sessions/:id/title", SessionInternalPaths.updateTitle),
   lifecycleProxyRoute("POST", "/sessions/:id/archive", SessionInternalPaths.archive),
   lifecycleProxyRoute("POST", "/sessions/:id/unarchive", SessionInternalPaths.unarchive),
+  budgetProxyRoute,
 ];

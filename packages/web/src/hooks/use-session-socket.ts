@@ -54,6 +54,7 @@ interface UseSessionSocketReturn {
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
+  canManageBudget: boolean;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
   hasMoreHistory: boolean;
@@ -425,6 +426,7 @@ export function useSessionSocket(
     participants: state.participants,
     artifacts: state.artifacts,
     currentParticipantId: state.currentParticipantId,
+    canManageBudget: state.canManageBudget,
     isProcessing,
     promptQueue: state.promptQueue,
     hasMoreHistory,

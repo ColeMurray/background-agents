@@ -56,6 +56,8 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
   next_attempt_at INTEGER NOT NULL
 );`;
 
+const DEFAULT_WS_CLIENT_CAPABILITIES_JSON = "[]";
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -80,6 +82,10 @@ CREATE TABLE IF NOT EXISTS session (
   vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
+  cost_warning_sent INTEGER NOT NULL DEFAULT 0,     -- One-time warning latch for the current limit
+  budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
+  cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0, -- At least one positive-token step omitted cost
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -131,6 +137,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -215,6 +222,7 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   ws_id TEXT PRIMARY KEY,
   participant_id TEXT NOT NULL,
   client_id TEXT,
+  capabilities TEXT NOT NULL DEFAULT '${DEFAULT_WS_CLIENT_CAPABILITIES_JSON}',
   created_at INTEGER NOT NULL,
   authorization_expires_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
@@ -647,6 +655,33 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 47,
     description: "Persist terminal message projections awaiting retry",
     run: TERMINAL_MESSAGE_PROJECTION_TABLE_SQL,
+  },
+  {
+    id: 48,
+    description: "Add session budget state, message reported cost, and client capabilities",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN cost_warning_sent INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN budget_exhausted INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_cost_usd REAL NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT NOT NULL DEFAULT '${DEFAULT_WS_CLIENT_CAPABILITIES_JSON}'`
+      );
+    },
   },
 ];
 

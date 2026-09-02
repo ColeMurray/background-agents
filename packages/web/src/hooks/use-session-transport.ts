@@ -7,6 +7,7 @@ import {
   type ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import {
+  SESSION_BUDGET_CAPABILITY,
   WS_CLOSE_AUTHORIZATION_REVOKED,
   WS_CLOSE_INTERNAL_ERROR,
 } from "@open-inspect/shared/types/websocket";
@@ -195,6 +196,7 @@ export function useSessionTransport(
         type: "subscribe",
         token: wsTokenRef.current,
         clientId: crypto.randomUUID(),
+        capabilities: [SESSION_BUDGET_CAPABILITY],
       })
     );
   }, []);

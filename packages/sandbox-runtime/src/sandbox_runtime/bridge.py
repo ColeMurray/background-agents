@@ -682,6 +682,7 @@ class AgentBridge:
         author_data = cmd.get("author", {})
         start_time = time.time()
         outcome = "success"
+        message_cost_usd: float | None = None
 
         self.log.info(
             "prompt.start",
@@ -722,6 +723,8 @@ class AgentBridge:
                     error_message = event.get("error")
                 elif event.get("type") in ("token", "tool_call", "step_finish"):
                     emitted_output = True
+                if event.get("type") == "step_finish" and "messageCostUsd" in event:
+                    message_cost_usd = event["messageCostUsd"]
                 await self._send_event(event)
 
             if not had_error and not emitted_output:
@@ -743,6 +746,9 @@ class AgentBridge:
                     "messageId": message_id,
                     "success": not had_error,
                     **({"error": error_message} if error_message else {}),
+                    **(
+                        {"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}
+                    ),
                 }
             )
 
@@ -755,6 +761,9 @@ class AgentBridge:
                     "messageId": message_id,
                     "success": False,
                     "error": str(e),
+                    **(
+                        {"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}
+                    ),
                 }
             )
         finally:
