@@ -151,6 +151,28 @@ describe("ordinary HTTP response compatibility", () => {
     expect(response.headers.get("Cache-Control")).toBeNull();
   });
 
+  it("refuses an unsupported provider before enrolling a verified service actor", async () => {
+    const request = await signedRequest({
+      url: "https://test.local/sessions",
+      method: "POST",
+      service: "slack-bot",
+      actor: "slack:U-UNSUPPORTED-PROVIDER",
+      body: JSON.stringify({ title: "Never created", model: "anthropic/claude-haiku-4-5" }),
+    });
+
+    const response = await fetchWorker(request, { ...env, SCM_PROVIDER: "gitlab" } as Env);
+
+    expect(response.status).toBe(501);
+    await expect(
+      env.DB.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM users) AS users,
+           (SELECT COUNT(*) FROM user_identities) AS identities,
+           (SELECT COUNT(*) FROM user_role_assignments) AS assignments`
+      ).first<{ users: number; identities: number; assignments: number }>()
+    ).resolves.toEqual({ users: 0, identities: 0, assignments: 0 });
+  });
+
   it("applies a matched route's cache policy to an authentication rejection", async () => {
     const traceId = "route-cache-trace";
     const response = await SELF.fetch("https://test.local/roles", {

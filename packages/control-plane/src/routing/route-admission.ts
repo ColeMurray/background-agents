@@ -49,6 +49,8 @@ export type RouteAdmissionResult =
 export interface AuthorizationFailure {
   response: Response;
   decision?: DeniedAuthorizationDecision;
+  /** Deployment-capability refusals skip the general request log, as at the final gate. */
+  requestLog?: "emit" | "skip";
 }
 
 interface AuthorizationEvidence {
@@ -59,7 +61,7 @@ interface AuthorizationEvidence {
 type RouteAuthorizationResult =
   | { kind: "allowed"; decision: AllowedAuthorizationDecision }
   | { kind: "denied"; response: Response; decision: DeniedAuthorizationDecision }
-  | { kind: "error"; response: Response };
+  | { kind: "error"; response: Response; requestLog?: "emit" | "skip" };
 
 function denied(
   response: Response,
@@ -109,7 +111,7 @@ function resultForFailure(
 ): Exclude<RouteAuthorizationResult, { kind: "allowed" }> {
   return failure.decision
     ? { kind: "denied", response: failure.response, decision: failure.decision }
-    : { kind: "error", response: failure.response };
+    : { kind: "error", response: failure.response, requestLog: failure.requestLog };
 }
 
 function enforceImplementedScmProvider(
@@ -351,6 +353,8 @@ function enforceStaticServicePermissionCeiling(
 async function finalizeServiceActor(
   policy: RouteAdmissionPolicy,
   request: Request,
+  pathname: string,
+  env: Env,
   ctx: RequestContext
 ): Promise<AuthorizationFailure | null> {
   if (!loadsCanonicalSubject(policy)) return null;
@@ -358,6 +362,11 @@ async function finalizeServiceActor(
   if (principal?.kind !== "service" || !principal.actor || principal.actor.canonicalUserId) {
     return null;
   }
+
+  // Deployment capability does not depend on the caller: a request this
+  // deployment cannot serve must not enroll a user, identity, or assignment.
+  const providerCheck = enforceImplementedScmProvider(policy, pathname, env, ctx);
+  if (providerCheck) return { response: providerCheck, requestLog: "skip" };
 
   try {
     const prepared = policy.serviceActorClaims
@@ -642,6 +651,8 @@ async function enforceRouteAuthorization(
   policy: RouteAdmissionPolicy,
   match: RegExpMatchArray,
   request: Request,
+  pathname: string,
+  env: Env,
   ctx: RequestContext
 ): Promise<RouteAuthorizationResult> {
   const evidence = emptyEvidence();
@@ -671,7 +682,7 @@ async function enforceRouteAuthorization(
   const ceilingFailure = enforceStaticServicePermissionCeiling(policy, ctx, evidence);
   if (ceilingFailure) return resultForFailure(ceilingFailure);
 
-  const actorFailure = await finalizeServiceActor(policy, request, ctx);
+  const actorFailure = await finalizeServiceActor(policy, request, pathname, env, ctx);
   if (actorFailure) return resultForFailure(actorFailure);
 
   const activeUserFailure = await enforceActiveUser(policy, ctx, evidence);
@@ -764,12 +775,19 @@ export async function admitRoute(input: {
     }
   }
 
-  const authorization = await enforceRouteAuthorization(policy, match, handlerRequest, ctx);
-  if (authorization.kind !== "allowed") {
-    return denied(
-      authorization.response,
-      authorization.kind === "denied" ? { decision: authorization.decision } : undefined
-    );
+  const authorization = await enforceRouteAuthorization(
+    policy,
+    match,
+    handlerRequest,
+    pathname,
+    env,
+    ctx
+  );
+  if (authorization.kind === "denied") {
+    return denied(authorization.response, { decision: authorization.decision });
+  }
+  if (authorization.kind === "error") {
+    return denied(authorization.response, { requestLog: authorization.requestLog });
   }
 
   const providerCheck = enforceImplementedScmProvider(policy, pathname, env, ctx);

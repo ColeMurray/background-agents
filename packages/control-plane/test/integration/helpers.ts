@@ -152,6 +152,8 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
  * carry their service credential. Signs per request because sig1 binds method,
  * URL, and body.
  */
+const DEFAULT_SERVICE_REQUEST_METHOD = "GET";
+
 export interface ServiceRequestInit {
   method?: string;
   body?: string;
@@ -169,7 +171,7 @@ export async function serviceRequestHeaders(
   url: string,
   init?: ServiceRequestInit
 ): Promise<Record<string, string>> {
-  const method = init?.method ?? "GET";
+  const method = init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD;
   const service = init?.service ?? "web";
   const auth = await buildServiceAuthHeaders({
     service,
@@ -193,7 +195,7 @@ export async function serviceRequestHeaders(
 
 export async function serviceFetch(url: string, init?: ServiceRequestInit): Promise<Response> {
   return SELF.fetch(url, {
-    method: init?.method ?? "GET",
+    method: init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD,
     headers: await serviceRequestHeaders(url, init),
     body: init?.body,
   });
