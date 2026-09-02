@@ -210,7 +210,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transactionSync: transaction,
     db,
     alarmStore,
-    sockets: socketPlatform,
+    sockets: socketHost,
     createBackgroundTasks,
   } = platform;
 
@@ -257,7 +257,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Tier 2 — sockets and alarm scheduling.
   const alarmScheduler = createEarliestAlarmScheduler(alarmStore, alarmDeadlines);
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
-    socketPlatform,
+    socketHost,
     sandboxRepository,
     wsClientMappingRepository,
     alarmScheduler,
@@ -266,7 +266,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   );
   // Platform-level ping/pong: keepalives are answered without waking the
   // runtime. Session-wide wiring, so it lives here.
-  socketPlatform.setAutoResponse(
+  socketHost.setAutoResponse(
     JSON.stringify({ type: "ping" }),
     JSON.stringify({ type: "pong", timestamp: Date.now() })
   );

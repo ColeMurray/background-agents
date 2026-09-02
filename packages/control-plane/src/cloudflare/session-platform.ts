@@ -19,7 +19,7 @@ export function createDurableObjectSessionPlatform(
     sockets: {
       accept: (ws, tags) => ctx.acceptWebSocket(ws, tags),
       tags: (ws) => ctx.getTags(ws),
-      all: (tag) => ctx.getWebSockets(tag),
+      sockets: (tag) => ctx.getWebSockets(tag),
       // Hibernation-level auto-response: matched by the runtime without
       // waking the object.
       setAutoResponse: (request, response) =>

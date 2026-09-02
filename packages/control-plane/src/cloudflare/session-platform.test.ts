@@ -57,13 +57,13 @@ describe("createDurableObjectSessionPlatform", () => {
     const { state, calls } = createFakeState();
     const ws = {} as WebSocket;
 
-    const platform = createDurableObjectSessionPlatform(state, null);
-    platform.sockets.accept(ws, ["sandbox", "sid:sb-1"]);
-    platform.sockets.all();
-    platform.sockets.all("sandbox");
+    const { sockets: host } = createDurableObjectSessionPlatform(state, null);
+    host.accept(ws, ["sandbox", "sid:sb-1"]);
+    host.sockets();
+    host.sockets("sandbox");
 
     expect(calls.acceptWebSocket).toHaveBeenCalledWith(ws, ["sandbox", "sid:sb-1"]);
-    expect(platform.sockets.tags(ws)).toEqual(["sandbox", "sid:sb-1"]);
+    expect(host.tags(ws)).toEqual(["sandbox", "sid:sb-1"]);
     expect(calls.getTags).toHaveBeenCalledWith(ws);
     expect(calls.getWebSockets.mock.calls).toEqual([[undefined], ["sandbox"]]);
   });

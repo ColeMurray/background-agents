@@ -1,7 +1,7 @@
 /**
  * Unit tests for SessionWebSocketManagerImpl.
  *
- * Uses a fake SocketPlatform and mock repositories to test
+ * Uses a fake SocketHost and mock repositories to test
  * all WebSocket mechanics in isolation from the host.
  */
 
@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from "vitest";
 import { SessionWebSocketManagerImpl } from "./websocket-manager";
 import type { WebSocketManagerConfig } from "./websocket-manager";
 import type { Logger } from "../logger";
-import type { SocketPlatform } from "./platform";
+import type { SocketHost } from "./platform";
 import type { ClientInfo } from "../types";
 import type { SandboxRepository } from "./sandbox-repository";
 import type {
@@ -53,25 +53,25 @@ function createFakeWebSocket(readyState = WebSocket.OPEN): WebSocket {
 }
 
 /** Type for the fake DurableObjectState with test helpers. */
-interface FakeSocketPlatform {
+interface FakeSocketHost {
   sockets: Map<WebSocket, string[]>;
-  platform: SocketPlatform;
+  host: SocketHost;
 }
 
 /**
- * Fake SocketPlatform that tracks accepted WebSockets and their tags.
+ * Fake SocketHost that tracks accepted WebSockets and their tags.
  */
-function createFakeSocketPlatform(): FakeSocketPlatform {
+function createFakeSocketHost(): FakeSocketHost {
   const sockets = new Map<WebSocket, string[]>();
 
-  const platform: SocketPlatform = {
+  const host: SocketHost = {
     accept(ws, tags) {
       sockets.set(ws, tags);
     },
     tags(ws) {
       return sockets.get(ws) ?? [];
     },
-    all(tag) {
+    sockets(tag) {
       const accepted = Array.from(sockets.keys());
       return tag === undefined
         ? accepted
@@ -80,7 +80,7 @@ function createFakeSocketPlatform(): FakeSocketPlatform {
     setAutoResponse: vi.fn(),
   };
 
-  return { sockets, platform };
+  return { sockets, host };
 }
 
 /** Create a minimal mock Logger. */
@@ -203,7 +203,7 @@ const TEST_CONFIG: WebSocketManagerConfig = { authTimeoutMs: 100 };
 
 /** Create a fresh manager with all dependencies. */
 function createManager() {
-  const fakePlatform = createFakeSocketPlatform();
+  const fakeHost = createFakeSocketHost();
   const mockRepo = createMockRepository();
   const alarmScheduler = {
     schedule: vi.fn(async () => {}),
@@ -213,7 +213,7 @@ function createManager() {
   const log = createMockLogger();
 
   const manager = new SessionWebSocketManagerImpl(
-    fakePlatform.platform,
+    fakeHost.host,
     mockRepo.repo,
     mockRepo.repo as unknown as WsClientMappingRepository,
     alarmScheduler,
@@ -223,8 +223,8 @@ function createManager() {
 
   return {
     manager,
-    sockets: fakePlatform.sockets,
-    platform: fakePlatform.platform,
+    sockets: fakeHost.sockets,
+    host: fakeHost.host,
     mockRepo,
     alarmScheduler,
     log,
