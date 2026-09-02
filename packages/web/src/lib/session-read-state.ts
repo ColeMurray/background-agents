@@ -84,21 +84,23 @@ export function readStateSupersedes(next: SessionReadState, current: SessionRead
  * Fetched inbox rows are never edited. Each row is merged with its overlay
  * entry at render and the higher version wins, so a read shows on every row
  * at once, including pages loaded through "Load more". Entries are written
- * only from read-state responses and retire once a fetched row catches up.
+ * only from read-state responses, under the viewer who sent the request, so
+ * one viewer's reads never render for another. A fetched row that catches up
+ * with an entry simply wins at render; nothing is retired.
  */
 export type SessionReadOverlay = ReadonlyMap<string, SessionReadState>;
 
-let overlay: SessionReadOverlay = new Map();
-let overlayOwner: string | null = null;
+const EMPTY_OVERLAY: SessionReadOverlay = new Map();
+let overlays: ReadonlyMap<string, SessionReadOverlay> = new Map();
 const overlayListeners = new Set<() => void>();
 
-function replaceOverlay(next: SessionReadOverlay): void {
-  overlay = next;
+function replaceOverlays(next: ReadonlyMap<string, SessionReadOverlay>): void {
+  overlays = next;
   for (const listener of overlayListeners) listener();
 }
 
-export function getSessionReadOverlay(): SessionReadOverlay {
-  return overlay;
+export function getSessionReadOverlay(viewerId: string | null): SessionReadOverlay {
+  return (viewerId !== null && overlays.get(viewerId)) || EMPTY_OVERLAY;
 }
 
 export function subscribeSessionReadOverlay(listener: () => void): () => void {
@@ -106,26 +108,24 @@ export function subscribeSessionReadOverlay(listener: () => void): () => void {
   return () => overlayListeners.delete(listener);
 }
 
+/** Forgets every viewer's reads; tests start from a clean page. */
 export function resetSessionReadOverlay(): void {
-  overlayOwner = null;
-  if (overlay.size > 0) replaceOverlay(new Map());
+  if (overlays.size > 0) replaceOverlays(new Map());
 }
 
-/** Reads belong to one viewer: a sign-out or account switch forgets them. */
-export function scopeSessionReadOverlay(userId: string | null): void {
-  if (userId === overlayOwner) return;
-  resetSessionReadOverlay();
-  overlayOwner = userId;
-}
-
-/** Whether this page already read `messageId`, so opening it again need not ask. */
-export function isSessionMessageRead(sessionId: string, messageId: string): boolean {
-  const entry = overlay.get(sessionId);
+/** Whether this page already read `messageId` for this viewer, so opening it again need not ask. */
+export function isSessionMessageRead(
+  viewerId: string,
+  sessionId: string,
+  messageId: string
+): boolean {
+  const entry = getSessionReadOverlay(viewerId).get(sessionId);
   return entry?.latestMessageId === messageId && !entry.unread;
 }
 
-function recordReadState(sessionId: string, readState: SessionReadState): void {
-  const current = overlay.get(sessionId);
+function recordReadState(viewerId: string, sessionId: string, readState: SessionReadState): void {
+  const entries = getSessionReadOverlay(viewerId);
+  const current = entries.get(sessionId);
   if (current && !readStateSupersedes(readState, current)) return;
   if (
     current &&
@@ -135,9 +135,11 @@ function recordReadState(sessionId: string, readState: SessionReadState): void {
   ) {
     return;
   }
-  const next = new Map(overlay);
+  const next = new Map(entries);
   next.set(sessionId, readState);
-  replaceOverlay(next);
+  const nextOverlays = new Map(overlays);
+  nextOverlays.set(viewerId, next);
+  replaceOverlays(nextOverlays);
 }
 
 /**
@@ -149,37 +151,18 @@ function recordReadState(sessionId: string, readState: SessionReadState): void {
  * session between categories itself. The refetch is independent of the
  * acknowledgement: a failed refresh is SWR's to retry, not a reason to send
  * the read again.
- *
- * Returns false when the viewer changed while the request was in flight;
- * the result belongs to the previous viewer and is dropped.
  */
 export function applySessionReadResult(
   result: SessionReadResult,
   mutate: ScopedMutator,
   viewerId: string
-): boolean {
-  if (viewerId !== overlayOwner) return false;
-  recordReadState(result.sessionId, readStateFromResult(result));
+): void {
+  recordReadState(viewerId, result.sessionId, readStateFromResult(result));
   if (result.outcome === "marked_read" || result.outcome === "not_latest") {
     void mutate(isSessionInboxKey).catch((error: unknown) => {
       console.error("Failed to refresh session inbox after read", error);
     });
   }
-  return true;
-}
-
-/** Retires overlay entries that fetched rows have caught up with. */
-export function pruneSessionReadOverlay(
-  sessions: Iterable<{ id: string; readState: SessionReadState }>
-): void {
-  let next: Map<string, SessionReadState> | null = null;
-  for (const session of sessions) {
-    const entry = overlay.get(session.id);
-    if (!entry || !readStateSupersedes(session.readState, entry)) continue;
-    next ??= new Map(overlay);
-    next.delete(session.id);
-  }
-  if (next) replaceOverlay(next);
 }
 
 function mergeReadState<T extends { id: string; readState: SessionReadState }>(
@@ -196,8 +179,12 @@ export function applySessionReadOverlay(
   entries: SessionReadOverlay
 ): SessionInboxItem {
   if (entries.size === 0) return item;
-  return {
-    rootSession: mergeReadState(item.rootSession, entries),
-    descendantSessions: item.descendantSessions.map((session) => mergeReadState(session, entries)),
-  };
+  const rootSession = mergeReadState(item.rootSession, entries);
+  let changed = rootSession !== item.rootSession;
+  const descendantSessions = item.descendantSessions.map((session) => {
+    const merged = mergeReadState(session, entries);
+    if (merged !== session) changed = true;
+    return merged;
+  });
+  return changed ? { rootSession, descendantSessions } : item;
 }

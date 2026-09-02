@@ -21,8 +21,6 @@ import {
   applySessionReadResult,
   getSessionReadOverlay,
   markLatestMessageRead,
-  pruneSessionReadOverlay,
-  scopeSessionReadOverlay,
   subscribeSessionReadOverlay,
 } from "@/lib/session-read-state";
 
@@ -77,6 +75,9 @@ function useCategoryPagination(
   nextPageSequence: MutableRefObject<number>
 ) {
   const { fetcher } = useSWRConfig();
+  // The generation with a request in flight, so a second click before the
+  // loading state renders cannot send the same cursor twice.
+  const inFlightGeneration = useRef<number | null>(null);
   const firstPage = snapshot?.categories[category];
   const chainIdentity = JSON.stringify([filterIdentity, firstPage?.nextCursor ?? null]);
   const [state, setState] = useState<LoadedPagesState>(() => emptyPages(chainIdentity, 0));
@@ -109,9 +110,10 @@ function useCategoryPagination(
 
   const requestPage = useCallback(async () => {
     const cursor = lastPage?.nextCursor;
-    if (!snapshot || !cursor || current.loading) return;
-    const key = buildSessionInboxKey({ category, cursor, mine });
     const generation = current.generation;
+    if (!snapshot || !cursor || inFlightGeneration.current === generation) return;
+    inFlightGeneration.current = generation;
+    const key = buildSessionInboxKey({ category, cursor, mine });
     const sequence = nextPageSequence.current++;
     setState((previous) =>
       previous.generation === generation
@@ -130,12 +132,13 @@ function useCategoryPagination(
       setState((previous) =>
         previous.generation === generation ? { ...previous, loading: false, error } : previous
       );
+    } finally {
+      if (inFlightGeneration.current === generation) inFlightGeneration.current = null;
     }
   }, [
     canonicalRootIds,
     category,
     current.generation,
-    current.loading,
     fetcher,
     lastPage,
     mine,
@@ -186,12 +189,9 @@ function useCategoryPagination(
   };
 }
 
-function useSessionReadOverlay() {
-  return useSyncExternalStore(
-    subscribeSessionReadOverlay,
-    getSessionReadOverlay,
-    getSessionReadOverlay
-  );
+function useSessionReadOverlay(viewerId: string | null) {
+  const getSnapshot = useCallback(() => getSessionReadOverlay(viewerId), [viewerId]);
+  return useSyncExternalStore(subscribeSessionReadOverlay, getSnapshot, getSnapshot);
 }
 
 export function useSidebarSessions() {
@@ -326,15 +326,7 @@ export function useSidebarSessions() {
     inProgress.loadedPages,
   ]);
 
-  const overlay = useSessionReadOverlay();
-  useEffect(() => {
-    scopeSessionReadOverlay(userId);
-  }, [userId]);
-  useEffect(() => {
-    pruneSessionReadOverlay(
-      fetchedCategoryItems.flat().flatMap((item) => [item.rootSession, ...item.descendantSessions])
-    );
-  }, [fetchedCategoryItems]);
+  const overlay = useSessionReadOverlay(userId);
 
   // Reads this page established are merged over the fetched rows at render.
   // The server places sessions; the client only stops showing a hierarchy in
@@ -388,7 +380,6 @@ export function useSidebarSessions() {
   const handleMarkLatestMessageRead = useCallback(
     async (sessionId: string) => {
       if (!userId) return;
-      scopeSessionReadOverlay(userId);
       const result = await markLatestMessageRead(sessionId);
       applySessionReadResult(result, mutateCache, userId);
     },

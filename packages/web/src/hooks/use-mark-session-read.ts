@@ -7,7 +7,6 @@ import {
   applySessionReadResult,
   isSessionMessageRead,
   markMessageRead,
-  scopeSessionReadOverlay,
   SessionReadRequestError,
 } from "@/lib/session-read-state";
 
@@ -33,8 +32,7 @@ export function useMarkSessionRead(sessionId: string, messageId: string | null):
 
   useEffect(() => {
     if (!messageId || !viewerId) return;
-    scopeSessionReadOverlay(viewerId);
-    if (isSessionMessageRead(sessionId, messageId)) return;
+    if (isSessionMessageRead(viewerId, sessionId, messageId)) return;
     let cancelled = false;
     let settled = false;
     let inFlight = false;

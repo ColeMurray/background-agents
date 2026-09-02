@@ -13,9 +13,8 @@ import type { SessionReadResult } from "@open-inspect/shared/types/sessions";
 import { useSidebarSessions } from "./use-sidebar-sessions";
 import {
   applySessionReadResult,
-  getSessionReadOverlay,
+  isSessionMessageRead,
   resetSessionReadOverlay,
-  scopeSessionReadOverlay,
 } from "@/lib/session-read-state";
 
 const defaultUser = { id: "github:123", name: "Test User" };
@@ -74,7 +73,6 @@ function readItem(id: string): SessionInboxItem {
 const noRevalidate = async () => [];
 /** A read the session page recorded for the signed-in viewer. */
 function recordPageRead(result: SessionReadResult) {
-  scopeSessionReadOverlay(defaultUser.id);
   applySessionReadResult(result, noRevalidate, defaultUser.id);
 }
 
@@ -211,6 +209,27 @@ describe("useSidebarSessions", () => {
     expect(fetcher).toHaveBeenCalledWith(
       "/api/sessions/inbox?category=needs_attention&cursor=next"
     );
+  });
+
+  it("sends one request when Load more is clicked twice before it renders as loading", async () => {
+    let paginationRequests = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=")) {
+        paginationRequests += 1;
+        return page(["page-2"]);
+      }
+      return snapshot({ needs_attention: page(["attention"], "next") });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.sectionPagination.needsAttention.loadMore();
+      result.current.sectionPagination.needsAttention.loadMore();
+    });
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+
+    expect(paginationRequests).toBe(1);
   });
 
   it("keeps additional pages across unchanged and changed coherent head refreshes", async () => {
@@ -615,7 +634,7 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention[0]?.readState.unread).toBe(true);
   });
 
-  it("retires a recorded read once a fetched row catches up", async () => {
+  it("keeps a recorded read once the fetched row catches up, so reopening need not ask", async () => {
     let sessionRead = false;
     const fetcher = vi.fn(async () =>
       sessionRead
@@ -633,28 +652,34 @@ describe("useSidebarSessions", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     act(() => recordPageRead(readResult("target")));
-    expect(getSessionReadOverlay().has("target")).toBe(true);
+    expect(result.current.needsAttention).toEqual([]);
 
     sessionRead = true;
     await act(async () => result.current.refreshSnapshot());
 
-    await waitFor(() => expect(getSessionReadOverlay().has("target")).toBe(false));
-    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["target", "running"]);
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["target", "running"])
+    );
+    expect(result.current.inProgress[0]?.readState.unread).toBe(false);
+    expect(isSessionMessageRead(defaultUser.id, "target", "msg-1")).toBe(true);
   });
 
-  it("forgets recorded reads when the viewer signs out", async () => {
+  it("does not render another viewer's reads", async () => {
     const fetcher = vi.fn(async () => snapshot());
     const { result, rerender } = renderHook(() => useSidebarSessions(), {
       wrapper: wrapper(fetcher),
     });
     await waitFor(() => expect(result.current.loading).toBe(false));
     act(() => recordPageRead(readResult("attention")));
-    expect(getSessionReadOverlay().size).toBe(1);
+    expect(result.current.needsAttention).toEqual([]);
 
-    authUser = null;
+    authUser = { id: "github:456", name: "Other User" };
     rerender();
 
-    await waitFor(() => expect(getSessionReadOverlay().size).toBe(0));
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"])
+    );
+    expect(result.current.needsAttention[0]?.readState.unread).toBe(true);
   });
 
   it("discards loaded pages when the head boundary moves", async () => {

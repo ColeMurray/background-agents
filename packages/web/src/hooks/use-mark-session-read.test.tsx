@@ -71,7 +71,7 @@ describe("useMarkSessionRead", () => {
     });
 
     expect(markMessageRead).toHaveBeenCalledExactlyOnceWith("session-1", "message-1");
-    expect(getSessionReadOverlay().get("session-1")).toEqual({
+    expect(getSessionReadOverlay("viewer-a").get("session-1")).toEqual({
       latestMessageId: "message-1",
       unread: false,
       version: 1,
@@ -126,7 +126,7 @@ describe("useMarkSessionRead", () => {
     expect(console.error).toHaveBeenCalled();
   });
 
-  it("drops a response that arrives after the viewer changed", async () => {
+  it("records a late response under the viewer who sent it", async () => {
     let resolveFirst!: (value: SessionReadResult) => void;
     markMessageRead
       .mockImplementationOnce(
@@ -144,12 +144,19 @@ describe("useMarkSessionRead", () => {
     viewerId = "viewer-b";
     await act(async () => rerender());
     expect(markMessageRead).toHaveBeenCalledTimes(2);
-    const entryBefore = getSessionReadOverlay().get("session-1");
 
     await act(async () => resolveFirst(result("not_latest", true)));
 
-    expect(getSessionReadOverlay().get("session-1")).toEqual(entryBefore);
-    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(getSessionReadOverlay("viewer-a").get("session-1")).toEqual({
+      latestMessageId: "message-1",
+      unread: true,
+      version: 1,
+    });
+    expect(getSessionReadOverlay("viewer-b").get("session-1")).toEqual({
+      latestMessageId: "message-1",
+      unread: false,
+      version: 1,
+    });
   });
 
   it("does nothing until the session has a terminal message", async () => {
