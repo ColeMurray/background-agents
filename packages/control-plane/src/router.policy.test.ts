@@ -82,13 +82,13 @@ describe("route policy table", () => {
         expect(authorization.allOf.length).toBeGreaterThan(0);
         for (const requirement of authorization.allOf) {
           if (requirement.kind === "automation") {
-            expect(route.path).toContain(`:${requirement.automationIdParam}`);
+            expect(route.path.split("/")).toContain(`:${requirement.automationIdParam}`);
           }
         }
         if (authorization.service.kind === "actor") {
           for (const grant of authorization.service.actorlessGrants ?? []) {
             for (const pathParam of Object.keys(grant.pathParams ?? {})) {
-              expect(route.path).toContain(`:${pathParam}`);
+              expect(route.path.split("/")).toContain(`:${pathParam}`);
             }
           }
         }

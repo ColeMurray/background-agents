@@ -9,7 +9,7 @@
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { BackgroundTasks } from "./platform-ports";
 import { createTestBackgroundTasks } from "./background-tasks.test-support";
-import { createControlPlaneApp, type ControlPlaneHost } from "./routing/hono-app";
+import { cloudflareHost, createControlPlaneApp } from "./routing/hono-app";
 import { routes } from "./routes/catalog";
 import type { Route, RouteParams } from "./routes/shared";
 import type { Env } from "./types";
@@ -25,20 +25,26 @@ export type TestRequestHandler = (
   backgroundTasks: BackgroundTasks
 ) => Promise<Response>;
 
-/** Unit fixtures hand the app their background-task port where a platform passes its execution context. */
-const testHost: ControlPlaneHost = {
-  backgroundTasks: (executionCtx) => executionCtx as BackgroundTasks,
-};
+/** Present the fixture's port as the execution context the Cloudflare host expects. */
+function executionContextFromBackgroundTasks(tasks: BackgroundTasks): ExecutionContext {
+  return {
+    waitUntil(promise): void {
+      tasks.submit(() => promise, { name: "test.http.request" });
+    },
+    passThroughOnException(): void {},
+  } as ExecutionContext;
+}
 
 /**
- * Test-only adapter over an explicit catalog. Hono registers routes when the
- * app is built, so fixtures that need synthetic routes construct their own
- * handler instead of mutating the production catalog.
+ * Test-only adapter over an explicit catalog, through the production host.
+ * Hono registers routes when the app is built, so fixtures that need
+ * synthetic routes construct their own handler instead of mutating the
+ * production catalog.
  */
 export function createTestRequestHandler(catalog: readonly Route[]): TestRequestHandler {
-  const app = createControlPlaneApp(catalog, testHost);
+  const app = createControlPlaneApp(catalog, cloudflareHost);
   return (request, env, backgroundTasks) =>
-    Promise.resolve(app.fetch(request, env, backgroundTasks as unknown as ExecutionContext));
+    Promise.resolve(app.fetch(request, env, executionContextFromBackgroundTasks(backgroundTasks)));
 }
 
 /** Test-only adapter over the production catalog. */

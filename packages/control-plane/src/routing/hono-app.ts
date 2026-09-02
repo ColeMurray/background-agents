@@ -15,10 +15,10 @@ import { routes } from "../routes/catalog";
 import type { Route, RouteParams } from "../routes/shared";
 import type { Env } from "../types";
 import { admit } from "./admit";
-import type { ControlPlaneHonoEnv, ControlPlaneHost } from "./hono-env";
+import type { ControlPlaneHonoEnv, ControlPlaneHost, PlatformExecutionContext } from "./hono-env";
 import { finalizeRouteResponse, logRequest, withCorsAndTraceHeaders } from "./request-lifecycle";
 
-export type { ControlPlaneHonoEnv, ControlPlaneHost } from "./hono-env";
+export type { ControlPlaneHonoEnv, ControlPlaneHost, PlatformExecutionContext } from "./hono-env";
 
 /** Ordinary HTTP entrypoint signature shared by the Worker and test adapters. */
 export type ControlPlaneHttpHandler = (
@@ -40,10 +40,17 @@ function assertRoutePath(route: Route): void {
   if (!ROUTE_PATH_GRAMMAR.test(route.path)) {
     throw new Error(`Route path is outside the supported grammar: ${route.method} ${route.path}`);
   }
+  const names = route.path.split("/").filter((segment) => segment.startsWith(":"));
+  const duplicate = names.find((name, index) => names.indexOf(name) !== index);
+  if (duplicate) {
+    throw new Error(`Route declares parameter ${duplicate} twice: ${route.method} ${route.path}`);
+  }
 }
 
 /** The execution context the platform passed to `app.fetch`, if any. */
-function executionContextOf(c: { executionCtx: unknown }): unknown {
+function executionContextOf(c: {
+  executionCtx: PlatformExecutionContext;
+}): PlatformExecutionContext | undefined {
   try {
     return c.executionCtx;
   } catch {
@@ -146,7 +153,13 @@ export function createControlPlaneApp(
 
     const admission = c.get("admission");
     if (!admission) {
-      if (c.get("admissionExempt") || unexpected) return;
+      if (c.get("admissionExempt")) return;
+      if (unexpected) {
+        // Admission itself failed: the 500 still carries the selected
+        // route's response policy and the common headers.
+        replaceResponse(c, finalizeRouteResponse(c.res, c.get("routePolicy") ?? {}, context));
+        return;
+      }
       logger.error("Handler answered without admission running ahead of it", {
         event: "router.unadmitted_response",
         http_method: method,
@@ -247,10 +260,10 @@ function internalError(
 
 /** The Cloudflare Worker host: background tasks ride the event's `waitUntil`. */
 export const cloudflareHost: ControlPlaneHost = {
-  backgroundTasks: (executionCtx) =>
-    createCloudflareBackgroundTasks(
-      executionCtx as Parameters<typeof createCloudflareBackgroundTasks>[0]
-    ),
+  backgroundTasks: (executionCtx) => {
+    if (!executionCtx) throw new Error("The Cloudflare host requires an execution context");
+    return createCloudflareBackgroundTasks(executionCtx);
+  },
 };
 
 /** Build the Worker's ordinary HTTP entrypoint over a route catalog. */

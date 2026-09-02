@@ -106,6 +106,38 @@ describe("control-plane Hono app lifecycle", () => {
     expect(infoLines.map((line) => [line.http_path, line.http_status])).toEqual([["/teapot", 418]]);
   });
 
+  it("finalizes a failure inside admission with the route's response policy", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const route: Route = {
+      ...publicRoute("/sessions/:id/tunnel-urls", async () => json({ ok: true })),
+      authentication: {
+        kind: "sandbox",
+        getSessionId: () => {
+          throw new Error("identity lookup failed");
+        },
+      },
+      cacheControl: "no-store",
+    };
+    const app = createControlPlaneApp([route], host);
+
+    const response = await app.fetch(new Request("https://cp.test/sessions/s-1/tunnel-urls"), env);
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: "Internal server error" });
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(response.headers.get("x-request-id")).toBeTruthy();
+    expect(response.headers.get("x-trace-id")).toBeTruthy();
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(loggedEvents(errors).map((line) => [line.event, line.http_status])).toEqual([
+      ["http.request", 500],
+    ]);
+  });
+
+  it("refuses a route that declares the same parameter twice", () => {
+    expect(() =>
+      createControlPlaneApp([publicRoute("/parents/:id/children/:id", async () => json({}))], host)
+    ).toThrow("Route declares parameter :id twice");
+  });
+
   it("refuses to build a principal-less route that requires authorization", () => {
     const route = {
       ...publicRoute("/broken", async () => json({})),

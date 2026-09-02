@@ -36,6 +36,9 @@ export function admit(policy: AdmissionPolicy): MiddlewareHandler<ControlPlaneHo
   return async (c, next) => {
     const context = c.get("requestContext");
     const pathname = c.req.path;
+    // Recorded before anything can fail so the lifecycle finalizes an
+    // admission error with this route's response policy.
+    c.set("routePolicy", policy);
     const params = rawRouteParams(c.req.routePath, pathname);
     const result = await admitRoute({
       request: c.req.raw,
