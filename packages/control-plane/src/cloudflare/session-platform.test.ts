@@ -28,7 +28,8 @@ function createFakeState() {
     setWebSocketAutoResponse: vi.fn(),
     waitUntil: vi.fn(),
   };
-  return { state: calls as unknown as DurableObjectState, storage, calls };
+  const db = {} as SqlDatabase;
+  return { state: calls as unknown as DurableObjectState, storage, calls, db };
 }
 
 describe("createDurableObjectSessionPlatform", () => {
@@ -39,25 +40,24 @@ describe("createDurableObjectSessionPlatform", () => {
     vi.unstubAllGlobals();
   });
 
-  it("exposes the object's id, SQL, transaction, alarm store, and db", () => {
-    const { state, storage } = createFakeState();
-    const db = {} as SqlDatabase;
+  it("exposes the object's id, storage, alarm store, and the global store", () => {
+    const { state, storage, db } = createFakeState();
 
     const platform = createDurableObjectSessionPlatform(state, db);
 
     expect(platform.id).toBe("do-id");
-    expect(platform.sql).toBe(storage.sql);
+    expect(platform.storage).toBe(storage);
     expect(platform.db).toBe(db);
     expect(platform.alarmStore).toBe(storage);
-    expect(platform.transactionSync(() => 42)).toBe(42);
+    expect(platform.storage.transactionSync(() => 42)).toBe(42);
     expect(storage.transactionSync).toHaveBeenCalledTimes(1);
   });
 
   it("delegates socket acceptance, tags, and enumeration, passing the tag filter through", () => {
-    const { state, calls } = createFakeState();
+    const { state, calls, db } = createFakeState();
     const ws = {} as WebSocket;
 
-    const { sockets: host } = createDurableObjectSessionPlatform(state, null);
+    const { sockets: host } = createDurableObjectSessionPlatform(state, db);
     host.accept(ws, ["sandbox", "sid:sb-1"]);
     host.sockets();
     host.sockets("sandbox");
@@ -69,9 +69,9 @@ describe("createDurableObjectSessionPlatform", () => {
   });
 
   it("installs the auto-response as a request/response pair", () => {
-    const { state, calls } = createFakeState();
+    const { state, calls, db } = createFakeState();
 
-    const platform = createDurableObjectSessionPlatform(state, null);
+    const platform = createDurableObjectSessionPlatform(state, db);
     platform.sockets.setAutoResponse('{"type":"ping"}', '{"type":"pong"}');
 
     expect(calls.setWebSocketAutoResponse).toHaveBeenCalledTimes(1);
@@ -82,10 +82,10 @@ describe("createDurableObjectSessionPlatform", () => {
   });
 
   it("builds background tasks over the object's event lifetime that report to the given logger", async () => {
-    const { state, calls } = createFakeState();
+    const { state, calls, db } = createFakeState();
     const logger = { error: vi.fn() } as unknown as Logger;
 
-    const platform = createDurableObjectSessionPlatform(state, null);
+    const platform = createDurableObjectSessionPlatform(state, db);
     platform.createBackgroundTasks(logger).submit(() => Promise.reject(new Error("boom")), {
       name: "session.task",
     });

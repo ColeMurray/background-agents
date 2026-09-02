@@ -27,7 +27,7 @@ describe("createSessionRuntime", () => {
 
       let error: string | null = null;
       try {
-        createSessionRuntime(createDurableObjectSessionPlatform(state, null), doctored);
+        createSessionRuntime(createDurableObjectSessionPlatform(state, env.DB), doctored);
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }

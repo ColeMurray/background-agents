@@ -4,16 +4,15 @@ import { createCloudflareBackgroundTasks } from "./background-tasks";
 
 /**
  * A Durable Object's storage, hibernatable sockets, alarm, and event lifetime
- * as the session platform.
+ * as the session platform, over the deployment's global store.
  */
 export function createDurableObjectSessionPlatform(
   ctx: DurableObjectState,
-  db: SqlDatabase | null
+  db: SqlDatabase
 ): SessionPlatform {
   return {
     id: ctx.id.toString(),
-    sql: ctx.storage.sql,
-    transactionSync: <T>(closure: () => T): T => ctx.storage.transactionSync(closure),
+    storage: ctx.storage,
     db,
     alarmStore: ctx.storage,
     sockets: {

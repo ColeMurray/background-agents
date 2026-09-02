@@ -206,13 +206,14 @@ function resolveExecutionTimeoutMs(
 export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
   const {
     id: durableObjectId,
-    sql,
-    transactionSync: transaction,
+    storage,
     db,
     alarmStore,
     sockets: socketHost,
     createBackgroundTasks,
   } = platform;
+  const { sql } = storage;
+  const transaction = <T>(closure: () => T): T => storage.transactionSync(closure);
 
   // Tier 1 — repositories and alarm persistence (leaves over SqlStorage).
   const attachmentRepository = new SessionAttachmentRepository(sql);
@@ -285,8 +286,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
-  const sessionIndexStore = db ? new SessionIndexStore(db) : null;
-  const sessionPullRequestStore = db ? new SessionPullRequestStore(db) : null;
+  const sessionIndexStore = new SessionIndexStore(db);
+  const sessionPullRequestStore = new SessionPullRequestStore(db);
   const resolveRepoId = (sessionRow: SessionRow) =>
     resolveSessionRepoId(sessionRow, sessionCoreRepository, sourceControlProvider);
 
@@ -329,7 +330,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       terminalMessageCompletedAt: completedAt,
     });
 
-  const userScmTokenStore = db ? new UserScmTokenStore(db, tokenEncryptionKey) : null;
+  const userScmTokenStore = new UserScmTokenStore(db, tokenEncryptionKey);
   const participantService = new ParticipantService({
     repository: participantRepository,
     getProcessingMessageAuthor: () => messageRepository.getProcessingMessageAuthor(),
@@ -339,14 +340,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     userScmTokenStore,
   });
 
-  const scheduler = db ? new Scheduler(db, env, backgroundTasks) : undefined;
+  const scheduler = new Scheduler(db, env, backgroundTasks);
   const callbackService = new CallbackNotificationService({
     repository: sessionCoreRepository,
     messageRepository,
     env,
-    completeAutomationRun: scheduler
-      ? (completion) => scheduler.runComplete(completion)
-      : undefined,
+    completeAutomationRun: (completion) => scheduler.runComplete(completion),
     log,
     getSessionId: () => resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
   });
@@ -555,7 +554,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // service around the request-scoped log, so these stay functions.
   const refreshOpenAIToken = async (sessionRow: SessionRow, requestLog: Logger) => {
     const service = new OpenAITokenRefreshService(
-      db!,
+      db,
       repoSecretsEncryptionKey,
       resolveRepoId,
       requestLog
@@ -564,7 +563,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
   const refreshXaiToken = async (sessionRow: SessionRow, requestLog: Logger) => {
     const service = new XaiTokenRefreshService(
-      db!,
+      db,
       repoSecretsEncryptionKey,
       resolveRepoId,
       requestLog
@@ -582,7 +581,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sandboxRepository,
     sandboxEventProcessor,
     messenger,
-    Boolean(db),
     refreshOpenAIToken,
     refreshXaiToken,
     getScmCredentials,
@@ -643,7 +641,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         pushBranchToRemote: (pushSpec) => pushService.pushBranchToRemote(pushSpec),
         messenger,
         appName: resolveAppName(env),
-        sessionPullRequests: sessionPullRequestStore ?? undefined,
+        sessionPullRequests: sessionPullRequestStore,
         resolveScmSettings: (repo) => resolveScmSettings(db, repo),
       });
 
@@ -691,7 +689,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     schedulePullRequestRefresh,
     scmProviderName,
     resolveAuthorization: async (userId) => {
-      if (!db) return { kind: "unavailable" };
       try {
         const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
         return authorization.suspendedAt === null
@@ -865,7 +862,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
 interface LifecycleManagerDeps {
   env: Env;
-  db: SqlDatabase | null;
+  db: SqlDatabase;
   /** The latched public-session-id resolver shared with the session logger. */
   getSessionId: () => string;
   /** The repository, satisfying the manager's storage port structurally. */
@@ -910,34 +907,27 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     env.WORKER_URL ||
     `https://open-inspect-control-plane.${env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
-  // Create D1-backed lookups if database is available
-  let mcpServerLookup: McpServerLookup | undefined;
-  if (db) {
-    const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
-    mcpServerLookup = {
-      getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
-    };
-  }
+  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
+  const mcpServerLookup: McpServerLookup = {
+    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
+  };
 
   // Session-scoped gate: resolved from the primary member (the scalar mirror
   // this lookup is called with) — see resolveSessionScopedSettings for the
   // per-feature scope rules. Token absence short-circuits to false so a
   // misconfigured deployment never installs a tool that would 503 on every call.
-  let slackAgentNotifyLookup: SlackAgentNotifyLookup | undefined;
-  if (db) {
-    const tokenPresent = !!env.SLACK_BOT_TOKEN;
-    const settingsStore = new IntegrationSettingsStore(db);
-    slackAgentNotifyLookup = {
-      isEnabledForRepo: async (repoOwner, repoName) => {
-        if (!tokenPresent) return false;
-        const settings =
-          repoOwner && repoName
-            ? (await settingsStore.getResolvedConfig("slack", `${repoOwner}/${repoName}`)).settings
-            : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
-        return resolveSlackSettings(settings).agentNotificationsEnabled;
-      },
-    };
-  }
+  const tokenPresent = !!env.SLACK_BOT_TOKEN;
+  const settingsStore = new IntegrationSettingsStore(db);
+  const slackAgentNotifyLookup: SlackAgentNotifyLookup = {
+    isEnabledForRepo: async (repoOwner, repoName) => {
+      if (!tokenPresent) return false;
+      const settings =
+        repoOwner && repoName
+          ? (await settingsStore.getResolvedConfig("slack", `${repoOwner}/${repoName}`)).settings
+          : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});
+      return resolveSlackSettings(settings).agentNotificationsEnabled;
+    },
+  };
 
   const sandboxDashboardUrlBuilder =
     sandboxBackend === "modal"
@@ -963,13 +953,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     sandboxDashboardUrlBuilder,
   };
 
-  // Create the image lookup if D1 is available and the provider supports
-  // prebuilt images.
-  let imageBuildLookup: ImageBuildLookup | undefined;
+  // The image lookup exists only for providers that support prebuilt images.
   const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
-  if (db && imageBuildProvider) {
-    imageBuildLookup = createImageBuildLookup(db, imageBuildProvider);
-  }
+  const imageBuildLookup: ImageBuildLookup | undefined = imageBuildProvider
+    ? createImageBuildLookup(db, imageBuildProvider)
+    : undefined;
 
   return new SandboxLifecycleManager(
     provider,

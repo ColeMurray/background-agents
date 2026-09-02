@@ -27,18 +27,24 @@ export interface SocketHost {
   setAutoResponse(request: string, response: string): void;
 }
 
+/**
+ * The session's own SQLite store. The statements and the transaction
+ * primitive are bound to the same connection.
+ */
+export interface SessionStorage {
+  readonly sql: SqlStorage;
+  transactionSync: TransactionSync;
+}
+
 export interface SessionPlatform {
   /**
    * The host's identity for this runtime. It stands in for the session id
    * until `init` writes the session row.
    */
   id: string;
-  /** The session's own SQLite store. */
-  sql: SqlStorage;
-  /** Run `closure` atomically against `sql`. */
-  transactionSync: TransactionSync;
-  /** The global store, or null when the deployment has none bound. */
-  db: SqlDatabase | null;
+  storage: SessionStorage;
+  /** The global store. A host that cannot supply one cannot run sessions. */
+  db: SqlDatabase;
   /** The runtime's single scheduled wake-up. */
   alarmStore: AlarmScheduleStore;
   sockets: SocketHost;
