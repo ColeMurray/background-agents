@@ -1,6 +1,6 @@
 import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import type { SqlStorage } from "./sql-storage";
-import { participantRowSchema, type ParticipantRow } from "./types";
+import { participantRowSchema, SessionStorageIntegrityError, type ParticipantRow } from "./types";
 
 /** Data for creating a participant. */
 interface CreateParticipantData {
@@ -36,17 +36,20 @@ export class ParticipantRepository {
 
   getParticipantByUserId(userId: string): ParticipantRow | null {
     const result = this.sql.exec(`SELECT * FROM participants WHERE user_id = ?`, userId);
-    return parseParticipantRow(result.toArray()[0]);
+    const row = result.toArray()[0];
+    return row === undefined ? null : parseParticipantRow(row);
   }
 
   getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null {
     const result = this.sql.exec(`SELECT * FROM participants WHERE ws_auth_token = ?`, tokenHash);
-    return parseParticipantRow(result.toArray()[0]);
+    const parsed = participantRowSchema.safeParse(result.toArray()[0]);
+    return parsed.success ? parsed.data : null;
   }
 
   getParticipantById(participantId: string): ParticipantRow | null {
     const result = this.sql.exec(`SELECT * FROM participants WHERE id = ?`, participantId);
-    return parseParticipantRow(result.toArray()[0]);
+    const row = result.toArray()[0];
+    return row === undefined ? null : parseParticipantRow(row);
   }
 
   createParticipant(data: CreateParticipantData): void {
@@ -126,14 +129,12 @@ export class ParticipantRepository {
 
   listParticipants(): ParticipantRow[] {
     const result = this.sql.exec(`SELECT * FROM participants ORDER BY joined_at`);
-    return result
-      .toArray()
-      .map((row) => participantRowSchema.safeParse(row))
-      .flatMap((parsed) => (parsed.success ? [parsed.data] : []));
+    return result.toArray().map((row) => parseParticipantRow(row));
   }
 }
 
-function parseParticipantRow(row: unknown): ParticipantRow | null {
+function parseParticipantRow(row: unknown): ParticipantRow {
   const parsed = participantRowSchema.safeParse(row);
-  return parsed.success ? parsed.data : null;
+  if (parsed.success) return parsed.data;
+  throw new SessionStorageIntegrityError("Malformed persisted participant row");
 }

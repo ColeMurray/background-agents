@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ParticipantRepository } from "./participant-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
-import type { ParticipantRow } from "./types";
+import { SessionStorageIntegrityError, type ParticipantRow } from "./types";
 
 function participantRow(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -74,7 +74,15 @@ describe("ParticipantRepository", () => {
     expect(repository.getParticipantById("unknown")).toBeNull();
   });
 
-  it("returns null when a selected participant row is malformed", () => {
+  it("throws when an identity participant row is malformed", () => {
+    mock.setRows(`SELECT * FROM participants WHERE user_id = ?`, [
+      { ...participantRow(), role: "admin" },
+    ]);
+
+    expect(() => repository.getParticipantByUserId("user-1")).toThrow(SessionStorageIntegrityError);
+  });
+
+  it("returns null when a token-auth participant row is malformed", () => {
     mock.setRows(`SELECT * FROM participants WHERE ws_auth_token = ?`, [
       { ...participantRow(), role: "admin" },
     ]);
@@ -172,7 +180,7 @@ describe("ParticipantRepository", () => {
     expect(repository.listParticipants()).toEqual(participants);
   });
 
-  it("filters malformed participants while preserving nullable columns", () => {
+  it("throws on malformed listed participants while preserving nullable columns", () => {
     const valid = participantRow({
       canonical_user_id: null,
       scm_name: null,
@@ -184,6 +192,6 @@ describe("ParticipantRepository", () => {
       valid,
     ]);
 
-    expect(repository.listParticipants()).toEqual([valid]);
+    expect(() => repository.listParticipants()).toThrow(SessionStorageIntegrityError);
   });
 });

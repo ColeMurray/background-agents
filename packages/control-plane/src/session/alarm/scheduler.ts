@@ -1,5 +1,6 @@
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SqlStorage } from "../sql-storage";
+import { SessionStorageIntegrityError } from "../types";
 import { z } from "zod";
 
 /** Storage-independent access to the runtime's single scheduled wake-up. */
@@ -23,7 +24,7 @@ export interface AlarmDeadlineStore {
 const alarmStateRowSchema = z.object({
   pending_deadline: z.number().nullable(),
   in_flight_deadline: z.number().nullable(),
-  cancelled: z.number(),
+  cancelled: z.union([z.literal(0), z.literal(1)]),
 });
 
 type AlarmStateRow = z.infer<typeof alarmStateRowSchema>;
@@ -90,8 +91,11 @@ export class PersistedAlarmDeadlineStore implements AlarmDeadlineStore {
          FROM session_alarm_state WHERE singleton = 1`
       )
       .toArray();
-    const parsed = alarmStateRowSchema.safeParse(rows[0]);
-    return parsed.success ? parsed.data : null;
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = alarmStateRowSchema.safeParse(row);
+    if (parsed.success) return parsed.data;
+    throw new SessionStorageIntegrityError("Malformed persisted alarm state row");
   }
 }
 

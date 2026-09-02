@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ArtifactRepository } from "./artifact-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
-import type { ArtifactRow } from "./types";
+import { SessionStorageIntegrityError, type ArtifactRow } from "./types";
 
 function artifactRow(overrides: Partial<ArtifactRow> = {}): ArtifactRow {
   return {
@@ -102,14 +102,14 @@ describe("ArtifactRepository", () => {
     expect(repository.listArtifacts()).toEqual([row]);
   });
 
-  it("filters malformed artifact rows", () => {
+  it("throws on malformed artifact rows", () => {
     const valid = artifactRow();
     mock.setRows(`SELECT * FROM artifacts ORDER BY created_at DESC`, [
       { ...valid, type: "unknown" },
       valid,
     ]);
 
-    expect(repository.listArtifacts()).toEqual([valid]);
+    expect(() => repository.listArtifacts()).toThrow(SessionStorageIntegrityError);
   });
 
   it("queries artifacts by id", () => {
@@ -122,9 +122,9 @@ describe("ArtifactRepository", () => {
     expect(repository.getArtifactById("missing")).toBeNull();
   });
 
-  it("returns null when the selected artifact row is malformed", () => {
+  it("throws when the selected artifact row is malformed", () => {
     mock.setRows(`SELECT * FROM artifacts WHERE id = ?`, [{ ...artifactRow(), created_at: "bad" }]);
 
-    expect(repository.getArtifactById("art-1")).toBeNull();
+    expect(() => repository.getArtifactById("art-1")).toThrow(SessionStorageIntegrityError);
   });
 });

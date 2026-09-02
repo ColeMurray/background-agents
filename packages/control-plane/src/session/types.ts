@@ -18,6 +18,13 @@ import { z } from "zod";
 
 // Database row types (match SQLite schema)
 
+export class SessionStorageIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionStorageIntegrityError";
+  }
+}
+
 export type PromptGitIdentity =
   | {
       mode: "attributed-user";
