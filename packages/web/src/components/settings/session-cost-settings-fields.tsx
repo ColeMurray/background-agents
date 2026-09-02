@@ -159,6 +159,6 @@ export function useSessionCostSettings(
     },
     hasChanges:
       (maxCostEdit !== null && maxCostEdit.trim() !== (currentMaxCost?.toString() ?? "")) ||
-      (thresholdEdit !== null && thresholdEdit !== initialThreshold),
+      (thresholdEdit !== null && thresholdEdit.trim() !== initialThreshold),
   };
 }

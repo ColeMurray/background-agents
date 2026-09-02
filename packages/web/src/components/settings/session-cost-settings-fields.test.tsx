@@ -38,4 +38,14 @@ describe("useSessionCostSettings", () => {
     expect(result.current.validate()).toBeNull();
     expect(payload).not.toHaveProperty("costWarningThresholdPct");
   });
+
+  it("ignores threshold whitespace when detecting changes", () => {
+    const { result } = renderHook(() =>
+      useSessionCostSettings({ costWarningThresholdPct: 75 }, undefined, false)
+    );
+
+    act(() => result.current.setThreshold("75 "));
+
+    expect(result.current.hasChanges).toBe(false);
+  });
 });
