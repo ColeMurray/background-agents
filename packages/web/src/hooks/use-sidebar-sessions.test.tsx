@@ -12,6 +12,8 @@ import type {
 import { useSidebarSessions } from "./use-sidebar-sessions";
 import { reconcileSessionReadState } from "@/lib/session-read-state";
 
+const RECONCILIATION_SETTLE_DELAY_MS = 20;
+
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
 }));
@@ -471,7 +473,7 @@ describe("useSidebarSessions", () => {
         unread: false,
       })
     );
-    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    await act(() => new Promise((resolve) => setTimeout(resolve, RECONCILIATION_SETTLE_DELAY_MS)));
 
     expect(result.current.finished.map(({ id }) => id)).toEqual([
       "finished",
