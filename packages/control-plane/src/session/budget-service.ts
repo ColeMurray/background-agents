@@ -52,6 +52,9 @@ export class SessionBudgetService {
       });
       if (!accepted) return;
 
+      // A reported cost of 0 (unpriced or free models) is a real observation:
+      // it adds nothing and never latches the tracking-unavailable warning.
+      // Only an absent cost counts as "not tracked".
       if (typeof event.cost === "number" && Number.isFinite(event.cost) && event.cost > 0) {
         const totalCost = this.repository.addSessionCost(event.cost, now);
         transition = this.applyObservedCost(totalCost, messageId, now);
@@ -87,8 +90,8 @@ export class SessionBudgetService {
     });
     let warningEvent: Extract<SandboxEvent, { type: "warning" }> | null = null;
 
-    if (action === "exhaust") {
-      const reason = `Session cost limit reached: ${formatCost(session.total_cost)} of ${formatCost(maxCostUsd!)}`;
+    if (action === "exhaust" && maxCostUsd !== null) {
+      const reason = `Session cost limit reached: ${formatCost(session.total_cost)} of ${formatCost(maxCostUsd)}`;
       let preparation!: ExecutionStopPreparation;
       let exhaustionEvent!: Extract<SandboxEvent, { type: "warning" }>;
       this.repository.transaction(() => {
@@ -111,9 +114,9 @@ export class SessionBudgetService {
           { warningSent: action === "warn", exhausted: false },
           now
         );
-        if (action === "warn") {
+        if (action === "warn" && maxCostUsd !== null) {
           warningEvent = this.persistWarning(
-            `Session cost ${formatCost(session.total_cost)} reached ${this.warningThreshold(session)}% of the ${formatCost(maxCostUsd!)} limit.`,
+            `Session cost ${formatCost(session.total_cost)} reached ${this.warningThreshold(session)}% of the ${formatCost(maxCostUsd)} limit.`,
             null,
             now
           );
@@ -146,11 +149,12 @@ export class SessionBudgetService {
     now: number
   ): BudgetTransition {
     const session = this.repository.getSession();
-    if (!session) return NO_BUDGET_TRANSITION;
+    if (!session || session.max_cost_usd === null) return NO_BUDGET_TRANSITION;
+    const limit = session.max_cost_usd;
     const threshold = this.warningThreshold(session);
     const action = evaluateBudget({
       totalCost,
-      maxCostUsd: session.max_cost_usd,
+      maxCostUsd: limit,
       warningThresholdPct: threshold,
       warningSent: session.cost_warning_sent === 1,
       exhausted: session.budget_exhausted === 1,
@@ -161,7 +165,7 @@ export class SessionBudgetService {
       this.repository.markCostWarningSent(now);
       return {
         warningEvent: this.persistWarning(
-          `Session cost ${formatCost(totalCost)} reached ${threshold}% of the ${formatCost(session.max_cost_usd!)} limit.`,
+          `Session cost ${formatCost(totalCost)} reached ${threshold}% of the ${formatCost(limit)} limit.`,
           messageId,
           now
         ),
@@ -170,7 +174,6 @@ export class SessionBudgetService {
       };
     }
 
-    const limit = session.max_cost_usd!;
     const reason = `Session cost limit reached: ${formatCost(totalCost)} of ${formatCost(limit)}`;
     const stopPreparation = this.executionStop.prepare(reason, now);
     this.repository.markBudgetExhausted(now);

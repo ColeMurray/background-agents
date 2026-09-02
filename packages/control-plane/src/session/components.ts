@@ -92,6 +92,7 @@ import { SandboxRuntimeEventHandler } from "./sandbox-events/runtime.handler";
 import { SandboxStreamingEventHandler } from "./sandbox-events/streaming.handler";
 import { SandboxPushService } from "./sandbox-push-service";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
+import { PersistedTerminalMessageProjectionStore } from "./terminal-message-projection-store";
 import { SessionEventStream } from "./event-stream";
 import { AutofixHandler } from "./http/handlers/autofix.handler";
 import { MessagesHandler } from "./http/handlers/messages.handler";
@@ -231,6 +232,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const wsClientMappingRepository = new WsClientMappingRepository(sql);
   const sessionCoreRepository = new SessionCoreRepository(sql, transaction);
   const alarmDeadlines = new PersistedAlarmDeadlineStore(sql);
+  const terminalMessageProjectionStore = new PersistedTerminalMessageProjectionStore(sql);
 
   // Secrets-at-rest encryption is not optional. Every consumer below takes
   // the validated key, so no fallback path can persist a secret in plaintext.
@@ -311,14 +313,17 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     log,
   });
 
-  const terminalMessageProjection = new SessionTerminalMessageProjection(
-    sessionIndexStore,
-    () => {
+  const terminalMessageProjection = new SessionTerminalMessageProjection({
+    sessionIndex: sessionIndexStore,
+    getSessionId: () => {
       const current = sessionCoreRepository.getSession();
       return current ? resolvePublicSessionId(current, durableObjectId) : null;
     },
-    log
-  );
+    store: terminalMessageProjectionStore,
+    alarmScheduler,
+    now: () => Date.now(),
+    log,
+  });
   const recordTerminalMessage = (
     messageId: string,
     messageCreatedAt: number,
@@ -520,6 +525,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     executionStop,
     lifecycleManager,
+    terminalMessageProjection,
     alarmScheduler,
     getExecutionTimeoutMs,
     now: () => Date.now(),
@@ -883,6 +889,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           async () => {
             await wsManager.expireAuthorizationLeases(Date.now());
             await alarmScheduler.rehydrate();
+            await terminalMessageProjection.rearm();
           },
           {
             name: "alarm.rehydrate",

@@ -38,8 +38,6 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
-import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
-import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 
 export function SessionTimeline({
@@ -53,8 +51,6 @@ export function SessionTimeline({
   showSkeleton,
   onLoadOlder,
   onOpenMedia,
-  terminalMessageReadObservationEnabled = false,
-  onMarkMessageRead,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -66,8 +62,6 @@ export function SessionTimeline({
   showSkeleton: boolean;
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
-  terminalMessageReadObservationEnabled?: boolean;
-  onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
   const pendingMessageIds = useMemo(
     () =>
@@ -84,13 +78,6 @@ export function SessionTimeline({
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
   const [expandedTaskSections, setExpandedTaskSections] = useState<Set<string>>(new Set());
-  const latestTerminalMessageId = useMemo(() => {
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index];
-      if (event?.type === "execution_complete" && event.messageId) return event.messageId;
-    }
-    return null;
-  }, [events]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
@@ -99,11 +86,10 @@ export function SessionTimeline({
     () =>
       buildTimelineVirtualRows({
         items: timelineItems,
-        terminalMessageId: onMarkMessageRead ? latestTerminalMessageId : null,
         loadingHistory,
         isProcessing,
       }),
-    [isProcessing, latestTerminalMessageId, loadingHistory, onMarkMessageRead, timelineItems]
+    [isProcessing, loadingHistory, timelineItems]
   );
   const getVirtualRowKey = useCallback(
     (index: number) => virtualRows[index]?.id ?? index,
@@ -274,17 +260,6 @@ export function SessionTimeline({
         return <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>;
       case "thinking":
         return <ThinkingIndicator />;
-      case "terminal":
-        if (!onMarkMessageRead) return row.items.map(renderTimelineItem);
-        return (
-          <TerminalMessageReadObserver
-            messageId={row.messageId}
-            enabled={terminalMessageReadObservationEnabled}
-            onMarkMessageRead={onMarkMessageRead}
-          >
-            {row.items.map(renderTimelineItem)}
-          </TerminalMessageReadObserver>
-        );
       case "item":
         return renderTimelineItem(row.item);
     }

@@ -128,6 +128,9 @@ export class SessionInitHandler {
         { status: 400 }
       );
     }
+    // A retried init must not rebuild sandbox/participant rows or reset live
+    // budget state. If the first attempt committed but never scheduled the
+    // spawn, the first prompt spawns through processMessageQueue.
     if (this.sessionCoreRepository.getSession()) {
       return Response.json({ sessionId, status: "created" });
     }

@@ -19,6 +19,9 @@ function createHandler() {
   const lifecycleManager = {
     handleAlarm: vi.fn<() => Promise<SandboxAlarmResult>>().mockResolvedValue("no_action"),
   };
+  const terminalMessageProjection = {
+    flushPending: vi.fn<() => Promise<void>>().mockResolvedValue(),
+  };
   const alarmScheduler = {
     schedule: vi.fn<(timestamp: number) => Promise<void>>().mockResolvedValue(),
     cancel: vi.fn<() => Promise<void>>().mockResolvedValue(),
@@ -38,6 +41,7 @@ function createHandler() {
     messageQueue,
     executionStop,
     lifecycleManager,
+    terminalMessageProjection,
     alarmScheduler,
     getExecutionTimeoutMs: () => 1000,
     now,
@@ -50,6 +54,7 @@ function createHandler() {
     messageQueue,
     executionStop,
     lifecycleManager,
+    terminalMessageProjection,
     alarmScheduler,
     now,
     log,
@@ -76,6 +81,18 @@ describe("createAlarmHandler", () => {
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
     expect(executionStop.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a deferred terminal message projection before anything else", async () => {
+    const { handler, repository, executionStop, terminalMessageProjection } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+
+    await handler.handle();
+
+    expect(terminalMessageProjection.flushPending).toHaveBeenCalledOnce();
+    expect(terminalMessageProjection.flushPending.mock.invocationCallOrder[0]).toBeLessThan(
+      executionStop.recoverStopConfirmationTimeout.mock.invocationCallOrder[0]
+    );
   });
 
   it("does not fail processing message when execution timeout is not reached", async () => {
@@ -141,6 +158,7 @@ describe("createAlarmHandler", () => {
       messageQueue,
       executionStop,
       lifecycleManager,
+      terminalMessageProjection: { flushPending: vi.fn(async () => {}) },
       alarmScheduler,
       getExecutionTimeoutMs: () => 1000,
       now: () => 2000,

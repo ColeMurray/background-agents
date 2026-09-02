@@ -68,7 +68,6 @@ describe("evaluateBudget", () => {
 
 describe("hasPositiveTokenUsage", () => {
   it.each([
-    1,
     { total: 1 },
     { input: 1 },
     { output: 1 },
@@ -79,7 +78,7 @@ describe("hasPositiveTokenUsage", () => {
     expect(hasPositiveTokenUsage(tokens)).toBe(true);
   });
 
-  it.each([undefined, 0, -1, {}, { input: 0 }, { cache: { read: 0, write: 0 } }])(
+  it.each([undefined, 1, 0, -1, {}, { input: 0 }, { cache: { read: 0, write: 0 } }])(
     "rejects non-positive token usage %#",
     (tokens) => {
       expect(hasPositiveTokenUsage(tokens)).toBe(false);

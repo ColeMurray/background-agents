@@ -26,6 +26,7 @@ import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import { parseClientCapabilities } from "./ws-client-mapping-repository";
 import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 
 /**
@@ -448,13 +449,7 @@ export class SessionConnectionAuthenticator {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
-      capabilities: (() => {
-        try {
-          return JSON.parse(mapping.capabilities ?? "[]") as ClientInfo["capabilities"];
-        } catch {
-          return [];
-        }
-      })(),
+      capabilities: parseClientCapabilities(mapping.capabilities),
       authorizationExpiresAt: mapping.authorization_expires_at,
       ws,
     };

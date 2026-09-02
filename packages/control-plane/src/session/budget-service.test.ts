@@ -205,6 +205,32 @@ describe("SessionBudgetService", () => {
     );
   });
 
+  it("treats a reported cost of zero as observed, not untracked", async () => {
+    const h = createService();
+
+    await h.service.ingestStepFinish(
+      {
+        type: "step_finish",
+        ackId: "step_finish:free-1",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        cost: 0,
+        tokens: { input: 500, output: 200 },
+      },
+      "message-1",
+      1000
+    );
+
+    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
+    expect(h.repository.markCostTrackingUnavailable).not.toHaveBeenCalled();
+    expect(h.repository.markBudgetExhausted).not.toHaveBeenCalled();
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "budget_status" })
+    );
+  });
+
   it("updates the live limit and resumes queued work when permitted", async () => {
     const h = createService(session({ max_cost_usd: 10, budget_exhausted: 1, total_cost: 10 }));
 

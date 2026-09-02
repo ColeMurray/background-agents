@@ -24,7 +24,6 @@ export function evaluateBudget(input: BudgetEvaluationInput): BudgetAction {
 }
 
 export function hasPositiveTokenUsage(tokens: unknown): boolean {
-  if (typeof tokens === "number") return tokens > 0;
   if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) return false;
 
   const usage = tokens as Record<string, unknown>;

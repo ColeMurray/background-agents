@@ -22,7 +22,7 @@ function session(id: string, parentSessionId: string | null = null): SessionList
     environmentId: null,
     createdAt: 1,
     updatedAt: 2,
-    readState: { latestMessageId: "old-message", unread: true },
+    readState: { latestMessageId: "old-message", version: 1, unread: true },
   };
 }
 
@@ -83,7 +83,7 @@ describe("session inbox API keys", () => {
 });
 
 describe("applySessionInboxReadStateUpdate", () => {
-  const readState = { latestMessageId: "old-message", unread: false } as const;
+  const readState = { latestMessageId: "old-message", version: 1, unread: false } as const;
 
   it("updates a matching root session in a page without disturbing unrelated sessions", () => {
     const data: SessionInboxPage = {
@@ -96,10 +96,12 @@ describe("applySessionInboxReadStateUpdate", () => {
     expect(result?.items[0].rootSession.readState).toEqual(readState);
     expect(result?.items[0].descendantSessions[0].readState).toEqual({
       latestMessageId: "old-message",
+      version: 1,
       unread: true,
     });
     expect(result?.items[1].rootSession.readState).toEqual({
       latestMessageId: "old-message",
+      version: 1,
       unread: true,
     });
     expect(data.items[0].rootSession.readState.unread).toBe(true);
@@ -173,6 +175,7 @@ describe("applySessionInboxReadStateUpdate", () => {
     const data = page("target");
     data.items[0].rootSession.readState = {
       latestMessageId: "newer-message",
+      version: 2,
       unread: true,
     };
 
@@ -180,6 +183,7 @@ describe("applySessionInboxReadStateUpdate", () => {
 
     expect(result?.items[0].rootSession.readState).toEqual({
       latestMessageId: "newer-message",
+      version: 2,
       unread: true,
     });
   });

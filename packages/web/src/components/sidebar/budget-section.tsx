@@ -39,7 +39,16 @@ export function BudgetSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ maxCostUsd }),
       });
-      if (!response.ok) throw new Error("Unable to update the session cost limit");
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => null);
+        const serverMessage =
+          body &&
+          typeof body === "object" &&
+          typeof (body as { error?: unknown }).error === "string"
+            ? (body as { error: string }).error
+            : null;
+        throw new Error(serverMessage ?? "Unable to update the session cost limit");
+      }
       setEditing(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to update the session cost limit");
@@ -90,7 +99,7 @@ export function BudgetSection({
             <input
               id="session-cost-limit"
               type="number"
-              min="0"
+              min="0.01"
               step="0.01"
               value={value}
               onChange={(event) => setValue(event.target.value)}

@@ -47,6 +47,25 @@ const SESSION_ALARM_STATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_alarm_
   cancelled INTEGER NOT NULL DEFAULT 0
 );`;
 
+const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS terminal_message_projection_pending (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  message_id TEXT NOT NULL,
+  message_created_at INTEGER NOT NULL,
+  completed_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL
+);`;
+
+const STEP_FINISH_RECEIPTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_finish_receipts (
+  ack_id TEXT PRIMARY KEY,
+  message_id TEXT,
+  event_json TEXT NOT NULL,
+  observed_cost REAL,
+  received_at INTEGER NOT NULL
+);`;
+
+const DEFAULT_WS_CLIENT_CAPABILITIES_JSON = "[]";
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -143,13 +162,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- Deduplicated receipts for acknowledged cost-bearing runtime steps
-CREATE TABLE IF NOT EXISTS step_finish_receipts (
-  ack_id TEXT PRIMARY KEY,
-  message_id TEXT,
-  event_json TEXT NOT NULL,
-  observed_cost REAL,
-  received_at INTEGER NOT NULL
-);
+${STEP_FINISH_RECEIPTS_TABLE_SQL}
 
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -210,12 +223,16 @@ ${SESSION_DIFF_TABLE_SQL}
 -- Runtime alarm recovery source for hosts that can be adopted by another process.
 ${SESSION_ALARM_STATE_TABLE_SQL}
 
+-- A terminal message whose D1 projection has not landed yet. Only the newest
+-- is kept: the projection is monotonic, so an older one would be a no-op.
+${TERMINAL_MESSAGE_PROJECTION_TABLE_SQL}
+
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
   ws_id TEXT PRIMARY KEY,
   participant_id TEXT NOT NULL,
   client_id TEXT,
-  capabilities TEXT NOT NULL DEFAULT '[]',
+  capabilities TEXT NOT NULL DEFAULT '${DEFAULT_WS_CLIENT_CAPABILITIES_JSON}',
   created_at INTEGER NOT NULL,
   authorization_expires_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
@@ -646,7 +663,12 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 47,
-    description: "Add session budget state",
+    description: "Persist terminal message projections awaiting retry",
+    run: TERMINAL_MESSAGE_PROJECTION_TABLE_SQL,
+  },
+  {
+    id: 48,
+    description: "Add session budget state, step finish receipts, and client capabilities",
     run: (sql) => {
       runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
       runMigration(
@@ -661,37 +683,10 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         sql,
         `ALTER TABLE session ADD COLUMN cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0`
       );
-    },
-  },
-  {
-    id: 48,
-    description: "Add acknowledged step finish receipts",
-    run: `CREATE TABLE IF NOT EXISTS step_finish_receipts (
-      ack_id TEXT PRIMARY KEY,
-      message_id TEXT,
-      event_json TEXT NOT NULL,
-      observed_cost REAL,
-      received_at INTEGER NOT NULL
-    )`,
-  },
-  {
-    id: 49,
-    description: "Reconcile budget receipts and WebSocket mapping extensions",
-    run: (sql) => {
-      sql.exec(`CREATE TABLE IF NOT EXISTS step_finish_receipts (
-        ack_id TEXT PRIMARY KEY,
-        message_id TEXT,
-        event_json TEXT NOT NULL,
-        observed_cost REAL,
-        received_at INTEGER NOT NULL
-      )`);
+      runMigration(sql, STEP_FINISH_RECEIPTS_TABLE_SQL);
       runMigration(
         sql,
-        `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'`
-      );
-      runMigration(
-        sql,
-        `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0`
+        `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT NOT NULL DEFAULT '${DEFAULT_WS_CLIENT_CAPABILITIES_JSON}'`
       );
     },
   },

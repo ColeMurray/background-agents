@@ -235,6 +235,7 @@ export class SessionMessageQueue {
       participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
         this.assertBudgetAvailable();
+        this.assertQueueCapacity();
         participant = this.participantService.create(client.userId, client.name);
       }
       enqueued = await this.enqueuePromptCore({

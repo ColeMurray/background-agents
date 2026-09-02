@@ -12,9 +12,10 @@ import type { AlarmScheduler } from "../platform-ports";
 import type { ClientInfo } from "../types";
 import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
-import type {
-  WsClientMappingRepository,
-  WsClientMappingResult,
+import {
+  parseClientCapabilities,
+  type WsClientMappingRepository,
+  type WsClientMappingResult,
 } from "./ws-client-mapping-repository";
 import {
   WS_AUTHORIZATION_REVOKED_REASON,
@@ -341,11 +342,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       return lookup.client.capabilities?.includes(capability) ?? false;
     }
     if (lookup.kind !== "recovered") return false;
-    try {
-      return (JSON.parse(lookup.mapping.capabilities ?? "[]") as unknown[]).includes(capability);
-    } catch {
-      return false;
-    }
+    return parseClientCapabilities(lookup.mapping.capabilities).includes(capability);
   }
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {

@@ -1,6 +1,5 @@
-import { mutate } from "swr";
 import { browserApiFetch } from "./browser-api-fetch";
-import { applySessionReadState, isSessionListKey, type SessionListResponse } from "./session-list";
+import type { SandboxEvent } from "@/types/session";
 import {
   sessionReadResultSchema,
   type SessionReadAction,
@@ -46,12 +45,24 @@ async function patchSessionReadState(
   return sessionReadResultSchema.parse(await response.json());
 }
 
+/** The terminal message a viewer of these events has in front of them. */
+export function findLatestTerminalMessageId(events: SandboxEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === "execution_complete" && event.messageId) return event.messageId;
+  }
+  return null;
+}
+
+/**
+ * Only a missing projection is worth retrying: the message exists on the
+ * client, so the server row will catch up. A `not_latest` result means a newer
+ * message is on its way to the client, which acknowledges that one instead.
+ */
 export function classifySessionReadAttempt(
   result: SessionReadResult
 ): SessionReadAttemptDisposition {
-  return result.outcome === "marked_read" || result.outcome === "already_read"
-    ? "complete"
-    : "retry";
+  return result.outcome === "no_terminal_message" ? "retry" : "complete";
 }
 
 export function markMessageRead(sessionId: string, messageId: string): Promise<SessionReadResult> {
@@ -67,29 +78,47 @@ export function markLatestMessageRead(sessionId: string): Promise<SessionReadRes
   });
 }
 
-export function readStateFromResult(result: SessionReadResult): SessionReadState {
+function readStateFromResult(result: SessionReadResult): SessionReadState {
   return result.latestMessageId === null
     ? {
         latestMessageId: null,
         unread: false,
+        version: result.version,
       }
     : {
         latestMessageId: result.latestMessageId,
         unread: result.unread,
+        version: result.version,
       };
 }
 
-export async function reconcileSessionReadState(result: SessionReadResult): Promise<unknown> {
+/**
+ * Mirrors the projection's order: a higher version wins, and messages that
+ * share a version are ordered by ID. For one message, read is final.
+ */
+export function readStateSupersedes(next: SessionReadState, current: SessionReadState): boolean {
+  if (next.version !== current.version) return next.version > current.version;
+  if (next.latestMessageId !== current.latestMessageId) {
+    return (next.latestMessageId ?? "") > (current.latestMessageId ?? "");
+  }
+  return !(current.unread === false && next.unread);
+}
+
+export function applySessionReadStateToItem<T extends { id: string; readState?: SessionReadState }>(
+  session: T,
+  sessionId: string,
+  readState: SessionReadState | undefined
+): T {
+  if (session.id !== sessionId || !readState) return session;
+  if (session.readState && !readStateSupersedes(readState, session.readState)) return session;
+  return { ...session, readState };
+}
+
+export async function reconcileSessionReadState(result: SessionReadResult): Promise<void> {
   const readState = readStateFromResult(result);
-  const mutation = await mutate<SessionListResponse>(
-    isSessionListKey,
-    (current) => applySessionReadState(current, result.sessionId, readState),
-    { populateCache: true, revalidate: false }
-  );
   await Promise.all(
     [...readStateReconcilers].map((reconcile) =>
       reconcile({ sessionId: result.sessionId, outcome: result.outcome, readState })
     )
   );
-  return mutation;
 }

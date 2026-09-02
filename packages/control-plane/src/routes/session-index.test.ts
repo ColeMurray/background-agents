@@ -109,6 +109,7 @@ describe("session index routes", () => {
       outcome: "marked_read",
       unread: false,
       latestMessageId: "message-1",
+      version: 1_000,
     });
   });
 

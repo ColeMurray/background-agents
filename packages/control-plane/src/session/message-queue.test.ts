@@ -1486,6 +1486,20 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
   });
 
+  it("re-arms a future stop confirmation deadline when an earlier alarm fired", async () => {
+    const h = buildQueue();
+    const deadline = Date.now() + 10_000;
+    h.repository.getMessageAwaitingStopConfirmation.mockReturnValue({
+      id: "msg-stopped",
+      deadline,
+    });
+
+    await h.executionStop.recoverStopConfirmationTimeout();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+    expect(h.setAlarm).toHaveBeenCalledExactlyOnceWith(deadline);
+  });
+
   it("clears the marker and resumes only after definitive sandbox termination", async () => {
     const h = buildQueue();
     h.repository.getMessageAwaitingStopConfirmation
@@ -1654,6 +1668,22 @@ describe("SessionMessageQueue", () => {
 
       expect(h.participantService.create).not.toHaveBeenCalled();
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+    });
+
+    it("rejects a full queue on the WebSocket path before creating a participant", async () => {
+      const h = buildQueue();
+      h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
+      h.repository.getParticipantById.mockReturnValue(null as unknown as ParticipantRow);
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+      const ws = {} as WebSocket;
+
+      await h.queue.handlePromptMessage(ws, createClientInfo(), { content: "Continue" });
+
+      expect(h.participantService.create).not.toHaveBeenCalled();
+      expect(h.wsManager.send).toHaveBeenCalledWith(
+        ws,
+        expect.objectContaining({ type: "error", code: "PROMPT_QUEUE_FULL" })
+      );
     });
 
     it.each(["cancelled", "archived"] as const)(

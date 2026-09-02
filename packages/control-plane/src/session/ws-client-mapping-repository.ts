@@ -1,5 +1,8 @@
 import type { SqlStorage } from "./sql-storage";
-import type { ClientCapability } from "@open-inspect/shared/types/websocket";
+import {
+  clientCapabilitySchema,
+  type ClientCapability,
+} from "@open-inspect/shared/types/websocket";
 
 /** WS client mapping result for hibernation recovery. */
 export interface WsClientMappingResult {
@@ -85,5 +88,19 @@ export class WsClientMappingRepository {
       .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)
       .toArray() as Array<{ expires_at: number | null }>;
     return rows[0]?.expires_at ?? null;
+  }
+}
+
+/** Decode a persisted capabilities column; malformed or unknown entries are dropped. */
+export function parseClientCapabilities(raw: string | null | undefined): ClientCapability[] {
+  try {
+    const parsed: unknown = JSON.parse(raw ?? "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry) => {
+      const result = clientCapabilitySchema.safeParse(entry);
+      return result.success ? [result.data] : [];
+    });
+  } catch {
+    return [];
   }
 }

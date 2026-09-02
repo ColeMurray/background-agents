@@ -25,6 +25,7 @@ vi.mock("@/lib/session-read-state", async (importOriginal) => {
       outcome: "marked_read" as const,
       unread: false,
       latestMessageId: "msg-1",
+      version: 1,
     }),
   };
 });
@@ -43,7 +44,7 @@ function item(id: string) {
       environmentId: null,
       createdAt: 1,
       updatedAt: 2,
-      readState: { latestMessageId: null, unread: false as const },
+      readState: { latestMessageId: null, version: 0, unread: false as const },
     },
     descendantSessions: [],
   };
@@ -53,7 +54,10 @@ function unreadItem(id: string): SessionInboxItem {
   const base = item(id);
   return {
     ...base,
-    rootSession: { ...base.rootSession, readState: { latestMessageId: "msg-1", unread: true } },
+    rootSession: {
+      ...base.rootSession,
+      readState: { latestMessageId: "msg-1", version: 1, unread: true },
+    },
   };
 }
 
@@ -468,6 +472,7 @@ describe("useSidebarSessions", () => {
         sessionId: "finished-tail-b",
         outcome: "already_read",
         latestMessageId: "msg-1",
+        version: 1,
         unread: false,
       })
     );
@@ -498,6 +503,7 @@ describe("useSidebarSessions", () => {
         sessionId: "finished-tail",
         outcome: "not_latest",
         latestMessageId: "msg-9",
+        version: 9,
         unread: true,
       })
     );
@@ -521,12 +527,13 @@ describe("useSidebarSessions", () => {
         sessionId: "finished-tail",
         outcome: "marked_read",
         latestMessageId: "msg-1",
+        version: 1,
         unread: false,
       })
     );
 
     const tail = result.current.finished.find(({ id }) => id === "finished-tail");
-    expect(tail?.readState).toEqual({ latestMessageId: "msg-1", unread: false });
+    expect(tail?.readState).toEqual({ latestMessageId: "msg-1", version: 1, unread: false });
   });
 
   it("resets only the destination chain when an attention tail leaves attention", async () => {
@@ -556,6 +563,7 @@ describe("useSidebarSessions", () => {
         sessionId: "moving",
         outcome: "marked_read",
         latestMessageId: "msg-1",
+        version: 1,
         unread: false,
       })
     );
@@ -583,6 +591,7 @@ describe("useSidebarSessions", () => {
         sessionId: "tail-unread",
         outcome: "marked_read",
         latestMessageId: "msg-1",
+        version: 1,
         unread: false,
       })
     );
@@ -624,6 +633,7 @@ describe("useSidebarSessions", () => {
         sessionId: "moving",
         outcome: "marked_read",
         latestMessageId: "msg-2",
+        version: 2,
         unread: false,
       })
     );
@@ -671,6 +681,7 @@ describe("useSidebarSessions", () => {
         sessionId: "tail-unread",
         outcome: "marked_read",
         latestMessageId: "msg-1",
+        version: 1,
         unread: false,
       })
     );

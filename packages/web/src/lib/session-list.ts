@@ -5,7 +5,7 @@ import {
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
 } from "@open-inspect/shared/session-list-query";
-import { sessionStatusSchema, type SessionReadState } from "@open-inspect/shared/types/sessions";
+import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
@@ -44,8 +44,16 @@ const sessionListItemSchema = z.object({
     .optional(),
   readState: z
     .union([
-      z.object({ latestMessageId: z.null(), unread: z.literal(false) }),
-      z.object({ latestMessageId: z.string(), unread: z.boolean() }),
+      z.object({
+        latestMessageId: z.null(),
+        unread: z.literal(false),
+        version: z.number().default(0),
+      }),
+      z.object({
+        latestMessageId: z.string(),
+        unread: z.boolean(),
+        version: z.number().default(0),
+      }),
     ])
     .optional(),
 });
@@ -110,35 +118,6 @@ export function applyTitleUpdate(
       session.id === sessionId ? { ...session, title } : session
     ),
   };
-}
-
-export function applySessionReadState(
-  data: SessionListResponse | undefined,
-  sessionId: string,
-  readState: SessionReadState | undefined
-): SessionListResponse | undefined {
-  if (!data) return data;
-  return {
-    ...data,
-    sessions: data.sessions.map((session) =>
-      applySessionReadStateToItem(session, sessionId, readState)
-    ),
-  };
-}
-
-export function applySessionReadStateToItem<T extends { id: string; readState?: SessionReadState }>(
-  session: T,
-  sessionId: string,
-  readState: SessionReadState | undefined
-): T {
-  if (session.id !== sessionId || !readState) return session;
-  // Message IDs are not orderable, so a cached row holding a different message
-  // is left alone: it may already reflect a newer terminal message. A row with
-  // no terminal message yet has nothing newer to protect.
-  const currentMessageId = session.readState?.latestMessageId;
-  if (currentMessageId != null && currentMessageId !== readState.latestMessageId) return session;
-  if (session.readState?.unread === false && readState.unread) return session;
-  return { ...session, readState };
 }
 
 export function removeSessionFromList(sessions: SessionListItem[], sessionId: string) {

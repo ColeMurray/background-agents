@@ -76,6 +76,12 @@ describe("applyMigrations", () => {
     vi.setSystemTime(1000);
   });
 
+  it("has unique, strictly increasing migration ids", () => {
+    const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+  });
+
   it("runs all migrations on a fresh DO", () => {
     // No applied IDs → SELECT returns empty
     applyMigrations(mock.sql);
@@ -491,12 +497,19 @@ describe("applyMigrations", () => {
     expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
     expect(sessionTable).toContain("cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0");
 
-    const migration = MIGRATIONS.find((entry) => entry.id === 47);
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
+    expect(SCHEMA_SQL).toContain("capabilities TEXT NOT NULL DEFAULT '[]'");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 48);
     expect(typeof migration?.run).toBe("function");
     const db = new DatabaseSync(":memory:");
     const sql = createDatabaseSql(db);
     try {
       db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      db.exec(`CREATE TABLE ws_client_mapping (
+        ws_id TEXT PRIMARY KEY,
+        authorization_expires_at INTEGER NOT NULL DEFAULT 0
+      )`);
       const run = migration!.run as (sql: SqlStorage) => void;
       run(sql);
       expect(() => run(sql)).not.toThrow();
@@ -508,35 +521,8 @@ describe("applyMigrations", () => {
           expect.objectContaining({ name: "cost_tracking_unavailable", type: "INTEGER" }),
         ])
       );
-    } finally {
-      db.close();
-    }
-  });
-
-  it("adds acknowledged step finish receipts for fresh and migrated sessions", () => {
-    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
-    const migration = MIGRATIONS.find((entry) => entry.id === 48);
-    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
-  });
-
-  it("reconciles WebSocket leases and receipts from pre-merge budget schemas", () => {
-    const migration = MIGRATIONS.find((entry) => entry.id === 49);
-    expect(typeof migration?.run).toBe("function");
-    const db = new DatabaseSync(":memory:");
-    const sql = createDatabaseSql(db);
-    try {
-      db.exec(`CREATE TABLE ws_client_mapping (
-        ws_id TEXT PRIMARY KEY,
-        capabilities TEXT NOT NULL DEFAULT '[]'
-      )`);
-      const run = migration!.run as (sql: SqlStorage) => void;
-      run(sql);
-      expect(() => run(sql)).not.toThrow();
       expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ name: "capabilities", type: "TEXT" }),
-          expect.objectContaining({ name: "authorization_expires_at", type: "INTEGER" }),
-        ])
+        expect.arrayContaining([expect.objectContaining({ name: "capabilities", type: "TEXT" })])
       );
       expect(
         db
