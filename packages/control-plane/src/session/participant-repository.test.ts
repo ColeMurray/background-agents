@@ -1,6 +1,28 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ParticipantRepository } from "./participant-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import type { ParticipantRow } from "./types";
+
+function participantRow(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
+  return {
+    id: "p-1",
+    user_id: "user-1",
+    canonical_user_id: null,
+    scm_user_id: null,
+    scm_login: null,
+    scm_email: null,
+    scm_name: null,
+    auth_name: null,
+    role: "member",
+    scm_access_token_encrypted: null,
+    scm_refresh_token_encrypted: null,
+    scm_token_expires_at: null,
+    ws_auth_token: null,
+    ws_token_created_at: null,
+    joined_at: 1000,
+    ...overrides,
+  };
+}
 
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
@@ -30,7 +52,13 @@ describe("ParticipantRepository", () => {
   });
 
   it("looks up participants by user id, token hash, and id", () => {
-    const participant = { id: "p-1", user_id: "user-1" };
+    const participant = participantRow({
+      canonical_user_id: "canonical-user-1",
+      scm_login: "octocat",
+      auth_name: null,
+      ws_auth_token: "hash-1",
+      ws_token_created_at: 2000,
+    });
     mock.setRows(`SELECT * FROM participants WHERE user_id = ?`, [participant]);
     mock.setRows(`SELECT * FROM participants WHERE ws_auth_token = ?`, [participant]);
     mock.setRows(`SELECT * FROM participants WHERE id = ?`, [participant]);
@@ -44,6 +72,14 @@ describe("ParticipantRepository", () => {
     expect(repository.getParticipantByUserId("unknown")).toBeNull();
     expect(repository.getParticipantByWsTokenHash("unknown")).toBeNull();
     expect(repository.getParticipantById("unknown")).toBeNull();
+  });
+
+  it("returns null when a selected participant row is malformed", () => {
+    mock.setRows(`SELECT * FROM participants WHERE ws_auth_token = ?`, [
+      { ...participantRow(), role: "admin" },
+    ]);
+
+    expect(repository.getParticipantByWsTokenHash("hash-1")).toBeNull();
   });
 
   it("creates a participant with all fields", () => {
@@ -131,8 +167,23 @@ describe("ParticipantRepository", () => {
   });
 
   it("lists participants by join time", () => {
-    const participants = [{ id: "p-1", joined_at: 1000 }];
+    const participants = [participantRow({ scm_email: "user@example.com" })];
     mock.setRows(`SELECT * FROM participants ORDER BY joined_at`, participants);
     expect(repository.listParticipants()).toEqual(participants);
+  });
+
+  it("filters malformed participants while preserving nullable columns", () => {
+    const valid = participantRow({
+      canonical_user_id: null,
+      scm_name: null,
+      scm_refresh_token_encrypted: null,
+      ws_token_created_at: null,
+    });
+    mock.setRows(`SELECT * FROM participants ORDER BY joined_at`, [
+      { ...valid, joined_at: "bad" },
+      valid,
+    ]);
+
+    expect(repository.listParticipants()).toEqual([valid]);
   });
 });

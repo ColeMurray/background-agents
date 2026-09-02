@@ -1,6 +1,6 @@
 import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import type { SqlStorage } from "./sql-storage";
-import type { ParticipantRow } from "./types";
+import { participantRowSchema, type ParticipantRow } from "./types";
 
 /** Data for creating a participant. */
 interface CreateParticipantData {
@@ -36,17 +36,17 @@ export class ParticipantRepository {
 
   getParticipantByUserId(userId: string): ParticipantRow | null {
     const result = this.sql.exec(`SELECT * FROM participants WHERE user_id = ?`, userId);
-    return (result.toArray() as ParticipantRow[])[0] ?? null;
+    return parseParticipantRow(result.toArray()[0]);
   }
 
   getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null {
     const result = this.sql.exec(`SELECT * FROM participants WHERE ws_auth_token = ?`, tokenHash);
-    return (result.toArray() as ParticipantRow[])[0] ?? null;
+    return parseParticipantRow(result.toArray()[0]);
   }
 
   getParticipantById(participantId: string): ParticipantRow | null {
     const result = this.sql.exec(`SELECT * FROM participants WHERE id = ?`, participantId);
-    return (result.toArray() as ParticipantRow[])[0] ?? null;
+    return parseParticipantRow(result.toArray()[0]);
   }
 
   createParticipant(data: CreateParticipantData): void {
@@ -126,6 +126,14 @@ export class ParticipantRepository {
 
   listParticipants(): ParticipantRow[] {
     const result = this.sql.exec(`SELECT * FROM participants ORDER BY joined_at`);
-    return result.toArray() as ParticipantRow[];
+    return result
+      .toArray()
+      .map((row) => participantRowSchema.safeParse(row))
+      .flatMap((parsed) => (parsed.success ? [parsed.data] : []));
   }
+}
+
+function parseParticipantRow(row: unknown): ParticipantRow | null {
+  const parsed = participantRowSchema.safeParse(row);
+  return parsed.success ? parsed.data : null;
 }

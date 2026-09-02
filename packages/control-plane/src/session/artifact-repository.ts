@@ -1,6 +1,6 @@
 import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import type { SqlStorage } from "./sql-storage";
-import type { ArtifactRow } from "./types";
+import { artifactRowSchema, type ArtifactRow } from "./types";
 
 /** Data for creating an artifact. */
 export interface CreateArtifactData {
@@ -48,12 +48,15 @@ export class ArtifactRepository {
 
   listArtifacts(): ArtifactRow[] {
     const result = this.sql.exec(`SELECT * FROM artifacts ORDER BY created_at DESC`);
-    return result.toArray() as ArtifactRow[];
+    return result
+      .toArray()
+      .map((row) => artifactRowSchema.safeParse(row))
+      .flatMap((parsed) => (parsed.success ? [parsed.data] : []));
   }
 
   getArtifactById(artifactId: string): ArtifactRow | null {
     const result = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, artifactId);
-    const rows = result.toArray() as ArtifactRow[];
-    return rows[0] ?? null;
+    const parsed = artifactRowSchema.safeParse(result.toArray()[0]);
+    return parsed.success ? parsed.data : null;
   }
 }

@@ -375,4 +375,22 @@ describe("PersistedAlarmDeadlineStore", () => {
 
     db.close();
   });
+
+  it("parses nullable alarm state and treats malformed persisted rows as absent", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    initSchema(sql);
+    const deadlines = new PersistedAlarmDeadlineStore(sql);
+
+    deadlines.clear();
+    expect(deadlines.pending()).toBeNull();
+    expect(deadlines.cancelled()).toBe(true);
+
+    db.exec("UPDATE session_alarm_state SET cancelled = 'bad' WHERE singleton = 1");
+
+    expect(deadlines.cancelled()).toBe(false);
+    expect(deadlines.beginDelivery()).toBeNull();
+
+    db.close();
+  });
 });

@@ -1,5 +1,6 @@
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SqlStorage } from "../sql-storage";
+import { z } from "zod";
 
 /** Storage-independent access to the runtime's single scheduled wake-up. */
 export interface AlarmScheduleStore {
@@ -19,11 +20,13 @@ export interface AlarmDeadlineStore {
   completeDelivery(): void;
 }
 
-interface AlarmStateRow {
-  pending_deadline: number | null;
-  in_flight_deadline: number | null;
-  cancelled: number;
-}
+const alarmStateRowSchema = z.object({
+  pending_deadline: z.number().nullable(),
+  in_flight_deadline: z.number().nullable(),
+  cancelled: z.number(),
+});
+
+type AlarmStateRow = z.infer<typeof alarmStateRowSchema>;
 
 export class PersistedAlarmDeadlineStore implements AlarmDeadlineStore {
   constructor(private readonly sql: SqlStorage) {}
@@ -86,8 +89,9 @@ export class PersistedAlarmDeadlineStore implements AlarmDeadlineStore {
         `SELECT pending_deadline, in_flight_deadline, cancelled
          FROM session_alarm_state WHERE singleton = 1`
       )
-      .toArray() as AlarmStateRow[];
-    return rows[0] ?? null;
+      .toArray();
+    const parsed = alarmStateRowSchema.safeParse(rows[0]);
+    return parsed.success ? parsed.data : null;
   }
 }
 
