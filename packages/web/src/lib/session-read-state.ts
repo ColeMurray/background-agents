@@ -141,16 +141,31 @@ function recordReadState(sessionId: string, readState: SessionReadState): void {
 }
 
 /**
- * Settles a read-state response. The overlay shows it immediately; a read
- * that changed the server's state refetches the inbox so the server places
- * the session. Nothing on the client moves a session between categories.
+ * Settles a read-state response for the viewer who sent the request.
+ *
+ * The overlay shows the result immediately. A result that can change where
+ * the server places the session (`marked_read`, or `not_latest` carrying a
+ * newer unread message) refetches the inbox; the client never moves a
+ * session between categories itself. The refetch is independent of the
+ * acknowledgement: a failed refresh is SWR's to retry, not a reason to send
+ * the read again.
+ *
+ * Returns false when the viewer changed while the request was in flight;
+ * the result belongs to the previous viewer and is dropped.
  */
-export async function applySessionReadResult(
+export function applySessionReadResult(
   result: SessionReadResult,
-  mutate: ScopedMutator
-): Promise<void> {
+  mutate: ScopedMutator,
+  viewerId: string
+): boolean {
+  if (viewerId !== overlayOwner) return false;
   recordReadState(result.sessionId, readStateFromResult(result));
-  if (result.outcome === "marked_read") await mutate(isSessionInboxKey);
+  if (result.outcome === "marked_read" || result.outcome === "not_latest") {
+    void mutate(isSessionInboxKey).catch((error: unknown) => {
+      console.error("Failed to refresh session inbox after read", error);
+    });
+  }
+  return true;
 }
 
 /** Retires overlay entries that fetched rows have caught up with. */

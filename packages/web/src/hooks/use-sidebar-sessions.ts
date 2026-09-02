@@ -42,16 +42,25 @@ interface LoadedPage {
  * are fetched with a plain request and never stored under a cache key, so a
  * remount starts again from the head and nothing can restore a page the
  * server has since changed.
+ *
+ * A chain of loaded pages continues the head page from its cursor, so it is
+ * only coherent with the head it was loaded after. When the head's boundary
+ * moves (a row entered or left the first page) the chain is discarded along
+ * with any response still in flight; keeping it would hide the rows between
+ * the new boundary and the old tail. `generation` counts those resets so a
+ * response for an earlier chain can never land in a later one, even one
+ * with the same identity.
  */
 interface LoadedPagesState {
-  filterIdentity: string;
+  identity: string;
+  generation: number;
   pages: LoadedPage[];
   loading: boolean;
   error: unknown;
 }
 
-function emptyPages(filterIdentity: string): LoadedPagesState {
-  return { filterIdentity, pages: [], loading: false, error: undefined };
+function emptyPages(identity: string, generation: number): LoadedPagesState {
+  return { identity, generation, pages: [], loading: false, error: undefined };
 }
 
 function withoutRoots(page: SessionInboxPage, rootIds: Set<string>): SessionInboxPage {
@@ -68,41 +77,44 @@ function useCategoryPagination(
   nextPageSequence: MutableRefObject<number>
 ) {
   const { fetcher } = useSWRConfig();
-  const [state, setState] = useState<LoadedPagesState>(() => emptyPages(filterIdentity));
-  const current = state.filterIdentity === filterIdentity ? state : emptyPages(filterIdentity);
   const firstPage = snapshot?.categories[category];
+  const chainIdentity = JSON.stringify([filterIdentity, firstPage?.nextCursor ?? null]);
+  const [state, setState] = useState<LoadedPagesState>(() => emptyPages(chainIdentity, 0));
+  const current =
+    state.identity === chainIdentity ? state : emptyPages(chainIdentity, state.generation);
   const lastPage = current.pages.at(-1)?.page ?? firstPage;
 
   useEffect(() => {
-    setState(emptyPages(filterIdentity));
-  }, [filterIdentity]);
+    setState((previous) =>
+      previous.identity === chainIdentity
+        ? previous
+        : emptyPages(chainIdentity, previous.generation + 1)
+    );
+  }, [chainIdentity]);
 
   // Once the head snapshot carries a root, the loaded copy is stale for good:
   // the session may since have been archived or ranked past every loaded page.
   useEffect(() => {
-    setState((previous) =>
-      previous.filterIdentity === filterIdentity
-        ? {
-            ...previous,
-            pages: previous.pages.map(({ page, sequence }) => ({
-              sequence,
-              page: withoutRoots(page, canonicalRootIds),
-            })),
-          }
-        : previous
-    );
-  }, [canonicalRootIds, filterIdentity]);
+    setState((previous) => {
+      let changed = false;
+      const pages = previous.pages.map(({ page, sequence }) => {
+        const filtered = withoutRoots(page, canonicalRootIds);
+        if (filtered.items.length === page.items.length) return { page, sequence };
+        changed = true;
+        return { page: filtered, sequence };
+      });
+      return changed ? { ...previous, pages } : previous;
+    });
+  }, [canonicalRootIds]);
 
   const requestPage = useCallback(async () => {
     const cursor = lastPage?.nextCursor;
     if (!snapshot || !cursor || current.loading) return;
     const key = buildSessionInboxKey({ category, cursor, mine });
-    const requestIdentity = filterIdentity;
+    const generation = current.generation;
     const sequence = nextPageSequence.current++;
-    // A response for a filter that is no longer active is dropped by every
-    // updater below; a head refresh under the same filter does not affect it.
     setState((previous) =>
-      previous.filterIdentity === requestIdentity
+      previous.generation === generation
         ? { ...previous, loading: true, error: undefined }
         : previous
     );
@@ -110,23 +122,21 @@ function useCategoryPagination(
       if (!fetcher) throw new Error("Missing SWR fetcher");
       const page = withoutRoots((await fetcher(key)) as SessionInboxPage, canonicalRootIds);
       setState((previous) =>
-        previous.filterIdentity === requestIdentity
+        previous.generation === generation
           ? { ...previous, loading: false, pages: [...previous.pages, { page, sequence }] }
           : previous
       );
     } catch (error) {
       setState((previous) =>
-        previous.filterIdentity === requestIdentity
-          ? { ...previous, loading: false, error }
-          : previous
+        previous.generation === generation ? { ...previous, loading: false, error } : previous
       );
     }
   }, [
     canonicalRootIds,
     category,
+    current.generation,
     current.loading,
     fetcher,
-    filterIdentity,
     lastPage,
     mine,
     nextPageSequence,
@@ -377,10 +387,12 @@ export function useSidebarSessions() {
 
   const handleMarkLatestMessageRead = useCallback(
     async (sessionId: string) => {
+      if (!userId) return;
+      scopeSessionReadOverlay(userId);
       const result = await markLatestMessageRead(sessionId);
-      await applySessionReadResult(result, mutateCache);
+      applySessionReadResult(result, mutateCache, userId);
     },
-    [mutateCache]
+    [mutateCache, userId]
   );
 
   return {

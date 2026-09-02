@@ -53,9 +53,13 @@ export function SessionListItem({
     session.repositories
   );
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
+  // A row from a loaded page never refetches, so a confirmed rename stays
+  // on screen until the fetched title catches up.
   const { optimisticTitle, renameSession } = useSessionRename({
     sessionId: session.id,
     currentTitle: session.title,
+    authoritativeTitle: session.title,
+    awaitAuthoritativeTitle: true,
   });
   const displayTitle = optimisticTitle ?? session.title ?? repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge

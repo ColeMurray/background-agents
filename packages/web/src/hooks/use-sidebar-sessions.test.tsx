@@ -15,6 +15,7 @@ import {
   applySessionReadResult,
   getSessionReadOverlay,
   resetSessionReadOverlay,
+  scopeSessionReadOverlay,
 } from "@/lib/session-read-state";
 
 const defaultUser = { id: "github:123", name: "Test User" };
@@ -71,6 +72,11 @@ function readItem(id: string): SessionInboxItem {
 }
 
 const noRevalidate = async () => [];
+/** A read the session page recorded for the signed-in viewer. */
+function recordPageRead(result: SessionReadResult) {
+  scopeSessionReadOverlay(defaultUser.id);
+  applySessionReadResult(result, noRevalidate, defaultUser.id);
+}
 
 function page(ids: string[], nextCursor: string | null = null): SessionInboxPage {
   return { items: ids.map(item), hasMore: nextCursor !== null, nextCursor };
@@ -485,7 +491,7 @@ describe("useSidebarSessions", () => {
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    await act(() => applySessionReadResult(readResult("attention"), noRevalidate));
+    act(() => recordPageRead(readResult("attention")));
 
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["other"]);
     expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
@@ -533,7 +539,14 @@ describe("useSidebarSessions", () => {
     expect(snapshotFetches).toBe(fetchesBefore);
   });
 
-  it("shows a newer unread message from a not_latest result on a loaded page row", async () => {
+  it("shows a newer unread message from a not_latest result and refetches the snapshot", async () => {
+    markLatestMessageRead.mockImplementation(async (sessionId: string) => ({
+      sessionId,
+      outcome: "not_latest",
+      latestMessageId: "msg-9",
+      version: 9,
+      unread: true,
+    }));
     let snapshotFetches = 0;
     const fetcher = vi.fn(async (key: string) => {
       if (key.includes("category=")) {
@@ -548,23 +561,13 @@ describe("useSidebarSessions", () => {
     await waitFor(() => expect(result.current.finished).toHaveLength(2));
     const fetchesBefore = snapshotFetches;
 
-    await act(() =>
-      applySessionReadResult(
-        {
-          sessionId: "finished-tail",
-          outcome: "not_latest",
-          latestMessageId: "msg-9",
-          version: 9,
-          unread: true,
-        },
-        noRevalidate
-      )
-    );
+    await act(async () => result.current.handleMarkLatestMessageRead("finished-tail"));
 
     const tail = result.current.finished.find(({ id }) => id === "finished-tail");
     expect(tail?.readState).toEqual({ latestMessageId: "msg-9", version: 9, unread: true });
-    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
-    expect(snapshotFetches).toBe(fetchesBefore);
+    // The server owns placement: a newer unread message means a refetch, so
+    // the row can move to attention where the inbox query puts it.
+    await waitFor(() => expect(snapshotFetches).toBe(fetchesBefore + 1));
   });
 
   it("shows a read on a loaded page row without dropping it", async () => {
@@ -606,7 +609,7 @@ describe("useSidebarSessions", () => {
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    await act(() => applySessionReadResult(readResult("attention"), noRevalidate));
+    act(() => recordPageRead(readResult("attention")));
 
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
     expect(result.current.needsAttention[0]?.readState.unread).toBe(true);
@@ -629,7 +632,7 @@ describe("useSidebarSessions", () => {
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    await act(() => applySessionReadResult(readResult("target"), noRevalidate));
+    act(() => recordPageRead(readResult("target")));
     expect(getSessionReadOverlay().has("target")).toBe(true);
 
     sessionRead = true;
@@ -645,13 +648,105 @@ describe("useSidebarSessions", () => {
       wrapper: wrapper(fetcher),
     });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    await act(() => applySessionReadResult(readResult("attention"), noRevalidate));
+    act(() => recordPageRead(readResult("attention")));
     expect(getSessionReadOverlay().size).toBe(1);
 
     authUser = null;
     rerender();
 
     await waitFor(() => expect(getSessionReadOverlay().size).toBe(0));
+  });
+
+  it("discards loaded pages when the head boundary moves", async () => {
+    let sessionRead = false;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=in_progress")) {
+        return page([
+          key.includes("new-progress-next") ? "new-progress-tail" : "old-progress-tail",
+        ]);
+      }
+      if (key.includes("category=")) return page(["attention-tail"]);
+      return sessionRead
+        ? snapshot({
+            needs_attention: page(["attention"], "attention-next"),
+            in_progress: {
+              items: [readItem("moving"), item("running")],
+              hasMore: true,
+              nextCursor: "new-progress-next",
+            },
+          })
+        : snapshot({
+            needs_attention: page(["attention"], "attention-next"),
+            in_progress: page(["running"], "progress-next"),
+          });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    act(() => result.current.sectionPagination.inProgress.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+    await waitFor(() => expect(result.current.inProgress).toHaveLength(2));
+
+    sessionRead = true;
+    await act(async () => result.current.refreshSnapshot());
+
+    // The in-progress head gained a row, so its old tail could hide the rows
+    // now below the new boundary; it is dropped. The attention chain, whose
+    // boundary did not move, keeps its tail.
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["moving", "running"])
+    );
+    expect(result.current.sectionPagination.inProgress.hasMore).toBe(true);
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
+      "attention",
+      "attention-tail",
+    ]);
+
+    act(() => result.current.sectionPagination.inProgress.loadMore());
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual([
+        "moving",
+        "running",
+        "new-progress-tail",
+      ])
+    );
+  });
+
+  it("drops a response from an earlier chain even when the filter returns to the same identity", async () => {
+    const pendingPage = deferred<SessionInboxPage>();
+    let paginationRequests = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=")) {
+        paginationRequests += 1;
+        return paginationRequests === 1 ? pendingPage.promise : page(["fresh-page-2"]);
+      }
+      return snapshot({
+        needs_attention: page([key.includes("mine=true") ? "mine-first" : "all-first"], "next"),
+      });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() =>
+      expect(result.current.sectionPagination.needsAttention.loadingMore).toBe(true)
+    );
+
+    act(() => result.current.setSessionCreatorFilter("mine"));
+    await waitFor(() => expect(result.current.needsAttention[0]?.id).toBe("mine-first"));
+    act(() => result.current.setSessionCreatorFilter("all"));
+    await waitFor(() => expect(result.current.needsAttention[0]?.id).toBe("all-first"));
+    expect(result.current.sectionPagination.needsAttention.loadingMore).toBe(false);
+
+    await act(async () => pendingPage.resolve(page(["stale-page-2"])));
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["all-first"]);
+
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
+        "all-first",
+        "fresh-page-2",
+      ])
+    );
   });
 
   it("starts pagination from the head after a remount", async () => {

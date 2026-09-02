@@ -13,9 +13,19 @@ import {
 const markMessageRead =
   vi.fn<(sessionId: string, messageId: string) => Promise<SessionReadResult>>();
 
+const mutate = vi.fn(async (_key: unknown) => []);
+let viewerId: string | null = "viewer-a";
+
 vi.mock("@/lib/session-read-state", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   markMessageRead: (sessionId: string, messageId: string) => markMessageRead(sessionId, messageId),
+}));
+vi.mock("swr", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useSWRConfig: () => ({ mutate }),
+}));
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({ data: viewerId ? { user: { id: viewerId } } : undefined }),
 }));
 
 function result(
@@ -39,7 +49,10 @@ function setVisibility(value: "visible" | "hidden") {
 beforeEach(() => {
   setVisibility("visible");
   resetSessionReadOverlay();
+  viewerId = "viewer-a";
   markMessageRead.mockReset();
+  mutate.mockReset();
+  mutate.mockImplementation(async () => []);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
@@ -96,6 +109,47 @@ describe("useMarkSessionRead", () => {
     await act(async () => rerender({ messageId: "message-2" }));
     expect(markMessageRead).toHaveBeenCalledTimes(2);
     expect(markMessageRead).toHaveBeenLastCalledWith("session-1", "message-2");
+  });
+
+  it("refetches the inbox once after a new read and does not resend the read if that fails", async () => {
+    vi.useFakeTimers();
+    mutate.mockRejectedValueOnce(new Error("offline"));
+    markMessageRead.mockResolvedValue(result("marked_read"));
+
+    await act(async () => {
+      renderHook(() => useMarkSessionRead("session-1", "message-1"));
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(markMessageRead).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  it("drops a response that arrives after the viewer changed", async () => {
+    let resolveFirst!: (value: SessionReadResult) => void;
+    markMessageRead
+      .mockImplementationOnce(
+        () =>
+          new Promise<SessionReadResult>((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockResolvedValue(result("marked_read"));
+    const { rerender } = await act(async () =>
+      renderHook(() => useMarkSessionRead("session-1", "message-1"))
+    );
+    expect(markMessageRead).toHaveBeenCalledTimes(1);
+
+    viewerId = "viewer-b";
+    await act(async () => rerender());
+    expect(markMessageRead).toHaveBeenCalledTimes(2);
+    const entryBefore = getSessionReadOverlay().get("session-1");
+
+    await act(async () => resolveFirst(result("not_latest", true)));
+
+    expect(getSessionReadOverlay().get("session-1")).toEqual(entryBefore);
+    expect(mutate).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing until the session has a terminal message", async () => {
