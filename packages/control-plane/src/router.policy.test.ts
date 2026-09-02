@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { enforceRoutePrincipal, handleRequest, routes } from "./router";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { enforceRoutePrincipal } from "./routing/route-admission";
+import { routes } from "./routes/catalog";
+import { handleRequest, TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { parsePattern } from "./routes/shared";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
@@ -9,6 +11,43 @@ function routeFor(method: string, path: string) {
 }
 
 describe("route policy table", () => {
+  it("publishes the complete canonical route catalog", () => {
+    expect(routes).toHaveLength(171);
+
+    const paths = routes.map((route) => route.path);
+    expect(new Set(paths).size).toBe(130);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(171);
+
+    for (const route of routes) {
+      expect(route.pattern.source).toBe(parsePattern(route.path).source);
+    }
+  });
+
+  it("declares every path in the literal-or-parameter grammar shared by Hono and parsePattern", () => {
+    // Hono gives `*`, `?`, `{...}` and `.` routing meaning that parsePattern
+    // compiles as literals, so a path outside this grammar would be selected
+    // by Hono and then rejected by the raw-path regex.
+    for (const route of routes) {
+      expect(route.path, `${route.method} ${route.path}`).toMatch(/^(\/([A-Za-z0-9_-]+|:\w+))+$/);
+    }
+  });
+
+  it.each([
+    ["GET", "/sessions/inbox", "/sessions/:id"],
+    ["GET", "/model-provider-accounts/legacy-credentials", "/model-provider-accounts/:id"],
+  ])("orders the static overlap %s %s before %s", (method, staticPath, dynamicPath) => {
+    const staticIndex = routes.findIndex(
+      (route) => route.method === method && route.path === staticPath
+    );
+    const dynamicIndex = routes.findIndex(
+      (route) => route.method === method && route.path === dynamicPath
+    );
+
+    expect(staticIndex).toBeGreaterThanOrEqual(0);
+    expect(dynamicIndex).toBeGreaterThanOrEqual(0);
+    expect(staticIndex).toBeLessThan(dynamicIndex);
+  });
+
   it("has complete metadata", () => {
     expect(routes.length).toBeGreaterThan(0);
     expect(

@@ -4,7 +4,7 @@
  * Cloudflare Workers entry point with Durable Objects for session management.
  */
 
-import { handleRequest } from "./router";
+import { handleControlPlaneHttp } from "./routing/hono-app";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
@@ -42,8 +42,9 @@ export default {
       return handleWebSocket(request, env, url, db, metrics);
     }
 
-    // Regular API request — logged by the router with requestId and timing
-    return handleRequest(request, env, createCloudflareBackgroundTasks(ctx));
+    // Regular API request — Hono owns HTTP route selection while the neutral
+    // admission/dispatch pipeline retains authentication and authorization.
+    return handleControlPlaneHttp(request, env, ctx);
   },
 
   /**

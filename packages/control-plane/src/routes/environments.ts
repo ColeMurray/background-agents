@@ -26,7 +26,6 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
   type RequestContext,
-  parsePattern,
   json,
   error,
   parseJsonBody,
@@ -254,7 +253,7 @@ async function handleDeleteEnvironment(
 export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/environments"),
+    path: "/environments",
     authorization: requirePermission("environments.read", {
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
@@ -262,13 +261,13 @@ export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_RO
   },
   {
     method: "POST",
-    pattern: parsePattern("/environments"),
+    path: "/environments",
     authorization: requirePermission("environments.manage"),
     handler: handleCreateEnvironment,
   },
   {
     method: "GET",
-    pattern: parsePattern("/environments/:id"),
+    path: "/environments/:id",
     authorization: requirePermission("environments.read", {
       actorlessGrants: [{ service: "github-bot" }],
     }),
@@ -276,13 +275,13 @@ export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_RO
   },
   {
     method: "PUT",
-    pattern: parsePattern("/environments/:id"),
+    path: "/environments/:id",
     authorization: requirePermission("environments.manage"),
     handler: handleUpdateEnvironment,
   },
   {
     method: "DELETE",
-    pattern: parsePattern("/environments/:id"),
+    path: "/environments/:id",
     authorization: requirePermission("environments.manage"),
     handler: handleDeleteEnvironment,
   },

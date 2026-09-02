@@ -7,7 +7,6 @@ import {
   defineRoutes,
   error,
   json,
-  parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type Route,
   type UserRouteContext,
@@ -47,13 +46,13 @@ async function updatePreferences(
 export const keyboardShortcutRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/keyboard-shortcuts"),
+    path: "/keyboard-shortcuts",
     authorization: ACTIVE_SELF,
     handler: getPreferences,
   },
   {
     method: "PUT",
-    pattern: parsePattern("/keyboard-shortcuts"),
+    path: "/keyboard-shortcuts",
     authorization: activeSelf({ auditAllowed: true }),
     handler: updatePreferences,
   },

@@ -26,7 +26,6 @@ import {
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
-  parsePattern,
   requirePermission,
   type Route,
 } from "./shared";
@@ -250,7 +249,7 @@ async function handleVideoUpload(input: {
 export const sessionMediaUploadRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
   sessionRoute({
     method: "POST",
-    pattern: parsePattern("/sessions/:id/media"),
+    path: "/sessions/:id/media",
     authorization: requirePermission("sessions.collaborate"),
     handler: handleMediaUpload,
   }),

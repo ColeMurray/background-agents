@@ -1,6 +1,7 @@
 # Open-Inspect Control Plane
 
-Cloudflare Workers + Durable Objects control plane for session management and real-time streaming.
+Cloudflare Workers + Hono + Durable Objects control plane for session management and real-time
+streaming.
 
 ## Overview
 
@@ -21,8 +22,8 @@ The control plane provides:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Cloudflare Workers                            │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                   API Gateway (router.ts)                 │   │
-│  │   POST /sessions  │  GET /sessions/:id  │  WebSocket      │   │
+│  │              Hono HTTP API + Route Admission             │   │
+│  │   POST /sessions  │  GET /sessions/:id  │  WebSocket*     │   │
 │  └─────────────────────────────┬────────────────────────────┘   │
 │                                │                                 │
 │  ┌─────────────────────────────┴────────────────────────────┐   │
@@ -44,6 +45,12 @@ The control plane provides:
 │  └───────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+Hono selects ordinary HTTP routes from the framework-neutral catalog. Authentication, service
+principal admission, canonical actor resolution, RBAC, sandbox capabilities, and route-specific
+authorization remain in the shared admission layer. WebSocket upgrades (`*` above), scheduled
+events, Queues, and Durable Object lifecycle callbacks stay at the Cloudflare Worker boundary and do
+not pass through Hono.
 
 ## API Endpoints
 

@@ -5,7 +5,6 @@ import {
   error,
   json,
   NO_AUTHORIZATION,
-  parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   type Route,
 } from "./shared";
@@ -39,7 +38,7 @@ const handleSignInProviders: Route["handler"] = async (_request, _env, _match, c
 export const signInProviderRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_WEB_SERVICE_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/internal/auth/sign-in-providers"),
+    path: "/internal/auth/sign-in-providers",
     authorization: NO_AUTHORIZATION,
     handler: handleSignInProviders,
   },

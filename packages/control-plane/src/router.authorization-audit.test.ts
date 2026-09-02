@@ -1,10 +1,10 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
-import { handleRequest, routes } from "./router";
 import {
+  defineRoute,
   json,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   permissionRequirement,
@@ -14,7 +14,7 @@ import {
   serviceAuthorized,
   type Route,
 } from "./routes/shared";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import { createTestRequestHandler, TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
@@ -24,98 +24,107 @@ vi.mock("./auth/authenticate", async (importOriginal) => ({
 }));
 
 const TEST_ROUTES: Route[] = [
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "POST",
+      path: "/audit-test/actorless-service",
+      authorization: requirePermission("sessions.lifecycle", {
+        actorlessGrants: [{ service: "github-bot" }],
+      }),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user" }, supportedScmProviders: "all" },
+    {
+      method: "POST",
+      path: "/audit-test/user-only",
+      authorization: requirePermission("workspace.members.manage"),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "POST",
+      path: "/audit-test/automations/:id/pause",
+      authorization: requireAutomation("manage"),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "POST",
+      path: "/audit-test/managed",
+      authorization: requirePermission("workspace.members.manage"),
+      handler: async () => json({ handled: true }, 201),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "GET",
+      path: "/audit-test/managed",
+      authorization: requirePermission("workspace.members.manage"),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "GET",
+      path: "/audit-test/profiles",
+      authorization: requirePermission("skill_profiles.manage_own"),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "GET",
+      path: "/audit-test/read",
+      authorization: requirePermission("workspace.roles.read"),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "POST",
+      path: "/audit-test/service-actor",
+      authorization: requirePermission("sessions.lifecycle"),
+      handler: async () => json({ handled: true }, 201),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "service" }, supportedScmProviders: "all" },
+    {
+      method: "POST",
+      path: "/audit-test/service",
+      authorization: serviceAuthorized("github-bot", "required"),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(
+    { authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    {
+      method: "POST",
+      path: "/audit-test/multi",
+      authorization: requireAll(
+        permissionRequirement("analytics.read"),
+        permissionRequirement("workspace.members.manage")
+      ),
+      handler: async () => json({ handled: true }),
+    }
+  ),
+  defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "POST",
-    pattern: /^\/audit-test\/actorless-service$/,
-    authorization: requirePermission("sessions.lifecycle", {
-      actorlessGrants: [{ service: "github-bot" }],
-    }),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    authentication: { kind: "user" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: /^\/audit-test\/user-only$/,
-    authorization: requirePermission("workspace.members.manage"),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: /^\/audit-test\/automations\/(?<id>[^/]+)\/pause$/,
-    authorization: requireAutomation("manage"),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: /^\/audit-test\/managed$/,
-    authorization: requirePermission("workspace.members.manage"),
-    handler: async () => json({ handled: true }, 201),
-  },
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
-    method: "GET",
-    pattern: /^\/audit-test\/managed$/,
-    authorization: requirePermission("workspace.members.manage"),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
-    method: "GET",
-    pattern: /^\/audit-test\/profiles$/,
-    authorization: requirePermission("skill_profiles.manage_own"),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
-    method: "GET",
-    pattern: /^\/audit-test\/read$/,
-    authorization: requirePermission("workspace.roles.read"),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: /^\/audit-test\/service-actor$/,
-    authorization: requirePermission("sessions.lifecycle"),
-    handler: async () => json({ handled: true }, 201),
-  },
-  {
-    authentication: { kind: "service" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: /^\/audit-test\/service$/,
-    authorization: serviceAuthorized("github-bot", "required"),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    authentication: { kind: "user-or-service" },
-    supportedScmProviders: "all",
-    method: "POST",
-    pattern: /^\/audit-test\/multi$/,
-    authorization: requireAll(
-      permissionRequirement("analytics.read"),
-      permissionRequirement("workspace.members.manage")
-    ),
-    handler: async () => json({ handled: true }),
-  },
-  {
-    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
-    method: "POST",
-    pattern: /^\/audit-test\/sessions\/(?<id>[^/]+)\/upload$/,
+    path: "/audit-test/sessions/:id/upload",
     authorization: requirePermission("sessions.collaborate"),
     handler: async () => json({ handled: true }, 201),
-  },
+  }),
 ];
 
 interface AuditWrite {
@@ -214,11 +223,7 @@ function auditRecord(write: AuditWrite) {
   };
 }
 
-beforeAll(() => routes.push(...TEST_ROUTES));
-
-afterAll(() => {
-  routes.splice(routes.length - TEST_ROUTES.length, TEST_ROUTES.length);
-});
+const handleRequest = createTestRequestHandler(TEST_ROUTES);
 
 beforeEach(() => {
   mocks.authenticate.mockReset();

@@ -32,7 +32,6 @@ import {
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
-  parsePattern,
   permissionRequirement,
   requireAll,
   type Route,
@@ -354,7 +353,7 @@ async function handleSpawnChild(
 export const sessionChildSpawnRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
   sessionRoute({
     method: "POST",
-    pattern: parsePattern("/sessions/:id/children"),
+    path: "/sessions/:id/children",
     authorization: requireAll(
       permissionRequirement("sessions.create"),
       permissionRequirement("sessions.collaborate")

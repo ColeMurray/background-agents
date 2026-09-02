@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleRequest, routes } from "./router";
+import { routes } from "./routes/catalog";
 import {
+  handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,

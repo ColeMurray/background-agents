@@ -19,7 +19,6 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
   type RequestContext,
-  parsePattern,
   json,
   error,
   extractRepoParams,
@@ -329,7 +328,7 @@ async function handleListBranches(
 export const reposRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/repos"),
+    path: "/repos",
     authorization: requirePermission("repositories.read", {
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
@@ -337,13 +336,13 @@ export const reposRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   },
   {
     method: "PUT",
-    pattern: parsePattern("/repos/:owner/:name/metadata"),
+    path: "/repos/:owner/:name/metadata",
     authorization: requirePermission("repositories.settings.manage"),
     handler: handleUpdateRepoMetadata,
   },
   {
     method: "GET",
-    pattern: parsePattern("/repos/:owner/:name/metadata"),
+    path: "/repos/:owner/:name/metadata",
     authorization: requirePermission("repositories.read", {
       actorlessGrants: [{ service: "github-bot" }],
     }),
@@ -351,7 +350,7 @@ export const reposRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   },
   {
     method: "GET",
-    pattern: parsePattern("/repos/:owner/:name/branches"),
+    path: "/repos/:owner/:name/branches",
     authorization: requirePermission("repositories.read"),
     handler: handleListBranches,
   },

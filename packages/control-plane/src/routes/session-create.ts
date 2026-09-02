@@ -3,7 +3,10 @@ import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/sh
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
-import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
+import {
+  applyIdentityEnforcement,
+  requireAdmittedCanonicalUserId,
+} from "../routing/identity-enforcement";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
@@ -25,13 +28,13 @@ import {
 import {
   error,
   json,
-  parsePattern,
   resolveRepoOrError,
   type RequestContext,
   type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
   requirePermission,
+  type ServiceActorProfileClaims,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -39,6 +42,25 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
+
+async function extractSessionActorProfileClaims(
+  request: Request,
+  ctx: RequestContext
+): Promise<ServiceActorProfileClaims | null> {
+  const parsed = await parseCreateSessionInput(request);
+  if (!parsed.ok) return null;
+
+  // Keep the admission-time claim view aligned with the handler's raw-body
+  // identity guard. Invalid input remains handler-owned and yields no claims.
+  const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
+  if (enforcement.rejection) return null;
+
+  return {
+    displayName: parsed.input.actorDisplayName,
+    email: parsed.input.actorEmail,
+    avatarUrl: parsed.input.actorAvatarUrl,
+  };
+}
 
 async function handleCreateSession(
   request: Request,
@@ -125,16 +147,13 @@ async function handleCreateSession(
   const participantUserId = enforced.participantUserId;
   const spawnSource = enforced.spawnSource ?? undefined;
 
-  // Resolve canonical user model ID (for D1 session index) from the verified
-  // principal, failing closed; body display fields stay cosmetic.
+  // Admission finalized the canonical subject before RBAC. The handler may
+  // consume only that exact subject; it must never perform late identity
+  // selection from body profile fields.
   const userStore = new UserStore(ctx.db);
-  const resolution = await resolveCanonicalUserId(userStore, ctx, enforced, {
-    displayName: body.actorDisplayName,
-    email: body.actorEmail,
-    avatarUrl: body.actorAvatarUrl,
-  });
+  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution.userId;
+  const resolvedUserId = resolution;
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
@@ -273,8 +292,9 @@ async function handleCreateSession(
 export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "POST",
-    pattern: parsePattern("/sessions"),
+    path: "/sessions",
     authorization: requirePermission("sessions.create"),
+    serviceActorClaims: extractSessionActorProfileClaims,
     handler: handleCreateSession,
   },
 ]);

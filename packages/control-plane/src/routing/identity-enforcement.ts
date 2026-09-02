@@ -11,11 +11,11 @@
 
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
-import { createLogger } from "./../logger";
-import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
-import type { Principal, ResolvedIdentity } from "./principal";
-import type { UserStore } from "../db/user-store";
-import { error, json, type RequestContext } from "../routes/shared";
+import { createLogger } from "../logger";
+import { CALLBACK_DESTINATIONS } from "../auth/service/callback-signing";
+import type { Principal, ResolvedIdentity } from "../auth/principal";
+import { error } from "../http/responses";
+import type { RequestContext } from "../http/request-context";
 
 const logger = createLogger("identity-enforcement");
 
@@ -36,9 +36,10 @@ const SPAWNING_FORBIDDEN_FIELDS = [
 /**
  * Raw-body keys a caller may not send: identity comes from the principal,
  * SCM credentials from server-side enrichment. Checked against raw JSON
- * before Zod because every schema is strip-mode. Display-only fields
+ * before Zod because every schema is strip-mode. Profile fields
  * (authEmail/Name/AvatarUrl, actorDisplayName, scmLogin…) stay body-carried
- * by design.
+ * by design; only admission for a verified Slack/Linear service may treat
+ * actorEmail as identity-bearing.
  */
 const FORBIDDEN_IDENTITY_FIELDS: Record<IdentityRoute, readonly string[]> = {
   "session-create": SPAWNING_FORBIDDEN_FIELDS,
@@ -73,8 +74,8 @@ interface DerivedIdentity {
   /** Canonical D1 users.id when the principal resolves to one. */
   canonicalUserId: string | null;
   /**
-   * The verified bot-asserted actor backing `participantUserId` — what
-   * `resolveCanonicalUserId` creates the canonical user from on first sight.
+   * The verified bot-asserted actor backing `participantUserId` — what route
+   * admission uses to finalize the canonical user before RBAC.
    * Null for user principals (their `canonicalUserId` is always set) and for
    * userless service principals.
    */
@@ -175,85 +176,25 @@ export function applyIdentityEnforcement<R extends IdentityRoute>(
 }
 
 /**
- * Resolve the canonical `users.id` for a spawning route, creating the user
- * from the VERIFIED actor when the CP has not seen them before (display
- * fields may come from the body — they are cosmetic, never identity). Fails
- * closed with a 500 rather than writing anonymous attribution. Shared by
- * session-create and automation-create so the two routes cannot drift.
- *
- * Takes the requires-user enforced shape: every participant is backed by a
- * canonical user (web users) or a verified actor (bot assertions), so the
- * resolved id is never null.
+ * Return the canonical subject already admitted by the router. Spawning
+ * handlers may never resolve or relink identity after RBAC has run: the user
+ * authorized and the user attributed to the side effect must be identical.
  */
-export async function resolveCanonicalUserId(
-  userStore: UserStore,
+export function requireAdmittedCanonicalUserId(
   ctx: RequestContext,
-  enforced: DerivedIdentity & { participantUserId: string },
-  display: { displayName?: string; email?: string; avatarUrl?: string }
-): Promise<{ userId: string } | Response> {
-  const requireActive = async (userId: string): Promise<{ userId: string } | Response> => {
-    try {
-      const active = await ctx.db
-        .prepare("SELECT 1 AS active FROM users WHERE id = ? AND suspended_at IS NULL")
-        .bind(userId)
-        .first<{ active: number }>();
-      return active ? { userId } : error("Workspace access is disabled", 403);
-    } catch (cause) {
-      logger.error("Failed to verify workspace access", {
-        error: cause instanceof Error ? cause : String(cause),
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return error("Authorization unavailable", 503);
-    }
-  };
-  if (enforced.canonicalUserId) return requireActive(enforced.canonicalUserId);
-  const actor = enforced.actor;
-  if (!actor) {
-    // Unreachable while deriveIdentity holds its invariant (a participant
-    // without a canonical user is always actor-backed); fail closed rather
-    // than write anonymous attribution if that ever breaks.
-    logger.error("Participant carries neither a canonical user nor an actor", {
-      participant: enforced.participantUserId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to resolve session identity", 500);
-  }
-  try {
-    const user = await userStore.resolveOrCreateUser({
-      provider: actor.provider,
-      providerUserId: actor.providerUserId,
-      displayName: display.displayName,
-      providerEmail: display.email,
-      avatarUrl: display.avatarUrl,
-    });
-    if (ctx.authorization && user.id !== ctx.authorization.userId) {
-      logMismatchRejected(
-        "actor-resolution",
-        "canonicalUserId",
-        ctx.authorization.userId,
-        user.id,
-        ctx
-      );
-      return json(
-        {
-          error: "Actor identity changed; retry the request",
-          code: "actor_identity_changed",
-        },
-        409
-      );
-    }
-    return requireActive(user.id);
-  } catch (e) {
-    logger.error("Failed to resolve verified actor identity", {
-      error: e instanceof Error ? e : String(e),
-      provider: actor.provider,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to resolve session identity", 500);
-  }
+  enforced: DerivedIdentity & { participantUserId: string }
+): string | Response {
+  const userId = enforced.canonicalUserId;
+  if (userId && ctx.authorization?.userId === userId) return userId;
+
+  logger.error("Spawning handler received no matching admitted canonical user", {
+    participant: enforced.participantUserId,
+    canonical_user_id: userId ?? undefined,
+    authorized_user_id: ctx.authorization?.userId,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+  return error("Failed to resolve session identity", 500);
 }
 
 /**
@@ -267,22 +208,4 @@ export function mayAttachCallbackContext(ctx: RequestContext): boolean {
     principal?.kind === "service" &&
     (CALLBACK_DESTINATIONS as readonly ServiceName[]).includes(principal.service)
   );
-}
-
-function logMismatchRejected(
-  route: string,
-  field: string,
-  expected: string,
-  actual: string,
-  ctx: RequestContext
-): void {
-  logger.warn("Identity mismatch rejected", {
-    event: "identity.mismatch_rejected",
-    route,
-    field,
-    expected,
-    actual,
-    request_id: ctx.request_id,
-    trace_id: ctx.trace_id,
-  });
 }

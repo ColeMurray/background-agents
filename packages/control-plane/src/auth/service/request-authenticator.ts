@@ -11,9 +11,9 @@ import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
 import { UserStore } from "../../db/user-store";
 import { createLogger } from "../../logger";
-import type { RequestContext } from "../../routes/shared";
 import type { Env } from "../../types";
 import { ASSERTION_RIGHTS, isActorNamespace, type ActorNamespace } from "../principal";
+import type { AuthenticationRequestServices } from "../request-services";
 import type { AuthResult } from "../result";
 import { serviceAuthSecret } from "./config";
 
@@ -43,7 +43,11 @@ function parseActor(actor: string): { provider: ActorNamespace; providerUserId: 
 const seenNonces = new Map<string, number>();
 const SEEN_NONCE_LIMIT = 5000;
 
-function recordNonce(service: ServiceName, nonce: string, ctx: RequestContext): void {
+function recordNonce(
+  service: ServiceName,
+  nonce: string,
+  ctx: AuthenticationRequestServices
+): void {
   const now = Date.now();
   const key = `${service}:${nonce}`;
   const expiresAt = seenNonces.get(key);
@@ -73,7 +77,7 @@ function recordNonce(service: ServiceName, nonce: string, ctx: RequestContext): 
 export async function authenticateServiceRequest(
   request: Request,
   env: Env,
-  ctx: RequestContext,
+  ctx: AuthenticationRequestServices,
   signatureHeader: string
 ): Promise<AuthResult> {
   const serviceHeader = request.headers.get(SERVICE_HEADER) ?? "";

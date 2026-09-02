@@ -12,7 +12,6 @@ import {
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   requirePermission,
-  parsePattern,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -193,7 +192,7 @@ export const sessionDiffRoutes: Route[] = [
     SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method: "GET",
-      pattern: parsePattern("/sessions/:id/diff"),
+      path: "/sessions/:id/diff",
       authorization: requirePermission("sessions.read"),
       handler: handleDiffState,
     })
@@ -202,7 +201,7 @@ export const sessionDiffRoutes: Route[] = [
     SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
     sessionRoute({
       method: "PUT",
-      pattern: parsePattern("/sessions/:id/diff"),
+      path: "/sessions/:id/diff",
       authorization: requirePermission("sessions.collaborate"),
       handler: handleDiffUpload,
     })
@@ -211,7 +210,7 @@ export const sessionDiffRoutes: Route[] = [
     SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern("/sessions/:id/diff/failure"),
+      path: "/sessions/:id/diff/failure",
       authorization: requirePermission("sessions.collaborate"),
       handler: handleDiffFailure,
     })
@@ -220,7 +219,7 @@ export const sessionDiffRoutes: Route[] = [
     SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method: "GET",
-      pattern: parsePattern("/sessions/:id/diff/:revisionId/files/:fileId"),
+      path: "/sessions/:id/diff/:revisionId/files/:fileId",
       authorization: requirePermission("sessions.read"),
       handler: handleDiffFile,
     })
@@ -229,7 +228,7 @@ export const sessionDiffRoutes: Route[] = [
     SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern("/sessions/:id/diff/retry"),
+      path: "/sessions/:id/diff/retry",
       authorization: requirePermission("sessions.lifecycle"),
       handler: handleDiffRetry,
     })

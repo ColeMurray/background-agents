@@ -17,7 +17,6 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
   NO_AUTHORIZATION,
-  parsePattern,
   requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
@@ -264,7 +263,7 @@ export async function handleCancelChild(
 export const sessionChildRoutes: Route[] = [
   defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "GET",
-    pattern: parsePattern("/sessions/:id/children"),
+    path: "/sessions/:id/children",
     authorization: requirePermission("sessions.read"),
     handler: handleListChildren,
   }),
@@ -272,7 +271,7 @@ export const sessionChildRoutes: Route[] = [
     GITHUB_SANDBOX_FALLBACK_ROUTE,
     sessionRoute({
       method: "GET",
-      pattern: parsePattern("/sessions/:id/children/:childId"),
+      path: "/sessions/:id/children/:childId",
       authorization: requirePermission("sessions.read"),
       handler: handleGetChild,
     })
@@ -281,7 +280,7 @@ export const sessionChildRoutes: Route[] = [
     GITHUB_SANDBOX_FALLBACK_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
+      path: "/sessions/:id/children/:childId/cancel",
       authorization: requirePermission("sessions.lifecycle"),
       handler: handleCancelChild,
     })
@@ -290,7 +289,7 @@ export const sessionChildRoutes: Route[] = [
     SCM_AGNOSTIC_SANDBOX_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern("/sessions/:id/children/:childId/prompt"),
+      path: "/sessions/:id/children/:childId/prompt",
       authorization: NO_AUTHORIZATION,
       handler: handlePromptChild,
     })

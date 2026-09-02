@@ -8,7 +8,10 @@ import {
   sessionAttachmentReferencesSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared/types/session-attachments";
-import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
+import {
+  applyIdentityEnforcement,
+  mayAttachCallbackContext,
+} from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
@@ -25,7 +28,6 @@ import {
   defineRoutes,
   error,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  parsePattern,
   requirePermission,
   type Route,
 } from "./shared";
@@ -181,7 +183,7 @@ async function handleSessionPrompt(
 export const sessionPromptRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   sessionRoute({
     method: "POST",
-    pattern: parsePattern("/sessions/:id/prompt"),
+    path: "/sessions/:id/prompt",
     authorization: requirePermission("sessions.collaborate"),
     handler: handleSessionPrompt,
   }),

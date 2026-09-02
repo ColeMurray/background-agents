@@ -9,10 +9,50 @@
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { BackgroundTasks } from "./platform-ports";
 import { createTestBackgroundTasks } from "./background-tasks.test-support";
+import {
+  createControlPlaneHttpHandler,
+  handleControlPlaneHttp,
+  type ControlPlaneHttpHandler,
+} from "./routing/hono-app";
+import type { Route } from "./routes/shared";
+import type { Env } from "./types";
 
 // The single contract-faithful double lives in background-tasks.test-support;
 // this shared instance's recordings are unused by the router suites.
 export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTasks = createTestBackgroundTasks();
+
+function executionContextFromBackgroundTasks(tasks: BackgroundTasks): ExecutionContext {
+  return {
+    waitUntil(promise): void {
+      tasks.submit(() => promise, { name: "test.http.request" });
+    },
+    passThroughOnException(): void {},
+  } as ExecutionContext;
+}
+
+/** Request handler signature used by unit fixtures that provide the platform-neutral port. */
+export type TestRequestHandler = (
+  request: Request,
+  env: Env,
+  backgroundTasks: BackgroundTasks
+) => Promise<Response>;
+
+function adaptForTests(handler: ControlPlaneHttpHandler): TestRequestHandler {
+  return (request, env, backgroundTasks) =>
+    handler(request, env, executionContextFromBackgroundTasks(backgroundTasks));
+}
+
+/** Test-only adapter over the production catalog. */
+export const handleRequest: TestRequestHandler = adaptForTests(handleControlPlaneHttp);
+
+/**
+ * Test-only adapter over an explicit catalog. Hono registers routes when the
+ * app is built, so fixtures that need synthetic routes construct their own
+ * handler instead of mutating the production catalog.
+ */
+export function createTestRequestHandler(catalog: readonly Route[]): TestRequestHandler {
+  return adaptForTests(createControlPlaneHttpHandler(catalog));
+}
 
 /** Per-service secrets for unit-test env fixtures, mirrored by signedServiceRequest. */
 export const TEST_SERVICE_SECRETS = {

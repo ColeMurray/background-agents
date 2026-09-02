@@ -1,11 +1,10 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { getSetCookies } from "./helpers";
-import { createCloudflareBackgroundTasks } from "../../src/cloudflare/background-tasks";
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { UserStore } from "../../src/db/user-store";
-import { handleRequest as routeRequest } from "../../src/router";
+import { handleControlPlaneHttp as routeRequest } from "../../src/routing/hono-app";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
 import {
@@ -30,11 +29,7 @@ function handleRequest(
   request: Request,
   requestEnv: Parameters<typeof routeRequest>[1]
 ): Promise<Response> {
-  return routeRequest(
-    request,
-    requestEnv,
-    createCloudflareBackgroundTasks(createExecutionContext())
-  );
+  return routeRequest(request, requestEnv, createExecutionContext());
 }
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
 const WEB_SERVICE_SECRET = "test-service-secret-web";

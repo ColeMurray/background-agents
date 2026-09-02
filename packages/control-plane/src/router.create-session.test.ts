@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
-import { handleRequest } from "./router";
 import {
+  handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
@@ -153,10 +153,14 @@ describe("handleCreateSession D1 ordering", () => {
       DB: {
         prepare: vi.fn((sql: string) => {
           if (sql.includes("FROM users u") && sql.includes("user_role_assignments")) {
+            let authorizedUserId = "user-1";
             const authorizationStatement = {
-              bind: vi.fn(() => authorizationStatement),
+              bind: vi.fn((userId: string) => {
+                authorizedUserId = userId;
+                return authorizationStatement;
+              }),
               first: vi.fn(async () => ({
-                user_id: "user-1",
+                user_id: authorizedUserId,
                 suspended_at: null,
                 role_id: "role-1",
                 role_key: null,

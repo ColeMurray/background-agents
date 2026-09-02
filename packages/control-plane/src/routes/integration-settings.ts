@@ -29,7 +29,6 @@ import {
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
-  parsePattern,
   json,
   error,
   parseJsonBody,
@@ -492,7 +491,7 @@ export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SE
   // Integration settings — global
   {
     method: "GET",
-    pattern: parsePattern("/integration-settings/:id"),
+    path: "/integration-settings/:id",
     authorization: requirePermission("integrations.read", {
       actorlessGrants: [{ service: "slack-bot", pathParams: { id: "slack" } }],
     }),
@@ -500,38 +499,38 @@ export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SE
   },
   {
     method: "PUT",
-    pattern: parsePattern("/integration-settings/:id"),
+    path: "/integration-settings/:id",
     authorization: requirePermission("integrations.manage"),
     handler: handleSetIntegrationSettings,
   },
   {
     method: "DELETE",
-    pattern: parsePattern("/integration-settings/:id"),
+    path: "/integration-settings/:id",
     authorization: requirePermission("integrations.manage"),
     handler: handleDeleteIntegrationSettings,
   },
   // Integration settings — per-repo
   {
     method: "GET",
-    pattern: parsePattern("/integration-settings/:id/repos"),
+    path: "/integration-settings/:id/repos",
     authorization: requirePermission("integrations.read"),
     handler: handleListRepoSettings,
   },
   {
     method: "GET",
-    pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
+    path: "/integration-settings/:id/repos/:owner/:name",
     authorization: requirePermission("integrations.read"),
     handler: handleGetRepoSettings,
   },
   {
     method: "PUT",
-    pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
+    path: "/integration-settings/:id/repos/:owner/:name",
     authorization: requirePermission("repositories.settings.manage"),
     handler: handleSetRepoSettings,
   },
   {
     method: "DELETE",
-    pattern: parsePattern("/integration-settings/:id/repos/:owner/:name"),
+    path: "/integration-settings/:id/repos/:owner/:name",
     authorization: requirePermission("repositories.settings.manage"),
     handler: handleDeleteRepoSettings,
   },
@@ -539,26 +538,26 @@ export const integrationSettingsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SE
   // code-server, and VNC only)
   {
     method: "GET",
-    pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    path: "/integration-settings/:id/environments/:environmentId",
     authorization: requirePermission("integrations.read"),
     handler: handleGetEnvironmentSettings,
   },
   {
     method: "PUT",
-    pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    path: "/integration-settings/:id/environments/:environmentId",
     authorization: requirePermission("environments.settings.manage"),
     handler: handleSetEnvironmentSettings,
   },
   {
     method: "DELETE",
-    pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),
+    path: "/integration-settings/:id/environments/:environmentId",
     authorization: requirePermission("environments.settings.manage"),
     handler: handleDeleteEnvironmentSettings,
   },
   // Resolved config — used by bots at runtime
   {
     method: "GET",
-    pattern: parsePattern("/integration-settings/:id/resolved/:owner/:name"),
+    path: "/integration-settings/:id/resolved/:owner/:name",
     authorization: requirePermission("integrations.read", {
       actorlessGrants: [
         { service: "github-bot", pathParams: { id: "github" } },
