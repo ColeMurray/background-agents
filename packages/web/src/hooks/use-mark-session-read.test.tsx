@@ -4,16 +4,18 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionReadResult } from "@open-inspect/shared/types/sessions";
 import { useMarkSessionRead } from "./use-mark-session-read";
-import { SessionReadRequestError } from "@/lib/session-read-state";
+import {
+  getSessionReadOverlay,
+  resetSessionReadOverlay,
+  SessionReadRequestError,
+} from "@/lib/session-read-state";
 
 const markMessageRead =
   vi.fn<(sessionId: string, messageId: string) => Promise<SessionReadResult>>();
-const reconcileSessionReadState = vi.fn(async (_result: SessionReadResult) => {});
 
 vi.mock("@/lib/session-read-state", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   markMessageRead: (sessionId: string, messageId: string) => markMessageRead(sessionId, messageId),
-  reconcileSessionReadState: (result: SessionReadResult) => reconcileSessionReadState(result),
 }));
 
 function result(
@@ -36,8 +38,8 @@ function setVisibility(value: "visible" | "hidden") {
 
 beforeEach(() => {
   setVisibility("visible");
+  resetSessionReadOverlay();
   markMessageRead.mockReset();
-  reconcileSessionReadState.mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
@@ -56,7 +58,29 @@ describe("useMarkSessionRead", () => {
     });
 
     expect(markMessageRead).toHaveBeenCalledExactlyOnceWith("session-1", "message-1");
-    expect(reconcileSessionReadState).toHaveBeenCalledExactlyOnceWith(result("marked_read"));
+    expect(getSessionReadOverlay().get("session-1")).toEqual({
+      latestMessageId: "message-1",
+      unread: false,
+      version: 1,
+    });
+  });
+
+  it("does not ask again about a message this page already read", async () => {
+    markMessageRead.mockResolvedValue(result("marked_read"));
+    const first = await act(async () =>
+      renderHook(() => useMarkSessionRead("session-1", "message-1"))
+    );
+    first.unmount();
+
+    await act(async () => {
+      renderHook(() => useMarkSessionRead("session-1", "message-1"));
+    });
+    expect(markMessageRead).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      renderHook(() => useMarkSessionRead("session-1", "message-2"));
+    });
+    expect(markMessageRead).toHaveBeenCalledTimes(2);
   });
 
   it("acknowledges each message once and follows the message ID", async () => {

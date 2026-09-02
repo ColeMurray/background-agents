@@ -171,7 +171,17 @@ export function createEarliestAlarmScheduler(
   };
 }
 
-/** Track delivery separately so retries cannot acknowledge a replacement deadline. */
+/**
+ * Runs one alarm delivery against the runtime's single alarm slot.
+ *
+ * `beginDelivery` moves the pending deadline into flight and clears it, so
+ * while `handle` runs the store holds no future deadline. Every step of the
+ * handler that still needs a wake-up must schedule it again from its own
+ * persisted state (a deferred projection, a stop-confirmation deadline, an
+ * execution timeout); otherwise `rearm` finds nothing and that deadline is
+ * lost until the next rehydration. Delivery is tracked separately from the
+ * pending deadline so a retry cannot acknowledge a replacement deadline.
+ */
 export async function handleAlarmDelivery(
   deadlines: AlarmDeadlineStore,
   handle: () => Promise<void>,

@@ -1,29 +1,14 @@
+import type { ScopedMutator } from "swr";
 import { browserApiFetch } from "./browser-api-fetch";
+import { isSessionInboxKey } from "./session-inbox-api";
 import type { SandboxEvent } from "@/types/session";
+import type { SessionInboxItem } from "@open-inspect/shared/types/session-inbox";
 import {
   sessionReadResultSchema,
   type SessionReadAction,
   type SessionReadResult,
   type SessionReadState,
 } from "@open-inspect/shared/types/sessions";
-
-export type SessionReadAttemptDisposition = "complete" | "retry" | "permanent_failure";
-export interface SessionReadStateReconciledDetail {
-  sessionId: string;
-  outcome: SessionReadResult["outcome"];
-  readState: SessionReadState;
-}
-type SessionReadStateReconciler = (
-  detail: SessionReadStateReconciledDetail
-) => Promise<unknown> | unknown;
-const readStateReconcilers = new Set<SessionReadStateReconciler>();
-
-export function subscribeSessionReadStateReconciliation(
-  reconcile: SessionReadStateReconciler
-): () => void {
-  readStateReconcilers.add(reconcile);
-  return () => readStateReconcilers.delete(reconcile);
-}
 
 export class SessionReadRequestError extends Error {
   constructor(readonly status: number) {
@@ -52,17 +37,6 @@ export function findLatestTerminalMessageId(events: SandboxEvent[]): string | nu
     if (event?.type === "execution_complete" && event.messageId) return event.messageId;
   }
   return null;
-}
-
-/**
- * Only a missing projection is worth retrying: the message exists on the
- * client, so the server row will catch up. A `not_latest` result means a newer
- * message is on its way to the client, which acknowledges that one instead.
- */
-export function classifySessionReadAttempt(
-  result: SessionReadResult
-): SessionReadAttemptDisposition {
-  return result.outcome === "no_terminal_message" ? "retry" : "complete";
 }
 
 export function markMessageRead(sessionId: string, messageId: string): Promise<SessionReadResult> {
@@ -104,21 +78,111 @@ export function readStateSupersedes(next: SessionReadState, current: SessionRead
   return !(current.unread === false && next.unread);
 }
 
-export function applySessionReadStateToItem<T extends { id: string; readState?: SessionReadState }>(
-  session: T,
-  sessionId: string,
-  readState: SessionReadState | undefined
-): T {
-  if (session.id !== sessionId || !readState) return session;
-  if (session.readState && !readStateSupersedes(readState, session.readState)) return session;
-  return { ...session, readState };
+/**
+ * Read state the viewer established in this page, keyed by session ID.
+ *
+ * Fetched inbox rows are never edited. Each row is merged with its overlay
+ * entry at render and the higher version wins, so a read shows on every row
+ * at once, including pages loaded through "Load more". Entries are written
+ * only from read-state responses and retire once a fetched row catches up.
+ */
+export type SessionReadOverlay = ReadonlyMap<string, SessionReadState>;
+
+let overlay: SessionReadOverlay = new Map();
+let overlayOwner: string | null = null;
+const overlayListeners = new Set<() => void>();
+
+function replaceOverlay(next: SessionReadOverlay): void {
+  overlay = next;
+  for (const listener of overlayListeners) listener();
 }
 
-export async function reconcileSessionReadState(result: SessionReadResult): Promise<void> {
-  const readState = readStateFromResult(result);
-  await Promise.all(
-    [...readStateReconcilers].map((reconcile) =>
-      reconcile({ sessionId: result.sessionId, outcome: result.outcome, readState })
-    )
-  );
+export function getSessionReadOverlay(): SessionReadOverlay {
+  return overlay;
+}
+
+export function subscribeSessionReadOverlay(listener: () => void): () => void {
+  overlayListeners.add(listener);
+  return () => overlayListeners.delete(listener);
+}
+
+export function resetSessionReadOverlay(): void {
+  overlayOwner = null;
+  if (overlay.size > 0) replaceOverlay(new Map());
+}
+
+/** Reads belong to one viewer: a sign-out or account switch forgets them. */
+export function scopeSessionReadOverlay(userId: string | null): void {
+  if (userId === overlayOwner) return;
+  resetSessionReadOverlay();
+  overlayOwner = userId;
+}
+
+/** Whether this page already read `messageId`, so opening it again need not ask. */
+export function isSessionMessageRead(sessionId: string, messageId: string): boolean {
+  const entry = overlay.get(sessionId);
+  return entry?.latestMessageId === messageId && !entry.unread;
+}
+
+function recordReadState(sessionId: string, readState: SessionReadState): void {
+  const current = overlay.get(sessionId);
+  if (current && !readStateSupersedes(readState, current)) return;
+  if (
+    current &&
+    current.version === readState.version &&
+    current.latestMessageId === readState.latestMessageId &&
+    current.unread === readState.unread
+  ) {
+    return;
+  }
+  const next = new Map(overlay);
+  next.set(sessionId, readState);
+  replaceOverlay(next);
+}
+
+/**
+ * Settles a read-state response. The overlay shows it immediately; a read
+ * that changed the server's state refetches the inbox so the server places
+ * the session. Nothing on the client moves a session between categories.
+ */
+export async function applySessionReadResult(
+  result: SessionReadResult,
+  mutate: ScopedMutator
+): Promise<void> {
+  recordReadState(result.sessionId, readStateFromResult(result));
+  if (result.outcome === "marked_read") await mutate(isSessionInboxKey);
+}
+
+/** Retires overlay entries that fetched rows have caught up with. */
+export function pruneSessionReadOverlay(
+  sessions: Iterable<{ id: string; readState: SessionReadState }>
+): void {
+  let next: Map<string, SessionReadState> | null = null;
+  for (const session of sessions) {
+    const entry = overlay.get(session.id);
+    if (!entry || !readStateSupersedes(session.readState, entry)) continue;
+    next ??= new Map(overlay);
+    next.delete(session.id);
+  }
+  if (next) replaceOverlay(next);
+}
+
+function mergeReadState<T extends { id: string; readState: SessionReadState }>(
+  session: T,
+  entries: SessionReadOverlay
+): T {
+  const entry = entries.get(session.id);
+  if (!entry || !readStateSupersedes(entry, session.readState)) return session;
+  return { ...session, readState: entry };
+}
+
+export function applySessionReadOverlay(
+  item: SessionInboxItem,
+  entries: SessionReadOverlay
+): SessionInboxItem {
+  if (entries.size === 0) return item;
+  return {
+    rootSession: mergeReadState(item.rootSession, entries),
+    descendantSessions: item.descendantSessions.map((session) => mergeReadState(session, entries)),
+  };
 }

@@ -649,14 +649,7 @@ export class SessionMessageQueue {
           completion.messageId,
           completion.messageCreatedAt,
           completion.completedAt
-        )
-          .catch((projectionError) => {
-            this.log.error("terminal_message.projection_failed", {
-              message_id: message.id,
-              error: projectionError,
-            });
-          })
-          .then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
+        ).then(() => this.messenger.broadcast({ type: "sandbox_event", event })),
       {
         name: "terminal_message.project",
         context: { message_id: message.id },

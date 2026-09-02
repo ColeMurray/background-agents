@@ -7,7 +7,6 @@ import { applyTitleUpdate, isSessionListKey, type SessionListResponse } from "@/
 import {
   applySessionInboxTitleUpdate,
   isSessionInboxKey,
-  type SessionInboxPage,
   type SessionInboxSnapshot,
 } from "@/lib/session-inbox-api";
 
@@ -15,7 +14,7 @@ type SessionCacheMutator = ReturnType<typeof useSWRConfig>["mutate"];
 
 /**
  * A session's title is cached in two payload families: session-list responses
- * and inbox snapshots/pages. Every optimistic update, settlement, and rollback
+ * and inbox snapshots. Every optimistic update, settlement, and rollback
  * must touch both, or the sidebar inbox briefly reverts to the stale title
  * once the optimistic overlay clears.
  */
@@ -30,7 +29,7 @@ function applyTitleToSessionCaches(
       (current) => applyTitleUpdate(current, sessionId, title),
       { populateCache: true, revalidate: false }
     ),
-    mutate<SessionInboxSnapshot | SessionInboxPage>(
+    mutate<SessionInboxSnapshot>(
       isSessionInboxKey,
       (current) => applySessionInboxTitleUpdate(current, sessionId, title),
       { populateCache: true, revalidate: false }
