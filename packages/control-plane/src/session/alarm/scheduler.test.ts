@@ -8,6 +8,7 @@ import {
 } from "./scheduler";
 import { initSchema } from "../schema";
 import type { SqlResult, SqlStorage } from "../sql-storage";
+import { SessionStorageIntegrityError } from "../types";
 
 function createDatabaseSql(db: DatabaseSync): SqlStorage {
   return {
@@ -372,6 +373,28 @@ describe("PersistedAlarmDeadlineStore", () => {
     expect(deadlines.beginDelivery()).toBe("cancelled");
     deadlines.activate();
     expect(deadlines.beginDelivery()).toBe(4_000);
+
+    db.close();
+  });
+
+  it("parses nullable alarm state and throws on malformed persisted rows", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    initSchema(sql);
+    const deadlines = new PersistedAlarmDeadlineStore(sql);
+
+    deadlines.clear();
+    expect(deadlines.pending()).toBeNull();
+    expect(deadlines.cancelled()).toBe(true);
+
+    db.exec("UPDATE session_alarm_state SET cancelled = 'bad' WHERE singleton = 1");
+
+    expect(() => deadlines.cancelled()).toThrow(SessionStorageIntegrityError);
+    expect(() => deadlines.beginDelivery()).toThrow(SessionStorageIntegrityError);
+
+    db.exec("UPDATE session_alarm_state SET cancelled = 2 WHERE singleton = 1");
+
+    expect(() => deadlines.earliest()).toThrow(SessionStorageIntegrityError);
 
     db.close();
   });

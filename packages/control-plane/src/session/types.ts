@@ -11,12 +11,19 @@ import type {
   ParticipantRole,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
-import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
+import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
 import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 import { z } from "zod";
 
 // Database row types (match SQLite schema)
+
+export class SessionStorageIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionStorageIntegrityError";
+  }
+}
 
 export type PromptGitIdentity =
   | {
@@ -76,23 +83,27 @@ export function sessionHasRepository(session: SessionRow): session is Repository
   return Boolean(session.repo_owner && session.repo_name);
 }
 
-export interface ParticipantRow {
-  id: string;
-  user_id: string;
-  canonical_user_id?: string | null;
-  scm_user_id: string | null;
-  scm_login: string | null;
-  scm_email: string | null;
-  scm_name: string | null;
-  auth_name: string | null;
-  role: ParticipantRole;
-  scm_access_token_encrypted: string | null;
-  scm_refresh_token_encrypted: string | null;
-  scm_token_expires_at: number | null;
-  ws_auth_token: string | null; // SHA-256 hash of WebSocket auth token
-  ws_token_created_at: number | null; // When the token was generated
-  joined_at: number;
-}
+const participantRoleSchema = z.enum(["owner", "member"]) satisfies z.ZodType<ParticipantRole>;
+
+export const participantRowSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  canonical_user_id: z.string().nullable().optional(),
+  scm_user_id: z.string().nullable(),
+  scm_login: z.string().nullable(),
+  scm_email: z.string().nullable(),
+  scm_name: z.string().nullable(),
+  auth_name: z.string().nullable(),
+  role: participantRoleSchema,
+  scm_access_token_encrypted: z.string().nullable(),
+  scm_refresh_token_encrypted: z.string().nullable(),
+  scm_token_expires_at: z.number().nullable(),
+  ws_auth_token: z.string().nullable(), // SHA-256 hash of WebSocket auth token
+  ws_token_created_at: z.number().nullable(), // When the token was generated
+  joined_at: z.number(),
+});
+
+export type ParticipantRow = z.infer<typeof participantRowSchema>;
 
 export interface MessageRow {
   id: string;
@@ -137,15 +148,17 @@ export interface EventRow {
   timeline_sequence?: number;
 }
 
-export interface ArtifactRow {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: string | null; // JSON
-  created_at: number;
+export const artifactRowSchema = z.object({
+  id: z.string(),
+  type: artifactTypeSchema,
+  url: z.string().nullable(),
+  metadata: z.string().nullable(), // JSON
+  created_at: z.number(),
   /** Last content change; migration 34 backfills it to created_at. */
-  updated_at: number;
-}
+  updated_at: z.number(),
+});
+
+export type ArtifactRow = z.infer<typeof artifactRowSchema>;
 
 export interface SandboxRow {
   id: string;
