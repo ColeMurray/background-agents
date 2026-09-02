@@ -129,15 +129,17 @@ describe("MessageRepository", () => {
         id: "msg-1",
         content: "Continue",
         status: "pending",
-        source: "web",
-        callback_context: null,
+        source: "linear",
+        callback_context: "{}",
+        cancellable_by_user: 1,
       } as never,
       {
         id: "msg-2",
         content: "Reply in Linear",
         status: "pending",
-        source: "linear",
+        source: "web",
         callback_context: null,
+        cancellable_by_user: 0,
       } as never,
     ]);
     expect(repository.listPromptQueue()).toEqual([
@@ -157,6 +159,7 @@ describe("MessageRepository", () => {
       authorId: "p-1",
       content: "Hello",
       source: "web",
+      cancellableByUser: true,
       model: "claude-sonnet-4",
       attachments: "[]",
       callbackContext: '{"channel":"C123"}',
@@ -173,6 +176,7 @@ describe("MessageRepository", () => {
       null,
       "[]",
       '{"channel":"C123"}',
+      1,
       null,
       null,
       null,
@@ -195,6 +199,7 @@ describe("MessageRepository", () => {
           authorId: "p-1",
           content: "Fix feedback",
           source: "github",
+          cancellableByUser: false,
           status: "pending",
           createdAt: 2000,
         },
@@ -218,6 +223,7 @@ describe("MessageRepository", () => {
           authorId: "p-1",
           content: "Fix feedback",
           source: "github",
+          cancellableByUser: false,
           status: "pending",
           createdAt: 2000,
         },
@@ -242,6 +248,7 @@ describe("MessageRepository", () => {
           authorId: "p-1",
           content: "Fix feedback",
           source: "github",
+          cancellableByUser: false,
           status: "pending",
           createdAt: 2000,
         },
@@ -266,6 +273,7 @@ describe("MessageRepository", () => {
           authorId: "p-1",
           content: "Fix feedback",
           source: "github",
+          cancellableByUser: false,
           status: "pending",
           createdAt: 2000,
         },
@@ -290,6 +298,7 @@ describe("MessageRepository", () => {
           authorId: "p-1",
           content: "Fix feedback",
           source: "github",
+          cancellableByUser: false,
           status: "pending",
           createdAt: 2000,
         },
@@ -319,6 +328,7 @@ describe("MessageRepository", () => {
           authorId: "p-1",
           content: "Fix feedback",
           source: "github",
+          cancellableByUser: false,
           status: "pending",
           createdAt: 2000,
         },
@@ -345,6 +355,7 @@ describe("MessageRepository", () => {
         authorId: "p-1",
         content: "Look",
         source: "web",
+        cancellableByUser: true,
         status: "pending",
         createdAt: 1,
       },
@@ -364,6 +375,7 @@ describe("MessageRepository", () => {
           authorId: "p-1",
           content: "Look",
           source: "web",
+          cancellableByUser: true,
           status: "pending",
           createdAt: 1,
         },
@@ -373,23 +385,20 @@ describe("MessageRepository", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  it("atomically releases attachments and cancels a pending web message", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "web", callback_context: null },
+  it("atomically cancels a user-cancellable pending message and releases attachments", () => {
+    mock.setMatchingData(/DELETE FROM messages[\s\S]*cancellable_by_user = 1[\s\S]*RETURNING id/, [
+      { id: "msg-1" },
     ]);
-    mock.setRowsWritten(1);
     expect(repository.cancelPendingMessage("msg-1")).toBe(true);
     expect(transactionSyncCalls).toBe(1);
+    expect(mock.calls[0].query).toContain("DELETE FROM messages");
     expect(mock.calls[1].query).toContain("UPDATE attachments SET message_id = NULL");
-    expect(mock.calls[2].query).toContain("DELETE FROM messages");
   });
 
-  it("rejects cancellation for messages that may need callbacks", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "linear", callback_context: null },
-    ]);
+  it("rejects cancellation without canonical user ownership", () => {
     expect(repository.cancelPendingMessage("msg-1")).toBe(false);
     expect(mock.calls).toHaveLength(1);
+    expect(mock.calls[0].query).toContain("cancellable_by_user = 1");
   });
 
   it("atomically starts processing and creates the canonical user event", () => {

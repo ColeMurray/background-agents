@@ -1605,7 +1605,7 @@ export class Scheduler {
     const promptResponse = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, cancellableByUser: false }),
     });
 
     if (!promptResponse.ok) {

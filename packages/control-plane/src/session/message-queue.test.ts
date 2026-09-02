@@ -80,6 +80,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    cancellable_by_user: 1,
     client_request_id: null,
     request_fingerprint: null,
     autofix_feedback_key: null,
@@ -1520,6 +1521,7 @@ describe("SessionMessageQueue", () => {
             content: "Continue",
             authorId: "user-1",
             source: "agent",
+            cancellableByUser: false,
           })
         ).rejects.toMatchObject({ sessionStatus: status });
 
@@ -1553,6 +1555,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -1575,6 +1578,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
       });
 
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
@@ -1587,6 +1591,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -1616,6 +1621,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
       });
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();

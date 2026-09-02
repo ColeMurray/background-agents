@@ -55,6 +55,7 @@ describe("MessageService", () => {
       content: "hello",
       authorId: "user-1",
       source: "web",
+      cancellableByUser: true,
     });
 
     expect(result).toEqual({ messageId: "msg-1", status: "queued" });
@@ -62,6 +63,7 @@ describe("MessageService", () => {
       content: "hello",
       authorId: "user-1",
       source: "web",
+      cancellableByUser: true,
     });
   });
 
@@ -193,6 +195,7 @@ describe("MessageService", () => {
           },
         ]),
         callback_context: null,
+        cancellable_by_user: 1,
         client_request_id: null,
         request_fingerprint: null,
         autofix_feedback_key: null,
@@ -214,6 +217,7 @@ describe("MessageService", () => {
         reasoning_effort: null,
         attachments: "invalid-json",
         callback_context: null,
+        cancellable_by_user: 1,
         client_request_id: null,
         request_fingerprint: null,
         autofix_feedback_key: null,
@@ -235,6 +239,7 @@ describe("MessageService", () => {
         reasoning_effort: null,
         attachments: null,
         callback_context: null,
+        cancellable_by_user: 1,
         client_request_id: null,
         request_fingerprint: null,
         autofix_feedback_key: null,
@@ -282,6 +287,7 @@ describe("MessageService", () => {
         reasoning_effort: null,
         attachments: "[]",
         callback_context: null,
+        cancellable_by_user: 1,
         client_request_id: null,
         request_fingerprint: null,
         autofix_feedback_key: null,

@@ -753,6 +753,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
         source: "web",
         status: "pending",
         createdAt: now + index,
+        cancellableByUser: true,
       });
     }
     await queryDO(
@@ -905,8 +906,11 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
-  it("does not allow web clients to cancel integration-owned prompts", async () => {
-    const name = `ws-client-cancel-integration-${Date.now()}`;
+  it.each([
+    { ownership: "integration source", source: "linear", callbackContext: null },
+    { ownership: "callback context", source: "web", callbackContext: { channel: "C1" } },
+  ])("does not allow web clients to cancel prompts owned by $ownership", async (testCase) => {
+    const name = `ws-client-cancel-integration-${crypto.randomUUID()}`;
     const { stub } = await initNamedSession(name);
     const [{ id: participantId }] = await queryDO<{ id: string }>(
       stub,
@@ -916,16 +920,18 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       id: "message-linear",
       authorId: participantId,
       content: "Reply in Linear",
-      source: "linear",
+      source: testCase.source,
       status: "pending",
       createdAt: Date.now(),
     });
-    await queryDO(
-      stub,
-      "UPDATE messages SET source = 'web', callback_context = ? WHERE id = ?",
-      JSON.stringify({ channel: "C1", threadTs: "1.0" }),
-      "message-linear"
-    );
+    if (testCase.callbackContext) {
+      await queryDO(
+        stub,
+        "UPDATE messages SET callback_context = ? WHERE id = ?",
+        JSON.stringify(testCase.callbackContext),
+        "message-linear"
+      );
+    }
     const { ws, messages } = await openClientWs(name, { subscribe: true });
     const subscribed = messages.find((message) => message.type === "subscribed") as {
       promptQueue: Array<{ messageId: string }>;
