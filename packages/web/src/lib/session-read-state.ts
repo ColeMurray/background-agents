@@ -92,9 +92,15 @@ function readStateFromResult(result: SessionReadResult): SessionReadState {
       };
 }
 
-/** A higher version wins; within one version, read is final. */
+/**
+ * Mirrors the projection's order: a higher version wins, and messages that
+ * share a version are ordered by ID. For one message, read is final.
+ */
 export function readStateSupersedes(next: SessionReadState, current: SessionReadState): boolean {
   if (next.version !== current.version) return next.version > current.version;
+  if (next.latestMessageId !== current.latestMessageId) {
+    return (next.latestMessageId ?? "") > (current.latestMessageId ?? "");
+  }
   return !(current.unread === false && next.unread);
 }
 

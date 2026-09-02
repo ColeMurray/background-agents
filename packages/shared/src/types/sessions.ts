@@ -86,8 +86,9 @@ export interface PullRequestSummary {
  *
  * `version` orders terminal messages: it is the projected creation time of
  * the latest one and 0 before any turn completes. A read state with a higher
- * version supersedes one with a lower version; within one version, read is
- * final.
+ * version supersedes one with a lower version. Messages that share a version
+ * are ordered by message ID, as the projection orders them. For one message,
+ * read is final.
  */
 export type SessionReadState =
   | {
@@ -112,25 +113,24 @@ export const sessionReadActionSchema = z.discriminatedUnion("action", [
 ]);
 export type SessionReadAction = z.infer<typeof sessionReadActionSchema>;
 
+// Parsed from responses, so additive server fields must not fail an older
+// client. A control plane that predates `version` reads as version 0, which
+// never supersedes cached state.
 export const sessionReadResultSchema = z.union([
-  z
-    .object({
-      sessionId: z.string(),
-      outcome: z.literal("no_terminal_message"),
-      unread: z.literal(false),
-      latestMessageId: z.null(),
-      version: z.number(),
-    })
-    .strict(),
-  z
-    .object({
-      sessionId: z.string(),
-      outcome: z.enum(["marked_read", "already_read", "not_latest"]),
-      unread: z.boolean(),
-      latestMessageId: z.string(),
-      version: z.number(),
-    })
-    .strict(),
+  z.object({
+    sessionId: z.string(),
+    outcome: z.literal("no_terminal_message"),
+    unread: z.literal(false),
+    latestMessageId: z.null(),
+    version: z.number().default(0),
+  }),
+  z.object({
+    sessionId: z.string(),
+    outcome: z.enum(["marked_read", "already_read", "not_latest"]),
+    unread: z.boolean(),
+    latestMessageId: z.string(),
+    version: z.number().default(0),
+  }),
 ]);
 export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
 

@@ -117,6 +117,28 @@ describe("useMarkSessionRead", () => {
     expect(markMessageRead).toHaveBeenCalledTimes(4);
   });
 
+  it("replaces a pending backoff when the tab is shown again", async () => {
+    vi.useFakeTimers();
+    markMessageRead.mockResolvedValue(missingProjection);
+
+    await act(async () => {
+      renderHook(() => useMarkSessionRead("session-1", "message-1"));
+    });
+    expect(markMessageRead).toHaveBeenCalledTimes(1);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    setVisibility("hidden");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    setVisibility("visible");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(markMessageRead).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(markMessageRead).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(markMessageRead).toHaveBeenCalledTimes(3);
+  });
+
   it("retries transport failures but stops on a rejected request", async () => {
     vi.useFakeTimers();
     markMessageRead

@@ -74,7 +74,12 @@ export function useMarkSessionRead(sessionId: string, messageId: string | null):
         );
       }
     };
-    const onVisibilityChange = () => void attempt();
+    const onVisibilityChange = () => {
+      // A visible tab attempts now; the pending backoff must not attempt again.
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+      void attempt();
+    };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     void attempt();

@@ -74,6 +74,14 @@ describe("readStateSupersedes", () => {
     expect(readStateSupersedes(olderUnread, olderRead)).toBe(false);
     expect(readStateSupersedes(olderRead, olderRead)).toBe(true);
   });
+
+  it("orders messages that share a version by ID, as the projection does", () => {
+    const firstRead = { latestMessageId: "message-a", unread: false, version: 5 } as const;
+    const secondUnread = { latestMessageId: "message-b", unread: true, version: 5 } as const;
+
+    expect(readStateSupersedes(secondUnread, firstRead)).toBe(true);
+    expect(readStateSupersedes(firstRead, secondUnread)).toBe(false);
+  });
 });
 
 describe("applySessionReadStateToItem", () => {
@@ -81,6 +89,20 @@ describe("applySessionReadStateToItem", () => {
     id: "session-1",
     readState: { latestMessageId: "message-2", unread: true, version: 2 } as const,
   };
+
+  it("does not let a same-version older message hide a newer unread one", () => {
+    const newerUnread = {
+      id: "session-1",
+      readState: { latestMessageId: "message-b", unread: true, version: 5 } as const,
+    };
+    expect(
+      applySessionReadStateToItem(newerUnread, "session-1", {
+        latestMessageId: "message-a",
+        unread: false,
+        version: 5,
+      })
+    ).toBe(newerUnread);
+  });
 
   it("does not let an older result overwrite a newer terminal message", () => {
     expect(

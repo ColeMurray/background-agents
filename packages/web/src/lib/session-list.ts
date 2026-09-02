@@ -44,8 +44,16 @@ const sessionListItemSchema = z.object({
     .optional(),
   readState: z
     .union([
-      z.object({ latestMessageId: z.null(), unread: z.literal(false), version: z.number() }),
-      z.object({ latestMessageId: z.string(), unread: z.boolean(), version: z.number() }),
+      z.object({
+        latestMessageId: z.null(),
+        unread: z.literal(false),
+        version: z.number().default(0),
+      }),
+      z.object({
+        latestMessageId: z.string(),
+        unread: z.boolean(),
+        version: z.number().default(0),
+      }),
     ])
     .optional(),
 });
