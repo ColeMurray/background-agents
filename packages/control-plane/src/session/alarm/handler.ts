@@ -4,6 +4,7 @@ import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
 import type { MessageRepository } from "../message-repository";
+import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
@@ -14,6 +15,7 @@ export interface AlarmHandlerDeps {
     | "resumeAfterSandboxTermination"
   >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
+  terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
@@ -29,12 +31,14 @@ export interface AlarmHandler {
 /**
  * Durable Object alarm handler.
  *
- * Checks for stuck processing messages (defense-in-depth execution timeout)
- * before delegating to lifecycle alarm processing.
+ * Retries a deferred terminal message projection and checks for stuck
+ * processing messages (defense-in-depth execution timeout) before delegating
+ * to lifecycle alarm processing.
  */
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
+      await deps.terminalMessageProjection.flushPending();
       await deps.messageQueue.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
