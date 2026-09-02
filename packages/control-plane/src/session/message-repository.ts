@@ -120,6 +120,29 @@ export class MessageRepository {
     );
   }
 
+  /**
+   * Record the runtime's cumulative cost report for a turn and return how much
+   * it exceeds the highest report already stored. Resends, out-of-order
+   * reports, and unknown messages return 0.
+   */
+  raiseReportedCost(messageId: string, reportedCostUsd: number): number {
+    if (!Number.isFinite(reportedCostUsd) || reportedCostUsd <= 0) return 0;
+    // Read-then-write: callers hold the storage transaction, and RETURNING
+    // would only expose the post-update value.
+    const rows = this.sql
+      .exec(`SELECT reported_cost_usd FROM messages WHERE id = ?`, messageId)
+      .toArray() as Array<{ reported_cost_usd: number }>;
+    if (rows.length !== 1) return 0;
+    const previous = rows[0].reported_cost_usd;
+    if (reportedCostUsd <= previous) return 0;
+    this.sql.exec(
+      `UPDATE messages SET reported_cost_usd = ? WHERE id = ?`,
+      reportedCostUsd,
+      messageId
+    );
+    return reportedCostUsd - previous;
+  }
+
   clearMessageAwaitingStopConfirmation(messageId: string): void {
     this.sql.exec(`UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?`, messageId);
   }

@@ -349,11 +349,7 @@ export class SessionMessageQueue {
 
   async processMessageQueue(): Promise<void> {
     const currentSession = this.repository.getSession();
-    if (
-      !currentSession ||
-      !isSessionPromptable(currentSession.status) ||
-      currentSession.budget_exhausted === 1
-    ) {
+    if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
     }
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
@@ -364,6 +360,9 @@ export class SessionMessageQueue {
         await this.alarmScheduler.schedule(awaitingStop.deadline);
       }
       this.log.debug("processMessageQueue: waiting for sandbox stop confirmation");
+      return;
+    }
+    if (currentSession.budget_exhausted === 1) {
       return;
     }
     if (this.messageRepository.getProcessingMessage()) {

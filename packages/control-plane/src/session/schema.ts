@@ -56,14 +56,6 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
   next_attempt_at INTEGER NOT NULL
 );`;
 
-const STEP_FINISH_RECEIPTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_finish_receipts (
-  ack_id TEXT PRIMARY KEY,
-  message_id TEXT,
-  event_json TEXT NOT NULL,
-  observed_cost REAL,
-  received_at INTEGER NOT NULL
-);`;
-
 const DEFAULT_WS_CLIENT_CAPABILITIES_JSON = "[]";
 
 export const SCHEMA_SQL = `
@@ -145,6 +137,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -160,9 +153,6 @@ CREATE TABLE IF NOT EXISTS events (
   created_at INTEGER NOT NULL,
   timeline_sequence INTEGER NOT NULL UNIQUE
 );
-
--- Deduplicated receipts for acknowledged cost-bearing runtime steps
-${STEP_FINISH_RECEIPTS_TABLE_SQL}
 
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -668,7 +658,7 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 48,
-    description: "Add session budget state, step finish receipts, and client capabilities",
+    description: "Add session budget state, message reported cost, and client capabilities",
     run: (sql) => {
       runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
       runMigration(
@@ -683,7 +673,10 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         sql,
         `ALTER TABLE session ADD COLUMN cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0`
       );
-      runMigration(sql, STEP_FINISH_RECEIPTS_TABLE_SQL);
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_cost_usd REAL NOT NULL DEFAULT 0`
+      );
       runMigration(
         sql,
         `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT NOT NULL DEFAULT '${DEFAULT_WS_CLIENT_CAPABILITIES_JSON}'`

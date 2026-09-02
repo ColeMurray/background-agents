@@ -463,6 +463,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const autofixHandler = new AutofixHandler(messageQueue);
   const budgetService = new SessionBudgetService(
     sessionCoreRepository,
+    messageRepository,
     eventRepository,
     messenger,
     executionStop,
@@ -497,7 +498,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
-    () => messageQueue.broadcastPromptQueue()
+    () => messageQueue.broadcastPromptQueue(),
+    (event, now) => budgetService.ingestExecutionComplete(event, now)
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,

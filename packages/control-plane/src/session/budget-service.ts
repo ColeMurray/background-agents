@@ -7,6 +7,7 @@ import type {
   ExecutionStopCoordinator,
   ExecutionStopPreparation,
 } from "./execution-stop-coordinator";
+import type { MessageRepository } from "./message-repository";
 import type { SessionMessenger } from "./messenger";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionRow } from "./types";
@@ -23,9 +24,23 @@ const NO_BUDGET_TRANSITION: BudgetTransition = {
   statusChanged: false,
 };
 
+type StepFinishEvent = Extract<SandboxEvent, { type: "step_finish" }>;
+type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
+
+/**
+ * Cost accounting is idempotent by construction. The runtime reports the
+ * cumulative cost of the current turn (`messageCostUsd`) on every step and on
+ * `execution_complete`; the session total only ever moves by the amount that
+ * report exceeds the highest one already recorded for the message. A resent
+ * event therefore adds nothing and a dropped one is repaired by the next.
+ *
+ * Runtimes that predate the cumulative field still report a per-step `cost`,
+ * which is added directly; that path undercounts on a dropped event.
+ */
 export class SessionBudgetService {
   constructor(
     private readonly repository: SessionCoreRepository,
+    private readonly messageRepository: Pick<MessageRepository, "raiseReportedCost">,
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
     private readonly executionStop: Pick<ExecutionStopCoordinator, "prepare" | "deliver">,
@@ -34,39 +49,38 @@ export class SessionBudgetService {
   ) {}
 
   async ingestStepFinish(
-    event: Extract<SandboxEvent, { type: "step_finish" }>,
+    event: StepFinishEvent,
     messageId: string | null,
     now: number
-  ): Promise<boolean> {
-    let accepted = false;
+  ): Promise<void> {
     let transition = NO_BUDGET_TRANSITION;
     this.repository.transaction(() => {
-      accepted = this.eventRepository.recordStepFinishReceipt({
-        ackId:
-          event.ackId ??
-          `step_finish:legacy:${event.sandboxId}:${event.messageId}:${event.timestamp}:${event.taskCallId ?? ""}:${event.childSessionId ?? ""}`,
-        messageId,
-        eventJson: JSON.stringify(event),
-        observedCost: event.cost ?? null,
-        receivedAt: now,
-      });
-      if (!accepted) return;
-
-      // A reported cost of 0 (unpriced or free models) is a real observation:
-      // it adds nothing and never latches the tracking-unavailable warning.
-      // Only an absent cost counts as "not tracked".
-      if (typeof event.cost === "number" && Number.isFinite(event.cost) && event.cost > 0) {
-        const totalCost = this.repository.addSessionCost(event.cost, now);
+      const delta = this.observeReportedCost(event, messageId);
+      if (delta > 0) {
+        const totalCost = this.repository.addSessionCost(delta, now);
         transition = this.applyObservedCost(totalCost, messageId, now);
       } else if (event.cost == null) {
+        // A reported cost of 0 (unpriced or free models) is a real observation
+        // and never latches the warning. Only an absent cost is "not tracked".
         transition = this.applyCostTrackingUnavailable(event.tokens, messageId, now);
       }
     });
-
-    if (!accepted) return false;
-    this.messenger.broadcast({ type: "sandbox_event", event });
     await this.deliverTransition(transition);
-    return true;
+  }
+
+  async ingestExecutionComplete(event: ExecutionCompleteEvent, now: number): Promise<void> {
+    if (typeof event.messageCostUsd !== "number") return;
+    let transition = NO_BUDGET_TRANSITION;
+    this.repository.transaction(() => {
+      const delta = this.messageRepository.raiseReportedCost(
+        event.messageId,
+        event.messageCostUsd as number
+      );
+      if (delta <= 0) return;
+      const totalCost = this.repository.addSessionCost(delta, now);
+      transition = this.applyObservedCost(totalCost, event.messageId, now);
+    });
+    await this.deliverTransition(transition);
   }
 
   async updateLimit(maxCostUsd: number | null, now: number): Promise<void> {
@@ -141,6 +155,18 @@ export class SessionBudgetService {
       budgetExhausted: session.budget_exhausted === 1,
       costTrackingUnavailable: session.cost_tracking_unavailable === 1,
     });
+  }
+
+  /** Amount the session total should grow by for this step; 0 for resends. */
+  private observeReportedCost(event: StepFinishEvent, messageId: string | null): number {
+    if (typeof event.messageCostUsd === "number" && Number.isFinite(event.messageCostUsd)) {
+      const target = messageId ?? event.messageId;
+      return this.messageRepository.raiseReportedCost(target, event.messageCostUsd);
+    }
+    if (typeof event.cost === "number" && Number.isFinite(event.cost) && event.cost > 0) {
+      return event.cost;
+    }
+    return 0;
   }
 
   private applyObservedCost(

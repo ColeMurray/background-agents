@@ -84,7 +84,10 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
+    /** Cost of this step alone; absent when the runtime could not price it. */
     cost: z.number().nullable().optional(),
+    /** Cumulative reported cost of the whole turn so far; idempotent on resend. */
+    messageCostUsd: z.number().nonnegative().optional(),
     tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
@@ -113,6 +116,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     type: z.literal("execution_complete"),
     success: z.boolean(),
     error: z.string().optional(),
+    /** Final cumulative reported cost of the turn. */
+    messageCostUsd: z.number().nonnegative().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),

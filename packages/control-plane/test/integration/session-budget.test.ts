@@ -119,7 +119,6 @@ describe("session budgets", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         type: "step_finish",
-        ackId: "step_finish:null-cost",
         messageId: "message-unpriced",
         cost: null,
         tokens: { total: 10, input: 8, output: 2 },
@@ -161,26 +160,28 @@ describe("session budgets", () => {
       createdAt: Date.now(),
     });
 
-    const sendCost = (cost: number, ackId: string) =>
+    const sendCost = (cost: number, messageCostUsd: number) =>
       stub.fetch("http://internal/internal/sandbox-event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "step_finish",
-          ackId,
           messageId: "message-active",
           cost,
+          messageCostUsd,
           tokens: { total: 10, input: 8, output: 2 },
           sandboxId: "sandbox-1",
           timestamp: Date.now(),
         }),
       });
 
-    expect((await sendCost(7, "step_finish:1")).status).toBe(200);
-    expect((await sendCost(7, "step_finish:1")).status).toBe(200);
+    expect((await sendCost(7, 7)).status).toBe(200);
+    // A resent report changes nothing.
+    expect((await sendCost(7, 7)).status).toBe(200);
     expect(await queryDO(stub, "SELECT id FROM events WHERE type = 'warning'")).toEqual([]);
-    expect((await sendCost(1, "step_finish:2")).status).toBe(200);
-    expect((await sendCost(2, "step_finish:3")).status).toBe(200);
+    expect((await sendCost(1, 8)).status).toBe(200);
+    // The 9 report was lost; the next cumulative repairs it.
+    expect((await sendCost(1, 10)).status).toBe(200);
 
     const [session] = await queryDO<{
       total_cost: number;
@@ -188,11 +189,9 @@ describe("session budgets", () => {
       cost_warning_sent: number;
     }>(stub, "SELECT total_cost, budget_exhausted, cost_warning_sent FROM session");
     expect(session).toEqual({ total_cost: 10, budget_exhausted: 1, cost_warning_sent: 1 });
-    expect(await queryDO(stub, "SELECT ack_id FROM step_finish_receipts ORDER BY ack_id")).toEqual([
-      { ack_id: "step_finish:1" },
-      { ack_id: "step_finish:2" },
-      { ack_id: "step_finish:3" },
-    ]);
+    expect(
+      await queryDO(stub, "SELECT reported_cost_usd FROM messages WHERE id = 'message-active'")
+    ).toEqual([{ reported_cost_usd: 10 }]);
     expect(
       await queryDO<{ id: string; status: string }>(
         stub,
@@ -217,5 +216,49 @@ describe("session budgets", () => {
     expect(
       await queryDO(stub, "SELECT max_cost_usd, budget_exhausted, cost_warning_sent FROM session")
     ).toEqual([{ max_cost_usd: 20, budget_exhausted: 0, cost_warning_sent: 0 }]);
+  });
+
+  it("applies the final cumulative report carried on execution_complete", async () => {
+    const name = `budget-final-${Date.now()}`;
+    const { stub } = await initNamedSession(name, {
+      sandboxSettings: { maxSessionCostUsd: 10 },
+    });
+    await waitForSandboxStatus(stub, "failed");
+    const [{ id: ownerId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
+    await seedMessage(stub, {
+      id: "message-final",
+      authorId: ownerId,
+      content: "Finishing work",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 100,
+      startedAt: Date.now() - 50,
+    });
+
+    const response = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "execution_complete",
+        messageId: "message-final",
+        success: true,
+        messageCostUsd: 3.25,
+        sandboxId: "sandbox-1",
+        timestamp: Date.now(),
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await queryDO(stub, "SELECT total_cost, budget_exhausted FROM session")).toEqual([
+      { total_cost: 3.25, budget_exhausted: 0 },
+    ]);
+    expect(
+      await queryDO(
+        stub,
+        "SELECT status, reported_cost_usd FROM messages WHERE id = 'message-final'"
+      )
+    ).toEqual([{ status: "completed", reported_cost_usd: 3.25 }]);
   });
 });

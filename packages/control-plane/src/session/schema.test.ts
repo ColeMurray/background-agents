@@ -497,7 +497,7 @@ describe("applyMigrations", () => {
     expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
     expect(sessionTable).toContain("cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0");
 
-    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
+    expect(SCHEMA_SQL).toContain("reported_cost_usd REAL NOT NULL DEFAULT 0");
     expect(SCHEMA_SQL).toContain("capabilities TEXT NOT NULL DEFAULT '[]'");
 
     const migration = MIGRATIONS.find((entry) => entry.id === 48);
@@ -506,6 +506,7 @@ describe("applyMigrations", () => {
     const sql = createDatabaseSql(db);
     try {
       db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY)");
       db.exec(`CREATE TABLE ws_client_mapping (
         ws_id TEXT PRIMARY KEY,
         authorization_expires_at INTEGER NOT NULL DEFAULT 0
@@ -524,13 +525,11 @@ describe("applyMigrations", () => {
       expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "capabilities", type: "TEXT" })])
       );
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'step_finish_receipts'"
-          )
-          .get()
-      ).toEqual({ name: "step_finish_receipts" });
+      expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "reported_cost_usd", type: "REAL" }),
+        ])
+      );
     } finally {
       db.close();
     }

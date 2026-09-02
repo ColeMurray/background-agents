@@ -34,7 +34,11 @@ export class SandboxExecutionEventHandler {
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly processMessageQueue: () => Promise<void>,
-    private readonly broadcastPromptQueue: () => void
+    private readonly broadcastPromptQueue: () => void,
+    private readonly ingestExecutionCost: (
+      event: Extract<SandboxEvent, { type: "execution_complete" }>,
+      now: number
+    ) => Promise<void>
   ) {}
 
   async handleExecutionComplete(
@@ -89,6 +93,10 @@ export class SandboxExecutionEventHandler {
         outcome: "already_stopped",
       });
     }
+
+    // The final cumulative report lands after completion so a limit crossed by
+    // the last step pauses the queue without failing an already-finished turn.
+    await this.ingestExecutionCost(event, context.now);
 
     this.backgroundTasks.submit(() => this.triggerSnapshot("execution_complete"), {
       name: "snapshot.trigger",

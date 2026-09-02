@@ -516,4 +516,29 @@ describe("MessageRepository", () => {
     });
     expect(repository.getProcessingMessageAuthor()).toEqual({ author_id: "p-1" });
   });
+
+  describe("raiseReportedCost", () => {
+    it("returns the increase over the stored report", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: 1 }]);
+
+      expect(repository.raiseReportedCost("msg-1", 2.5)).toBe(1.5);
+
+      const call = mock.calls.find((c) => c.query.includes("SET reported_cost_usd"));
+      expect(call?.params).toEqual([2.5, "msg-1"]);
+    });
+
+    it("returns 0 without writing for a resend, an unknown message, or a non-positive report", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: 2.5 }]);
+      expect(repository.raiseReportedCost("msg-1", 2.5)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", 2)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", 0)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", Number.NaN)).toBe(0);
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
+
+    it("returns 0 for an unknown message", () => {
+      expect(repository.raiseReportedCost("missing", 2.5)).toBe(0);
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
+  });
 });

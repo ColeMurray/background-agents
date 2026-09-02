@@ -24,7 +24,6 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "snapshot_ready",
         "push_complete",
         "push_error",
-        "step_finish",
     }
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
@@ -80,7 +79,6 @@ class BufferedEventForwarder:
         # plane. Keyed by ackId, re-sent on reconnect until the DO confirms
         # receipt.
         self._pending_acks: dict[str, dict[str, Any]] = {}
-        self._in_flight_ack_ids: set[str] = set()
 
     async def bind(self, ws: ClientConnection) -> None:
         """Attach a live control-plane connection and recover the backlog.
@@ -100,9 +98,7 @@ class BufferedEventForwarder:
         """
         self._ws = ws
         async with self._recovery_lock:
-            pending_before_flush = [
-                ack_id for ack_id in self._pending_acks if ack_id not in self._in_flight_ack_ids
-            ]
+            pending_before_flush = list(self._pending_acks)
             await self._flush_buffer()
             await self._resend_pending(pending_before_flush)
 
@@ -126,25 +122,16 @@ class BufferedEventForwarder:
             return
 
         try:
-            if is_critical:
-                self._pending_acks[event["ackId"]] = event
-                self._in_flight_ack_ids.add(event["ackId"])
             await ws.send(json.dumps(event))
             if is_critical:
-                self._in_flight_ack_ids.discard(event["ackId"])
+                self._pending_acks[event["ackId"]] = event
         except asyncio.CancelledError:
             # A prompt task cancelled mid-send must not strand its event:
             # re-buffer it, then let the cancellation proceed.
-            if is_critical:
-                self._pending_acks.pop(event["ackId"], None)
-                self._in_flight_ack_ids.discard(event["ackId"])
             self._buffer_event(event)
             raise
         except Exception as e:
             self._log.warn("bridge.send_error", event_type=event_type, exc=e)
-            if is_critical:
-                self._pending_acks.pop(event["ackId"], None)
-                self._in_flight_ack_ids.discard(event["ackId"])
             self._buffer_event(event)
             await self._drain_if_rebound(failed_ws=ws)
 
@@ -155,7 +142,6 @@ class BufferedEventForwarder:
         """
         if ack_id in self._pending_acks:
             del self._pending_acks[ack_id]
-            self._in_flight_ack_ids.discard(ack_id)
             return True
         return False
 
@@ -200,19 +186,10 @@ class BufferedEventForwarder:
             if not ws or ws.state != State.OPEN:
                 break
             try:
-                is_critical = event.get("type") in CRITICAL_EVENT_TYPES and "ackId" in event
-                if is_critical:
-                    self._pending_acks[event["ackId"]] = event
-                    self._in_flight_ack_ids.add(event["ackId"])
                 await asyncio.wait_for(
                     ws.send(json.dumps(event)), timeout=self._send_timeout_seconds
                 )
-                if is_critical:
-                    self._in_flight_ack_ids.discard(event["ackId"])
             except Exception as e:
-                if is_critical:
-                    self._pending_acks.pop(event["ackId"], None)
-                    self._in_flight_ack_ids.discard(event["ackId"])
                 self._log.warn("bridge.flush_send_error", exc=e)
                 break
 
@@ -224,6 +201,8 @@ class BufferedEventForwarder:
             flushed += 1
             # Track critical events sent from buffer as pending ACKs; the
             # event went out even if it is no longer at the buffer head.
+            if event.get("type") in CRITICAL_EVENT_TYPES and "ackId" in event:
+                self._pending_acks[event["ackId"]] = event
 
         self._log.info(
             "bridge.flush_buffer_complete",

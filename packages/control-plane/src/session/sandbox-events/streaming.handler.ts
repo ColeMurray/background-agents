@@ -52,11 +52,10 @@ export class SandboxStreamingEventHandler {
     context: SandboxEventContext
   ): Promise<void> {
     this.updateLastActivity(context.now);
+    this.messenger.broadcast({ type: "sandbox_event", event });
     if (event.type === "step_finish") {
       await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
-      return;
     }
-    this.messenger.broadcast({ type: "sandbox_event", event });
   }
 
   handleToolCall(

@@ -71,7 +71,15 @@ function createService(row = session()) {
   };
   const eventRepository = {
     createEvent: vi.fn(),
-    recordStepFinishReceipt: vi.fn(() => true),
+  };
+  const reportedCosts = new Map<string, number>();
+  const messageRepository = {
+    raiseReportedCost: vi.fn((messageId: string, reported: number) => {
+      const previous = reportedCosts.get(messageId) ?? 0;
+      if (reported <= previous) return 0;
+      reportedCosts.set(messageId, reported);
+      return reported - previous;
+    }),
   };
   const broadcast = vi.fn();
   const preparation = { stopped: true } as ExecutionStopPreparation;
@@ -80,6 +88,7 @@ function createService(row = session()) {
   const processMessageQueue = vi.fn(async () => {});
   const service = new SessionBudgetService(
     repository as unknown as SessionCoreRepository,
+    messageRepository,
     eventRepository as unknown as EventRepository,
     { broadcast } as unknown as SessionMessenger,
     { prepare: prepareBudgetStop, deliver: deliverBudgetStop },
@@ -89,6 +98,7 @@ function createService(row = session()) {
   return {
     service,
     repository,
+    messageRepository,
     eventRepository,
     broadcast,
     prepareBudgetStop,
@@ -98,24 +108,108 @@ function createService(row = session()) {
 }
 
 describe("SessionBudgetService", () => {
-  it("deduplicates and applies cost with its budget transition in one transaction", async () => {
-    const h = createService(session({ total_cost: 7 }));
+  it("applies a cumulative report once and repairs a dropped one", async () => {
+    const h = createService(session({ total_cost: 0, max_cost_usd: 100 }));
     const event = {
       type: "step_finish" as const,
       messageId: "message-1",
       sandboxId: "sandbox-1",
       timestamp: 1,
-      ackId: "step_finish:1",
+      cost: 1,
+      messageCostUsd: 1,
+    };
+
+    await h.service.ingestStepFinish(event, "message-1", 1000);
+    await h.service.ingestStepFinish(event, "message-1", 1001);
+    // The report for the second step was lost; the third carries both.
+    await h.service.ingestStepFinish(
+      { ...event, cost: 0.5, messageCostUsd: 2.5 },
+      "message-1",
+      1002
+    );
+
+    expect(h.repository.addSessionCost).toHaveBeenCalledTimes(2);
+    expect(h.repository.addSessionCost).toHaveBeenNthCalledWith(1, 1, 1000);
+    expect(h.repository.addSessionCost).toHaveBeenNthCalledWith(2, 1.5, 1002);
+    expect(h.repository.transaction).toHaveBeenCalledTimes(3);
+  });
+
+  it("attributes cost to the context message when the event names another", async () => {
+    const h = createService(session({ total_cost: 0, max_cost_usd: 100 }));
+
+    await h.service.ingestStepFinish(
+      {
+        type: "step_finish",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        cost: 2,
+        messageCostUsd: 2,
+      },
+      "message-2",
+      1000
+    );
+
+    expect(h.messageRepository.raiseReportedCost).toHaveBeenCalledWith("message-2", 2);
+  });
+
+  it("adds a legacy per-step cost directly when no cumulative report is present", async () => {
+    const h = createService(session({ total_cost: 0, max_cost_usd: 100 }));
+    const event = {
+      type: "step_finish" as const,
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp: 1,
       cost: 1,
     };
 
-    await expect(h.service.ingestStepFinish(event, "message-1", 1000)).resolves.toBe(true);
-    h.eventRepository.recordStepFinishReceipt.mockReturnValueOnce(false);
-    await expect(h.service.ingestStepFinish(event, "message-1", 1001)).resolves.toBe(false);
+    await h.service.ingestStepFinish(event, "message-1", 1000);
+    await h.service.ingestStepFinish(event, "message-1", 1001);
 
-    expect(h.repository.addSessionCost).toHaveBeenCalledOnce();
-    expect(h.repository.markCostWarningSent).toHaveBeenCalledOnce();
-    expect(h.repository.transaction).toHaveBeenCalledTimes(2);
+    expect(h.messageRepository.raiseReportedCost).not.toHaveBeenCalled();
+    expect(h.repository.addSessionCost).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies the final report on execution_complete and pauses without a stop", async () => {
+    const h = createService(session({ total_cost: 9 }));
+    h.prepareBudgetStop.mockReturnValueOnce({ stopped: false } as ExecutionStopPreparation);
+
+    await h.service.ingestExecutionComplete(
+      {
+        type: "execution_complete",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        success: true,
+        messageCostUsd: 1.5,
+      },
+      1000
+    );
+
+    expect(h.repository.addSessionCost).toHaveBeenCalledWith(1.5, 1000);
+    expect(h.repository.markBudgetExhausted).toHaveBeenCalledWith(1000);
+    expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.stringContaining("Work paused") })
+    );
+    expect(h.deliverBudgetStop).toHaveBeenCalledOnce();
+  });
+
+  it("ignores execution_complete without a cumulative report", async () => {
+    const h = createService();
+
+    await h.service.ingestExecutionComplete(
+      {
+        type: "execution_complete",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        success: true,
+      },
+      1000
+    );
+
+    expect(h.repository.transaction).not.toHaveBeenCalled();
+    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
   });
 
   it("persists and broadcasts one threshold warning", async () => {
@@ -127,7 +221,6 @@ describe("SessionBudgetService", () => {
         messageId: "message-1",
         sandboxId: "sandbox-1",
         timestamp: 1,
-        ackId: "step_finish:warning",
         cost: 1,
       },
       "message-1",
@@ -159,7 +252,6 @@ describe("SessionBudgetService", () => {
         messageId: "message-1",
         sandboxId: "sandbox-1",
         timestamp: 1,
-        ackId: "step_finish:exhaust",
         cost: 1,
       },
       "message-1",
@@ -187,16 +279,8 @@ describe("SessionBudgetService", () => {
       timestamp: 1,
       tokens: { input: 1 },
     };
-    await h.service.ingestStepFinish(
-      { ...event, ackId: "step_finish:unpriced-1" },
-      "message-1",
-      1000
-    );
-    await h.service.ingestStepFinish(
-      { ...event, ackId: "step_finish:unpriced-2" },
-      "message-1",
-      1001
-    );
+    await h.service.ingestStepFinish(event, "message-1", 1000);
+    await h.service.ingestStepFinish(event, "message-1", 1001);
 
     expect(h.repository.markCostTrackingUnavailable).toHaveBeenCalledOnce();
     expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
@@ -211,7 +295,6 @@ describe("SessionBudgetService", () => {
     await h.service.ingestStepFinish(
       {
         type: "step_finish",
-        ackId: "step_finish:free-1",
         messageId: "message-1",
         sandboxId: "sandbox-1",
         timestamp: 1,
