@@ -360,9 +360,12 @@ async function finalizeServiceActor(
   }
 
   try {
-    const claims = policy.serviceActorClaims
+    const prepared = policy.serviceActorClaims
       ? await policy.serviceActorClaims(request.clone(), ctx)
       : null;
+    // The route refused this body: answer with its response and write nothing.
+    if (prepared?.kind === "rejected") return { response: prepared.response };
+    const claims = prepared?.claims;
     const actor = principal.actor;
     const user = await new UserStore(ctx.db).resolveOrCreateUser({
       provider: actor.provider,
@@ -643,7 +646,13 @@ async function enforceRouteAuthorization(
 ): Promise<RouteAuthorizationResult> {
   const evidence = emptyEvidence();
   const principal = ctx.principal;
-  if (!principal) return allowed(policy, "user", evidence);
+  if (!principal) {
+    // Only a route that declares no authorization may run without a subject.
+    if (policy.authorization.kind !== "none") {
+      return { kind: "error", response: error("Unauthorized", 401) };
+    }
+    return allowed(policy, "user", evidence);
+  }
 
   const principalFailure = enforceRoutePrincipal(policy.authentication, principal, evidence);
   if (principalFailure) return resultForFailure(principalFailure);

@@ -37,12 +37,39 @@ const logger = createLogger("router");
  */
 const ROUTE_PATH_GRAMMAR = /^(\/([A-Za-z0-9_-]+|:\w+))+$/;
 
-function createHonoApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
-  for (const route of catalog) {
-    if (!ROUTE_PATH_GRAMMAR.test(route.path)) {
-      throw new Error(`Route path is outside the supported grammar: ${route.method} ${route.path}`);
-    }
+/** Wall-clock start captured before Hono selects a route, keyed by the raw request. */
+const requestStartedAt = new WeakMap<Request, number>();
+
+function assertRouteContract(route: Route): void {
+  if (!ROUTE_PATH_GRAMMAR.test(route.path)) {
+    throw new Error(`Route path is outside the supported grammar: ${route.method} ${route.path}`);
   }
+  const principalless =
+    route.authentication.kind === "public" || route.authentication.kind === "handler-authenticated";
+  if (principalless && route.authorization.kind !== "none") {
+    throw new Error(
+      `Route without a verified principal cannot require authorization: ${route.method} ${route.path}`
+    );
+  }
+}
+
+function contextFor(
+  request: Request,
+  env: Env,
+  executionCtx: Parameters<typeof createCloudflareBackgroundTasks>[0]
+): RequestContext {
+  // eslint-disable-next-line no-restricted-syntax -- ordinary HTTP composition root passes the stable binding once
+  const database = env.DB;
+  return createRequestContext({
+    request,
+    env,
+    database,
+    executionCtx: createCloudflareBackgroundTasks(executionCtx),
+  });
+}
+
+function createHonoApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
+  for (const route of catalog) assertRouteContract(route);
 
   const app = new Hono<ControlPlaneHonoEnv>({
     strict: true,
@@ -57,17 +84,8 @@ function createHonoApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
   app.use("*", async (c, next) => {
     // TrieRouter runs a root wildcard twice for the literal path `/*`.
     if (c.get("requestContext")) return next();
-    const startedAt = Date.now();
-    // eslint-disable-next-line no-restricted-syntax -- Hono composition root passes the stable binding once
-    const database = c.env.DB;
-    const context = createRequestContext({
-      request: c.req.raw,
-      env: c.env,
-      database,
-      executionCtx: createCloudflareBackgroundTasks(c.executionCtx),
-    });
-    c.set("requestContext", context);
-    c.set("startedAt", startedAt);
+    c.set("requestContext", contextFor(c.req.raw, c.env, c.executionCtx));
+    c.set("startedAt", requestStartedAt.get(c.req.raw) ?? Date.now());
     await next();
   });
 
@@ -130,6 +148,7 @@ export function createControlPlaneHttpHandler(catalog: readonly Route[]): Contro
   const app = createHonoApp(catalog);
 
   return async (request, env, executionCtx) => {
+    requestStartedAt.set(request, Date.now());
     const pathname = new URL(request.url).pathname;
 
     // eslint-disable-next-line no-restricted-syntax -- ordinary HTTP composition root validates the required binding
@@ -142,15 +161,10 @@ export function createControlPlaneHttpHandler(catalog: readonly Route[]): Contro
     }
 
     if (request.method === "HEAD") {
-      // eslint-disable-next-line no-restricted-syntax -- ordinary HTTP composition root passes the stable binding once
-      const database = env.DB;
-      const context = createRequestContext({
-        request,
-        env,
-        database,
-        executionCtx: createCloudflareBackgroundTasks(executionCtx),
-      });
-      return withCorsAndTraceHeaders(error("Not found", 404), context);
+      return withCorsAndTraceHeaders(
+        error("Not found", 404),
+        contextFor(request, env, executionCtx)
+      );
     }
 
     return app.fetch(request, env, executionCtx);

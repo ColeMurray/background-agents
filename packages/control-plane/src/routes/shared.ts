@@ -28,6 +28,15 @@ export interface ServiceActorProfileClaims {
   avatarUrl?: string;
 }
 
+/**
+ * Outcome of preparing a route's actor claims before identity is finalized.
+ * A rejected body ends admission with the route's own response, so no user,
+ * identity, or assignment is written for a request the handler would refuse.
+ */
+export type ServiceActorClaimsResult =
+  | { kind: "claims"; claims: ServiceActorProfileClaims }
+  | { kind: "rejected"; response: Response };
+
 /** Route matching, authorization, and handler configuration. */
 export interface RouteDefinition<Context extends RequestContext = RequestContext> {
   method: string;
@@ -37,13 +46,10 @@ export interface RouteDefinition<Context extends RequestContext = RequestContext
   /**
    * Extract profile claims asserted by the trusted service that owns this
    * route. Authentication has already verified the exact request body before
-   * this hook runs. Invalid route input returns no claims so the handler keeps
-   * ownership of its existing validation response.
+   * this hook runs. Invalid route input returns the route's own rejection so
+   * admission stops before any identity is written.
    */
-  serviceActorClaims?: (
-    request: Request,
-    ctx: RequestContext
-  ) => Promise<ServiceActorProfileClaims | null>;
+  serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
   cacheControl?: "no-store" | "private, no-store";
   handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
 }

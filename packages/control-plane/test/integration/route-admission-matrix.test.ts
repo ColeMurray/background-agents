@@ -9,12 +9,22 @@
  */
 
 import { SELF, env } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
+import { createExecutionContext } from "cloudflare:test";
+import { createControlPlaneHttpHandler } from "../../src/routing/hono-app";
+import type { Env } from "../../src/types";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { routes } from "../../src/routes/catalog";
 import type { Route } from "../../src/routes/shared";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, seedSandboxAuth, serviceFetch, waitForSandboxStatus } from "./helpers";
+import {
+  initSession,
+  seedSandboxAuth,
+  serviceFetch,
+  serviceRequestHeaders,
+  waitForSandboxStatus,
+} from "./helpers";
 
 const BASE = "https://test.local";
 const BROWSER_USER_ID = "11111111111111111111111111111111";
@@ -74,6 +84,17 @@ function isSessionRoute(route: Route): boolean {
   return route.path.startsWith("/sessions/:id");
 }
 
+function isAutomationRoute(route: Route): boolean {
+  return route.path.startsWith("/automations/:id");
+}
+
+let automationSequence = 0;
+async function createAutomation(): Promise<string> {
+  const id = `matrix-automation-${automationSequence++}`;
+  await new AutomationStore(env.DB).create(automation(id, BROWSER_USER_ID));
+  return id;
+}
+
 function isMutation(route: Route): boolean {
   return route.method !== "GET";
 }
@@ -109,8 +130,11 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: "sb-matrix" });
     fixtures.sandboxSessionId = sessionName;
 
-    fixtures.automationId = "matrix-automation";
-    await new AutomationStore(env.DB).create(automation(fixtures.automationId, BROWSER_USER_ID));
+    fixtures.automationId = await createAutomation();
+  }, MATRIX_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await cleanD1Tables();
   }, MATRIX_TIMEOUT_MS);
 
   it("rejects every credentialed route anonymously by its authentication class", async () => {
@@ -149,11 +173,16 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       if (kind === "sandbox" || kind === "service" || kind === "public") continue;
       if (kind === "handler-authenticated") continue;
 
-      const sessionId =
-        isSessionRoute(route) && isMutation(route)
+      // Mutating routes get a fresh resource so an earlier DELETE or state
+      // change cannot turn later routes into handler-owned 404s.
+      const id = isAutomationRoute(route)
+        ? isMutation(route)
+          ? await createAutomation()
+          : fixtures.automationId
+        : isSessionRoute(route) && isMutation(route)
           ? await createReadySession()
           : fixtures.readonlySessionId;
-      const url = `${BASE}${materialize(route, { id: route.path.startsWith("/automations/") ? fixtures.automationId : sessionId })}`;
+      const url = `${BASE}${materialize(route, { id })}`;
       const response = await serviceFetch(url, {
         method: route.method,
         ...(isMutation(route) ? { body: "{}" } : {}),
@@ -265,5 +294,146 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       );
     }
     expect(observed).toMatchSnapshot();
+  });
+});
+
+/**
+ * Admission proof independent of handler behavior: every production policy is
+ * kept, every handler is replaced by a sentinel, and each credential class is
+ * asserted to reach the sentinel exactly when the route's policy admits it.
+ */
+describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
+  const fixtures: MatrixFixtures = {
+    readonlySessionId: "",
+    sandboxSessionId: "",
+    automationId: "",
+  };
+  const shadow: Route[] = routes.map((route) => ({
+    ...route,
+    handler: async () => Response.json({ sentinel: `${route.method} ${route.path}` }),
+  }));
+  const handle = createControlPlaneHttpHandler(shadow);
+
+  beforeAll(async () => {
+    await cleanD1Tables();
+    expect((await serviceFetch(`${BASE}/me/authorization`)).status).toBe(200);
+    fixtures.readonlySessionId = await createReadySession();
+    const { stub, sessionName } = await initSession({ userId: BROWSER_USER_ID });
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: "sb-sentinel" });
+    fixtures.sandboxSessionId = sessionName;
+    fixtures.automationId = await createAutomation();
+  }, MATRIX_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await cleanD1Tables();
+  }, MATRIX_TIMEOUT_MS);
+
+  async function reachedSentinel(response: Response, identity: string): Promise<boolean> {
+    if (response.status !== 200) return false;
+    const body = (await response.json().catch(() => null)) as { sentinel?: string } | null;
+    return body?.sentinel === identity;
+  }
+
+  async function botHeaders(
+    url: string,
+    method: string,
+    service: (typeof BOT_SERVICES)[number],
+    actor?: string
+  ): Promise<Record<string, string>> {
+    return buildServiceAuthHeaders({
+      service,
+      secret: `test-service-secret-${service}`,
+      method,
+      url,
+      actor,
+    });
+  }
+
+  function send(url: string, method: string, headers: Record<string, string>): Promise<Response> {
+    return handle(
+      new Request(url, { method, headers }),
+      env as unknown as Env,
+      createExecutionContext()
+    );
+  }
+
+  it("admits exactly the credential classes each route's policy accepts", async () => {
+    for (const route of routes) {
+      const identity = `${route.method} ${route.path}`;
+      const kind = route.authentication.kind;
+      const sessionId =
+        kind === "sandbox" || kind === "user-or-service-with-sandbox-fallback"
+          ? fixtures.sandboxSessionId
+          : fixtures.readonlySessionId;
+      const url = `${BASE}${materialize(route, {
+        id: isAutomationRoute(route) ? fixtures.automationId : sessionId,
+      })}`;
+      const method = route.method;
+      const expectReach = async (
+        headers: Record<string, string>,
+        label: string,
+        reach: boolean
+      ) => {
+        const response = await send(url, method, headers);
+        expect(await reachedSentinel(response, identity), `${identity} [${label}]`).toBe(reach);
+      };
+
+      const owner = await serviceRequestHeaders(url, { method });
+      const sandbox = { Authorization: `Bearer ${SANDBOX_TOKEN}` };
+      const wrongSandbox = { Authorization: "Bearer not-the-sandbox-token" };
+      const actorBot = await botHeaders(url, method, "slack-bot", "slack:U-SENTINEL");
+
+      switch (kind) {
+        case "public":
+          await expectReach({}, "anonymous", true);
+          break;
+        case "handler-authenticated":
+          // The handler owns credential verification, so admission is open.
+          await expectReach({}, "anonymous", true);
+          break;
+        case "web-service":
+          await expectReach(owner, "web", true);
+          await expectReach({}, "anonymous", false);
+          await expectReach(actorBot, "bot", false);
+          break;
+        case "user":
+          await expectReach(owner, "owner", true);
+          await expectReach({}, "anonymous", false);
+          await expectReach(actorBot, "bot actor", false);
+          break;
+        case "user-or-service":
+          await expectReach(owner, "owner", true);
+          await expectReach({}, "anonymous", false);
+          await expectReach(wrongSandbox, "bearer", false);
+          break;
+        case "service": {
+          if (route.authorization.kind !== "service") throw new Error(identity);
+          const services: readonly string[] = route.authorization.services;
+          const denied = BOT_SERVICES.find((service) => !services.includes(service));
+          if (!denied) throw new Error(`${identity} admits every bot service`);
+          await expectReach(
+            await botHeaders(url, method, route.authorization.services[0]),
+            "bot",
+            true
+          );
+          await expectReach(await botHeaders(url, method, denied), "wrong bot", false);
+          await expectReach(owner, "web", false);
+          await expectReach({}, "anonymous", false);
+          break;
+        }
+        case "sandbox":
+          await expectReach(sandbox, "sandbox", true);
+          await expectReach(wrongSandbox, "wrong token", false);
+          await expectReach(owner, "owner", false);
+          await expectReach({}, "anonymous", false);
+          break;
+        case "user-or-service-with-sandbox-fallback":
+          await expectReach(sandbox, "sandbox", true);
+          await expectReach(owner, "owner", true);
+          await expectReach(wrongSandbox, "wrong token", false);
+          await expectReach({}, "anonymous", false);
+          break;
+      }
+    }
   });
 });

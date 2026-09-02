@@ -34,7 +34,7 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
   requirePermission,
-  type ServiceActorProfileClaims,
+  type ServiceActorClaimsResult,
 } from "./shared";
 
 const logger = createLogger("router:session-create");
@@ -46,19 +46,22 @@ const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
 async function extractSessionActorProfileClaims(
   request: Request,
   ctx: RequestContext
-): Promise<ServiceActorProfileClaims | null> {
+): Promise<ServiceActorClaimsResult> {
   const parsed = await parseCreateSessionInput(request);
-  if (!parsed.ok) return null;
+  if (!parsed.ok) return { kind: "rejected", response: error(parsed.message, 400) };
 
   // Keep the admission-time claim view aligned with the handler's raw-body
-  // identity guard. Invalid input remains handler-owned and yields no claims.
+  // identity guard; the same rejection ends admission before enrollment.
   const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
-  if (enforcement.rejection) return null;
+  if (enforcement.rejection) return { kind: "rejected", response: enforcement.rejection };
 
   return {
-    displayName: parsed.input.actorDisplayName,
-    email: parsed.input.actorEmail,
-    avatarUrl: parsed.input.actorAvatarUrl,
+    kind: "claims",
+    claims: {
+      displayName: parsed.input.actorDisplayName,
+      email: parsed.input.actorEmail,
+      avatarUrl: parsed.input.actorAvatarUrl,
+    },
   };
 }
 

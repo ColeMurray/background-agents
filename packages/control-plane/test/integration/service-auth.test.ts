@@ -720,7 +720,7 @@ describe("sig1 service-credential authentication", () => {
       "U-FIRST-CONTACT-MALFORMED-BODY",
       '{"title":"Malformed","actorEmail":"body-target@corp.test"',
     ],
-  ])("does not use profile claims from %s", async (_caseName, providerUserId, body) => {
+  ])("rejects %s before enrolling the actor", async (_caseName, providerUserId, body) => {
     const users = new UserStore(env.DB);
     const bodyTarget = await users.createUser({
       displayName: "Body Target",
@@ -740,12 +740,16 @@ describe("sig1 service-credential authentication", () => {
     });
 
     expect(response.status).toBe(400);
-    const identity = await users.getIdentity("slack", providerUserId);
-    expect(identity).not.toBeNull();
-    expect(identity?.userId).not.toBe(bodyTarget.id);
+    await expect(users.getIdentity("slack", providerUserId)).resolves.toBeNull();
     await expect(
-      env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{ count: number }>()
-    ).resolves.toMatchObject({ count: 0 });
+      env.DB.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM sessions) AS sessions,
+           (SELECT COUNT(*) FROM users) AS users,
+           (SELECT COUNT(*) FROM user_identities) AS identities`
+      ).first<{ sessions: number; users: number; identities: number }>()
+    ).resolves.toEqual({ sessions: 0, users: 1, identities: 0 });
+    void bodyTarget;
   });
 
   it("does not relink a known actor when a session body carries a conflicting email", async () => {
