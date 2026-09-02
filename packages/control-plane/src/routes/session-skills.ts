@@ -1,7 +1,5 @@
 import { MAX_SANDBOX_SKILL_PAGE_SIZE } from "@open-inspect/shared/types/skills";
-import { SessionIndexStore } from "../db/session-index";
 import { SessionSkillStore } from "../db/session-skills";
-import { hashSessionSkillManifest } from "../skills/content-addressing";
 import type { Env } from "../types";
 import {
   defineRoute,
@@ -29,19 +27,8 @@ async function handleSessionSkillsView(
 ): Promise<Response> {
   const id = sessionId(match);
   if (id instanceof Response) return id;
-  let view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
-  if (!view) {
-    const session = await new SessionIndexStore(ctx.db).get(id);
-    if (!session) return error("Session skill manifest not found", 404);
-    const selection = { mode: "all" as const };
-    view = {
-      manifestSha256: await hashSessionSkillManifest(selection, []),
-      resolverVersion: 1,
-      selection,
-      resolvedAt: session.createdAt,
-      skills: [],
-    };
-  }
+  const view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
+  if (!view) return error("Session skill manifest not found", 404);
   const response = json(view);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
@@ -81,23 +68,11 @@ async function handleSandboxInstallation(
     id,
     page ?? undefined
   );
-  // Sessions created before managed-skills shipped have no pinned row. Treat
-  // them as an empty legacy manifest so snapshot restores remain bootable.
-  const resolvedManifest =
-    manifest ??
-    ((await new SessionIndexStore(ctx.db).exists(id))
-      ? {
-          schemaVersion: 1 as const,
-          manifestSha256: await hashSessionSkillManifest({ mode: "all" }, []),
-          skills: [],
-          nextCursor: null,
-        }
-      : null);
-  if (!resolvedManifest) return error("Session skill manifest not found", 404);
-  const response = json(resolvedManifest);
+  if (!manifest) return error("Session skill manifest not found", 404);
+  const response = json(manifest);
   // The digest covers the whole manifest, so it is stable across pages and
   // cannot identify one. Only tag a response that is the entire installation.
-  if (page === null) response.headers.set("ETag", `"${resolvedManifest.manifestSha256}"`);
+  if (page === null) response.headers.set("ETag", `"${manifest.manifestSha256}"`);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }

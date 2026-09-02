@@ -35,6 +35,13 @@ describe("initializeSession", () => {
     sandboxSettings: {},
     automationId: null,
     automationRunId: null,
+    managedSkillsManifest: {
+      selection: { mode: "all" },
+      resolverVersion: 1,
+      manifestSha256: "0".repeat(64),
+      resolvedAt: 1,
+      skills: [],
+    },
     providerAuth: [
       {
         provider: "openai",
@@ -86,6 +93,24 @@ describe("initializeSession", () => {
     expect(createMock.mock.invocationCallOrder[0]).toBeLessThan(
       stubFetchMock.mock.invocationCallOrder[0]
     );
+  });
+
+  it("requires exactly one resolved or inherited managed skills manifest", async () => {
+    await expect(
+      initializeSession(
+        createEnv(),
+        { ...baseInput, managedSkillsManifest: undefined },
+        ctx as never
+      )
+    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
+    await expect(
+      initializeSession(
+        createEnv(),
+        { ...baseInput, managedSkillsSourceSessionId: "parent-session" },
+        ctx as never
+      )
+    ).rejects.toThrow("Session must resolve or inherit exactly one managed skills manifest");
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("throws when D1 write fails and does not call DO init", async () => {

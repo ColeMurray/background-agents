@@ -6,7 +6,7 @@ import { SessionSkillStore } from "../../src/db/session-skills";
 import { SkillConflictError, SkillStore } from "../../src/db/skills";
 import { EnvironmentStore } from "../../src/db/environments";
 import { resolveManagedSkills } from "../../src/session/skill-resolution";
-import { buildSkillRevision, hashSessionSkillManifest } from "../../src/skills/content-addressing";
+import { buildSkillRevision } from "../../src/skills/content-addressing";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch } from "./helpers";
 
@@ -199,7 +199,7 @@ describe("managed skills persistence and resolution", () => {
     );
   });
 
-  it("serves an empty skills view for a legacy session without a manifest", async () => {
+  it("does not synthesize skills provenance for a session without a manifest", async () => {
     const createdAt = Date.now();
     await new SessionIndexStore(env.DB).create({
       id: "legacy-without-skills",
@@ -215,14 +215,7 @@ describe("managed skills persistence and resolution", () => {
     });
 
     const response = await serviceFetch("https://test.local/sessions/legacy-without-skills/skills");
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      manifestSha256: await hashSessionSkillManifest({ mode: "all" }, []),
-      resolverVersion: 1,
-      selection: { mode: "all" },
-      resolvedAt: createdAt,
-      skills: [],
-    });
+    expect(response.status).toBe(404);
 
     const missingResponse = await serviceFetch("https://test.local/sessions/missing/skills");
     expect(missingResponse.status).toBe(404);
