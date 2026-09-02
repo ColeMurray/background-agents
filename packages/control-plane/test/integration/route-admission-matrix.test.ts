@@ -295,6 +295,58 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     }
     expect(observed).toMatchSnapshot();
   });
+
+  it("passes percent-encoded path segments through undecoded", async () => {
+    // Session ids are looked up by the raw segment, so an encoded letter misses.
+    const encodedSessionId = `%74${fixtures.readonlySessionId.slice(1)}`;
+    const session = await serviceFetch(`${BASE}/sessions/${encodedSessionId}`);
+    expect(session.status).toBe(404);
+    await expect(session.json()).resolves.toEqual({ error: "Session not found" });
+
+    // The sandbox binding verifies the token against the same raw segment.
+    const sandboxInit = { headers: { Authorization: `Bearer ${SANDBOX_TOKEN}` } };
+    const encodedSandboxId = `%74${fixtures.sandboxSessionId.slice(1)}`;
+    const plain = await SELF.fetch(
+      `${BASE}/sessions/${fixtures.sandboxSessionId}/tunnel-urls`,
+      sandboxInit
+    );
+    expect(plain.status).toBe(200);
+    const encoded = await SELF.fetch(
+      `${BASE}/sessions/${encodedSandboxId}/tunnel-urls`,
+      sandboxInit
+    );
+    expect(encoded.status).toBe(401);
+
+    // Repository segments decode exactly once in the handler: a nested owner
+    // arrives as one segment, a slash in the name is refused after that one
+    // decode, and a doubly-encoded slash survives it because nothing decodes
+    // the segment a second time.
+    const nested = await serviceFetch(`${BASE}/repos/group%2Fsubgroup/web-app/secrets`);
+    expect(nested.status).not.toBe(400);
+    const slashInName = await serviceFetch(`${BASE}/repos/acme/web%2Fapp/secrets`);
+    expect(slashInName.status).toBe(400);
+    await expect(slashInName.json()).resolves.toEqual({
+      error: "Owner and name must be valid repository path segments",
+    });
+    const doubleEncoded = await serviceFetch(`${BASE}/repos/acme/web%252Fapp/secrets`);
+    expect(doubleEncoded.status).not.toBe(400);
+
+    // RBAC member ids decode once too: an id that is canonical only after a
+    // second decode is refused.
+    const memberInit = {
+      method: "PUT",
+      body: JSON.stringify({ roleId: "role_builtin_member" }),
+    };
+    const canonical = "1".repeat(32);
+    const control = await serviceFetch(`${BASE}/members/${canonical}/role`, memberInit);
+    expect(control.status).not.toBe(400);
+    const twiceEncoded = await serviceFetch(
+      `${BASE}/members/${"1".repeat(31)}%2531/role`,
+      memberInit
+    );
+    expect(twiceEncoded.status).toBe(400);
+    await expect(twiceEncoded.json()).resolves.toEqual({ error: "Invalid user ID" });
+  });
 });
 
 /**
@@ -434,6 +486,42 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           await expectReach({}, "anonymous", false);
           break;
       }
+    }
+  });
+
+  it("delivers raw path segments to handlers", async () => {
+    const echo: Route[] = routes.map((route) => ({
+      ...route,
+      handler: async (_request, _env, match) => Response.json({ groups: { ...match.groups } }),
+    }));
+    const handleEcho = createControlPlaneHttpHandler(echo);
+    const cases: Array<{ method: string; url: string; groups: Record<string, string> }> = [
+      {
+        method: "GET",
+        url: `${BASE}/sessions/abc%2Fdef`,
+        groups: { id: "abc%2Fdef" },
+      },
+      {
+        method: "GET",
+        url: `${BASE}/repos/group%2Fsubgroup/web%252Fapp/secrets`,
+        groups: { owner: "group%2Fsubgroup", name: "web%252Fapp" },
+      },
+      {
+        method: "PUT",
+        url: `${BASE}/members/${"1".repeat(31)}%2531/role`,
+        groups: { id: `${"1".repeat(31)}%2531` },
+      },
+    ];
+
+    for (const { method, url, groups } of cases) {
+      const headers = await serviceRequestHeaders(url, { method });
+      const response = await handleEcho(
+        new Request(url, { method, headers }),
+        env as unknown as Env,
+        createExecutionContext()
+      );
+      expect(response.status, url).toBe(200);
+      await expect(response.json(), url).resolves.toEqual({ groups });
     }
   });
 });
