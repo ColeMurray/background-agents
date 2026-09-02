@@ -12,6 +12,7 @@ import {
   AUTOMATION_INVOCATION_STATUS,
   type AutomationInvocationTone,
 } from "@/lib/automation-invocation-status";
+import { useLocalizedDateTime } from "@/hooks/use-localized-date-time";
 
 const BADGE_TONE_CLASSES: Record<AutomationInvocationTone, string> = {
   neutral: "bg-muted text-muted-foreground",
@@ -68,8 +69,8 @@ function invocationStartedAt(invocation: AutomationInvocation): number | null {
   return startTimes.length > 0 ? Math.min(...startTimes) : null;
 }
 
-function firedAtLabel(invocation: AutomationInvocation): string {
-  return new Date(invocation.scheduledAt ?? invocation.createdAt).toLocaleString();
+function FiredAtLabel({ invocation }: { invocation: AutomationInvocation }) {
+  return useLocalizedDateTime(invocation.scheduledAt ?? invocation.createdAt);
 }
 
 /** A skipped firing: no child runs, only a reason. */
@@ -79,7 +80,7 @@ function SkippedInvocationRow({ invocation }: { invocation: AutomationInvocation
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 min-w-0">{statusBadge(invocation.status)}</div>
         <span className="text-xs text-muted-foreground flex-shrink-0">
-          {firedAtLabel(invocation)}
+          <FiredAtLabel invocation={invocation} />
         </span>
       </div>
       {invocation.skipReason && (
@@ -107,7 +108,9 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
           )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-xs text-muted-foreground">{firedAtLabel(invocation)}</span>
+          <span className="text-xs text-muted-foreground">
+            <FiredAtLabel invocation={invocation} />
+          </span>
           {run.sessionId && (
             <Link
               href={`/session/${run.sessionId}`}
@@ -210,7 +213,7 @@ function FanOutInvocationRow({
           {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
         </div>
         <span className="text-xs text-muted-foreground flex-shrink-0">
-          {firedAtLabel(invocation)}
+          <FiredAtLabel invocation={invocation} />
         </span>
       </button>
       {expanded && (

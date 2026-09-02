@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useLocalizedDateTime } from "@/hooks/use-localized-date-time";
 
 const SETTINGS_KEY = "/api/commit-signing";
 
@@ -40,6 +41,7 @@ export function CommitSigningSettings() {
       : ({ kind: "disabled" } as const);
   }, [error, isLoading, rawData]);
   const data = viewState.kind === "enabled" ? viewState.data : undefined;
+  const updatedAt = useLocalizedDateTime(data?.updatedAt);
   const configurationKnown = viewState.kind === "enabled" || viewState.kind === "disabled";
   const [committerName, setCommitterName] = useState("");
   const [committerEmail, setCommitterEmail] = useState("");
@@ -141,7 +143,7 @@ export function CommitSigningSettings() {
           </div>
           <div>
             <dt className="inline text-muted-foreground">Updated: </dt>
-            <dd className="inline">{new Date(data.updatedAt).toLocaleString()}</dd>
+            <dd className="inline">{updatedAt}</dd>
           </div>
         </dl>
       )}
