@@ -77,7 +77,16 @@ function latestHierarchyUpdate(item: SessionInboxItem): number {
   );
 }
 
-function destinationCategory(
+/** Attention membership is unread-driven: a hierarchy stays while any session is unread. */
+export function isSessionInboxItemFullyRead(item: SessionInboxItem): boolean {
+  return (
+    !item.rootSession.readState.unread &&
+    item.descendantSessions.every((session) => !session.readState.unread)
+  );
+}
+
+/** Where a fully read hierarchy lands; mirrors the category rule in the inbox query. */
+export function sessionInboxDestinationCategory(
   item: SessionInboxItem
 ): Exclude<SessionInboxCategory, "needs_attention"> {
   return item.rootSession.status === "active" ||
@@ -142,18 +151,14 @@ export function applySessionInboxReadStateUpdate<T extends SessionInboxSnapshot 
         item.rootSession.id === sessionId ||
         item.descendantSessions.some((session) => session.id === sessionId)
     );
-    if (
-      attentionItem &&
-      !attentionItem.rootSession.readState.unread &&
-      attentionItem.descendantSessions.every((session) => !session.readState.unread)
-    ) {
+    if (attentionItem && isSessionInboxItemFullyRead(attentionItem)) {
       categories.needs_attention = {
         ...categories.needs_attention,
         items: categories.needs_attention.items.filter(
           (item) => item.rootSession.id !== attentionItem.rootSession.id
         ),
       };
-      const destination = destinationCategory(attentionItem);
+      const destination = sessionInboxDestinationCategory(attentionItem);
       categories[destination] = {
         ...categories[destination],
         items: [

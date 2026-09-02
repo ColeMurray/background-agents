@@ -418,7 +418,7 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-b"]);
   });
 
-  it("resets retained pages when a session is marked read", async () => {
+  it("reconciles read state on retained pages when a session is marked read", async () => {
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")
         ? {
@@ -435,7 +435,136 @@ describe("useSidebarSessions", () => {
 
     await act(async () => result.current.handleMarkLatestMessageRead("tail-unread"));
 
+    // The freshly read hierarchy leaves the retained attention page; the still
+    // unread one stays with its read state intact.
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"]);
+    const remainingTail = result.current.needsAttention.find(({ id }) => id === "tail-other");
+    expect(remainingTail?.readState.unread).toBe(true);
+  });
+
+  it("keeps retained pages when an already-read session is acknowledged", async () => {
+    let snapshotFetches = 0;
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=finished")) return page(["finished-tail-a", "finished-tail-b"]);
+      if (key.includes("category=in_progress")) return page(["progress-tail"]);
+      snapshotFetches += 1;
+      return snapshot({
+        in_progress: page(["running"], "progress-next"),
+        finished: page(["finished"], "finished-next"),
+      });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.finished.loadMore());
+    act(() => result.current.sectionPagination.inProgress.loadMore());
+    await waitFor(() => expect(result.current.finished).toHaveLength(3));
+    await waitFor(() => expect(result.current.inProgress).toHaveLength(2));
+    const fetchesBefore = snapshotFetches;
+
+    // Opening a session acknowledges its terminal message even when it is
+    // already read. Nothing changed, so nothing in the sidebar should move.
+    await act(() =>
+      reconcileSessionReadState({
+        sessionId: "finished-tail-b",
+        outcome: "already_read",
+        latestMessageId: "msg-1",
+        unread: false,
+      })
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+    expect(result.current.finished.map(({ id }) => id)).toEqual([
+      "finished",
+      "finished-tail-a",
+      "finished-tail-b",
+    ]);
+    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running", "progress-tail"]);
+    expect(snapshotFetches).toBe(fetchesBefore);
+  });
+
+  it("keeps retained pages for a not_latest result", async () => {
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? page(["finished-tail"])
+        : snapshot({ finished: page(["finished"], "finished-next") })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.finished.loadMore());
+    await waitFor(() => expect(result.current.finished).toHaveLength(2));
+
+    await act(() =>
+      reconcileSessionReadState({
+        sessionId: "finished-tail",
+        outcome: "not_latest",
+        latestMessageId: "msg-9",
+        unread: true,
+      })
+    );
+
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
+  });
+
+  it("updates a read tail row in place instead of dropping it", async () => {
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? { items: [unreadItem("finished-tail")], hasMore: false, nextCursor: null }
+        : snapshot({ finished: page(["finished"], "finished-next") })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.finished.loadMore());
+    await waitFor(() => expect(result.current.finished).toHaveLength(2));
+
+    await act(() =>
+      reconcileSessionReadState({
+        sessionId: "finished-tail",
+        outcome: "marked_read",
+        latestMessageId: "msg-1",
+        unread: false,
+      })
+    );
+
+    const tail = result.current.finished.find(({ id }) => id === "finished-tail");
+    expect(tail?.readState).toEqual({ latestMessageId: "msg-1", unread: false });
+  });
+
+  it("resets only the destination chain when an attention tail leaves attention", async () => {
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=needs_attention")) {
+        return { items: [unreadItem("moving")], hasMore: false, nextCursor: null };
+      }
+      if (key.includes("category=in_progress")) return page(["progress-tail"]);
+      if (key.includes("category=finished")) return page(["finished-tail"]);
+      return snapshot({
+        needs_attention: page(["attention"], "attention-next"),
+        in_progress: page(["running"], "progress-next"),
+        finished: page(["finished"], "finished-next"),
+      });
+    });
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    act(() => result.current.sectionPagination.inProgress.loadMore());
+    act(() => result.current.sectionPagination.finished.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+    await waitFor(() => expect(result.current.inProgress).toHaveLength(2));
+    await waitFor(() => expect(result.current.finished).toHaveLength(2));
+
+    await act(() =>
+      reconcileSessionReadState({
+        sessionId: "moving",
+        outcome: "marked_read",
+        latestMessageId: "msg-1",
+        unread: false,
+      })
+    );
+
+    // "moving" is active, so it heads for in_progress: that chain restarts from
+    // the head page. The finished chain is unaffected and keeps its tail.
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
   });
 
   it("reconciles retained pages when read state changes outside the sidebar", async () => {

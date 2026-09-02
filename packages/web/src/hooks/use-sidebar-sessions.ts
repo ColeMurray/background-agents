@@ -11,18 +11,21 @@ import type {
   SessionInboxSnapshot,
   SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
-import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import {
+  applySessionInboxItemReadState,
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
+  isSessionInboxItemFullyRead,
   isSessionInboxKey,
   isSessionInboxPaginationKey,
+  sessionInboxDestinationCategory,
 } from "@/lib/session-inbox-api";
 import {
   markLatestMessageRead,
   reconcileSessionReadState,
   subscribeSessionReadStateReconciliation,
+  type SessionReadStateReconciledDetail,
 } from "@/lib/session-read-state";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
@@ -134,7 +137,9 @@ function useCategoryPagination(
     [error, paginationRequest, refreshSnapshot, retryPage]
   );
 
-  // Pages loaded through `Load more` live only in this retained state.
+  // Mutations revalidate the head snapshot, but pages loaded through `Load
+  // more` live only in this retained state. Reconcile them in place or they
+  // keep rendering the pre-mutation rows.
   const updateRetainedItems = useCallback(
     (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
       setAdditionalPagesState((state) => ({
@@ -347,24 +352,73 @@ export function useSidebarSessions() {
     [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
   );
 
+  // Every session open acknowledges its terminal message, read or not, so
+  // this runs far more often than read state actually changes. Retained pages
+  // are updated in place; only a hierarchy leaving attention restarts a chain.
   const reconcileSidebarReadState = useCallback(
-    ({ sessionId, readState }: { sessionId: string; readState: SessionReadState }) => {
-      resetAttentionRetained();
-      resetInProgressRetained();
-      resetFinishedRetained();
+    ({ sessionId, outcome, readState }: SessionReadStateReconciledDetail) => {
+      const applyReadState = (item: SessionInboxItem) =>
+        applySessionInboxItemReadState(item, sessionId, readState);
+      updateAttentionRetained((item) => {
+        const updated = applyReadState(item);
+        return isSessionInboxItemFullyRead(updated) ? null : updated;
+      });
+      updateInProgressRetained(applyReadState);
+      updateFinishedRetained(applyReadState);
+
+      // The destination chain was paged without the arriving hierarchy, so a
+      // rank between its head and retained tail would never render. Restart
+      // that one chain from the head.
+      const attentionItem = attentionItems.find(
+        (item) =>
+          item.rootSession.id === sessionId ||
+          item.descendantSessions.some((session) => session.id === sessionId)
+      );
+      if (attentionItem && !readState.unread) {
+        const acknowledged = [attentionItem.rootSession, ...attentionItem.descendantSessions].find(
+          (session) => session.id === sessionId
+        );
+        const cachedMessageId = acknowledged?.readState.latestMessageId ?? null;
+        // A row holding a different message declined the in-place update
+        // (message IDs are not orderable). It may be stale or newer, so drop
+        // the retained attention rows and let revalidation place it.
+        const unreconcilable =
+          cachedMessageId !== null && cachedMessageId !== readState.latestMessageId;
+        if (unreconcilable) resetAttentionRetained();
+        if (unreconcilable || isSessionInboxItemFullyRead(applyReadState(attentionItem))) {
+          if (sessionInboxDestinationCategory(attentionItem) === "in_progress") {
+            resetInProgressRetained();
+          } else {
+            resetFinishedRetained();
+          }
+        }
+      }
+
       return Promise.all([
         mutateCache<SessionInboxSnapshot | SessionInboxPage>(
           isSessionInboxKey,
           (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
-          { populateCache: true, revalidate: true }
+          // `already_read` confirms the cached state; any other outcome may
+          // carry a change the snapshot has not seen yet.
+          { populateCache: true, revalidate: outcome !== "already_read" }
         ),
+        // Cached cursor pages would restore pre-acknowledgement rows on remount.
         mutateCache<SessionInboxPage | undefined>(isSessionInboxPaginationKey, () => undefined, {
           populateCache: true,
-          revalidate: true,
+          revalidate: false,
         }),
       ]);
     },
-    [mutateCache, resetAttentionRetained, resetFinishedRetained, resetInProgressRetained]
+    [
+      attentionItems,
+      mutateCache,
+      resetAttentionRetained,
+      resetFinishedRetained,
+      resetInProgressRetained,
+      updateAttentionRetained,
+      updateFinishedRetained,
+      updateInProgressRetained,
+    ]
   );
 
   useEffect(() => {

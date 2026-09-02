@@ -132,9 +132,11 @@ export function applySessionReadStateToItem<T extends { id: string; readState?: 
   readState: SessionReadState | undefined
 ): T {
   if (session.id !== sessionId || !readState) return session;
+  // Message IDs are not orderable, so a cached row holding a different message
+  // is left alone: it may already reflect a newer terminal message. A row with
+  // no terminal message yet has nothing newer to protect.
   const currentMessageId = session.readState?.latestMessageId;
-  if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId)
-    return session;
+  if (currentMessageId != null && currentMessageId !== readState.latestMessageId) return session;
   if (session.readState?.unread === false && readState.unread) return session;
   return { ...session, readState };
 }

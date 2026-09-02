@@ -62,6 +62,25 @@ describe("reconcileSessionReadState", () => {
     });
   });
 
+  it("tells reconcilers what the server decided", async () => {
+    const reconcile = vi.fn();
+    const unsubscribe = subscribeSessionReadStateReconciliation(reconcile);
+
+    await reconcileSessionReadState({
+      sessionId: "session-1",
+      outcome: "already_read",
+      unread: false,
+      latestMessageId: "message-1",
+    });
+    unsubscribe();
+
+    expect(reconcile).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      outcome: "already_read",
+      readState: { unread: false, latestMessageId: "message-1" },
+    });
+  });
+
   it("waits for registered cache reconcilers", async () => {
     let finishReconciliation!: () => void;
     const pendingReconciliation = new Promise<void>((resolve) => {

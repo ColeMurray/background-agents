@@ -126,6 +126,23 @@ describe("applySessionReadState", () => {
     });
   });
 
+  it("accepts the first terminal message when the cache had none", () => {
+    const data: SessionListResponse = {
+      sessions: [session("session-1", { readState: { unread: false, latestMessageId: null } })],
+      hasMore: false,
+    };
+
+    expect(
+      applySessionReadState(data, "session-1", {
+        unread: false,
+        latestMessageId: "message-a",
+      })?.sessions[0].readState
+    ).toEqual({
+      unread: false,
+      latestMessageId: "message-a",
+    });
+  });
+
   it("does not restore unread state for the same terminal message", () => {
     const data: SessionListResponse = {
       sessions: [

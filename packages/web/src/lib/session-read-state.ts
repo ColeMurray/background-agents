@@ -11,6 +11,7 @@ import {
 export type SessionReadAttemptDisposition = "complete" | "retry" | "permanent_failure";
 export interface SessionReadStateReconciledDetail {
   sessionId: string;
+  outcome: SessionReadResult["outcome"];
   readState: SessionReadState;
 }
 type SessionReadStateReconciler = (
@@ -87,7 +88,7 @@ export async function reconcileSessionReadState(result: SessionReadResult): Prom
   );
   await Promise.all(
     [...readStateReconcilers].map((reconcile) =>
-      reconcile({ sessionId: result.sessionId, readState })
+      reconcile({ sessionId: result.sessionId, outcome: result.outcome, readState })
     )
   );
   return mutation;
