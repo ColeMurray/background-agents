@@ -45,8 +45,8 @@ function session(unread = false): SessionItem {
     createdAt: 1,
     updatedAt: 2,
     readState: unread
-      ? { latestMessageId: "message-1", unread: true }
-      : { latestMessageId: null, unread: false },
+      ? { latestMessageId: "message-1", version: 1, unread: true }
+      : { latestMessageId: null, version: 0, unread: false },
   };
 }
 

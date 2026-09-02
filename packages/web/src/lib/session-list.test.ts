@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyTitleUpdate,
-  applySessionReadState,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -89,82 +88,6 @@ describe("fetchSessionListPage", () => {
     );
 
     await expect(fetchSessionListPage(buildSessionsPageKey())).rejects.toThrow();
-  });
-});
-
-describe("applySessionReadState", () => {
-  it("does not let an older mutation response overwrite a newer terminal message", () => {
-    const data: SessionListResponse = {
-      sessions: [
-        session("session-1", {
-          readState: {
-            unread: true,
-            latestMessageId: "message-b",
-          },
-        }),
-      ],
-      hasMore: false,
-    };
-
-    expect(
-      applySessionReadState(data, "session-1", {
-        unread: false,
-        latestMessageId: "message-a",
-      })?.sessions[0].readState
-    ).toEqual({
-      unread: true,
-      latestMessageId: "message-b",
-    });
-    expect(
-      applySessionReadState(data, "session-1", {
-        unread: false,
-        latestMessageId: "message-b",
-      })?.sessions[0].readState
-    ).toEqual({
-      unread: false,
-      latestMessageId: "message-b",
-    });
-  });
-
-  it("accepts the first terminal message when the cache had none", () => {
-    const data: SessionListResponse = {
-      sessions: [session("session-1", { readState: { unread: false, latestMessageId: null } })],
-      hasMore: false,
-    };
-
-    expect(
-      applySessionReadState(data, "session-1", {
-        unread: false,
-        latestMessageId: "message-a",
-      })?.sessions[0].readState
-    ).toEqual({
-      unread: false,
-      latestMessageId: "message-a",
-    });
-  });
-
-  it("does not restore unread state for the same terminal message", () => {
-    const data: SessionListResponse = {
-      sessions: [
-        session("session-1", {
-          readState: {
-            unread: false,
-            latestMessageId: "message-a",
-          },
-        }),
-      ],
-      hasMore: false,
-    };
-
-    expect(
-      applySessionReadState(data, "session-1", {
-        unread: true,
-        latestMessageId: "message-a",
-      })?.sessions[0].readState
-    ).toEqual({
-      unread: false,
-      latestMessageId: "message-a",
-    });
   });
 });
 

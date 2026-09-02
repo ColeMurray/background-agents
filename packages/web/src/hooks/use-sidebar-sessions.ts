@@ -340,7 +340,6 @@ export function useSidebarSessions() {
   const updateAttentionRetained = attention.updateRetainedItems;
   const updateInProgressRetained = inProgress.updateRetainedItems;
   const updateFinishedRetained = finished.updateRetainedItems;
-  const resetAttentionRetained = attention.resetRetainedPages;
   const resetInProgressRetained = inProgress.resetRetainedPages;
   const resetFinishedRetained = finished.resetRetainedPages;
   const updateAllRetainedItems = useCallback(
@@ -374,23 +373,15 @@ export function useSidebarSessions() {
           item.rootSession.id === sessionId ||
           item.descendantSessions.some((session) => session.id === sessionId)
       );
-      if (attentionItem && !readState.unread) {
-        const acknowledged = [attentionItem.rootSession, ...attentionItem.descendantSessions].find(
-          (session) => session.id === sessionId
-        );
-        const cachedMessageId = acknowledged?.readState.latestMessageId ?? null;
-        // A row holding a different message declined the in-place update
-        // (message IDs are not orderable). It may be stale or newer, so drop
-        // the retained attention rows and let revalidation place it.
-        const unreconcilable =
-          cachedMessageId !== null && cachedMessageId !== readState.latestMessageId;
-        if (unreconcilable) resetAttentionRetained();
-        if (unreconcilable || isSessionInboxItemFullyRead(applyReadState(attentionItem))) {
-          if (sessionInboxDestinationCategory(attentionItem) === "in_progress") {
-            resetInProgressRetained();
-          } else {
-            resetFinishedRetained();
-          }
+      if (
+        attentionItem &&
+        !readState.unread &&
+        isSessionInboxItemFullyRead(applyReadState(attentionItem))
+      ) {
+        if (sessionInboxDestinationCategory(attentionItem) === "in_progress") {
+          resetInProgressRetained();
+        } else {
+          resetFinishedRetained();
         }
       }
 
@@ -412,7 +403,6 @@ export function useSidebarSessions() {
     [
       attentionItems,
       mutateCache,
-      resetAttentionRetained,
       resetFinishedRetained,
       resetInProgressRetained,
       updateAttentionRetained,

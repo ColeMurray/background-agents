@@ -7,7 +7,7 @@ import type {
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
-import { applySessionReadStateToItem } from "./session-list";
+import { applySessionReadStateToItem } from "./session-read-state";
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 

@@ -81,14 +81,24 @@ export interface PullRequestSummary {
   closed: number;
 }
 
+/**
+ * Viewer-specific read state for a session's latest terminal message.
+ *
+ * `version` orders terminal messages: it is the projected creation time of
+ * the latest one and 0 before any turn completes. A read state with a higher
+ * version supersedes one with a lower version; within one version, read is
+ * final.
+ */
 export type SessionReadState =
   | {
       latestMessageId: null;
       unread: false;
+      version: number;
     }
   | {
       latestMessageId: string;
       unread: boolean;
+      version: number;
     };
 
 export const sessionReadActionSchema = z.discriminatedUnion("action", [
@@ -109,6 +119,7 @@ export const sessionReadResultSchema = z.union([
       outcome: z.literal("no_terminal_message"),
       unread: z.literal(false),
       latestMessageId: z.null(),
+      version: z.number(),
     })
     .strict(),
   z
@@ -117,6 +128,7 @@ export const sessionReadResultSchema = z.union([
       outcome: z.enum(["marked_read", "already_read", "not_latest"]),
       unread: z.boolean(),
       latestMessageId: z.string(),
+      version: z.number(),
     })
     .strict(),
 ]);
