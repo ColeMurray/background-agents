@@ -20,6 +20,10 @@ import {
 
 const logger = createLogger("router:model-preferences");
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function handleGetModelPreferences(
   _request: Request,
   env: Env,
@@ -70,10 +74,10 @@ async function handleSetModelPreferences(
     return error("Model preferences storage is not configured", 503);
   }
 
-  const body = await parseJsonBody<{ enabledModels?: unknown[] }>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
 
-  if (!body?.enabledModels || !Array.isArray(body.enabledModels)) {
+  if (!isRecord(body) || !Array.isArray(body.enabledModels)) {
     return error("Request body must include enabledModels array", 400);
   }
   if (!body.enabledModels.every((id): id is string => typeof id === "string")) {

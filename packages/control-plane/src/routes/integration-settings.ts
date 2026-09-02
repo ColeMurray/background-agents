@@ -38,6 +38,17 @@ import {
 
 const logger = createLogger("router:integration-settings");
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractSettings(body: unknown): Record<string, unknown> | Response {
+  if (!isRecord(body) || !isRecord(body.settings)) {
+    return error("Request body must include settings object", 400);
+  }
+  return body.settings;
+}
+
 function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
   const id = match.groups?.id;
   if (!id || !isValidIntegrationId(id)) return null;
@@ -101,17 +112,15 @@ async function handleSetIntegrationSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
+  const settings = extractSettings(body);
+  if (settings instanceof Response) return settings;
 
   const store = new IntegrationSettingsStore(ctx.db);
 
   try {
-    await store.setGlobal(id, body.settings);
+    await store.setGlobal(id, settings);
 
     logger.info("integration_settings.updated", {
       event: "integration_settings.updated",
@@ -213,18 +222,16 @@ async function handleSetRepoSettings(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
+  const settings = extractSettings(body);
+  if (settings instanceof Response) return settings;
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
 
   try {
-    await store.setRepoSettings(id, repo, body.settings);
+    await store.setRepoSettings(id, repo, settings);
 
     logger.info("integration_repo_settings.updated", {
       event: "integration_repo_settings.updated",
@@ -310,15 +317,13 @@ async function handleSetEnvironmentSettings(
   if (params instanceof Response) return params;
   const { integrationId, environmentId, store } = params;
 
-  const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
+  const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
-
-  if (!body?.settings || typeof body.settings !== "object") {
-    return error("Request body must include settings object", 400);
-  }
+  const settings = extractSettings(body);
+  if (settings instanceof Response) return settings;
 
   try {
-    await store.setEnvironmentSettings(integrationId, environmentId, body.settings);
+    await store.setEnvironmentSettings(integrationId, environmentId, settings);
 
     logger.info("integration_environment_settings.updated", {
       event: "integration_environment_settings.updated",

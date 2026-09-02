@@ -104,4 +104,16 @@ describe("Model preferences API", () => {
 
     expect(response.status).toBe(400);
   });
+
+  it("rejects non-object request bodies", async () => {
+    const response = await serviceFetch("https://test.local/model-preferences", {
+      method: "PUT",
+      body: JSON.stringify(["openai/gpt-5.4"]),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Request body must include enabledModels array",
+    });
+  });
 });
