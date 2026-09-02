@@ -6,6 +6,7 @@ import {
   openSandboxWs,
   queryDO,
   seedSandboxAuth,
+  serviceFetch,
 } from "./helpers";
 
 const SANDBOX_TOKEN = "prompt-order-sandbox-token";
@@ -50,6 +51,25 @@ describe("POST /internal/prompt", () => {
     expect(messages[0].source).toBe("web");
     // Status may be "pending" or "processing" depending on queue processing
     expect(["pending", "processing"]).toContain(messages[0].status);
+  });
+
+  it("derives user cancellation ownership independently of caller-supplied source", async () => {
+    const { stub, sessionName } = await initSession();
+
+    const response = await serviceFetch(`https://cp.test/sessions/${sessionName}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ content: "Browser prompt", source: "linear" }),
+    });
+
+    expect(response.status).toBe(200);
+    const { messageId } = await response.json<{ messageId: string }>();
+    expect(
+      await queryDO<{ source: string; cancellable_by_user: number }>(
+        stub,
+        "SELECT source, cancellable_by_user FROM messages WHERE id = ?",
+        messageId
+      )
+    ).toEqual([{ source: "linear", cancellable_by_user: 1 }]);
   });
 
   it("persists queued prompts in FIFO order", async () => {

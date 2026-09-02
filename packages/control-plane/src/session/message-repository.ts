@@ -29,6 +29,7 @@ export interface CreateMessageData {
   reasoningEffort?: string | null;
   attachments?: string | null;
   callbackContext?: string | null;
+  cancellableByUser: boolean;
   clientRequestId?: string | null;
   requestFingerprint?: string | null;
   autofixFeedbackKey?: string | null;
@@ -227,37 +228,22 @@ export class MessageRepository {
       messageId: message.id,
       content: message.content,
       status: message.status as "pending" | "processing",
+      cancellable: message.status === "pending" && message.cancellable_by_user === 1,
     }));
   }
 
   cancelPendingMessage(messageId: string): boolean {
     return this.transactionSync(() => {
-      const result = this.sql.exec(
-        `SELECT status, source, callback_context FROM messages WHERE id = ?`,
+      const deleted = this.sql.exec(
+        `DELETE FROM messages
+         WHERE id = ? AND status = 'pending' AND cancellable_by_user = 1
+         RETURNING id`,
         messageId
       );
-      const message = (
-        result.toArray() as Array<{
-          status: MessageStatus;
-          source: string;
-          callback_context: string | null;
-        }>
-      )[0];
-      if (
-        message?.status !== "pending" ||
-        message.source !== "web" ||
-        message.callback_context !== null
-      ) {
-        return false;
-      }
+      if (deleted.toArray().length !== 1) return false;
 
       this.attachments.releaseForMessage(messageId);
-      const deleted = this.sql.exec(
-        `DELETE FROM messages WHERE id = ? AND status = 'pending'`,
-        messageId
-      );
-      deleted.toArray();
-      return deleted.rowsWritten === 1;
+      return true;
     });
   }
 
@@ -279,9 +265,9 @@ export class MessageRepository {
     this.sql.exec(
       `INSERT INTO messages (
          id, author_id, content, source, model, reasoning_effort, attachments,
-         callback_context, client_request_id, request_fingerprint, autofix_feedback_key,
+         callback_context, cancellable_by_user, client_request_id, request_fingerprint, autofix_feedback_key,
          autofix_pr_key, origin_context, status, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -290,6 +276,7 @@ export class MessageRepository {
       data.reasoningEffort ?? null,
       data.attachments ?? null,
       data.callbackContext ?? null,
+      data.cancellableByUser ? 1 : 0,
       data.clientRequestId ?? null,
       data.requestFingerprint ?? null,
       data.autofixFeedbackKey ?? null,

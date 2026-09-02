@@ -55,6 +55,7 @@ describe("MessagesHandler", () => {
       content: "hello",
       authorId: "user-1",
       source: "web",
+      cancellableByUser: false,
     });
   });
 
@@ -94,7 +95,10 @@ describe("MessagesHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(messageService.enqueuePrompt).toHaveBeenCalledWith(body);
+    expect(messageService.enqueuePrompt).toHaveBeenCalledWith({
+      ...body,
+      cancellableByUser: false,
+    });
   });
 
   it("returns 400 for malformed prompt bodies", async () => {

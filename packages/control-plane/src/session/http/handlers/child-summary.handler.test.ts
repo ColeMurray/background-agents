@@ -105,6 +105,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    cancellable_by_user: 1,
     client_request_id: null,
     request_fingerprint: null,
     autofix_feedback_key: null,

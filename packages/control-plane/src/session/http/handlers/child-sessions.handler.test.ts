@@ -136,6 +136,7 @@ describe("ChildSessionsHandler", () => {
         authorId: "owner-1",
         canonicalUserId: "canonical-1",
         source: "agent",
+        cancellableByUser: false,
         scmEnrichment: {
           userId: null,
           login: null,

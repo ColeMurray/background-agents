@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS messages (
   reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
   callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
+  cancellable_by_user INTEGER NOT NULL DEFAULT 0,   -- Set only by authenticated user ingress
   client_request_id TEXT,                           -- Web-client idempotency key
   request_fingerprint TEXT,                         -- Participant-scoped canonical request hash
   autofix_feedback_key TEXT,                        -- Stable provider feedback identity for idempotency
@@ -628,6 +629,18 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         sql,
         `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0`
       );
+    },
+  },
+  {
+    id: 47,
+    description: "Add canonical prompt cancellation ownership",
+    run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN cancellable_by_user INTEGER NOT NULL DEFAULT 0`
+      );
+      sql.exec(`UPDATE messages SET cancellable_by_user = 1
+        WHERE source = 'web' AND callback_context IS NULL`);
     },
   },
 ];

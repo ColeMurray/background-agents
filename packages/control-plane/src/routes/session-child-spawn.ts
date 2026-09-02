@@ -294,6 +294,7 @@ async function handleSpawnChild(
       authorId: spawnContext.promptAuthor.userId,
       canonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? undefined,
       source: "agent",
+      cancellableByUser: false,
     } satisfies EnqueuePromptRequest;
 
     promptResponse = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.prompt, {

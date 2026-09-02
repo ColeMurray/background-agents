@@ -80,6 +80,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    cancellable_by_user: 1,
     client_request_id: null,
     request_fingerprint: null,
     autofix_feedback_key: null,
@@ -427,12 +428,15 @@ describe("SessionMessageQueue", () => {
     });
 
     expect(h.repository.cancelPendingMessage).toHaveBeenCalledWith("msg-1");
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "prompt_queue_updated", promptQueue: [] });
     expect(h.wsManager.send).toHaveBeenCalledWith(ws, {
       type: "prompt_cancelled",
       clientRequestId: "request-1",
       messageId: "msg-1",
     });
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "prompt_queue_updated", promptQueue: [] });
+    expect(h.broadcast.mock.invocationCallOrder[0]).toBeLessThan(
+      h.wsManager.send.mock.invocationCallOrder[0]
+    );
     expect(h.sessionStatus.reconcileAfterQueueRemoval).toHaveBeenCalledOnce();
   });
 
@@ -451,7 +455,10 @@ describe("SessionMessageQueue", () => {
       message: "This prompt is no longer pending and cannot be removed",
       clientRequestId: "request-1",
     });
-    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "prompt_queue_updated", promptQueue: [] });
+    expect(h.broadcast.mock.invocationCallOrder[0]).toBeLessThan(
+      h.wsManager.send.mock.invocationCallOrder[0]
+    );
   });
 
   it("reconciles session status after removing a prompt", async () => {
@@ -1514,6 +1521,7 @@ describe("SessionMessageQueue", () => {
             content: "Continue",
             authorId: "user-1",
             source: "agent",
+            cancellableByUser: false,
           })
         ).rejects.toMatchObject({ sessionStatus: status });
 
@@ -1547,6 +1555,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -1569,6 +1578,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
       });
 
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
@@ -1581,6 +1591,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -1610,6 +1621,7 @@ describe("SessionMessageQueue", () => {
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
+        cancellableByUser: false,
       });
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();

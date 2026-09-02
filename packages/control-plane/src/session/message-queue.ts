@@ -65,6 +65,7 @@ interface EnqueuePromptCoreData {
   userId: string;
   content: string;
   source: MessageSource;
+  cancellableByUser: boolean;
   model?: string;
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
@@ -194,6 +195,7 @@ export class SessionMessageQueue {
         authorId: participant.id,
         content: command.prompt,
         source: "github",
+        cancellableByUser: false,
         status: "pending",
         createdAt: now,
       },
@@ -257,6 +259,7 @@ export class SessionMessageQueue {
         userId: client.userId,
         content: data.content,
         source: "web",
+        cancellableByUser: true,
         model: data.model,
         reasoningEffort: data.reasoningEffort,
         attachments: data.attachments,
@@ -328,7 +331,9 @@ export class SessionMessageQueue {
     ws: WebSocket,
     data: { messageId: string; clientRequestId: string }
   ): Promise<void> {
-    if (!this.messageRepository.cancelPendingMessage(data.messageId)) {
+    const cancelled = this.messageRepository.cancelPendingMessage(data.messageId);
+    this.broadcastPromptQueue();
+    if (!cancelled) {
       this.wsManager.send(ws, {
         type: "error",
         code: "PROMPT_NOT_CANCELLABLE",
@@ -343,7 +348,6 @@ export class SessionMessageQueue {
       clientRequestId: data.clientRequestId,
       messageId: data.messageId,
     });
-    this.broadcastPromptQueue();
     this.log.info("prompt.cancelled", {
       event: "prompt.cancelled",
       message_id: data.messageId,
@@ -740,6 +744,7 @@ export class SessionMessageQueue {
       userId: data.authorId,
       content: data.content,
       source: data.source,
+      cancellableByUser: data.cancellableByUser,
       model: data.model,
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
@@ -822,6 +827,7 @@ export class SessionMessageQueue {
           authorId: data.participant.id,
           content: data.content,
           source: data.source,
+          cancellableByUser: data.cancellableByUser,
           model: messageModel,
           reasoningEffort: messageReasoningEffort,
           attachments: attachments ? JSON.stringify(attachments) : null,

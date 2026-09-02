@@ -103,6 +103,7 @@ export interface MessageRow {
   reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
+  cancellable_by_user: number;
   client_request_id: string | null;
   request_fingerprint: string | null;
   autofix_feedback_key: string | null;

@@ -167,11 +167,13 @@ describe("session view contracts", () => {
         messageId: "message-running",
         content: "Run this",
         status: "processing",
+        cancellable: false,
       },
       {
         messageId: "message-pending",
         content: "Then this",
         status: "pending",
+        cancellable: true,
       },
     ];
 
@@ -186,6 +188,18 @@ describe("session view contracts", () => {
     expect(
       serverMessageSchema.parse({ type: "prompt_queue_updated", promptQueue }).promptQueue
     ).toEqual(promptQueue);
+  });
+
+  it("treats queue items from older servers as non-cancellable", () => {
+    const message = serverMessageSchema.parse({
+      type: "prompt_queue_updated",
+      promptQueue: [{ messageId: "message-1", content: "Wait", status: "pending" }],
+    });
+
+    expect(message).toMatchObject({
+      type: "prompt_queue_updated",
+      promptQueue: [{ cancellable: false }],
+    });
   });
 
   it("echoes prompt request correlation", () => {

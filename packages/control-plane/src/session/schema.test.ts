@@ -416,6 +416,33 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("adds canonical prompt cancellation ownership and backfills eligible legacy messages", () => {
+    expect(SCHEMA_SQL).toContain("cancellable_by_user INTEGER NOT NULL DEFAULT 0");
+    const migration = MIGRATIONS.find((entry) => entry.id === 47);
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        callback_context TEXT
+      )`);
+      db.exec(`INSERT INTO messages VALUES
+        ('web', 'web', NULL),
+        ('linear', 'linear', NULL),
+        ('callback', 'web', '{}')`);
+      (migration!.run as (sql: SqlStorage) => void)(sql);
+
+      expect(db.prepare("SELECT id, cancellable_by_user FROM messages ORDER BY id").all()).toEqual([
+        { id: "callback", cancellable_by_user: 0 },
+        { id: "linear", cancellable_by_user: 0 },
+        { id: "web", cancellable_by_user: 1 },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("initializes a legacy messages table before creating indexes for new columns", () => {
     expect(SCHEMA_SQL).not.toMatch(/\bCREATE (?:UNIQUE )?INDEX\b/);
 
@@ -453,6 +480,7 @@ describe("applyMigrations", () => {
           expect.objectContaining({ name: "client_request_id", type: "TEXT" }),
           expect.objectContaining({ name: "request_fingerprint", type: "TEXT" }),
           expect.objectContaining({ name: "stop_confirmation_deadline", type: "INTEGER" }),
+          expect.objectContaining({ name: "cancellable_by_user", type: "INTEGER" }),
         ])
       );
       expect(

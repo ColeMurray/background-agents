@@ -135,6 +135,7 @@ async function handleSessionPrompt(
     authorId,
     canonicalUserId,
     source: body.source || "web",
+    cancellableByUser: ctx.principal?.kind === "user",
     model: body.model,
     reasoningEffort: body.reasoningEffort,
     attachments,

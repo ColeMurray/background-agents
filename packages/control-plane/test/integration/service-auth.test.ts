@@ -11,6 +11,7 @@ import { generateInternalToken } from "@open-inspect/shared/auth";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
+import { queryDO } from "./helpers";
 import { insertCanonicalUser } from "./identity-seed-helpers";
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -311,9 +312,50 @@ describe("sig1 service-credential authentication", () => {
       method: "POST",
       url: `https://test.local/sessions/${createdBody.sessionId}/prompt`,
       actor: "slack:U0002",
-      body: JSON.stringify({ content: "Cross-session prompt" }),
+      body: JSON.stringify({ content: "Integration source prompt", source: "linear" }),
     });
     expect(collaborator.status).toBe(200);
+
+    const callbackPrompt = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: `https://test.local/sessions/${createdBody.sessionId}/prompt`,
+      actor: "slack:U0002",
+      body: JSON.stringify({
+        content: "Integration callback prompt",
+        source: "web",
+        callbackContext: {
+          source: "slack",
+          channel: "C1",
+          threadTs: "1.0",
+          repoFullName: "acme/repo",
+          model: "anthropic/claude-haiku-4-5",
+        },
+      }),
+    });
+    expect(callbackPrompt.status).toBe(200);
+
+    const stub = env.SESSION.get(env.SESSION.idFromName(createdBody.sessionId));
+    expect(
+      await queryDO<{ content: string; source: string; cancellable_by_user: number }>(
+        stub,
+        `SELECT content, source, cancellable_by_user FROM messages
+         WHERE content IN (?, ?) ORDER BY content`,
+        "Integration source prompt",
+        "Integration callback prompt"
+      )
+    ).toEqual([
+      {
+        content: "Integration callback prompt",
+        source: "web",
+        cancellable_by_user: 0,
+      },
+      {
+        content: "Integration source prompt",
+        source: "linear",
+        cancellable_by_user: 0,
+      },
+    ]);
 
     const deniedByServiceCeiling = await signedFetch({
       service: "slack-bot",

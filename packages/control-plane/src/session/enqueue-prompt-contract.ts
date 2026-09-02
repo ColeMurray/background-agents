@@ -13,6 +13,7 @@ export const enqueuePromptRequestSchema = z
     authorId: z.string(),
     canonicalUserId: z.string().nullable().optional(),
     source: messageSourceSchema,
+    cancellableByUser: z.boolean().default(false),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),

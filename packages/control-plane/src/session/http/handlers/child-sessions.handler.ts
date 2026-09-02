@@ -150,6 +150,7 @@ export class ChildSessionsHandler {
           authorId: parsed.data.author.userId,
           canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
           source: "agent",
+          cancellableByUser: false,
           scmEnrichment: {
             userId: parsed.data.author.scmUserId,
             login: parsed.data.author.scmLogin,
