@@ -89,7 +89,7 @@ async function makeActivityPayload(
   const data = {
     sessionId: "session-1",
     messageId: "message-1",
-    timestamp: 1778900000000,
+    timestamp: Date.now(),
     context: {
       source: "slack",
       channel: "C123",
@@ -169,6 +169,24 @@ describe("POST /callbacks/activity", () => {
 
     expect(response.status).toBe(401);
     expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["stale", -60 * 60 * 1000],
+    ["future", 60 * 60 * 1000],
+  ])("rejects a signed %s heartbeat timestamp", async (_label, offsetMs) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const payload = await makeActivityPayload({ timestamp: Date.now() + offsetMs });
+    const { response, ctx } = await postCallback("/callbacks/activity", payload);
+
+    expect(response.status).toBe(401);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

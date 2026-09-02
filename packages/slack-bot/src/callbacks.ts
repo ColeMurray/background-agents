@@ -16,6 +16,7 @@ import {
 } from "./activity-status";
 
 const log = createLogger("callback");
+const ACTIVITY_CALLBACK_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -266,6 +267,20 @@ callbacksRouter.post("/activity", async (c) => {
     startTime,
   });
   if (rejection) return rejection;
+
+  if (Math.abs(startTime - valid.timestamp) > ACTIVITY_CALLBACK_MAX_CLOCK_SKEW_MS) {
+    log.warn("http.request", {
+      trace_id: traceId,
+      http_method: "POST",
+      http_path: "/callbacks/activity",
+      http_status: 401,
+      outcome: "rejected",
+      reject_reason: "invalid_timestamp",
+      session_id: valid.sessionId,
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
 
   c.executionCtx.waitUntil(
     setAssistantThreadStatusBestEffort(
