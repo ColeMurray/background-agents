@@ -125,10 +125,29 @@ describe("MessageRepository", () => {
 
   it("projects unfinished messages into the prompt queue", () => {
     vi.spyOn(repository, "listUnfinishedMessages").mockReturnValue([
-      { id: "msg-1", content: "Continue", status: "pending" } as never,
+      {
+        id: "msg-1",
+        content: "Continue",
+        status: "pending",
+        source: "web",
+        callback_context: null,
+      } as never,
+      {
+        id: "msg-2",
+        content: "Reply in Linear",
+        status: "pending",
+        source: "linear",
+        callback_context: null,
+      } as never,
     ]);
     expect(repository.listPromptQueue()).toEqual([
-      { messageId: "msg-1", content: "Continue", status: "pending" },
+      { messageId: "msg-1", content: "Continue", status: "pending", cancellable: true },
+      {
+        messageId: "msg-2",
+        content: "Reply in Linear",
+        status: "pending",
+        cancellable: false,
+      },
     ]);
   });
 

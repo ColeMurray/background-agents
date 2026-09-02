@@ -246,9 +246,9 @@ describe("prompt queue status", () => {
         {...baseTimelineProps}
         events={events}
         promptQueue={[
-          { messageId: "running", content: "First", status: "processing" },
-          { messageId: "next", content: "Second", status: "pending" },
-          { messageId: "later", content: "Third", status: "pending" },
+          { messageId: "running", content: "First", status: "processing", cancellable: false },
+          { messageId: "next", content: "Second", status: "pending", cancellable: true },
+          { messageId: "later", content: "Third", status: "pending", cancellable: true },
         ]}
       />
     );
@@ -268,11 +268,13 @@ describe("prompt queue status", () => {
             messageId: "canonical",
             content: "Canonical prompt",
             status: "processing",
+            cancellable: false,
           },
           {
             messageId: "outside-replay",
             content: "Queued outside replay",
             status: "pending",
+            cancellable: true,
           },
         ]}
       />

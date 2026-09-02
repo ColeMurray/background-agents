@@ -157,7 +157,7 @@ export default function SessionPage() {
       if (!capabilities.lifecycle) return;
       if (cancellingPromptIdsRef.current.has(messageId)) return;
       const queuedPrompt = promptQueue.find((item) => item.messageId === messageId);
-      if (!queuedPrompt || queuedPrompt.status !== "pending") return;
+      if (!queuedPrompt?.cancellable) return;
 
       cancellingPromptIdsRef.current.add(messageId);
       setCancellingPromptIds(new Set(cancellingPromptIdsRef.current));

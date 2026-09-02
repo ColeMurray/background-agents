@@ -22,7 +22,9 @@ describe("QueuedPromptStack", () => {
   it("shows queued prompts without removal controls in read-only mode", () => {
     render(
       <QueuedPromptStack
-        promptQueue={[{ messageId: "queued-1", content: "Review this", status: "pending" }]}
+        promptQueue={[
+          { messageId: "queued-1", content: "Review this", status: "pending", cancellable: true },
+        ]}
         cancellingPromptIds={new Set()}
         onRemove={vi.fn()}
         capabilities={{ ...FULL_CAPABILITIES, lifecycle: false }}
@@ -39,9 +41,14 @@ describe("QueuedPromptStack", () => {
         onRemove={vi.fn()}
         capabilities={FULL_CAPABILITIES}
         promptQueue={[
-          { messageId: "running", content: "Already running", status: "processing" },
-          { messageId: "next", content: "Run next", status: "pending" },
-          { messageId: "later", content: "Run after that", status: "pending" },
+          {
+            messageId: "running",
+            content: "Already running",
+            status: "processing",
+            cancellable: false,
+          },
+          { messageId: "next", content: "Run next", status: "pending", cancellable: true },
+          { messageId: "later", content: "Run after that", status: "pending", cancellable: true },
         ]}
       />
     );
@@ -60,7 +67,14 @@ describe("QueuedPromptStack", () => {
         cancellingPromptIds={new Set()}
         onRemove={vi.fn()}
         capabilities={FULL_CAPABILITIES}
-        promptQueue={[{ messageId: "running", content: "Already running", status: "processing" }]}
+        promptQueue={[
+          {
+            messageId: "running",
+            content: "Already running",
+            status: "processing",
+            cancellable: false,
+          },
+        ]}
       />
     );
 
@@ -71,7 +85,9 @@ describe("QueuedPromptStack", () => {
     const onRemove = vi.fn();
     render(
       <QueuedPromptStack
-        promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
+        promptQueue={[
+          { messageId: "next", content: "Run next", status: "pending", cancellable: true },
+        ]}
         cancellingPromptIds={new Set(["next"])}
         onRemove={onRemove}
         capabilities={FULL_CAPABILITIES}
@@ -88,7 +104,9 @@ describe("QueuedPromptStack", () => {
     const onRemove = vi.fn();
     render(
       <QueuedPromptStack
-        promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
+        promptQueue={[
+          { messageId: "next", content: "Run next", status: "pending", cancellable: true },
+        ]}
         cancellingPromptIds={new Set()}
         onRemove={onRemove}
         capabilities={FULL_CAPABILITIES}
@@ -99,7 +117,7 @@ describe("QueuedPromptStack", () => {
     expect(onRemove).toHaveBeenCalledWith("next");
   });
 
-  it("offers removal for pending prompts whose eligibility is server-owned", () => {
+  it("does not offer removal for a server-owned prompt", () => {
     const onRemove = vi.fn();
     render(
       <QueuedPromptStack
@@ -108,6 +126,7 @@ describe("QueuedPromptStack", () => {
             messageId: "linear-prompt",
             content: "Reply in Linear",
             status: "pending",
+            cancellable: false,
           },
         ]}
         cancellingPromptIds={new Set()}
@@ -116,7 +135,10 @@ describe("QueuedPromptStack", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove queued prompt: Reply in Linear" }));
-    expect(onRemove).toHaveBeenCalledWith("linear-prompt");
+    expect(screen.getByText("Reply in Linear")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Remove queued prompt: Reply in Linear" })
+    ).not.toBeInTheDocument();
+    expect(onRemove).not.toHaveBeenCalled();
   });
 });

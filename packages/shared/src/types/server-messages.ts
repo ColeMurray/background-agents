@@ -11,6 +11,7 @@ export const promptQueueItemSchema = z.object({
   messageId: z.string(),
   content: z.string(),
   status: z.enum(["pending", "processing"]),
+  cancellable: z.boolean().default(false),
 });
 export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
 

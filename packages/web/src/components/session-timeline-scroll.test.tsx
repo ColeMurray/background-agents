@@ -359,7 +359,14 @@ describe("timeline auto-scrolling", () => {
       <SessionTimeline
         {...baseTimelineProps}
         events={events}
-        promptQueue={[{ messageId: "queued", content: "Next prompt", status: "pending" }]}
+        promptQueue={[
+          {
+            messageId: "queued",
+            content: "Next prompt",
+            status: "pending",
+            cancellable: true,
+          },
+        ]}
       />
     );
 

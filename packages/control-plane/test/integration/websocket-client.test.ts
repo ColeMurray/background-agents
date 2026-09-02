@@ -634,7 +634,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       promptQueue: Array<Record<string, unknown>>;
     };
     expect(subscribed.promptQueue).toEqual([
-      expect.objectContaining({ content: "Only once", status: "pending" }),
+      expect.objectContaining({ content: "Only once", status: "pending", cancellable: true }),
     ]);
     expect(subscribed.promptQueue[0]).not.toHaveProperty("model");
     expect(subscribed.promptQueue[0]).not.toHaveProperty("reasoningEffort");
@@ -931,7 +931,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       promptQueue: Array<{ messageId: string }>;
     };
     expect(subscribed.promptQueue).toContainEqual(
-      expect.objectContaining({ messageId: "message-linear" })
+      expect.objectContaining({ messageId: "message-linear", cancellable: false })
     );
     const clientRequestId = crypto.randomUUID();
     const rejected = collectMessages(ws, {

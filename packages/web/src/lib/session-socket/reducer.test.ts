@@ -93,6 +93,7 @@ describe("sessionSocketReducer", () => {
           messageId: "message-1",
           content: "Running",
           status: "processing" as const,
+          cancellable: false,
         },
       ];
       const state = createSessionSocketState({
@@ -166,6 +167,7 @@ describe("sessionSocketReducer", () => {
         messageId: "message-2",
         content: "Next",
         status: "pending" as const,
+        cancellable: true,
       },
     ];
     const state = reduce(
@@ -177,7 +179,9 @@ describe("sessionSocketReducer", () => {
 
   it("waits for the authoritative queue update after cancellation acknowledgement", () => {
     const initial = subscribedState({
-      promptQueue: [{ messageId: "message-2", content: "Next", status: "pending" }],
+      promptQueue: [
+        { messageId: "message-2", content: "Next", status: "pending", cancellable: true },
+      ],
     });
     const state = reduce(
       initial,

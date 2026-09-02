@@ -227,6 +227,10 @@ export class MessageRepository {
       messageId: message.id,
       content: message.content,
       status: message.status as "pending" | "processing",
+      cancellable:
+        message.status === "pending" &&
+        message.source === "web" &&
+        message.callback_context === null,
     }));
   }
 
