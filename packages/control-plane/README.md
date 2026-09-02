@@ -444,6 +444,7 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+- `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` - Dedicated key for provider account credentials in D1
 
 Optional variables:
 
