@@ -635,25 +635,13 @@ describe("AutofixService", () => {
     expect(h.sessions.fetch).not.toHaveBeenCalled();
   });
 
-  it("dispatches an Open Inspect App review containing top-level findings and replies", async () => {
+  it("dispatches an Open Inspect App review with a body and only thread replies", async () => {
     const h = buildService();
     h.github.getPullRequestFeedback.mockResolvedValueOnce(
       openInspectReview({
-        body: "",
+        body: "Please address the remaining issue.",
         state: "COMMENTED",
         comments: [
-          {
-            id: "9001",
-            inReplyToId: null,
-            body: "Handle the nullable value.",
-            url: "https://github.com/acme/widgets/pull/42#discussion_r9001",
-            path: "src/input.ts",
-            line: 12,
-            startLine: null,
-            side: "RIGHT",
-            startSide: null,
-            diffHunk: "@@ -10,3 +10,3 @@",
-          },
           {
             id: "9002",
             inReplyToId: "8001",

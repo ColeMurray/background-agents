@@ -427,6 +427,7 @@ export class AutofixService {
       if (feedback.kind !== "review") return "bot_pr_comment";
       if (!settings.openInspectReviewsEnabled) return "own_reviews_disabled";
       if (
+        !feedback.body.trim() &&
         feedback.comments.length > 0 &&
         feedback.comments.every((comment) => comment.inReplyToId !== null)
       ) {
