@@ -40,7 +40,7 @@ export class SessionSkillStore {
     if (!loaded) return null;
     return {
       manifestSha256: loaded.manifest.manifest_sha256,
-      resolverVersion: 1,
+      resolverVersion: SKILL_RESOLVER_VERSION,
       selection: this.selection(loaded.manifest),
       resolvedAt: loaded.manifest.resolved_at,
       skills: loaded.revisions.map((row) => this.resolvedSkill(row)),
@@ -126,7 +126,7 @@ export class SessionSkillStore {
   }
 
   private selection(manifest: ManifestRow): SessionSkillsView["selection"] {
-    if (manifest.resolver_version !== 1) {
+    if (manifest.resolver_version !== SKILL_RESOLVER_VERSION) {
       throw new Error(`Unsupported managed skill resolver version: ${manifest.resolver_version}`);
     }
     if (manifest.selection_mode === "profile") {
