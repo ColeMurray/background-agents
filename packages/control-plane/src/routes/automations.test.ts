@@ -12,7 +12,7 @@ import { HttpError, resolveRepoOrError, type RequestContext } from "./shared";
 import type { Principal } from "../auth/principal";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
@@ -239,10 +239,10 @@ async function callRoute(
   }
 ): Promise<Response> {
   const route = automationRoutes.find(
-    (candidate) => candidate.method === method && candidate.pattern.test(path)
+    (candidate) => candidate.method === method && routePathPattern(candidate.path).test(path)
   );
   if (!route) throw new Error(`No route found for ${method} ${path}`);
-  const match = path.match(route.pattern)!;
+  const match = path.match(routePathPattern(route.path))!;
   const url = new URL(`https://test.local${path}`);
   if (options?.query) {
     for (const [k, v] of Object.entries(options.query)) {

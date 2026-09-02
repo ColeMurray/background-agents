@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { extractRepoParams, parsePattern } from "./shared";
+import { extractRepoParams } from "./shared";
+import { routePathPattern } from "../router.test-support";
 
 describe("repository route parameters", () => {
   it("decodes a nested owner namespace from one URL segment", () => {
     const match = "/repos/group%2Fsubgroup/web/branches".match(
-      parsePattern("/repos/:owner/:name/branches")
+      routePathPattern("/repos/:owner/:name/branches")
     );
 
     expect(match).not.toBeNull();
@@ -13,7 +14,7 @@ describe("repository route parameters", () => {
 
   it("rejects an encoded slash in the repository name", async () => {
     const match = "/repos/group/web%2Fapi/branches".match(
-      parsePattern("/repos/:owner/:name/branches")
+      routePathPattern("/repos/:owner/:name/branches")
     );
 
     const result = extractRepoParams(match!);

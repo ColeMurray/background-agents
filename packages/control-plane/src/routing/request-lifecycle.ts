@@ -31,7 +31,7 @@ export function withCorsAndTraceHeaders(response: Response, ctx: RequestContext)
 /** Apply all matched-route response policy in one body-preserving reconstruction. */
 export function finalizeRouteResponse(
   response: Response,
-  route: Route,
+  route: Pick<Route, "cacheControl">,
   ctx: RequestContext
 ): Response {
   return withCommonHeaders(

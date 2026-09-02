@@ -4,7 +4,7 @@ import { HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const FIXED_NOW = 1_700_000_000_000;
 
@@ -37,8 +37,8 @@ vi.mock("../db/analytics-dashboard-store", () => ({
 function getHandler(method: string, path: string) {
   const pathname = new URL(`https://test.local${path}`).pathname;
   for (const route of analyticsRoutes) {
-    if (route.method === method && route.pattern.test(pathname)) {
-      const match = pathname.match(route.pattern)!;
+    if (route.method === method && routePathPattern(route.path).test(pathname)) {
+      const match = pathname.match(routePathPattern(route.path))!;
       return { handler: route.handler, match };
     }
   }

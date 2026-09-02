@@ -245,8 +245,11 @@ type ServicePrincipal = Extract<Principal, { kind: "service" }>;
 type WebServicePrincipal = Omit<ServicePrincipal, "service"> & { service: "web" };
 type UserOrServicePrincipal = Exclude<Principal, SandboxPrincipal>;
 
+/** Raw path parameters of the selected route, keyed by parameter name. */
+export type RouteParams = Readonly<Record<string, string>>;
+
 type SandboxSessionBinding = {
-  getSessionId(match: RegExpMatchArray): string | null;
+  getSessionId(params: RouteParams): string | null;
 };
 
 export type RouteAuthentication =
@@ -283,10 +286,8 @@ export interface RoutePolicy {
   supportedScmProviders: "all" | readonly SourceControlProviderName[];
 }
 
-/** Fully resolved route, including the raw-path matcher compiled from its canonical path. */
-export interface Route extends RouteDefinition, RoutePolicy {
-  pattern: RegExp;
-}
+/** Fully resolved route: a definition combined with the policy it was declared under. */
+export interface Route extends RouteDefinition, RoutePolicy {}
 
 /** Framework-neutral policy consumed by request admission. */
 export type RouteAdmissionPolicy = Pick<
@@ -295,7 +296,7 @@ export type RouteAdmissionPolicy = Pick<
 >;
 
 const SESSION_ID_BINDING: SandboxSessionBinding = {
-  getSessionId: (match) => match.groups?.id ?? null,
+  getSessionId: (params) => params.id ?? null,
 };
 
 export const GITHUB_USER_OR_SERVICE_ROUTE = {
@@ -364,17 +365,8 @@ export function defineRoute<const Policy extends RoutePolicy>(
   return {
     ...route,
     ...policy,
-    pattern: parsePattern(route.path),
     handler,
   };
-}
-
-/**
- * Parse route pattern into regex.
- */
-export function parsePattern(pattern: string): RegExp {
-  const regexPattern = pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)");
-  return new RegExp(`^${regexPattern}$`);
 }
 
 /**

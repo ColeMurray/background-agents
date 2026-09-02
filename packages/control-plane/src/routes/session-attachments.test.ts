@@ -4,7 +4,7 @@ import type { Env } from "../types";
 import { sessionAttachmentRoutes } from "./session-attachments";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -68,10 +68,10 @@ function oversizedStreamingUploadRequest(): Request {
 function getUploadRoute() {
   const path = "/sessions/session-1/attachments";
   const route = sessionAttachmentRoutes.find(
-    (candidate) => candidate.method === "POST" && path.match(candidate.pattern)
+    (candidate) => candidate.method === "POST" && path.match(routePathPattern(candidate.path))
   );
   if (!route) throw new Error("Attachment upload route not found");
-  const match = path.match(route.pattern);
+  const match = path.match(routePathPattern(route.path));
   if (!match) throw new Error("Attachment upload route did not match");
   return { route, match };
 }

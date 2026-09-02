@@ -5,7 +5,7 @@ import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import type { Env } from "../types";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 function createCtx(
   db: SqlDatabase = {} as SqlDatabase,
@@ -47,7 +47,7 @@ function createEnv(fetch: (request: Request) => Promise<Response>): Env {
 function getHandler(method: string, path: string) {
   for (const route of sessionRuntimeProxyRoutes) {
     if (route.method !== method) continue;
-    const match = path.match(route.pattern);
+    const match = path.match(routePathPattern(route.path));
     if (match) return { handler: route.handler, match, route };
   }
   throw new Error(`No route found for ${method} ${path}`);

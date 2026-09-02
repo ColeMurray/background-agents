@@ -1,5 +1,5 @@
 /**
- * Test-only builder for service-authenticated router requests.
+ * Test-only builders for router requests.
  *
  * sig1 binds method, URL, and body, so every request is signed individually
  * — there is no reusable Authorization header. Env fixtures must bind the
@@ -9,26 +9,14 @@
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { BackgroundTasks } from "./platform-ports";
 import { createTestBackgroundTasks } from "./background-tasks.test-support";
-import {
-  createControlPlaneHttpHandler,
-  handleControlPlaneHttp,
-  type ControlPlaneHttpHandler,
-} from "./routing/hono-app";
-import type { Route } from "./routes/shared";
+import { createControlPlaneApp, type ControlPlaneHost } from "./routing/hono-app";
+import { routes } from "./routes/catalog";
+import type { Route, RouteParams } from "./routes/shared";
 import type { Env } from "./types";
 
 // The single contract-faithful double lives in background-tasks.test-support;
 // this shared instance's recordings are unused by the router suites.
 export const TEST_BACKGROUND_TASK_CONTEXT: BackgroundTasks = createTestBackgroundTasks();
-
-function executionContextFromBackgroundTasks(tasks: BackgroundTasks): ExecutionContext {
-  return {
-    waitUntil(promise): void {
-      tasks.submit(() => promise, { name: "test.http.request" });
-    },
-    passThroughOnException(): void {},
-  } as ExecutionContext;
-}
 
 /** Request handler signature used by unit fixtures that provide the platform-neutral port. */
 export type TestRequestHandler = (
@@ -37,13 +25,10 @@ export type TestRequestHandler = (
   backgroundTasks: BackgroundTasks
 ) => Promise<Response>;
 
-function adaptForTests(handler: ControlPlaneHttpHandler): TestRequestHandler {
-  return (request, env, backgroundTasks) =>
-    handler(request, env, executionContextFromBackgroundTasks(backgroundTasks));
-}
-
-/** Test-only adapter over the production catalog. */
-export const handleRequest: TestRequestHandler = adaptForTests(handleControlPlaneHttp);
+/** Unit fixtures hand the app their background-task port where a platform passes its execution context. */
+const testHost: ControlPlaneHost = {
+  backgroundTasks: (executionCtx) => executionCtx as BackgroundTasks,
+};
 
 /**
  * Test-only adapter over an explicit catalog. Hono registers routes when the
@@ -51,7 +36,31 @@ export const handleRequest: TestRequestHandler = adaptForTests(handleControlPlan
  * handler instead of mutating the production catalog.
  */
 export function createTestRequestHandler(catalog: readonly Route[]): TestRequestHandler {
-  return adaptForTests(createControlPlaneHttpHandler(catalog));
+  const app = createControlPlaneApp(catalog, testHost);
+  return (request, env, backgroundTasks) =>
+    Promise.resolve(app.fetch(request, env, backgroundTasks as unknown as ExecutionContext));
+}
+
+/** Test-only adapter over the production catalog. */
+export const handleRequest: TestRequestHandler = createTestRequestHandler(routes);
+
+/** Compile a catalog path into the legacy raw-path matcher, for handler-level fixtures. */
+export function routePathPattern(path: string): RegExp {
+  return new RegExp(`^${path.replace(/:(\w+)/g, "(?<$1>[^/]+)")}$`);
+}
+
+/** Select the catalog route for a concrete path and rebuild what the adapter hands its handler. */
+export function matchRoute(
+  catalog: readonly Route[],
+  method: string,
+  path: string
+): { route: Route; match: RegExpMatchArray; params: RouteParams } | undefined {
+  for (const route of catalog) {
+    if (route.method !== method) continue;
+    const match = path.match(routePathPattern(route.path));
+    if (match) return { route, match, params: { ...match.groups } };
+  }
+  return undefined;
 }
 
 /** Per-service secrets for unit-test env fixtures, mirrored by signedServiceRequest. */

@@ -1,25 +1,24 @@
-/** Hono adapter for ordinary control-plane HTTP requests. */
+/** Hono application for ordinary control-plane HTTP requests. */
 
-import { Hono } from "hono";
+import { Hono, type Handler } from "hono";
 import { TrieRouter } from "hono/router/trie-router";
+import {
+  auditRouteAuthorizationDecision,
+  shouldAuditAllowedDecision,
+} from "../authorization/request-audit";
 import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { createRequestContext } from "../http/create-request-context";
 import type { RequestContext } from "../http/request-context";
-import { error } from "../http/responses";
+import { error, HttpError } from "../http/responses";
 import { createLogger } from "../logger";
 import { routes } from "../routes/catalog";
-import type { Route } from "../routes/shared";
-import { dispatchMatchedRoute } from "./route-dispatch";
-import { withCorsAndTraceHeaders } from "./request-lifecycle";
+import type { Route, RouteParams } from "../routes/shared";
 import type { Env } from "../types";
+import { admit } from "./admit";
+import type { ControlPlaneHonoEnv, ControlPlaneHost } from "./hono-env";
+import { finalizeRouteResponse, logRequest, withCorsAndTraceHeaders } from "./request-lifecycle";
 
-type ControlPlaneHonoEnv = {
-  Bindings: Env;
-  Variables: {
-    requestContext: RequestContext;
-    startedAt: number;
-  };
-};
+export type { ControlPlaneHonoEnv, ControlPlaneHost } from "./hono-env";
 
 /** Ordinary HTTP entrypoint signature shared by the Worker and test adapters. */
 export type ControlPlaneHttpHandler = (
@@ -31,45 +30,78 @@ export type ControlPlaneHttpHandler = (
 const logger = createLogger("router");
 
 /**
- * Hono gives `*`, `?`, `{...}` and `.` routing meaning that parsePattern
- * compiles as literals. Refusing anything outside literal or `:param`
- * segments keeps Hono selection and the raw-path regex in agreement.
+ * Hono gives `*`, `?`, `{...}` and `.` routing meaning, and raw parameter
+ * segments are read back from the pathname by position, so a path may hold
+ * only literal and `:param` segments.
  */
 const ROUTE_PATH_GRAMMAR = /^(\/([A-Za-z0-9_-]+|:\w+))+$/;
 
-/** Wall-clock start captured before Hono selects a route, keyed by the raw request. */
-const requestStartedAt = new WeakMap<Request, number>();
-
-function assertRouteContract(route: Route): void {
+function assertRoutePath(route: Route): void {
   if (!ROUTE_PATH_GRAMMAR.test(route.path)) {
     throw new Error(`Route path is outside the supported grammar: ${route.method} ${route.path}`);
   }
-  const principalless =
-    route.authentication.kind === "public" || route.authentication.kind === "handler-authenticated";
-  if (principalless && route.authorization.kind !== "none") {
-    throw new Error(
-      `Route without a verified principal cannot require authorization: ${route.method} ${route.path}`
-    );
+}
+
+/** The execution context the platform passed to `app.fetch`, if any. */
+function executionContextOf(c: { executionCtx: unknown }): unknown {
+  try {
+    return c.executionCtx;
+  } catch {
+    return undefined;
   }
 }
 
-function contextFor(
-  request: Request,
-  env: Env,
-  executionCtx: Parameters<typeof createCloudflareBackgroundTasks>[0]
-): RequestContext {
-  // eslint-disable-next-line no-restricted-syntax -- ordinary HTTP composition root passes the stable binding once
-  const database = env.DB;
-  return createRequestContext({
-    request,
-    env,
-    database,
-    executionCtx: createCloudflareBackgroundTasks(executionCtx),
-  });
+/** Rebuild the legacy `RegExpMatchArray` handlers still read from raw parameters. */
+function legacyMatch(pathname: string, params: RouteParams): RegExpMatchArray {
+  const match = [pathname, ...Object.values(params)] as unknown as RegExpMatchArray;
+  match.index = 0;
+  match.input = pathname;
+  match.groups = { ...params };
+  return match;
 }
 
-function createHonoApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
-  for (const route of catalog) assertRouteContract(route);
+/** Run a catalog handler with the request and context admission produced. */
+function legacy(route: Route): Handler<ControlPlaneHonoEnv> {
+  return (c) => {
+    const admission = c.get("admission");
+    if (admission?.result.kind !== "admitted") {
+      throw new Error(`Handler reached without admission: ${route.method} ${route.path}`);
+    }
+    return route.handler(
+      admission.result.handlerRequest,
+      c.env,
+      legacyMatch(c.req.path, admission.params),
+      c.get("requestContext")
+    );
+  };
+}
+
+/**
+ * Replace the response once the handler chain has finished. Hono's setter
+ * merges the previous response's headers into the new one, so clear it
+ * first when the previous response must not leak into the replacement.
+ */
+function replaceResponse(
+  c: { res: Response | undefined; finalized: boolean },
+  response: Response
+): void {
+  c.res = undefined;
+  c.res = response;
+}
+
+/**
+ * Build the Hono application over a route catalog.
+ *
+ * The lifecycle middleware owns everything around a route: the DB and HEAD
+ * guards, the request context, the request log, authorization audit, and
+ * the common response headers. `admit()` owns the route's policy, and a
+ * handler that answers without admission having run is refused.
+ */
+export function createControlPlaneApp(
+  catalog: readonly Route[],
+  host: ControlPlaneHost
+): Hono<ControlPlaneHonoEnv> {
+  for (const route of catalog) assertRoutePath(route);
 
   const app = new Hono<ControlPlaneHonoEnv>({
     strict: true,
@@ -77,19 +109,88 @@ function createHonoApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
     router: new TrieRouter(),
   });
 
-  app.onError((caught) => {
-    throw caught;
-  });
-
   app.use("*", async (c, next) => {
     // TrieRouter runs a root wildcard twice for the literal path `/*`.
     if (c.get("requestContext")) return next();
-    c.set("requestContext", contextFor(c.req.raw, c.env, c.executionCtx));
-    c.set("startedAt", requestStartedAt.get(c.req.raw) ?? Date.now());
-    await next();
+
+    const startedAt = Date.now();
+    const pathname = c.req.path;
+    const method = c.req.raw.method;
+
+    // eslint-disable-next-line no-restricted-syntax -- composition root validates the required binding
+    if (!c.env.DB) {
+      logger.error("DB binding is not configured; refusing request", { http_path: pathname });
+      return new Response(JSON.stringify({ error: "Database not configured" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const context = contextFor(c.req.raw, c.env, host.backgroundTasks(executionContextOf(c)));
+    c.set("requestContext", context);
+    c.set("startedAt", startedAt);
+
+    // Hono maps HEAD to GET implicitly; the control plane never has.
+    if (method === "HEAD") return withCorsAndTraceHeaders(error("Not found", 404), context);
+
+    let unexpected = false;
+    try {
+      await next();
+    } catch (caught) {
+      // Only Error instances reach onError; anything else lands here.
+      unexpected = true;
+      replaceResponse(c, internalError(caught, context, method, pathname, startedAt));
+    }
+    // An unexpected handler failure was already logged as the 500 it became.
+    unexpected ||= c.error !== undefined && !(c.error instanceof HttpError);
+
+    const admission = c.get("admission");
+    if (!admission) {
+      if (c.get("admissionExempt") || unexpected) return;
+      logger.error("Handler answered without admission running ahead of it", {
+        event: "router.unadmitted_response",
+        http_method: method,
+        http_path: pathname,
+        request_id: context.request_id,
+        trace_id: context.trace_id,
+      });
+      replaceResponse(c, withCorsAndTraceHeaders(error("Internal server error", 500), context));
+      return;
+    }
+
+    const { policy, result } = admission;
+    if (result.kind === "denied") {
+      if (result.requestLog === "emit") logRequest(c.res, context, method, pathname, startedAt);
+      replaceResponse(c, finalizeRouteResponse(c.res, policy, context));
+      return;
+    }
+
+    if (!unexpected) logRequest(c.res, context, method, pathname, startedAt);
+    if (shouldAuditAllowedDecision(result.decision)) {
+      await auditRouteAuthorizationDecision({
+        ctx: context,
+        method,
+        path: pathname,
+        response: c.res,
+        decision: result.decision,
+      });
+    }
+    replaceResponse(c, finalizeRouteResponse(c.res, policy, context));
+  });
+
+  app.onError((caught, c) => {
+    if (caught instanceof HttpError) return error(caught.message, caught.status);
+    return internalError(
+      caught,
+      c.get("requestContext"),
+      c.req.raw.method,
+      c.req.path,
+      c.get("startedAt")
+    );
   });
 
   app.options("*", (c) => {
+    c.set("admissionExempt", true);
     const context = c.get("requestContext");
     return new Response(null, {
       headers: {
@@ -104,71 +205,58 @@ function createHonoApp(catalog: readonly Route[]): Hono<ControlPlaneHonoEnv> {
   });
 
   for (const route of catalog) {
-    app.on(route.method, route.path, async (c) => {
-      const pathname = new URL(c.req.raw.url).pathname;
-      const match = pathname.match(route.pattern);
-      const context = c.get("requestContext");
-      if (!match) {
-        // Unreachable while the grammar guard holds; fail closed but loudly.
-        logger.error("Hono selected a route its raw-path matcher rejects", {
-          event: "router.match_mismatch",
-          http_method: route.method,
-          route_path: route.path,
-          http_path: pathname,
-          request_id: context.request_id,
-          trace_id: context.trace_id,
-        });
-        return withCorsAndTraceHeaders(error("Not found", 404), context);
-      }
-
-      return dispatchMatchedRoute({
-        request: c.req.raw,
-        env: c.env,
-        route,
-        match,
-        pathname,
-        context,
-        startedAt: c.get("startedAt"),
-      });
-    });
+    app.on(route.method, route.path, admit(route), legacy(route));
   }
 
-  app.notFound((c) => withCorsAndTraceHeaders(error("Not found", 404), c.get("requestContext")));
+  app.notFound((c) => {
+    c.set("admissionExempt", true);
+    return withCorsAndTraceHeaders(error("Not found", 404), c.get("requestContext"));
+  });
 
   return app;
 }
 
-/**
- * Build the ordinary HTTP entrypoint over a route catalog.
- *
- * DB and HEAD handling stay outside Hono because missing-DB responses are
- * intentionally undecorated and Hono implicitly maps HEAD to GET.
- */
+function contextFor(request: Request, env: Env, executionCtx: RequestContext["executionCtx"]) {
+  // eslint-disable-next-line no-restricted-syntax -- ordinary HTTP composition root passes the stable binding once
+  const database = env.DB;
+  return createRequestContext({ request, env, database, executionCtx });
+}
+
+/** Log an unexpected failure as the sanitized 500 it becomes. */
+function internalError(
+  caught: unknown,
+  context: RequestContext,
+  method: string,
+  pathname: string,
+  startedAt: number
+): Response {
+  logger.error("http.request", {
+    event: "http.request",
+    request_id: context.request_id,
+    trace_id: context.trace_id,
+    http_method: method,
+    http_path: pathname,
+    http_status: 500,
+    duration_ms: Date.now() - startedAt,
+    outcome: "error",
+    error: caught instanceof Error ? caught : String(caught),
+    ...context.metrics.summarize(),
+  });
+  return error("Internal server error", 500);
+}
+
+/** The Cloudflare Worker host: background tasks ride the event's `waitUntil`. */
+export const cloudflareHost: ControlPlaneHost = {
+  backgroundTasks: (executionCtx) =>
+    createCloudflareBackgroundTasks(
+      executionCtx as Parameters<typeof createCloudflareBackgroundTasks>[0]
+    ),
+};
+
+/** Build the Worker's ordinary HTTP entrypoint over a route catalog. */
 export function createControlPlaneHttpHandler(catalog: readonly Route[]): ControlPlaneHttpHandler {
-  const app = createHonoApp(catalog);
-
-  return async (request, env, executionCtx) => {
-    requestStartedAt.set(request, Date.now());
-    const pathname = new URL(request.url).pathname;
-
-    // eslint-disable-next-line no-restricted-syntax -- ordinary HTTP composition root validates the required binding
-    if (!env.DB) {
-      logger.error("DB binding is not configured; refusing request", { http_path: pathname });
-      return new Response(JSON.stringify({ error: "Database not configured" }), {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    if (request.method === "HEAD") {
-      return withCorsAndTraceHeaders(
-        error("Not found", 404),
-        contextFor(request, env, executionCtx)
-      );
-    }
-
-    return app.fetch(request, env, executionCtx);
-  };
+  const app = createControlPlaneApp(catalog, cloudflareHost);
+  return (request, env, executionCtx) => Promise.resolve(app.fetch(request, env, executionCtx));
 }
 
 /** Production entrypoint over the canonical route catalog. */

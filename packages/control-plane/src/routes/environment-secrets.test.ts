@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "../auth/crypto";
 import { environmentSecretsRoutes } from "./environment-secrets";
 import type { RequestContext, Route } from "./shared";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 function findRoute(method: string, path: string): { route: Route; match: RegExpMatchArray } {
   const route = environmentSecretsRoutes.find(
-    (candidate) => candidate.method === method && path.match(candidate.pattern)
+    (candidate) => candidate.method === method && path.match(routePathPattern(candidate.path))
   );
   if (!route) throw new Error(`Missing ${method} ${path} route`);
-  return { route, match: path.match(route.pattern)! };
+  return { route, match: path.match(routePathPattern(route.path))! };
 }
 
 function createContext() {

@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { scmSettingsRoutes } from "./scm-settings";
 import type { RequestContext, Route } from "./shared";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { matchRoute, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 function findRoute(method: string, path: string): { route: Route; match: RegExpMatchArray } {
-  const route = scmSettingsRoutes.find(
-    (candidate) => candidate.method === method && path.match(candidate.pattern)
-  );
-  if (!route) throw new Error(`Missing ${method} ${path} route`);
-  return { route, match: path.match(route.pattern)! };
+  const matched = matchRoute(scmSettingsRoutes, method, path);
+  if (!matched) throw new Error(`Missing ${method} ${path} route`);
+  return { route: matched.route, match: matched.match };
 }
 
 function failingContext(): RequestContext {

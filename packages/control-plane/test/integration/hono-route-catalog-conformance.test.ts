@@ -14,7 +14,7 @@ function materializePath(
   const groups: Record<string, string> = {};
   const pathname = routePath.replace(PARAMETER, (_parameter, name: string) => {
     // An encoded slash remains one raw URL.pathname segment. It detects any
-    // decoding before Hono selection or before the legacy-compatible regex.
+    // decoding before Hono selection or in the raw parameter read-back.
     const value = `fixture-${routeIndex}-${name}%2Fraw`;
     groups[name] = value;
     return value;
@@ -30,7 +30,6 @@ describe("Hono route catalog conformance", () => {
         identity: `${route.method} ${route.path}`,
         pathname,
         groups,
-        pattern: route.pattern.source,
         authentication: route.authentication.kind,
         authorization: route.authorization,
         supportedScmProviders: route.supportedScmProviders,

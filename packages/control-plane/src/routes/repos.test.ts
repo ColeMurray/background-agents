@@ -5,7 +5,7 @@ import type { Env } from "../types";
 import { reposRoutes } from "./repos";
 import type * as SharedRoutes from "./shared";
 import type { RequestContext } from "./shared";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { matchRoute, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const {
   mockCacheDelete,
@@ -75,21 +75,15 @@ vi.mock("./shared", async () => {
 });
 
 function getListHandler() {
-  const route = reposRoutes.find(
-    (candidate) => candidate.method === "GET" && candidate.pattern.test("/repos")
-  );
-  if (!route) throw new Error("No repository list route found");
-  const match = "/repos".match(route.pattern);
-  if (!match) throw new Error("List route did not match /repos");
-  return { handler: route.handler, match };
+  const matched = matchRoute(reposRoutes, "GET", "/repos");
+  if (!matched) throw new Error("No repository list route found");
+  return { handler: matched.route.handler, match: matched.match };
 }
 
 function getUpdateHandler(path: string) {
-  const route = reposRoutes.find((candidate) => candidate.method === "PUT");
-  if (!route) throw new Error("No repository metadata update route found");
-  const match = path.match(route.pattern);
-  if (!match) throw new Error(`Update route did not match ${path}`);
-  return { handler: route.handler, match };
+  const matched = matchRoute(reposRoutes, "PUT", path);
+  if (!matched) throw new Error(`Update route did not match ${path}`);
+  return { handler: matched.route.handler, match: matched.match };
 }
 
 describe("repository list route", () => {

@@ -4,7 +4,7 @@ import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -64,7 +64,7 @@ function createEnv(): Env {
 function getHandler(method: string, path: string) {
   for (const route of sessionIndexRoutes) {
     if (route.method !== method) continue;
-    const match = path.match(route.pattern);
+    const match = path.match(routePathPattern(route.path));
     if (match) return { handler: route.handler, match };
   }
   throw new Error(`No route found for ${method} ${path}`);

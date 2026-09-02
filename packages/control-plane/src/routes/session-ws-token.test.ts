@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import { sessionWsTokenRoutes } from "./session-ws-token";
 import type { RequestContext, Route } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 
 function routeFor(path: string): { route: Route; match: RegExpMatchArray } {
-  const route = sessionWsTokenRoutes.find((candidate) => candidate.pattern.test(path));
+  const route = sessionWsTokenRoutes.find((candidate) =>
+    routePathPattern(candidate.path).test(path)
+  );
   if (!route) throw new Error(`route not found: ${path}`);
-  const match = path.match(route.pattern);
+  const match = path.match(routePathPattern(route.path));
   if (!match) throw new Error(`path did not match: ${path}`);
   return { route, match };
 }

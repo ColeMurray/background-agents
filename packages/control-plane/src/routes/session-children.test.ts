@@ -6,7 +6,7 @@ import type { ActivePromptAuthor } from "../session/active-prompt-author";
 import type { Env } from "../types";
 import { handleCancelChild, handlePromptChild } from "./session-children";
 import type { SessionRouteContext } from "./session-route";
-import { parsePattern } from "./shared";
+import { routePathPattern } from "../router.test-support";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 vi.mock("../session/integration-settings-resolution", () => ({
@@ -14,7 +14,7 @@ vi.mock("../session/integration-settings-resolution", () => ({
 }));
 
 function routeMatch(path: string, pattern: string): RegExpMatchArray {
-  const match = path.match(parsePattern(pattern));
+  const match = path.match(routePathPattern(pattern));
   if (!match) throw new Error("Expected route match");
   return match;
 }

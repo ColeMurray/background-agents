@@ -23,6 +23,7 @@ import type {
   RouteAdmissionPolicy,
   RouteAuthentication,
   RouteAuthorizationRequirement,
+  RouteParams,
 } from "../routes/shared";
 import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
@@ -411,11 +412,11 @@ function authorizationUserId(ctx: RequestContext): string | null {
 function actorlessGrantMatches(
   grant: ActorlessServiceGrant,
   service: string,
-  match: RegExpMatchArray
+  params: RouteParams
 ): boolean {
   if (grant.service !== service) return false;
   return Object.entries(grant.pathParams ?? {}).every(([name, expected]) => {
-    const value = match.groups?.[name];
+    const value = params[name];
     if (value === undefined) return false;
     try {
       return decodeURIComponent(value) === expected;
@@ -427,7 +428,7 @@ function actorlessGrantMatches(
 
 function enforceServiceRouteAuthorization(
   policy: RouteAdmissionPolicy,
-  match: RegExpMatchArray,
+  params: RouteParams,
   ctx: RequestContext,
   evidence: AuthorizationEvidence
 ): AuthorizationFailure | null {
@@ -475,7 +476,7 @@ function enforceServiceRouteAuthorization(
     return null;
   }
   const granted = authorization.service.actorlessGrants?.some((grant) =>
-    actorlessGrantMatches(grant, principal.service, match)
+    actorlessGrantMatches(grant, principal.service, params)
   );
   if (granted) {
     evidence.requirements.push({ kind: "actorless-service-grant", service: principal.service });
@@ -569,7 +570,7 @@ async function enforceScopedPermissionRequirement(
 
 async function enforceAutomationRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
-  match: RegExpMatchArray,
+  params: RouteParams,
   ctx: RequestContext,
   evidence: AuthorizationEvidence
 ): Promise<AuthorizationFailure | null> {
@@ -585,7 +586,7 @@ async function enforceAutomationRequirement(
       "Forbidden"
     );
   }
-  const encodedAutomationId = match.groups?.[requirement.automationIdParam];
+  const encodedAutomationId = params[requirement.automationIdParam];
   if (!encodedAutomationId) return { response: json({ error: "Invalid automation route" }, 400) };
   let automationId: string;
   try {
@@ -649,7 +650,7 @@ function allowed(
  */
 async function enforceRouteAuthorization(
   policy: RouteAdmissionPolicy,
-  match: RegExpMatchArray,
+  params: RouteParams,
   request: Request,
   pathname: string,
   env: Env,
@@ -676,7 +677,7 @@ async function enforceRouteAuthorization(
     return allowed(policy, "sandbox", evidence);
   }
 
-  const serviceFailure = enforceServiceRouteAuthorization(policy, match, ctx, evidence);
+  const serviceFailure = enforceServiceRouteAuthorization(policy, params, ctx, evidence);
   if (serviceFailure) return resultForFailure(serviceFailure);
 
   const ceilingFailure = enforceStaticServicePermissionCeiling(policy, ctx, evidence);
@@ -699,7 +700,7 @@ async function enforceRouteAuthorization(
           failure = await enforceScopedPermissionRequirement(requirement, ctx, evidence);
           break;
         case "automation":
-          failure = await enforceAutomationRequirement(requirement, match, ctx, evidence);
+          failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
           break;
       }
       if (failure) return resultForFailure(failure);
@@ -715,11 +716,11 @@ export async function admitRoute(input: {
   request: Request;
   env: Env;
   policy: RouteAdmissionPolicy;
-  match: RegExpMatchArray;
+  params: RouteParams;
   pathname: string;
   ctx: RequestContext;
 }): Promise<RouteAdmissionResult> {
-  const { env, match, pathname, policy, ctx } = input;
+  const { env, params, pathname, policy, ctx } = input;
   let handlerRequest = input.request;
   const authentication = policy.authentication;
 
@@ -728,7 +729,7 @@ export async function admitRoute(input: {
     const sandboxSessionId =
       authentication.kind === "sandbox" ||
       authentication.kind === "user-or-service-with-sandbox-fallback"
-        ? authentication.getSessionId(match)
+        ? authentication.getSessionId(params)
         : null;
 
     if (authentication.kind === "sandbox") {
@@ -777,7 +778,7 @@ export async function admitRoute(input: {
 
   const authorization = await enforceRouteAuthorization(
     policy,
-    match,
+    params,
     handlerRequest,
     pathname,
     env,

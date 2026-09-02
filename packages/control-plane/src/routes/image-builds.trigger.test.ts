@@ -14,6 +14,7 @@ import type * as VercelClientModule from "../sandbox/providers/vercel/client";
 import type * as OpenComputerProviderModule from "../sandbox/providers/opencomputer-provider";
 import type * as OpenComputerClientModule from "../sandbox/opencomputer-rest-client";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
+import { routePathPattern } from "../router.test-support";
 
 // The repo trigger resolves the repo's actual default branch (never assumes
 // "main") and threads it into the build's repository set + fingerprint + the
@@ -113,14 +114,14 @@ function findRoute(method: string, path: string): Route {
   // Match on method as well as pattern so a same-pattern route of another
   // method (or a reordering) can never resolve to the wrong handler.
   const route = imageBuildRoutes.find(
-    (candidate) => candidate.method === method && candidate.pattern.test(path)
+    (candidate) => candidate.method === method && routePathPattern(candidate.path).test(path)
   );
   if (!route) throw new Error(`route not found: ${method} ${path}`);
   return route;
 }
 
 function matchFor(route: Route, path: string): RegExpMatchArray {
-  const match = path.match(route.pattern);
+  const match = path.match(routePathPattern(route.path));
   if (!match) throw new Error("path did not match route pattern");
   return match;
 }
