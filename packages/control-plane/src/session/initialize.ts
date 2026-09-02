@@ -90,6 +90,12 @@ export async function initializeSession(
   input: SessionInitInput,
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
+  if (
+    (input.managedSkillsManifest === undefined) ===
+    (input.managedSkillsSourceSessionId === undefined)
+  ) {
+    throw new Error("Session must resolve or inherit exactly one managed skills manifest");
+  }
   const hasRepoOwner = input.repoOwner !== null;
   const hasRepoName = input.repoName !== null;
   const hasRepoId = input.repoId != null;

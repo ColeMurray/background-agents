@@ -1,13 +1,10 @@
 import { MAX_SANDBOX_SKILL_PAGE_SIZE } from "@open-inspect/shared/types/skills";
-import { SessionIndexStore } from "../db/session-index";
 import { SessionSkillStore } from "../db/session-skills";
-import { hashSessionSkillManifest } from "../skills/content-addressing";
 import type { Env } from "../types";
 import {
   defineRoute,
   error,
   json,
-  parsePattern,
   NO_AUTHORIZATION,
   requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
@@ -70,23 +67,11 @@ async function handleSandboxInstallation(
     id,
     page ?? undefined
   );
-  // Sessions created before managed-skills shipped have no pinned row. Treat
-  // them as an empty legacy manifest so snapshot restores remain bootable.
-  const resolvedManifest =
-    manifest ??
-    ((await new SessionIndexStore(ctx.db).exists(id))
-      ? {
-          schemaVersion: 1 as const,
-          manifestSha256: await hashSessionSkillManifest({ mode: "all" }, []),
-          skills: [],
-          nextCursor: null,
-        }
-      : null);
-  if (!resolvedManifest) return error("Session skill manifest not found", 404);
-  const response = json(resolvedManifest);
+  if (!manifest) return error("Session skill manifest not found", 404);
+  const response = json(manifest);
   // The digest covers the whole manifest, so it is stable across pages and
   // cannot identify one. Only tag a response that is the entire installation.
-  if (page === null) response.headers.set("ETag", `"${resolvedManifest.manifestSha256}"`);
+  if (page === null) response.headers.set("ETag", `"${manifest.manifestSha256}"`);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }
@@ -94,13 +79,13 @@ async function handleSandboxInstallation(
 export const sessionSkillRoutes: Route[] = [
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
-    pattern: parsePattern("/sessions/:id/skills"),
+    path: "/sessions/:id/skills",
     authorization: requirePermission("sessions.read"),
     handler: handleSessionSkillsView,
   }),
   defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
     method: "GET",
-    pattern: parsePattern("/sessions/:id/sandbox-skills"),
+    path: "/sessions/:id/sandbox-skills",
     authorization: NO_AUTHORIZATION,
     handler: handleSandboxInstallation,
   }),

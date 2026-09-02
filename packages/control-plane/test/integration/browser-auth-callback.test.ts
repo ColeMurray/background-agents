@@ -1,6 +1,5 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { getSetCookies } from "./helpers";
-import { createCloudflareBackgroundTasks } from "../../src/cloudflare/background-tasks";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +7,7 @@ import { getUserAuth } from "../../src/auth/user/runtime";
 import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";
 import { decryptToken } from "../../src/auth/crypto";
 import { UserStore } from "../../src/db/user-store";
-import { handleRequest as routeRequest } from "../../src/router";
+import { handleControlPlaneHttp as routeRequest } from "../../src/routing/hono-app";
 import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
 import { cleanD1Tables } from "./cleanup";
 import { createSignedGoogleIdToken } from "./google-id-token";
@@ -25,11 +24,7 @@ function handleRequest(
   request: Request,
   requestEnv: Parameters<typeof routeRequest>[1]
 ): Promise<Response> {
-  return routeRequest(
-    request,
-    requestEnv,
-    createCloudflareBackgroundTasks(createExecutionContext())
-  );
+  return routeRequest(request, requestEnv, createExecutionContext());
 }
 
 let googleIdToken = "";

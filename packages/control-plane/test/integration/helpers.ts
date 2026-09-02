@@ -152,18 +152,26 @@ async function testBrowserSessionCookie(initialRole: InitialUserRole): Promise<s
  * carry their service credential. Signs per request because sig1 binds method,
  * URL, and body.
  */
-export async function serviceFetch(
+const DEFAULT_SERVICE_REQUEST_METHOD = "GET";
+
+export interface ServiceRequestInit {
+  method?: string;
+  body?: string;
+  headers?: Record<string, string>;
+  service?: ServiceName;
+  actor?: string;
+  initialUserRole?: InitialUserRole;
+}
+
+/**
+ * Build the production-equivalent credential headers for one request: sig1
+ * for the service plus, for web, the seeded Better Auth browser session.
+ */
+export async function serviceRequestHeaders(
   url: string,
-  init?: {
-    method?: string;
-    body?: string;
-    headers?: Record<string, string>;
-    service?: ServiceName;
-    actor?: string;
-    initialUserRole?: InitialUserRole;
-  }
-): Promise<Response> {
-  const method = init?.method ?? "GET";
+  init?: ServiceRequestInit
+): Promise<Record<string, string>> {
+  const method = init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD;
   const service = init?.service ?? "web";
   const auth = await buildServiceAuthHeaders({
     service,
@@ -177,14 +185,18 @@ export async function serviceFetch(
     service === "web"
       ? await testBrowserSessionCookie(init?.initialUserRole ?? DEFAULT_INITIAL_USER_ROLE)
       : undefined;
+  return {
+    ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
+    ...(browserCookie ? { Cookie: browserCookie } : {}),
+    ...init?.headers,
+    ...auth,
+  };
+}
+
+export async function serviceFetch(url: string, init?: ServiceRequestInit): Promise<Response> {
   return SELF.fetch(url, {
-    method,
-    headers: {
-      ...(init?.body === undefined ? {} : { "Content-Type": "application/json" }),
-      ...(browserCookie ? { Cookie: browserCookie } : {}),
-      ...init?.headers,
-      ...auth,
-    },
+    method: init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD,
+    headers: await serviceRequestHeaders(url, init),
     body: init?.body,
   });
 }

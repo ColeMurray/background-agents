@@ -21,7 +21,6 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   NO_AUTHORIZATION,
   parseJsonBody,
-  parsePattern,
   requirePermission,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
@@ -71,7 +70,7 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
     config.policy,
     sessionRoute({
       method: config.method,
-      pattern: parsePattern(config.routePath),
+      path: config.routePath,
       authorization: config.authorization,
       handler: async (request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
@@ -103,7 +102,7 @@ function legacyTokenRefreshRoute(
     SCM_AGNOSTIC_SANDBOX_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern(routePath),
+      path: routePath,
       authorization: NO_AUTHORIZATION,
       handler: async (_request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
@@ -294,7 +293,7 @@ function lifecycleProxyRoute(
     GITHUB_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method,
-      pattern: parsePattern(routePath),
+      path: routePath,
       authorization: requirePermission("sessions.lifecycle"),
       handler: async (request, _env, match, ctx) => {
         const sessionId = getSessionId(match);
@@ -321,7 +320,7 @@ const budgetProxyRoute = defineRoute(
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   sessionRoute({
     method: "PATCH",
-    pattern: parsePattern("/sessions/:id/budget"),
+    path: "/sessions/:id/budget",
     authorization: requirePermission("sessions.lifecycle"),
     handler: async (request, _env, match, ctx) => {
       const sessionId = getSessionId(match);
@@ -350,7 +349,6 @@ const budgetProxyRoute = defineRoute(
 );
 
 export const sessionRuntimeProxyRoutes: Route[] = [
-  budgetProxyRoute,
   simpleProxyRoute({
     policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     method: "GET",
@@ -362,7 +360,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     sessionRoute({
       method: "GET",
-      pattern: parsePattern("/sessions/:id"),
+      path: "/sessions/:id",
       authorization: requirePermission("sessions.read"),
       handler: handleSessionSnapshot,
     })
@@ -381,7 +379,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern("/sessions/:id/sandbox-error"),
+      path: "/sessions/:id/sandbox-error",
       authorization: NO_AUTHORIZATION,
       handler: handleSandboxError,
     })
@@ -416,7 +414,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method: "GET",
-      pattern: parsePattern("/sessions/:id/participant-profiles"),
+      path: "/sessions/:id/participant-profiles",
       authorization: requirePermission("sessions.read"),
       handler: handleParticipantProfiles,
     })
@@ -433,7 +431,7 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     GITHUB_SANDBOX_FALLBACK_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern("/sessions/:id/pr"),
+      path: "/sessions/:id/pr",
       authorization: requirePermission("sessions.collaborate"),
       handler: handleCreatePR,
     })
@@ -467,4 +465,5 @@ export const sessionRuntimeProxyRoutes: Route[] = [
   lifecycleProxyRoute("PATCH", "/sessions/:id/title", SessionInternalPaths.updateTitle),
   lifecycleProxyRoute("POST", "/sessions/:id/archive", SessionInternalPaths.archive),
   lifecycleProxyRoute("POST", "/sessions/:id/unarchive", SessionInternalPaths.unarchive),
+  budgetProxyRoute,
 ];

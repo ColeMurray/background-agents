@@ -6,7 +6,7 @@ import { SessionSkillStore } from "../../src/db/session-skills";
 import { SkillConflictError, SkillStore } from "../../src/db/skills";
 import { EnvironmentStore } from "../../src/db/environments";
 import { resolveManagedSkills } from "../../src/session/skill-resolution";
-import { buildSkillRevision } from "../../src/skills/content-addressing";
+import { buildSkillRevision, hashSessionSkillManifest } from "../../src/skills/content-addressing";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch } from "./helpers";
 
@@ -197,6 +197,44 @@ describe("managed skills persistence and resolution", () => {
     await expect(store.getSandboxInstallation("child")).rejects.toThrow(
       `Missing files for session skill revision ${skill.currentRevisionId}`
     );
+  });
+
+  it("serves canonical empty skills for a legacy session without a manifest", async () => {
+    const createdAt = Date.now();
+    await new SessionIndexStore(env.DB).create({
+      id: "legacy-without-skills",
+      title: null,
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    const manifestSha256 = await hashSessionSkillManifest({ mode: "all" }, []);
+    const store = new SessionSkillStore(env.DB);
+    await expect(store.getSandboxInstallation("legacy-without-skills")).resolves.toEqual({
+      schemaVersion: 1,
+      manifestSha256,
+      skills: [],
+      nextCursor: null,
+    });
+
+    const response = await serviceFetch("https://test.local/sessions/legacy-without-skills/skills");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      manifestSha256,
+      resolverVersion: 1,
+      selection: { mode: "all" },
+      resolvedAt: createdAt,
+      skills: [],
+    });
+
+    const missingResponse = await serviceFetch("https://test.local/sessions/missing/skills");
+    expect(missingResponse.status).toBe(404);
   });
 
   it("serves catalog and personal profile CRUD through authenticated routes", async () => {

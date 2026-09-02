@@ -149,6 +149,7 @@ const githubPullRequestReviewSchema = z.object({
 
 const githubReviewCommentSchema = z.object({
   id: z.number(),
+  in_reply_to_id: z.number().nullable().optional(),
   body: z.string(),
   html_url: z.url(),
   path: z.string(),
@@ -201,6 +202,7 @@ export type GitHubPullRequestFeedback =
 
 interface GitHubReviewComment {
   id: string;
+  inReplyToId: string | null;
   body: string;
   url: string;
   path: string;
@@ -360,6 +362,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       comments.push(
         ...pageComments.map((comment) => ({
           id: String(comment.id),
+          inReplyToId: comment.in_reply_to_id?.toString() ?? null,
           body: comment.body,
           url: comment.html_url,
           path: comment.path,

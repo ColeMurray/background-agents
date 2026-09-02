@@ -11,7 +11,6 @@ import { generateInternalToken } from "@open-inspect/shared/auth";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
-import { insertCanonicalUser } from "./identity-seed-helpers";
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
   web: "test-service-secret-web",
@@ -433,52 +432,401 @@ describe("sig1 service-credential authentication", () => {
     });
   });
 
-  it("does not authorize a first-contact actor as one user and attribute it to a Viewer", async () => {
-    await insertCanonicalUser({
-      id: "existing-viewer",
-      email: "viewer@example.com",
-      emailVerified: 1,
+  it("denies a first-contact Slack actor using the Viewer role selected by its attested email", async () => {
+    const users = new UserStore(env.DB);
+    const viewer = await users.createUser({
       displayName: "Existing Viewer",
+      email: "viewer@corp.test",
+      emailVerified: true,
     });
     await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
-      .bind("role_builtin_viewer", "existing-viewer")
+      .bind("role_builtin_viewer", viewer.id)
       .run();
 
-    const body = JSON.stringify({
-      title: "First-contact actor",
-      model: "anthropic/claude-haiku-4-5",
-      actorEmail: "viewer@example.com",
-    });
-    const first = await signedFetch({
+    const response = await signedFetch({
       service: "slack-bot",
       method: "POST",
       url: "https://test.local/sessions",
-      actor: "slack:U-EMAIL-VIEWER",
-      body,
+      actor: "slack:U-FIRST-CONTACT-VIEWER",
+      body: JSON.stringify({
+        title: "Must not be created",
+        model: "anthropic/claude-haiku-4-5",
+        actorEmail: "viewer@corp.test",
+      }),
     });
 
-    expect(first.status).toBe(409);
-    await expect(first.json()).resolves.toMatchObject({ code: "actor_identity_changed" });
-    const identity = await new UserStore(env.DB).getIdentity("slack", "U-EMAIL-VIEWER");
-    expect(identity?.userId).toBe("existing-viewer");
-
-    const retry = await signedFetch({
-      service: "slack-bot",
-      method: "POST",
-      url: "https://test.local/sessions",
-      actor: "slack:U-EMAIL-VIEWER",
-      body,
-    });
-    expect(retry.status).toBe(403);
-    await expect(retry.json()).resolves.toMatchObject({
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
       code: "permission_required",
       permission: "sessions.create",
     });
+    await expect(users.getIdentity("slack", "U-FIRST-CONTACT-VIEWER")).resolves.toMatchObject({
+      userId: viewer.id,
+    });
+    await expect(
+      env.DB.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM sessions) AS sessions,
+           (SELECT COUNT(*) FROM users) AS users`
+      ).first<{ sessions: number; users: number }>()
+    ).resolves.toEqual({ sessions: 0, users: 1 });
+  });
 
-    const sessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{
-      count: number;
-    }>();
-    expect(sessions?.count).toBe(0);
+  it("rejects bot automation creation at the service ceiling without enrolling its actor", async () => {
+    const response = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/automations",
+      actor: "slack:U-AUTOMATION-DENIED",
+      body: JSON.stringify({
+        name: "Denied automation",
+        instructions: "Must not run",
+        scheduleCron: "0 9 * * *",
+        scheduleTz: "UTC",
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "service_capability_required",
+    });
+    await expect(
+      env.DB.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM users) AS users,
+           (SELECT COUNT(*) FROM user_identities) AS identities,
+           (SELECT COUNT(*) FROM user_role_assignments) AS assignments,
+           (SELECT COUNT(*) FROM automations) AS automations`
+      ).first<{
+        users: number;
+        identities: number;
+        assignments: number;
+        automations: number;
+      }>()
+    ).resolves.toEqual({ users: 0, identities: 0, assignments: 0, automations: 0 });
+  });
+
+  it("does not enroll an actor on an exact-service internal route", async () => {
+    const response = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/internal/slack-event",
+      actor: "slack:U-INTERNAL-NONMEMBER",
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Invalid event"),
+    });
+    await expect(
+      env.DB.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM users) AS users,
+           (SELECT COUNT(*) FROM user_identities) AS identities,
+           (SELECT COUNT(*) FROM user_role_assignments) AS assignments`
+      ).first<{ users: number; identities: number; assignments: number }>()
+    ).resolves.toEqual({ users: 0, identities: 0, assignments: 0 });
+  });
+
+  it("creates a session for the active Member selected by a first-contact Slack email claim", async () => {
+    const users = new UserStore(env.DB);
+    const member = await users.createUser({
+      displayName: "Existing Member",
+      email: "member@corp.test",
+      emailVerified: true,
+    });
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind("role_builtin_member", member.id)
+      .run();
+
+    const response = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-FIRST-CONTACT-MEMBER",
+      body: JSON.stringify({
+        title: "Readable after claim extraction",
+        model: "anthropic/claude-haiku-4-5",
+        actorEmail: "member@corp.test",
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    await expect(users.getIdentity("slack", "U-FIRST-CONTACT-MEMBER")).resolves.toMatchObject({
+      userId: member.id,
+    });
+    await expect(
+      env.DB.prepare("SELECT title, user_id AS userId FROM sessions").first<{
+        title: string;
+        userId: string;
+      }>()
+    ).resolves.toEqual({ title: "Readable after claim extraction", userId: member.id });
+  });
+
+  it("denies a first-contact Linear actor whose attested email selects a suspended Member", async () => {
+    const users = new UserStore(env.DB);
+    const suspended = await users.createUser({
+      displayName: "Suspended Member",
+      email: "suspended@corp.test",
+      emailVerified: true,
+    });
+    await env.DB.batch([
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        "role_builtin_member",
+        suspended.id
+      ),
+      env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?").bind(1, suspended.id),
+    ]);
+
+    const response = await signedFetch({
+      service: "linear-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "linear:FIRST-CONTACT-SUSPENDED",
+      body: JSON.stringify({
+        title: "Must not be created",
+        model: "anthropic/claude-haiku-4-5",
+        actorEmail: "suspended@corp.test",
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "active_user_required" });
+    await expect(users.getIdentity("linear", "FIRST-CONTACT-SUSPENDED")).resolves.toMatchObject({
+      userId: suspended.id,
+    });
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{ count: number }>()
+    ).resolves.toMatchObject({ count: 0 });
+  });
+
+  it("denies a first-contact actor whose attested email selects an unassigned user", async () => {
+    const users = new UserStore(env.DB);
+    const unassigned = await users.createUser({
+      displayName: "Unassigned User",
+      email: "unassigned@corp.test",
+      emailVerified: true,
+    });
+    await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?")
+      .bind(unassigned.id)
+      .run();
+
+    const response = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-FIRST-CONTACT-UNASSIGNED",
+      body: JSON.stringify({
+        title: "Must not be created",
+        model: "anthropic/claude-haiku-4-5",
+        actorEmail: "unassigned@corp.test",
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "assignment_required" });
+    await expect(users.getIdentity("slack", "U-FIRST-CONTACT-UNASSIGNED")).resolves.toMatchObject({
+      userId: unassigned.id,
+    });
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{ count: number }>()
+    ).resolves.toMatchObject({ count: 0 });
+  });
+
+  it.each([
+    [
+      "repository",
+      "repositories.use",
+      "role_session_creator_without_repo_use",
+      "U-FIRST-CONTACT-CONSTRAINED-REPO",
+      { repoOwner: "acme", repoName: "widgets" },
+    ],
+    [
+      "environment",
+      "environments.use",
+      "role_session_creator_without_environment_use",
+      "U-FIRST-CONTACT-CONSTRAINED-ENV",
+      { environmentId: "missing-environment" },
+    ],
+  ] as const)(
+    "uses the first-contact canonical actor's custom-role %s target permissions",
+    async (_targetKind, expectedPermission, roleId, providerUserId, target) => {
+      const users = new UserStore(env.DB);
+      const constrained = await users.createUser({
+        displayName: "Constrained Session Creator",
+        email: "constrained@corp.test",
+        emailVerified: true,
+      });
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system)
+         VALUES (?, NULL, ?, ?, NULL, 0)`
+        ).bind(
+          roleId,
+          `Session Creator ${providerUserId}`,
+          `session creator ${providerUserId.toLowerCase()}`
+        ),
+        env.DB.prepare(
+          "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.create')"
+        ).bind(roleId),
+        env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+          roleId,
+          constrained.id
+        ),
+      ]);
+
+      const response = await signedFetch({
+        service: "slack-bot",
+        method: "POST",
+        url: "https://test.local/sessions",
+        actor: `slack:${providerUserId}`,
+        body: JSON.stringify({
+          ...target,
+          title: "Must not use the target",
+          model: "anthropic/claude-haiku-4-5",
+          actorEmail: "constrained@corp.test",
+        }),
+      });
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        code: "permission_required",
+        permission: expectedPermission,
+      });
+      await expect(users.getIdentity("slack", providerUserId)).resolves.toMatchObject({
+        userId: constrained.id,
+      });
+      await expect(
+        env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{ count: number }>()
+      ).resolves.toMatchObject({ count: 0 });
+    }
+  );
+
+  it.each([
+    [
+      "forbidden identity fields",
+      "U-FIRST-CONTACT-FORBIDDEN-BODY",
+      JSON.stringify({
+        title: "Forbidden body",
+        model: "anthropic/claude-haiku-4-5",
+        actorEmail: "body-target@corp.test",
+        userId: "caller-controlled-user",
+      }),
+    ],
+    [
+      "malformed JSON",
+      "U-FIRST-CONTACT-MALFORMED-BODY",
+      '{"title":"Malformed","actorEmail":"body-target@corp.test"',
+    ],
+  ])("rejects %s before enrolling the actor", async (_caseName, providerUserId, body) => {
+    const users = new UserStore(env.DB);
+    const bodyTarget = await users.createUser({
+      displayName: "Body Target",
+      email: "body-target@corp.test",
+      emailVerified: true,
+    });
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind("role_builtin_viewer", bodyTarget.id)
+      .run();
+
+    const response = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: `slack:${providerUserId}`,
+      body,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(users.getIdentity("slack", providerUserId)).resolves.toBeNull();
+    await expect(
+      env.DB.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM sessions) AS sessions,
+           (SELECT COUNT(*) FROM users) AS users,
+           (SELECT COUNT(*) FROM user_identities) AS identities`
+      ).first<{ sessions: number; users: number; identities: number }>()
+    ).resolves.toEqual({ sessions: 0, users: 1, identities: 0 });
+    void bodyTarget;
+  });
+
+  it("does not relink a known actor when a session body carries a conflicting email", async () => {
+    const users = new UserStore(env.DB);
+    const knownActor = await users.resolveOrCreateUser({
+      provider: "slack",
+      providerUserId: "U-KNOWN-IMMUTABLE",
+      displayName: "Known Actor",
+    });
+    const conflictingViewer = await users.createUser({
+      displayName: "Conflicting Viewer",
+      email: "conflicting-viewer@corp.test",
+      emailVerified: true,
+    });
+    await env.DB.batch([
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        "role_builtin_member",
+        knownActor.id
+      ),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        "role_builtin_viewer",
+        conflictingViewer.id
+      ),
+    ]);
+
+    const response = await signedFetch({
+      service: "slack-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "slack:U-KNOWN-IMMUTABLE",
+      body: JSON.stringify({
+        title: "Known actor remains canonical",
+        model: "anthropic/claude-haiku-4-5",
+        actorEmail: "conflicting-viewer@corp.test",
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    await expect(users.getIdentity("slack", "U-KNOWN-IMMUTABLE")).resolves.toMatchObject({
+      userId: knownActor.id,
+      providerEmail: null,
+    });
+    await expect(
+      env.DB.prepare("SELECT user_id AS userId FROM sessions").first<{ userId: string }>()
+    ).resolves.toEqual({ userId: knownActor.id });
+  });
+
+  it("does not let a GitHub body email select an existing canonical user", async () => {
+    const users = new UserStore(env.DB);
+    const viewer = await users.createUser({
+      displayName: "Existing Viewer",
+      email: "github-body-target@corp.test",
+      emailVerified: true,
+    });
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind("role_builtin_viewer", viewer.id)
+      .run();
+
+    const response = await signedFetch({
+      service: "github-bot",
+      method: "POST",
+      url: "https://test.local/sessions",
+      actor: "github:987654321",
+      body: JSON.stringify({
+        title: "GitHub email is cosmetic",
+        model: "anthropic/claude-haiku-4-5",
+        actorEmail: "github-body-target@corp.test",
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const identity = await users.getIdentity("github", "987654321");
+    expect(identity).toMatchObject({ providerEmail: null });
+    expect(identity?.userId).not.toBe(viewer.id);
+    await expect(
+      env.DB.prepare("SELECT user_id AS userId FROM sessions").first<{ userId: string }>()
+    ).resolves.toEqual({ userId: identity!.userId });
   });
 
   it("requires a user or signed actor before any service can create a session", async () => {

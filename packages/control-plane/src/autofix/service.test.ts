@@ -343,6 +343,7 @@ describe("AutofixService", () => {
       comments: [
         {
           id: "9001",
+          inReplyToId: null,
           body: "Preserve this complete comment.",
           url: "https://github.com/acme/widgets/pull/42#discussion_r9001",
           path: "src/input.ts",
@@ -419,6 +420,7 @@ describe("AutofixService", () => {
       author: { id: "8", login: "alice", type: "User" },
       comments: Array.from({ length: 101 }, (_, index) => ({
         id: String(index),
+        inReplyToId: null,
         body: `Comment ${index}`,
         url: `https://github.com/acme/widgets/pull/42#discussion_r${index}`,
         path: "src/input.ts",
@@ -580,6 +582,7 @@ describe("AutofixService", () => {
         comments: [
           {
             id: "9001",
+            inReplyToId: null,
             body: "Handle the nullable value.",
             url: "https://github.com/acme/widgets/pull/42#discussion_r9001",
             path: "src/input.ts",
@@ -601,6 +604,64 @@ describe("AutofixService", () => {
       expect.any(String),
       expect.objectContaining({ body: expect.stringContaining("Handle the nullable value.") })
     );
+  });
+
+  it("does not dispatch an Open Inspect App review containing only thread replies", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce(
+      openInspectReview({
+        body: "",
+        state: "COMMENTED",
+        comments: [
+          {
+            id: "9002",
+            inReplyToId: "8001",
+            body: "Fixed in 49716d0.",
+            url: "https://github.com/acme/widgets/pull/42#discussion_r9002",
+            path: "src/input.ts",
+            line: null,
+            startLine: null,
+            side: "RIGHT",
+            startSide: null,
+            diffHunk: "@@ -10,3 +10,3 @@",
+          },
+        ],
+      })
+    );
+
+    const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);
+
+    expect(result).toMatchObject({ decision: "skipped", reason: "own_review_replies" });
+    expect(h.sessions.fetch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an Open Inspect App review with a body and only thread replies", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce(
+      openInspectReview({
+        body: "Please address the remaining issue.",
+        state: "COMMENTED",
+        comments: [
+          {
+            id: "9002",
+            inReplyToId: "8001",
+            body: "Fixed in 49716d0.",
+            url: "https://github.com/acme/widgets/pull/42#discussion_r9002",
+            path: "src/other.ts",
+            line: null,
+            startLine: null,
+            side: "RIGHT",
+            startSide: null,
+            diffHunk: "@@ -20,3 +20,3 @@",
+          },
+        ],
+      })
+    );
+
+    const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);
+
+    expect(result).toMatchObject({ decision: "queued", messageId: "message-1" });
+    expect(h.sessions.fetch).toHaveBeenCalledOnce();
   });
 
   it("does not dispatch an approved Open Inspect App review", async () => {

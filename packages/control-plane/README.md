@@ -1,6 +1,7 @@
 # Open-Inspect Control Plane
 
-Cloudflare Workers + Durable Objects control plane for session management and real-time streaming.
+Cloudflare Workers + Hono + Durable Objects control plane for session management and real-time
+streaming.
 
 ## Overview
 
@@ -21,8 +22,11 @@ The control plane provides:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Cloudflare Workers                            │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                   API Gateway (router.ts)                 │   │
-│  │   POST /sessions  │  GET /sessions/:id  │  WebSocket      │   │
+│  │                  Worker fetch entrypoint                 │   │
+│  │  ┌──────────────────────────────────┐  ┌───────────────┐ │   │
+│  │  │ Hono HTTP API + Route Admission  │  │  WebSocket    │ │   │
+│  │  │ POST /sessions  GET /sessions/:id│  │  upgrade*     │ │   │
+│  │  └──────────────────────────────────┘  └───────────────┘ │   │
 │  └─────────────────────────────┬────────────────────────────┘   │
 │                                │                                 │
 │  ┌─────────────────────────────┴────────────────────────────┐   │
@@ -44,6 +48,12 @@ The control plane provides:
 │  └───────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+Hono selects ordinary HTTP routes from the framework-neutral catalog. Authentication, service
+principal admission, canonical actor resolution, RBAC, sandbox capabilities, and route-specific
+authorization remain in the shared admission layer. WebSocket upgrades (`*` above), scheduled
+events, Queues, and Durable Object lifecycle callbacks stay at the Cloudflare Worker boundary and do
+not pass through Hono.
 
 ## API Endpoints
 
@@ -434,6 +444,7 @@ All secrets are configured via Terraform. Required secrets include:
 - `GITHUB_APP_PRIVATE_KEY` - GitHub App private key (PKCS#8 format)
 - `GITHUB_APP_INSTALLATION_ID` - Single installation for all users
 - `REPO_SECRETS_ENCRYPTION_KEY` - AES-GCM key for encrypting repo secrets in D1
+- `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` - Dedicated key for provider account credentials in D1
 
 Optional variables:
 

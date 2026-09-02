@@ -46,7 +46,10 @@ import {
   parseAndValidateAutomationProviderSelections,
 } from "../model-provider-accounts/automation-provider-selection";
 import { generateId } from "../auth/crypto";
-import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
+import {
+  applyIdentityEnforcement,
+  requireAdmittedCanonicalUserId,
+} from "../routing/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
 import {
@@ -61,7 +64,6 @@ import {
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
-  parsePattern,
   json,
   error,
   parseJsonBody,
@@ -700,16 +702,11 @@ async function handleCreateAutomation(
     triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
-  // Resolve the canonical user model ID fail-closed from the verified
-  // principal — the scheduler replays user_id as session identity at fire
-  // time, so an automation must never be created with lost attribution.
-  const resolution = await resolveCanonicalUserId(new UserStore(ctx.db), ctx, enforced, {
-    displayName: body.actorDisplayName,
-    email: body.actorEmail,
-    avatarUrl: body.actorAvatarUrl,
-  });
+  // The scheduler replays user_id as session identity at fire time, so the
+  // handler may consume only the canonical subject admitted before RBAC.
+  const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution.userId;
+  const resolvedUserId = resolution;
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
@@ -1449,7 +1446,7 @@ async function handleGetSlackChannels(
 export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/integration-settings/slack/watched-channels"),
+    path: "/integration-settings/slack/watched-channels",
     authorization: requirePermission("automations.read", {
       actorlessGrants: [{ service: "slack-bot" }],
     }),
@@ -1457,73 +1454,73 @@ export const automationRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROU
   },
   {
     method: "GET",
-    pattern: parsePattern("/integration-settings/slack/channels"),
+    path: "/integration-settings/slack/channels",
     authorization: requirePermission("automations.read"),
     handler: handleGetSlackChannels,
   },
   {
     method: "GET",
-    pattern: parsePattern("/automations"),
+    path: "/automations",
     authorization: requirePermission("automations.read"),
     handler: handleListAutomations,
   },
   {
     method: "POST",
-    pattern: parsePattern("/automations"),
+    path: "/automations",
     authorization: requirePermission("automations.create"),
     handler: handleCreateAutomation,
   },
   {
     method: "GET",
-    pattern: parsePattern("/automations/:id"),
+    path: "/automations/:id",
     authorization: requirePermission("automations.read"),
     handler: handleGetAutomation,
   },
   {
     method: "PUT",
-    pattern: parsePattern("/automations/:id"),
+    path: "/automations/:id",
     authorization: requireAutomation("manage"),
     handler: handleUpdateAutomation,
   },
   {
     method: "DELETE",
-    pattern: parsePattern("/automations/:id"),
+    path: "/automations/:id",
     authorization: requireAutomation("manage"),
     handler: handleDeleteAutomation,
   },
   {
     method: "POST",
-    pattern: parsePattern("/automations/:id/pause"),
+    path: "/automations/:id/pause",
     authorization: requireAutomation("manage"),
     handler: handlePauseAutomation,
   },
   {
     method: "POST",
-    pattern: parsePattern("/automations/:id/resume"),
+    path: "/automations/:id/resume",
     authorization: requireAutomation("manage"),
     handler: handleResumeAutomation,
   },
   {
     method: "POST",
-    pattern: parsePattern("/automations/:id/trigger"),
+    path: "/automations/:id/trigger",
     authorization: requireAutomation("trigger"),
     handler: handleTriggerAutomation,
   },
   {
     method: "GET",
-    pattern: parsePattern("/automations/:id/invocations"),
+    path: "/automations/:id/invocations",
     authorization: requirePermission("automations.read"),
     handler: handleListInvocations,
   },
   {
     method: "GET",
-    pattern: parsePattern("/automations/:id/runs/:runId"),
+    path: "/automations/:id/runs/:runId",
     authorization: requirePermission("automations.read"),
     handler: handleGetRun,
   },
   {
     method: "POST",
-    pattern: parsePattern("/automations/:id/regenerate-key"),
+    path: "/automations/:id/regenerate-key",
     authorization: requireAutomation("manage"),
     handler: handleRegenerateKey,
   },

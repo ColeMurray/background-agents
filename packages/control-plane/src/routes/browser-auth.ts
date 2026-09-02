@@ -5,7 +5,6 @@ import {
   defineRoutes,
   error,
   NO_AUTHORIZATION,
-  parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   type Route,
 } from "./shared";
@@ -87,7 +86,7 @@ export const browserAuthRoutes: Route[] = defineRoutes(
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
     method,
-    pattern: parsePattern(path),
+    path: path,
     authorization: NO_AUTHORIZATION,
     handler: handleBrowserAuth,
   }))

@@ -4,7 +4,6 @@ import {
   error,
   json,
   NO_AUTHORIZATION,
-  parsePattern,
   SCM_AGNOSTIC_WEB_SERVICE_ROUTE,
   type Route,
 } from "./shared";
@@ -35,7 +34,7 @@ const handleActivity: Route["handler"] = async (request, _env, _match, ctx) => {
 export const autofixRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_WEB_SERVICE_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/autofix/activity"),
+    path: "/autofix/activity",
     authorization: NO_AUTHORIZATION,
     handler: handleActivity,
   },

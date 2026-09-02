@@ -49,7 +49,6 @@ import {
   error,
   json,
   parseJsonBody,
-  parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
@@ -182,7 +181,7 @@ function managementRoute(
 ): Route {
   return defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method,
-    pattern: parsePattern(path),
+    path: path,
     cacheControl: PRIVATE_NO_STORE,
     authorization: requirePermission(
       method === "GET" ? "provider_accounts.read" : "provider_accounts.manage"
@@ -484,7 +483,7 @@ export const modelProviderAccountRoutes: Route[] = [
   ...managementRoutes,
   defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
     method: "POST",
-    pattern: parsePattern("/sessions/:id/provider-auth/:provider/access-token"),
+    path: "/sessions/:id/provider-auth/:provider/access-token",
     cacheControl: NO_STORE,
     authorization: NO_AUTHORIZATION,
     handler: handleProviderAccess,

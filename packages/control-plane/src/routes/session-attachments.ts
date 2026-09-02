@@ -8,7 +8,7 @@
  *
  * GET streams the file back. It is HMAC-authenticated for the web app's proxy
  * route and sandbox-token-authenticated so the bridge can hydrate attachments
- * before prompting OpenCode (see SANDBOX_AUTH_ROUTES in router.ts).
+ * before prompting OpenCode (see the sandbox-fallback policies in routes/shared.ts).
  *
  * Every stored object is registered as an attachment record in the session DO,
  * which enforces per-session quotas and prunes records never referenced by a
@@ -50,7 +50,6 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
-  parsePattern,
   requirePermission,
   type Route,
 } from "./shared";
@@ -243,7 +242,7 @@ export const sessionAttachmentRoutes: Route[] = [
     GITHUB_USER_OR_SERVICE_ROUTE,
     sessionRoute({
       method: "POST",
-      pattern: parsePattern("/sessions/:id/attachments"),
+      path: "/sessions/:id/attachments",
       authorization: requirePermission("sessions.collaborate"),
       handler: handleAttachmentPost,
     })
@@ -252,7 +251,7 @@ export const sessionAttachmentRoutes: Route[] = [
     GITHUB_SANDBOX_FALLBACK_ROUTE,
     sessionRoute({
       method: "GET",
-      pattern: parsePattern("/sessions/:id/attachments/:attachmentId"),
+      path: "/sessions/:id/attachments/:attachmentId",
       authorization: requirePermission("sessions.read"),
       handler: handleAttachmentGet,
     })

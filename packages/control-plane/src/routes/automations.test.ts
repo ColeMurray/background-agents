@@ -931,7 +931,7 @@ describe("automation route handlers", () => {
       );
     });
 
-    it("resolves an unseen bot actor via the user store with body display fields", async () => {
+    it("fails closed when a bot actor bypasses admission", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", {
@@ -944,17 +944,10 @@ describe("automation route handlers", () => {
         principal: SLACK_BOT_PRINCIPAL,
       });
 
-      expect(res.status).toBe(201);
-      expect(mockUserStore.resolveOrCreateUser).toHaveBeenCalledWith({
-        provider: "slack",
-        providerUserId: "U0123",
-        displayName: "Alice",
-        providerEmail: "alice@corp.com",
-        avatarUrl: "https://avatars.test/alice.png",
-      });
-      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ created_by: "slack:U0123", user_id: "resolved-user-1" })
-      );
+      expect(res.status).toBe(500);
+      await expect(res.json()).resolves.toEqual({ error: "Failed to resolve session identity" });
+      expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
     });
 
     it("rejects forbidden body identity fields", async () => {

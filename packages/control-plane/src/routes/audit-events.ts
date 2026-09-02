@@ -6,7 +6,6 @@ import {
   defineRoutes,
   error,
   json,
-  parsePattern,
   requirePermission,
   type RequestContext,
   type Route,
@@ -52,7 +51,7 @@ async function handleListAuditEvents(
 export const auditEventRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/audit-events"),
+    path: "/audit-events",
     authorization: requirePermission("workspace.audit.read", { service: "deny" }),
     cacheControl: "private, no-store",
     handler: handleListAuditEvents,

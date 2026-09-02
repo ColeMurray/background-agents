@@ -3,21 +3,13 @@
  */
 
 import { decodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
-import type { CorrelationContext } from "../logger";
-import type { AuthenticationContext, Principal } from "../auth/principal";
-import type { RequestMetrics } from "../db/instrumented-d1";
-import type { SqlDatabase } from "../db/sql-database";
+import type { Principal } from "../auth/principal";
+import type { RequestContext } from "../http/request-context";
+import { error, HttpError } from "../http/responses";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
-import type { BackgroundTasks } from "../platform-ports";
-import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
-import type {
-  EffectiveAuthorization,
-  PermissionId,
-  ScopedPermissionStem,
-} from "@open-inspect/shared/rbac";
+import type { PermissionId, ScopedPermissionStem } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
-import type { AutomationRow } from "../db/automation-store";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -26,46 +18,38 @@ import {
   type SourceControlProviderName,
 } from "../source-control";
 
-/** Request-scoped dependencies, identity, and resolved authorization state. */
-export type RequestContext = CorrelationContext & {
-  metrics: RequestMetrics;
-  /**
-   * The request's database handle (the DB binding wrapped with query
-   * instrumentation). Route handlers must use this instead of the raw binding
-   * so every query is timed — an ESLint rule forbids `.DB` access under
-   * src/routes and src/webhooks.
-   */
-  db: SqlDatabase;
-  /** Request-scoped capability for scheduling background tasks. */
-  executionCtx: BackgroundTasks;
-  /** Lazy runtime dependency used by user-session authentication and credential access. */
-  getUserAuth?: () => BetterAuthRuntime;
-  /** Lazy normalized auth runtime used by server-only authentication composition routes. */
-  getUserAuthRuntime?: () => UserAuthRuntime;
-  /**
-   * The request's verified principal. Absent only on public routes and CORS
-   * preflights — every authenticated request carries one.
-   */
-  principal?: Principal;
-  /** Authentication provenance, separate from the principal being authorized. */
-  authentication?: AuthenticationContext;
-  /** Effective human authorization loaded once by the router for this request. */
-  authorization?: EffectiveAuthorization;
-  /** Resource admission populated by the router for automation mutation routes. */
-  automationAdmission?: AutomationRouteAdmission;
-};
+export type { AutomationRouteAdmission, RequestContext } from "../http/request-context";
+export { error, HttpError, json } from "../http/responses";
 
-/** Automation resource admitted by the router for the current mutation. */
-export interface AutomationRouteAdmission {
-  automation: AutomationRow;
+/** Profile data a route can extract from an already verified service request. */
+export interface ServiceActorProfileClaims {
+  displayName?: string;
+  email?: string;
+  avatarUrl?: string;
 }
+
+/**
+ * Outcome of preparing a route's actor claims before identity is finalized.
+ * A rejected body ends admission with the route's own response, so no user,
+ * identity, or assignment is written for a request the handler would refuse.
+ */
+export type ServiceActorClaimsResult =
+  | { kind: "claims"; claims: ServiceActorProfileClaims }
+  | { kind: "rejected"; response: Response };
 
 /** Route matching, authorization, and handler configuration. */
 export interface RouteDefinition<Context extends RequestContext = RequestContext> {
   method: string;
-  pattern: RegExp;
+  path: string;
   /** Authorization policy enforced before the handler runs. */
   authorization: RouteAuthorization;
+  /**
+   * Extract profile claims asserted by the trusted service that owns this
+   * route. Authentication has already verified the exact request body before
+   * this hook runs. Invalid route input returns the route's own rejection so
+   * admission stops before any identity is written.
+   */
+  serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
   cacheControl?: "no-store" | "private, no-store";
   handler: (request: Request, env: Env, match: RegExpMatchArray, ctx: Context) => Promise<Response>;
 }
@@ -299,7 +283,16 @@ export interface RoutePolicy {
   supportedScmProviders: "all" | readonly SourceControlProviderName[];
 }
 
-export interface Route extends RouteDefinition, RoutePolicy {}
+/** Fully resolved route, including the raw-path matcher compiled from its canonical path. */
+export interface Route extends RouteDefinition, RoutePolicy {
+  pattern: RegExp;
+}
+
+/** Framework-neutral policy consumed by request admission. */
+export type RouteAdmissionPolicy = Pick<
+  Route,
+  "authentication" | "authorization" | "serviceActorClaims" | "supportedScmProviders"
+>;
 
 const SESSION_ID_BINDING: SandboxSessionBinding = {
   getSessionId: (match) => match.groups?.id ?? null,
@@ -368,7 +361,12 @@ export function defineRoute<const Policy extends RoutePolicy>(
 ): Route {
   const handler: Route["handler"] = (request, env, match, ctx) =>
     route.handler(request, env, match, ctx as RouteContext<Policy["authentication"]>);
-  return { ...route, ...policy, handler };
+  return {
+    ...route,
+    ...policy,
+    pattern: parsePattern(route.path),
+    handler,
+  };
 }
 
 /**
@@ -377,38 +375,6 @@ export function defineRoute<const Policy extends RoutePolicy>(
 export function parsePattern(pattern: string): RegExp {
   const regexPattern = pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)");
   return new RegExp(`^${regexPattern}$`);
-}
-
-/**
- * Create JSON response.
- */
-export function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-/**
- * Create error response.
- */
-export function error(message: string, status = 400): Response {
-  return json({ error: message }, status);
-}
-
-/**
- * Raise from a route handler or helper to return an error response with a
- * specific status. Mapped centrally in router.ts's dispatch catch to
- * error(message, status), avoiding `| Response` plumbing in callers.
- */
-export class HttpError extends Error {
-  constructor(
-    message: string,
-    readonly status: number
-  ) {
-    super(message);
-    this.name = "HttpError";
-  }
 }
 
 /**

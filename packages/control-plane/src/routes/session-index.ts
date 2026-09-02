@@ -17,7 +17,6 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   parseJsonBody,
-  parsePattern,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   requirePermission,
   type RequestContext,
@@ -239,25 +238,25 @@ async function handleDeleteSession(
 export const sessionIndexRoutes: Route[] = [
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "GET",
-    pattern: parsePattern("/sessions"),
+    path: "/sessions",
     authorization: requirePermission("sessions.read"),
     handler: handleListSessions,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
-    pattern: parsePattern("/sessions/inbox"),
+    path: "/sessions/inbox",
     authorization: requirePermission("sessions.read", { service: "deny" }),
     handler: handleListSessionInbox,
   }),
   defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "PATCH",
-    pattern: parsePattern("/sessions/:id/read-state"),
+    path: "/sessions/:id/read-state",
     authorization: requirePermission("sessions.read"),
     handler: handlePatchReadState,
   }),
   defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
     method: "DELETE",
-    pattern: parsePattern("/sessions/:id"),
+    path: "/sessions/:id",
     authorization: requirePermission("sessions.delete"),
     handler: handleDeleteSession,
   }),

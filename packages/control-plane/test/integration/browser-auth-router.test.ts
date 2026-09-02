@@ -1,8 +1,7 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { createCloudflareBackgroundTasks } from "../../src/cloudflare/background-tasks";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { describe, expect, it } from "vitest";
-import { handleRequest as routeRequest } from "../../src/router";
+import { handleControlPlaneHttp as routeRequest } from "../../src/routing/hono-app";
 import type { Env } from "../../src/types";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
@@ -13,11 +12,7 @@ function handleRequest(
   request: Request,
   requestEnv: Parameters<typeof routeRequest>[1]
 ): Promise<Response> {
-  return routeRequest(
-    request,
-    requestEnv,
-    createCloudflareBackgroundTasks(createExecutionContext())
-  );
+  return routeRequest(request, requestEnv, createExecutionContext());
 }
 
 async function signedServiceRequest(

@@ -18,7 +18,6 @@ import {
   defineRoutes,
   error,
   json,
-  parsePattern,
   requirePermission,
 } from "./shared";
 
@@ -148,31 +147,31 @@ async function handlePullRequests(
 export const analyticsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/analytics/dashboard"),
+    path: "/analytics/dashboard",
     authorization: requirePermission("analytics.read"),
     handler: handleDashboard,
   },
   {
     method: "GET",
-    pattern: parsePattern("/analytics/summary"),
+    path: "/analytics/summary",
     authorization: requirePermission("analytics.read"),
     handler: handleSummary,
   },
   {
     method: "GET",
-    pattern: parsePattern("/analytics/timeseries"),
+    path: "/analytics/timeseries",
     authorization: requirePermission("analytics.read"),
     handler: handleTimeseries,
   },
   {
     method: "GET",
-    pattern: parsePattern("/analytics/breakdown"),
+    path: "/analytics/breakdown",
     authorization: requirePermission("analytics.read"),
     handler: handleBreakdown,
   },
   {
     method: "GET",
-    pattern: parsePattern("/analytics/pull-requests"),
+    path: "/analytics/pull-requests",
     authorization: requirePermission("analytics.read"),
     handler: handlePullRequests,
   },

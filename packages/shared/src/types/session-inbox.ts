@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { PullRequestSummary, SessionReadState, SessionStatus, SpawnSource } from "./sessions";
 import type { SessionListRepository } from "./repositories";
 
+/** Viewer-specific session row in session inbox page and snapshot payloads. */
 export interface SessionListItem {
   id: string;
   title: string | null;

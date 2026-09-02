@@ -50,6 +50,13 @@ describe("session provider auth persistence", () => {
         platformUserId: null,
         scmTokenEncrypted: null,
         scmRefreshTokenEncrypted: null,
+        managedSkillsManifest: {
+          selection: { mode: "all" },
+          resolverVersion: 1,
+          manifestSha256: "0".repeat(64),
+          resolvedAt: 1,
+          skills: [],
+        },
         providerAuth,
       },
       {

@@ -18,7 +18,6 @@ import {
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
   defineRoutes,
-  parsePattern,
   json,
   error,
   parseJsonBody,
@@ -304,25 +303,25 @@ async function handleImportEnvironmentSecrets(
 export const environmentSecretsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
-    pattern: parsePattern("/environments/:id/secrets"),
+    path: "/environments/:id/secrets",
     authorization: requirePermission("environments.secrets.manage"),
     handler: handleListEnvironmentSecrets,
   },
   {
     method: "PUT",
-    pattern: parsePattern("/environments/:id/secrets"),
+    path: "/environments/:id/secrets",
     authorization: requirePermission("environments.secrets.manage"),
     handler: handleSetEnvironmentSecrets,
   },
   {
     method: "POST",
-    pattern: parsePattern("/environments/:id/secrets/import"),
+    path: "/environments/:id/secrets/import",
     authorization: requirePermission("environments.secrets.manage"),
     handler: handleImportEnvironmentSecrets,
   },
   {
     method: "DELETE",
-    pattern: parsePattern("/environments/:id/secrets/:key"),
+    path: "/environments/:id/secrets/:key",
     authorization: requirePermission("environments.secrets.manage"),
     handler: handleDeleteEnvironmentSecret,
   },
