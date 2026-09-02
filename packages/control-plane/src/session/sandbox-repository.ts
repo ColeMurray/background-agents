@@ -23,6 +23,7 @@ const ACCESS_ARTIFACT_COLUMNS: Record<
 export interface SandboxCircuitBreakerState {
   status: SandboxStatus;
   created_at: number;
+  last_heartbeat: number | null;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
@@ -91,7 +92,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, last_heartbeat, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
     const row = rows[0];
@@ -137,7 +138,8 @@ export class SandboxRepository {
          tunnel_urls = NULL,
          ttyd_url = NULL,
          ttyd_token = NULL,
-         runtime_version = NULL
+         runtime_version = NULL,
+         last_heartbeat = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -230,6 +232,32 @@ export class SandboxRepository {
       `UPDATE sandbox SET last_heartbeat = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       timestamp
     );
+  }
+
+  recordStartupHeartbeat(sandboxId: string, timestamp: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = 'connecting', last_heartbeat = ?
+       WHERE modal_sandbox_id = ? AND status NOT IN ('snapshotting', 'stopped', 'stale')`,
+      timestamp,
+      sandboxId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  failStartupIfUnchanged(sandboxId: string, createdAt: number, livenessAt: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = 'failed'
+       WHERE modal_sandbox_id = ?
+         AND created_at = ?
+         AND status IN ('spawning', 'connecting')
+         AND MAX(created_at, COALESCE(last_heartbeat, 0)) = ?`,
+      sandboxId,
+      createdAt,
+      livenessAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSandboxLastActivity(timestamp: number): void {

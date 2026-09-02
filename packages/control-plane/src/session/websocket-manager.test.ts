@@ -285,6 +285,19 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("acceptAndSetSandboxSocket", () => {
+    it("gates a newly accepted socket with persisted connecting status", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      const row = createSandboxRow("sb-1");
+      row.status = "connecting";
+      mockRepo.setSandbox(row);
+
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      expect(manager.getSandboxSocket()).toBe(ws);
+      expect(manager.getExecutionSocket()).toBeNull();
+    });
+
     it("accepts with sandbox + sid tags", () => {
       const { manager, sockets } = createManager();
       const ws = createFakeWebSocket();
@@ -297,13 +310,13 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(tags).toContain("sid:sandbox-abc");
     });
 
-    it("accepts with only sandbox tag when no sandboxId", () => {
+    it("accepts with sandbox identity tags", () => {
       const { manager, sockets } = createManager();
       const ws = createFakeWebSocket();
 
-      manager.acceptAndSetSandboxSocket(ws);
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
-      expect(sockets.get(ws)).toEqual(["sandbox"]);
+      expect(sockets.get(ws)).toEqual(["sandbox", "sid:sb-1"]);
     });
 
     it("closes existing sandbox socket and returns replaced=true", () => {
@@ -318,21 +331,36 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(oldWs.close).toHaveBeenCalledWith(1000, "New sandbox connecting");
     });
 
+    it("closes a hibernated sandbox socket when the in-memory cache is empty", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const oldWs = createFakeWebSocket();
+      const newWs = createFakeWebSocket();
+      sockets.set(oldWs, ["sandbox", "sid:sb-1"]);
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+
+      const result = manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+
+      expect(result.replaced).toBe(true);
+      expect(oldWs.close).toHaveBeenCalledWith(1000, "New sandbox connecting");
+      expect(manager.getSandboxSocket()).toBe(newWs);
+    });
+
     it("does not try to close an already-closed sandbox socket", () => {
       const { manager } = createManager();
       const oldWs = createFakeWebSocket(WebSocket.CLOSED);
       const newWs = createFakeWebSocket();
 
-      manager.acceptAndSetSandboxSocket(oldWs);
-      const result = manager.acceptAndSetSandboxSocket(newWs);
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      const result = manager.acceptAndSetSandboxSocket(newWs, "sb-1");
 
       expect(result.replaced).toBe(false);
       expect(oldWs.close).not.toHaveBeenCalled();
     });
 
     it("sets new socket as active sandbox", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
       const ws = createFakeWebSocket();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
@@ -342,8 +370,9 @@ describe("SessionWebSocketManagerImpl", () => {
 
   describe("getSandboxSocket", () => {
     it("returns cached socket if open", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
       const ws = createFakeWebSocket();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
 
       manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
@@ -437,7 +466,7 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox terminated");
     });
 
-    it("returns null and closes zombie WS when sandbox status is failed", () => {
+    it("keeps a current-attempt failed socket available for self-healing", () => {
       const { manager, sockets, mockRepo } = createManager();
       const ws = createFakeWebSocket();
 
@@ -446,8 +475,47 @@ describe("SessionWebSocketManagerImpl", () => {
       row.status = "failed";
       mockRepo.setSandbox(row);
 
-      expect(manager.getSandboxSocket()).toBeNull();
-      expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox terminated");
+      expect(manager.getSandboxSocket()).toBe(ws);
+      expect(ws.close).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("execution readiness", () => {
+    it("uses persisted ready status as the only execution gate", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      const row = createSandboxRow("sb-1");
+      row.status = "connecting";
+      mockRepo.setSandbox(row);
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+      expect(manager.getExecutionSocket()).toBeNull();
+      row.status = "ready";
+      expect(manager.getExecutionSocket()).toBe(ws);
+    });
+
+    it("fences sender identity against the active sid-tagged socket", () => {
+      const { manager, mockRepo } = createManager();
+      const oldWs = createFakeWebSocket();
+      const newWs = createFakeWebSocket();
+      mockRepo.setSandbox(createSandboxRow("sb-1"));
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+
+      expect(manager.isCurrentSandboxSocket(oldWs, "sb-1")).toBe(false);
+      expect(manager.isCurrentSandboxSocket(newWs, "sb-1")).toBe(true);
+      expect(manager.isCurrentSandboxSocket(newWs, "wrong-id")).toBe(false);
+    });
+
+    it("recovers a hibernated socket for execution when persisted status is ready", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["sandbox", "sid:sb-1"]);
+      const row = createSandboxRow("sb-1");
+      row.status = "ready";
+      mockRepo.setSandbox(row);
+
+      expect(manager.getExecutionSocket()).toBe(ws);
     });
   });
 
@@ -497,9 +565,10 @@ describe("SessionWebSocketManagerImpl", () => {
     });
 
     it("returns false and does not clear when ws does not match", () => {
-      const { manager } = createManager();
+      const { manager, mockRepo } = createManager();
       const oldWs = createFakeWebSocket();
       const newWs = createFakeWebSocket();
+      mockRepo.setSandbox(createSandboxRow("sb-2"));
 
       manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
       manager.acceptAndSetSandboxSocket(newWs, "sb-2");

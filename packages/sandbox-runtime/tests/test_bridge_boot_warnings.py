@@ -5,6 +5,7 @@ forwards each as a `warning` sandbox event after its WebSocket handshake and
 consumes the file exactly once.
 """
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -66,3 +67,19 @@ async def test_drain_is_a_noop_without_file(tmp_path: Path):
         await bridge._drain_boot_warnings()
 
     bridge._send_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_warning_send_preserves_warning_file(tmp_path: Path):
+    warnings_file = tmp_path / "warnings.jsonl"
+    warnings_file.write_text(json.dumps({"scope": "setup", "message": "setup failed"}) + "\n")
+    bridge = _create_bridge()
+    bridge._send_event = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with (
+        patch("sandbox_runtime.bridge.BOOT_WARNINGS_FILE_PATH", str(warnings_file)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await bridge._drain_boot_warnings()
+
+    assert warnings_file.exists()

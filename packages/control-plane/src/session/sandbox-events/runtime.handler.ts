@@ -5,6 +5,7 @@ import type { SessionMessenger } from "../messenger";
 import type { SandboxRepository } from "../sandbox-repository";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
+import type { SessionWebSocketManager } from "../websocket-manager";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
 /**
@@ -21,14 +22,25 @@ export class SandboxRuntimeEventHandler {
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
+    private readonly wsManager: SessionWebSocketManager,
     private readonly applySessionTitleUpdate: (
       title: string,
       options?: SessionTitleUpdateOptions
     ) => SessionTitleUpdateResult,
-    private readonly updateLastActivity: (timestamp: number) => void
+    private readonly updateLastActivity: (timestamp: number) => void,
+    private readonly scheduleInactivityCheck: () => Promise<void>,
+    private readonly processMessageQueue: () => Promise<void>,
+    private readonly isProviderStartupPending: () => boolean,
+    private readonly scheduleDisconnectCheck: () => Promise<void>
   ) {}
 
-  handleHeartbeat(context: SandboxEventContext): void {
+  handleHeartbeat(
+    event: Extract<SandboxEvent, { type: "heartbeat" }>,
+    context: SandboxEventContext
+  ): void {
+    if (context.sender && !this.wsManager.isCurrentSandboxSocket(context.sender, event.sandboxId)) {
+      return;
+    }
     this.sandboxRepository.updateSandboxHeartbeat(context.now);
     // A quiet tool call may emit no events for longer than the inactivity
     // timeout. While its message is processing, the bridge heartbeat proves
@@ -42,7 +54,46 @@ export class SandboxRuntimeEventHandler {
     this.applySessionTitleUpdate(event.title, { onlyIfUnset: true });
   }
 
-  handleReady(event: Extract<SandboxEvent, { type: "ready" }>, context: SandboxEventContext): void {
+  async handleReady(
+    event: Extract<SandboxEvent, { type: "ready" }>,
+    context: SandboxEventContext
+  ): Promise<void> {
+    const status = this.sandboxRepository.getSandbox()?.status;
+    if (!context.sender) {
+      this.recordReadyMetadata(event, context);
+      return;
+    }
+    if (
+      !status ||
+      !["spawning", "connecting", "failed", "ready", "snapshotting"].includes(status) ||
+      !this.wsManager.isCurrentSandboxSocket(context.sender, event.sandboxId)
+    ) {
+      return;
+    }
+
+    if (status !== "ready") this.recordReadyMetadata(event, context);
+    if (status === "snapshotting") {
+      this.sandboxRepository.updateSandboxHeartbeat(context.now);
+      await this.scheduleDisconnectCheck();
+      return;
+    }
+
+    this.sandboxRepository.updateSandboxStatus("ready");
+    this.sandboxRepository.updateSandboxHeartbeat(context.now);
+    this.updateLastActivity(context.now);
+    await this.scheduleDisconnectCheck();
+    await this.scheduleInactivityCheck();
+    this.messenger.broadcast({ type: "sandbox_status", status: "ready" });
+    if (!this.isProviderStartupPending()) {
+      this.messenger.broadcast({ type: "sandbox_access_changed" });
+    }
+    await this.processMessageQueue();
+  }
+
+  private recordReadyMetadata(
+    event: Extract<SandboxEvent, { type: "ready" }>,
+    context: SandboxEventContext
+  ): void {
     this.diffService.pinBaselines(event);
     // Fills the column a fresh spawn cleared; a restore has already seeded
     // the snapshot's version, which outranks whatever this sandbox reports.

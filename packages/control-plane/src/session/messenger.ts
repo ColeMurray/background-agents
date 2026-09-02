@@ -20,7 +20,7 @@ import type { SessionWebSocketManager } from "./websocket-manager";
  */
 type DeliverySockets = Pick<
   SessionWebSocketManager,
-  "forEachClientSocket" | "getSandboxSocket" | "send"
+  "forEachClientSocket" | "getExecutionSocket" | "send"
 >;
 
 export class SandboxDeliveryUnavailableError extends Error {
@@ -49,7 +49,7 @@ export class SessionMessengerImpl implements SessionMessenger {
   }
 
   sendToSandbox(command: SandboxCommand): Promise<void> {
-    const ws = this.wsManager.getSandboxSocket();
+    const ws = this.wsManager.getExecutionSocket();
     if (!ws) return Promise.reject(new SandboxDeliveryUnavailableError());
     return this.wsManager.send(ws, command)
       ? Promise.resolve()

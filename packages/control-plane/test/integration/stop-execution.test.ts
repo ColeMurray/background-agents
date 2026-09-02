@@ -8,6 +8,7 @@ import {
   openSandboxWs,
   seedSandboxAuth,
   collectMessages,
+  waitForSandboxStatus,
 } from "./helpers";
 
 describe("POST /internal/stop", () => {
@@ -298,7 +299,17 @@ describe("POST /internal/stop", () => {
 
     // Connect sandbox WS so queue drain can dispatch
     const { ws: sandboxWs } = await openSandboxWs(name, sandboxAuth);
-    if (sandboxWs) sandboxWs.accept();
+    if (sandboxWs) {
+      sandboxWs.accept();
+      sandboxWs.send(
+        JSON.stringify({
+          type: "ready",
+          sandboxId: sandboxAuth.sandboxId,
+          timestamp: Date.now() / 1000,
+        })
+      );
+      await waitForSandboxStatus(stub, "ready");
+    }
     // Stop execution - marks A as failed
     await stub.fetch("http://internal/internal/stop", { method: "POST" });
 

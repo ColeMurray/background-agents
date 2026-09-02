@@ -16,11 +16,14 @@ const CONNECTING_TIMEOUT_BUFFER_MS = 1_000;
 async function parkSandboxPastConnectingTimeout(stub: DurableObjectStub): Promise<void> {
   await waitForSandboxStatus(stub, "failed");
   await runInSessionDO(stub, (instance: SessionDO, state) => {
+    const createdAt =
+      Date.now() -
+      (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + CONNECTING_TIMEOUT_BUFFER_MS);
     state.storage.sql.exec(
       // modal_object_id stays null, so terminating never calls the provider.
-      "UPDATE sandbox SET status = 'connecting', modal_object_id = NULL, created_at = ?",
-      Date.now() -
-        (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + CONNECTING_TIMEOUT_BUFFER_MS)
+      `UPDATE sandbox SET status = 'connecting', modal_object_id = NULL,
+         created_at = ?, last_heartbeat = NULL`,
+      createdAt
     );
   });
 }

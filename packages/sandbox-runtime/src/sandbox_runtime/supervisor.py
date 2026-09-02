@@ -39,12 +39,21 @@ class ImageBuildExecutionCancelled(Exception):
     """A handled process signal interrupted image-build work."""
 
 
+class InteractiveStartupCancelled(Exception):
+    """A clean bridge exit interrupted pre-ready startup."""
+
+
+class InteractiveStartupBridgeFailed(Exception):
+    """The bridge exhausted its restart budget during pre-ready startup."""
+
+
 class SandboxSupervisor:
     """Apply lifecycle policy to the composed runtime services."""
 
     MAX_RESTARTS = 5
     BACKOFF_BASE = 2.0
     BACKOFF_MAX = 60.0
+    EARLY_BRIDGE_MONITOR_INTERVAL_SECONDS = 1.0
 
     def __init__(
         self,
@@ -168,8 +177,13 @@ class SandboxSupervisor:
         )
         return restart_count
 
-    async def _handle_bridge_exit(self, restart_count: int) -> int:
-        exit_code = self.agent_bridge.exit_code()
+    async def _handle_bridge_exit(
+        self,
+        restart_count: int,
+        exit_code: int | None = None,
+    ) -> int:
+        if exit_code is None:
+            exit_code = self.agent_bridge.exit_code()
         if exit_code is None:
             return restart_count
         if exit_code == 0:
@@ -278,10 +292,9 @@ class SandboxSupervisor:
             self.log.warn("vnc.max_restarts", restart_count=restart_count)
         return restart_count
 
-    async def monitor_processes(self) -> None:
+    async def monitor_processes(self, *, bridge_restarts: int = 0) -> None:
         """Monitor each concrete process owner with its explicit restart policy."""
         opencode_restarts = 0
-        bridge_restarts = 0
         code_server_restarts = 0
         terminal_restarts = 0
         desktop_restarts = 0
@@ -352,6 +365,70 @@ class SandboxSupervisor:
                 f"image build exceeded its {timeout_seconds}-second execution timeout"
             ) from error
 
+    async def _start_interactive_services(
+        self,
+        expected_tunnel_ports: list[int],
+    ) -> RepositoryBootResult:
+        try:
+            await self.browser_desktop.start()
+        except Exception as error:
+            self.log.warn("vnc.start_failed", exc=error)
+            await self.browser_desktop.stop()
+
+        boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+        self._repository_boot_result = boot_result
+
+        # Materialization is sandbox-boot work; OpenCode process restarts
+        # reuse this tree and must not depend on control-plane availability.
+        if self.managed_skills is not None:
+            await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
+
+        try:
+            await self.code_server.start(boot_result.workdir)
+        except Exception as error:
+            self.log.warn("code_server.start_failed", exc=error)
+            await self.code_server.stop()
+        try:
+            await self.web_terminal.start(boot_result.workdir)
+        except Exception as error:
+            self.log.warn("web_terminal.start_failed", exc=error)
+            await self.web_terminal.stop()
+
+        await self.opencode_server.start(boot_result.repositories, boot_result.workdir)
+        return boot_result
+
+    async def _monitor_interactive_startup(
+        self,
+        startup_task: asyncio.Task[RepositoryBootResult],
+    ) -> tuple[RepositoryBootResult, int]:
+        bridge_restarts = 0
+        try:
+            while not startup_task.done():
+                await asyncio.wait(
+                    {startup_task},
+                    timeout=self.EARLY_BRIDGE_MONITOR_INTERVAL_SECONDS,
+                )
+                if startup_task.done():
+                    break
+                if self.shutdown_event.is_set():
+                    raise InteractiveStartupCancelled
+                exit_code = self.agent_bridge.exit_code()
+                if exit_code is None:
+                    continue
+                bridge_restarts = await self._handle_bridge_exit(
+                    bridge_restarts,
+                    exit_code,
+                )
+                if self.shutdown_event.is_set():
+                    if exit_code == 0:
+                        raise InteractiveStartupCancelled
+                    raise InteractiveStartupBridgeFailed
+            return await startup_task, bridge_restarts
+        finally:
+            if not startup_task.done():
+                startup_task.cancel()
+                await asyncio.gather(startup_task, return_exceptions=True)
+
     async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool:
         startup_start = time.time()
         self.boot_mode = BootMode.from_env(os.environ)
@@ -381,6 +458,8 @@ class SandboxSupervisor:
         Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
 
         opencode_ready = False
+        early_connection = os.environ.get("EARLY_SANDBOX_CONNECTION") == "1"
+        bridge_restarts = 0
         try:
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
@@ -405,34 +484,17 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return True
 
-            try:
-                await self.browser_desktop.start()
-            except Exception as error:
-                self.log.warn("vnc.start_failed", exc=error)
-                await self.browser_desktop.stop()
-
-            boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
-            self._repository_boot_result = boot_result
-
-            # Materialization is sandbox-boot work; OpenCode process restarts
-            # reuse this tree and must not depend on control-plane availability.
-            if self.managed_skills is not None:
-                await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
-
-            try:
-                await self.code_server.start(boot_result.workdir)
-            except Exception as error:
-                self.log.warn("code_server.start_failed", exc=error)
-                await self.code_server.stop()
-            try:
-                await self.web_terminal.start(boot_result.workdir)
-            except Exception as error:
-                self.log.warn("web_terminal.start_failed", exc=error)
-                await self.web_terminal.stop()
-
-            await self.opencode_server.start(boot_result.repositories, boot_result.workdir)
+            if early_connection:
+                await self.agent_bridge.start()
+                startup_task = asyncio.create_task(
+                    self._start_interactive_services(expected_tunnel_ports)
+                )
+                boot_result, bridge_restarts = await self._monitor_interactive_startup(startup_task)
+            else:
+                boot_result = await self._start_interactive_services(expected_tunnel_ports)
             opencode_ready = True
-            await self.agent_bridge.start()
+            if not early_connection:
+                await self.agent_bridge.start()
             self.log.info(
                 "sandbox.startup",
                 repo_owner=self.config.repo_owner,
@@ -447,10 +509,15 @@ class SandboxSupervisor:
                 duration_ms=int((time.time() - startup_start) * 1000),
                 outcome="success",
             )
-            await self.monitor_processes()
+            await self.monitor_processes(bridge_restarts=bridge_restarts)
         except ImageBuildExecutionCancelled:
             self.log.info("image_build.cancelled", reason="shutdown_requested")
             return True
+        except InteractiveStartupCancelled:
+            self.log.info("supervisor.startup_cancelled", reason="bridge_graceful_exit")
+            return True
+        except InteractiveStartupBridgeFailed:
+            return False
         except Exception as error:
             self.log.error("supervisor.error", exc=error)
             if self.boot_mode is BootMode.BUILD and self.shutdown_event.is_set():
