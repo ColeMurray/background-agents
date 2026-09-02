@@ -50,6 +50,7 @@ import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../e
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
+import type { SessionPlatform } from "./platform";
 import { SessionCoreRepository } from "./session-core-repository";
 import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
@@ -80,7 +81,6 @@ import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
 import { Scheduler } from "../scheduler/scheduler";
-import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
@@ -137,13 +137,6 @@ import { AuthorizationError, AuthorizationService } from "../authorization/servi
  * unauthenticated connections that never complete the handshake.
  */
 const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
-
-/** The platform surface the session graph is built over. */
-export interface SessionPlatform {
-  ctx: DurableObjectState;
-  sql: SqlStorage;
-  db: SqlDatabase | null;
-}
 
 /**
  * What the platform adapter (SessionDO) is allowed to touch. Everything else
@@ -211,9 +204,15 @@ function resolveExecutionTimeoutMs(
 
 /** Build the session runtime, including authorization verification and lease expiry handling. */
 export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
-  const { ctx, sql, db } = platform;
-  const durableObjectId = ctx.id.toString();
-  const transaction = <T>(closure: () => T): T => ctx.storage.transactionSync(closure);
+  const {
+    id: durableObjectId,
+    sql,
+    transactionSync: transaction,
+    db,
+    alarmStore,
+    sockets: socketPlatform,
+    createBackgroundTasks,
+  } = platform;
 
   // Tier 1 — repositories and alarm persistence (leaves over SqlStorage).
   const attachmentRepository = new SessionAttachmentRepository(sql);
@@ -249,29 +248,27 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)),
     getPublicSessionId
   );
-  const backgroundTasks = createCloudflareBackgroundTasks(ctx, log);
+  const backgroundTasks = createBackgroundTasks(log);
   // The sandbox repository validates the status it reads and warns on anything
   // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
   // for access secrets, so it takes the key.
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
 
   // Tier 2 — sockets and alarm scheduling.
-  const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
+  const alarmScheduler = createEarliestAlarmScheduler(alarmStore, alarmDeadlines);
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
-    ctx,
+    socketPlatform,
     sandboxRepository,
     wsClientMappingRepository,
     alarmScheduler,
     log,
     { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
   );
-  // Hibernation-level ping/pong: the runtime answers keepalives without
-  // waking the Durable Object. Platform-global wiring, so it lives here.
-  ctx.setWebSocketAutoResponse(
-    new WebSocketRequestResponsePair(
-      JSON.stringify({ type: "ping" }),
-      JSON.stringify({ type: "pong", timestamp: Date.now() })
-    )
+  // Platform-level ping/pong: keepalives are answered without waking the
+  // runtime. Session-wide wiring, so it lives here.
+  socketPlatform.setAutoResponse(
+    JSON.stringify({ type: "ping" }),
+    JSON.stringify({ type: "pong", timestamp: Date.now() })
   );
 
   // Tier 3 — outbound delivery over the socket registry.

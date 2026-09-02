@@ -3,6 +3,7 @@ import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import type { Env } from "../../src/types";
 import { createSessionRuntime } from "../../src/session/components";
+import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 
 /**
@@ -26,14 +27,7 @@ describe("createSessionRuntime", () => {
 
       let error: string | null = null;
       try {
-        createSessionRuntime(
-          {
-            ctx: state,
-            sql: state.storage.sql,
-            db: null,
-          },
-          doctored
-        );
+        createSessionRuntime(createDurableObjectSessionPlatform(state, null), doctored);
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }

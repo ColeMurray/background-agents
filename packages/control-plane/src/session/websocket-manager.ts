@@ -1,14 +1,16 @@
 /**
- * SessionWebSocketManager — centralizes all Cloudflare WebSocket API usage
- * into a single, testable module.
+ * SessionWebSocketManager — the session's socket registry over the host's
+ * `SocketPlatform`.
  *
  * The manager owns socket identity, persistence, and authorization leases.
- * The DO builds ClientInfo and stores it here after snapshot synchronization.
+ * The connection authenticator builds ClientInfo and stores it here after
+ * snapshot synchronization.
  */
 
 import type { Logger } from "../logger";
 import type { AlarmScheduler } from "../platform-ports";
 import type { ClientInfo } from "../types";
+import type { SocketPlatform } from "./platform";
 import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
 import type {
@@ -106,15 +108,15 @@ export type ClientLookup =
 // Implementation
 // ---------------------------------------------------------------------------
 
-/** Durable Object WebSocket manager with persisted authorization leases. */
+/** Session WebSocket manager with persisted authorization leases. */
 export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private clients = new Map<WebSocket, ClientInfo>();
   private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
 
-  /** Create a WebSocket manager backed by Durable Object state and persisted client mappings. */
+  /** Create a WebSocket manager over the host's sockets and persisted client mappings. */
   constructor(
-    private readonly ctx: DurableObjectState,
+    private readonly platform: SocketPlatform,
     private readonly sandboxRepository: SandboxRepository,
     private readonly wsClientMappingRepository: WsClientMappingRepository,
     private readonly alarmScheduler: AlarmScheduler,
@@ -133,12 +135,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   acceptClientSocket(ws: WebSocket, wsId: string): void {
-    this.ctx.acceptWebSocket(ws, [`wsid:${wsId}`]);
+    this.platform.accept(ws, [`wsid:${wsId}`]);
   }
 
   acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean } {
     const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : [])];
-    this.ctx.acceptWebSocket(ws, tags);
+    this.platform.accept(ws, tags);
 
     let replaced = false;
     if (this.sandboxWs && this.sandboxWs !== ws) {
@@ -161,7 +163,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
 
   classify(ws: WebSocket): ConnectionClassification {
-    const tags = this.ctx.getTags(ws);
+    const tags = this.platform.tags(ws);
     if (tags.includes("sandbox")) {
       const sidTag = tags.find((t) => t.startsWith("sid:"));
       return { kind: "sandbox", sandboxId: sidTag?.slice(4) };
@@ -186,7 +188,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     if (sandbox && terminalStatuses.includes(sandbox.status)) {
       this.sandboxWs = null;
       // Close any lingering sandbox WebSockets so they don't persist
-      for (const ws of this.ctx.getWebSockets()) {
+      for (const ws of this.platform.all()) {
         const parsed = this.classify(ws);
         if (parsed.kind === "sandbox") {
           this.close(ws, 1000, "Sandbox terminated");
@@ -201,7 +203,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
     // Hibernation recovery: scan all WebSockets, validate sandbox identity
 
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.platform.all()) {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" || ws.readyState !== WebSocket.OPEN) continue;
 
@@ -229,7 +231,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   detachSandboxSocket(code: number, reason: string): void {
     const sockets = new Set<WebSocket>();
     if (this.sandboxWs) sockets.add(this.sandboxWs);
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.platform.all()) {
       if (this.classify(ws).kind === "sandbox") sockets.add(ws);
     }
     this.sandboxWs = null;
@@ -319,7 +321,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   /** Close and remove expired client leases, then schedule the next deadline. */
   async expireAuthorizationLeases(now: number): Promise<void> {
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.platform.all()) {
       const parsed = this.classify(ws);
       if (parsed.kind !== "client") continue;
       const expiresAt = this.authorizationExpiry(ws, parsed);
@@ -386,7 +388,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     mode: "all_clients" | "authenticated_only",
     fn: (ws: WebSocket) => void
   ): void {
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.platform.all()) {
       const parsed = this.classify(ws);
       if (parsed.kind === "sandbox") continue;
 
@@ -468,7 +470,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   getConnectedClientCount(): number {
     let count = 0;
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.platform.all()) {
       const parsed = this.classify(ws);
       if (parsed.kind !== "sandbox" && ws.readyState === WebSocket.OPEN) {
         count++;

@@ -1,0 +1,30 @@
+import type { SqlDatabase } from "../db/sql-database";
+import type { SessionPlatform } from "../session/platform";
+import { createCloudflareBackgroundTasks } from "./background-tasks";
+
+/**
+ * A Durable Object's storage, hibernatable sockets, alarm, and event lifetime
+ * as the session platform.
+ */
+export function createDurableObjectSessionPlatform(
+  ctx: DurableObjectState,
+  db: SqlDatabase | null
+): SessionPlatform {
+  return {
+    id: ctx.id.toString(),
+    sql: ctx.storage.sql,
+    transactionSync: <T>(closure: () => T): T => ctx.storage.transactionSync(closure),
+    db,
+    alarmStore: ctx.storage,
+    sockets: {
+      accept: (ws, tags) => ctx.acceptWebSocket(ws, tags),
+      tags: (ws) => ctx.getTags(ws),
+      all: (tag) => ctx.getWebSockets(tag),
+      // Hibernation-level auto-response: matched by the runtime without
+      // waking the object.
+      setAutoResponse: (request, response) =>
+        ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(request, response)),
+    },
+    createBackgroundTasks: (log) => createCloudflareBackgroundTasks(ctx, log),
+  };
+}
