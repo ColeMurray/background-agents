@@ -4,6 +4,7 @@ import {
   type SessionSkillsView,
   skillAssignmentSchema,
 } from "@open-inspect/shared/types/skills";
+import { hashSessionSkillManifest, SKILL_RESOLVER_VERSION } from "../skills/content-addressing";
 import { SkillStore } from "./skills";
 import type { SqlDatabase } from "./sql-database";
 
@@ -91,11 +92,27 @@ export class SessionSkillStore {
     sessionId: string,
     page?: { after: number; limit: number }
   ): Promise<{ manifest: ManifestRow; revisions: RevisionRow[] } | null> {
-    const manifest = await this.db
+    let manifest = await this.db
       .prepare("SELECT * FROM session_skill_manifests WHERE session_id = ?")
       .bind(sessionId)
       .first<ManifestRow>();
-    if (!manifest) return null;
+    if (!manifest) {
+      const session = await this.db
+        .prepare("SELECT created_at FROM sessions WHERE id = ?")
+        .bind(sessionId)
+        .first<{ created_at: number }>();
+      if (!session) return null;
+      const selection = { mode: "all" as const };
+      manifest = {
+        session_id: sessionId,
+        selection_mode: selection.mode,
+        profile_id: null,
+        profile_name: null,
+        resolver_version: SKILL_RESOLVER_VERSION,
+        manifest_sha256: await hashSessionSkillManifest(selection, []),
+        resolved_at: session.created_at,
+      };
+    }
     const revisions = await this.db
       .prepare(
         page
