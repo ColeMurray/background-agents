@@ -22,6 +22,7 @@ import {
 } from "./automation-model-provider-auth";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { AutomationListCursor } from "./automation-list-cursor";
+import { UserStore } from "./user-store";
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -206,6 +207,7 @@ export function toAutomation(
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
+    userId: row.user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -314,6 +316,7 @@ function toAutomationInvocation(
 
 // ─── Store ───────────────────────────────────────────────────────────────────
 
+/** Persists automations, invocations, runs, and composable lifecycle mutations. */
 export class AutomationStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -365,6 +368,29 @@ export class AutomationStore {
       .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
       .bind(id)
       .first<AutomationRow>();
+  }
+
+  /**
+   * Repair a legacy SCM-only owner with a compare-and-set and return the canonical row.
+   * Every ownership admission path calls this before comparing `user_id`, so repair is
+   * a storage invariant rather than a side effect of starting an invocation.
+   */
+  async resolveCanonicalOwner(automation: AutomationRow): Promise<AutomationRow> {
+    if (automation.user_id || !automation.created_by || automation.created_by === "anonymous") {
+      return automation;
+    }
+
+    const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
+    if (!identity) return automation;
+
+    const result = await this.db
+      .prepare("UPDATE automations SET user_id = ? WHERE id = ? AND user_id IS NULL")
+      .bind(identity.userId, automation.id)
+      .run();
+    if ((result.meta?.changes ?? 0) > 0) {
+      return { ...automation, user_id: identity.userId };
+    }
+    return (await this.getById(automation.id)) ?? automation;
   }
 
   async list(options: {
@@ -512,36 +538,48 @@ export class AutomationStore {
     return this.getById(id);
   }
 
-  async softDelete(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a soft-delete statement for composition in an atomic batch. */
+  bindSoftDelete(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET deleted_at = ?, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, now, id)
-      .run();
+      .bind(now, now, id);
+  }
+
+  /** Soft-delete an automation and report whether a live row changed. */
+  async softDelete(id: string): Promise<boolean> {
+    const result = await this.bindSoftDelete(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async pause(id: string): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a pause statement for composition in an atomic batch. */
+  bindPause(id: string, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(now, id)
-      .run();
+      .bind(now, id);
+  }
+
+  /** Pause an automation and report whether a live row changed. */
+  async pause(id: string): Promise<boolean> {
+    const result = await this.bindPause(id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
-    const now = Date.now();
-    const result = await this.db
+  /** Build a resume statement for composition in an atomic batch. */
+  bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
+    return this.db
       .prepare(
         "UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
       )
-      .bind(nextRunAt, now, id)
-      .run();
+      .bind(nextRunAt, now, id);
+  }
+
+  /** Resume an automation and report whether a live row changed. */
+  async resume(id: string, nextRunAt: number | null): Promise<boolean> {
+    const result = await this.bindResume(id, nextRunAt).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
@@ -855,7 +893,7 @@ export class AutomationStore {
 
   /**
    * Per-source overlap predicate, used both as the cheap pre-check and inside
-   * the guarded insert (same SQL, one definition). Schedule/manual firings
+   * the conditional insert (same SQL, one definition). Schedule/manual firings
    * block on ANY active run of the automation (main parity with
    * getActiveRunForAutomation); event firings block per concurrency key only —
    * an automation-wide guard would serialize unrelated events.
@@ -911,7 +949,6 @@ export class AutomationStore {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
     const statements: SqlStatement[] = [];
-
     statements.push(
       this.db
         .prepare(
@@ -1044,6 +1081,46 @@ export class AutomationStore {
 
     const results = await this.db.batch(statements);
     return { inserted: (results[0]?.meta?.changes ?? 0) > 0 };
+  }
+
+  /** Atomically record a denied cron slot and pause it so overdue denial cannot starve the queue. */
+  async recordAuthorizationDenied(
+    invocation: AutomationInvocationRow,
+    fromSlot: number
+  ): Promise<{ inserted: boolean; paused: boolean }> {
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO automation_invocations
+           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          invocation.id,
+          invocation.automation_id,
+          invocation.source,
+          invocation.scheduled_at,
+          invocation.trigger_key,
+          invocation.concurrency_key,
+          invocation.trigger_metadata,
+          invocation.skip_reason,
+          invocation.failure_counted_at,
+          invocation.created_at,
+          invocation.updated_at
+        ),
+      this.db
+        .prepare(
+          `UPDATE automations
+           SET enabled = 0, next_run_at = NULL, updated_at = ?
+           WHERE id = ? AND deleted_at IS NULL AND enabled = 1 AND next_run_at = ?`
+        )
+        .bind(Date.now(), invocation.automation_id, fromSlot),
+    ]);
+    return {
+      inserted: (results[0]?.meta?.changes ?? 0) > 0,
+      paused: (results[1]?.meta?.changes ?? 0) > 0,
+    };
   }
 
   async getInvocationById(invocationId: string): Promise<AutomationInvocationRow | null> {

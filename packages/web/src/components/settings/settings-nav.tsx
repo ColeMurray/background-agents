@@ -5,6 +5,7 @@ import { useState } from "react";
 import { BackIcon, ChevronRightIcon, SearchIcon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useSettingsIsMobile } from "./settings-viewport-context";
 import { getSettingsGroups, type SettingsCategory } from "./settings-registry";
 
@@ -38,10 +39,14 @@ function SettingsSearch({ value, onChange }: { value: string; onChange: (value: 
   );
 }
 
+/**
+ * Renders searchable settings navigation containing only categories the current user may access.
+ */
 export function SettingsNav({ activeCategory, onSelect }: SettingsNavProps) {
   const isMobile = useSettingsIsMobile();
   const [query, setQuery] = useState("");
-  const groups = getSettingsGroups({ query });
+  const { hasPermission } = useCurrentUserAuthorization();
+  const groups = getSettingsGroups({ query, hasPermission });
 
   const navigation = (
     <div className="space-y-6">

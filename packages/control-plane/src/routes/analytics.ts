@@ -5,6 +5,7 @@ import {
   type AnalyticsDays,
 } from "@open-inspect/shared/types/analytics";
 import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
+import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
 import {
   type PullRequestAnalyticsFilters,
   PullRequestAnalyticsStore,
@@ -18,6 +19,7 @@ import {
   error,
   json,
   parsePattern,
+  requirePermission,
 } from "./shared";
 
 function parseDaysParam(value: string | null): AnalyticsDays | null {
@@ -48,6 +50,29 @@ function getFilters(days: AnalyticsDays): AnalyticsFilters {
 function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters {
   const now = Date.now();
   return { startAt: now - days * 24 * 60 * 60 * 1000, endAt: now, now };
+}
+
+async function handleDashboard(
+  request: Request,
+  env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const url = new URL(request.url);
+  const days = parseDaysParam(url.searchParams.get("days"));
+  if (!days) {
+    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
+  }
+
+  const generatedAt = Date.now();
+  const store = new AnalyticsDashboardStore(ctx.db);
+  return json(
+    await store.get({
+      days,
+      startAt: generatedAt - days * 24 * 60 * 60 * 1000,
+      endAt: generatedAt,
+    })
+  );
 }
 
 async function handleSummary(
@@ -123,22 +148,32 @@ async function handlePullRequests(
 export const analyticsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
   {
     method: "GET",
+    pattern: parsePattern("/analytics/dashboard"),
+    authorization: requirePermission("analytics.read"),
+    handler: handleDashboard,
+  },
+  {
+    method: "GET",
     pattern: parsePattern("/analytics/summary"),
+    authorization: requirePermission("analytics.read"),
     handler: handleSummary,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/timeseries"),
+    authorization: requirePermission("analytics.read"),
     handler: handleTimeseries,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/breakdown"),
+    authorization: requirePermission("analytics.read"),
     handler: handleBreakdown,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/pull-requests"),
+    authorization: requirePermission("analytics.read"),
     handler: handlePullRequests,
   },
 ]);

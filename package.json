@@ -14,12 +14,15 @@
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
     "test:lint-complexity": "node --test scripts/lint-complexity-message.test.mjs",
+    "test:rbac-bootstrap-owner": "node --experimental-transform-types --test scripts/bootstrap-workspace-owner.test.ts",
+    "test:user-merge-cli": "node --experimental-transform-types --test scripts/merge-split-users.test.ts",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:integration": "npm run test:integration --workspaces --if-present",
     "typecheck": "npm run build -w @open-inspect/shared && npm run typecheck --workspaces --if-present",
     "knip": "knip",
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
     "build:opencomputer-template": "npm run build-template -w @open-inspect/opencomputer-infra --",
+    "rbac:bootstrap-owner": "node --experimental-transform-types scripts/bootstrap-workspace-owner.ts",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
   },
   "devDependencies": {
@@ -39,7 +42,7 @@
     "wrangler": "^4.103.0"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "overrides": {
     "minimatch": "^10.2.5",

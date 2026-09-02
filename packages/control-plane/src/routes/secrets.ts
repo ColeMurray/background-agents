@@ -18,6 +18,7 @@ import {
   parseJsonBody,
   extractRepoParams,
   resolveRepoOrError,
+  requirePermission,
 } from "./shared";
 import { secretsRequestBodySchema } from "./secret-request-schemas";
 
@@ -380,31 +381,37 @@ export const secretsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE,
   {
     method: "PUT",
     pattern: parsePattern("/repos/:owner/:name/secrets"),
+    authorization: requirePermission("repositories.secrets.manage"),
     handler: handleSetRepoSecrets,
   },
   {
     method: "GET",
     pattern: parsePattern("/repos/:owner/:name/secrets"),
+    authorization: requirePermission("repositories.secrets.manage"),
     handler: handleListRepoSecrets,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/repos/:owner/:name/secrets/:key"),
+    authorization: requirePermission("repositories.secrets.manage"),
     handler: handleDeleteRepoSecret,
   },
   {
     method: "PUT",
     pattern: parsePattern("/secrets"),
+    authorization: requirePermission("global_secrets.manage"),
     handler: handleSetGlobalSecrets,
   },
   {
     method: "GET",
     pattern: parsePattern("/secrets"),
+    authorization: requirePermission("global_secrets.manage"),
     handler: handleListGlobalSecrets,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/secrets/:key"),
+    authorization: requirePermission("global_secrets.manage"),
     handler: handleDeleteGlobalSecret,
   },
 ]);

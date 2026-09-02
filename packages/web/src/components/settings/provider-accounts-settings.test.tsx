@@ -43,6 +43,14 @@ const account = {
 };
 let accountsResult: ModelProviderAccount[];
 let defaultsResult: ModelProviderAccountDefault[];
+let allowedPermissions: Set<string> | null;
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      allowedPermissions === null || allowedPermissions.has(permission),
+  }),
+}));
 
 vi.mock("@/hooks/use-provider-accounts", () => ({
   useProviderAccounts: () => ({
@@ -88,6 +96,7 @@ describe("ProviderAccountsSettings", () => {
     reconnectAccount.mockResolvedValue(undefined);
     accountsResult = [account];
     defaultsResult = [];
+    allowedPermissions = null;
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -96,6 +105,18 @@ describe("ProviderAccountsSettings", () => {
       loading: false,
       legacyKeys: [],
     };
+  });
+
+  it("keeps read-only account details visible without management actions", () => {
+    allowedPermissions = new Set(["provider_accounts.read"]);
+
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getByText("Team ChatGPT")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add account" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "More actions for Team ChatGPT" })
+    ).not.toBeInTheDocument();
   });
 
   it("reconnects OpenAI through device authorization with the selected account id", async () => {

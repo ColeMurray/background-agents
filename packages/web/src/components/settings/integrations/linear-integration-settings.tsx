@@ -46,6 +46,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/linear";
 const REPO_SETTINGS_KEY = "/api/integration-settings/linear/repos";
@@ -67,7 +68,13 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+/**
+ * Displays Linear integration settings with global and repository edits gated by their respective permissions.
+ */
 export function LinearIntegrationSettings() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canManageGlobal = hasPermission("integrations.manage");
+  const canManageRepos = hasPermission("repositories.settings.manage");
   const { data: globalData, isLoading: globalLoading } =
     useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
@@ -108,21 +115,25 @@ export function LinearIntegrationSettings() {
         )}
       </SettingsCardSection>
 
-      <GlobalSettingsSection
-        settings={settings}
-        availableRepos={availableRepos}
-        enabledModelOptions={enabledModelOptions}
-      />
+      <fieldset disabled={!canManageGlobal} className="min-w-0">
+        <GlobalSettingsSection
+          settings={settings}
+          availableRepos={availableRepos}
+          enabledModelOptions={enabledModelOptions}
+        />
+      </fieldset>
 
       <SettingsCardSection
         title="Repository Overrides"
         description="Override model selection and behavior for specific repositories."
       >
-        <RepoOverridesSection
-          overrides={repoOverrides}
-          availableRepos={availableRepos}
-          enabledModelOptions={enabledModelOptions}
-        />
+        <fieldset disabled={!canManageRepos} className="min-w-0">
+          <RepoOverridesSection
+            overrides={repoOverrides}
+            availableRepos={availableRepos}
+            enabledModelOptions={enabledModelOptions}
+          />
+        </fieldset>
       </SettingsCardSection>
     </div>
   );

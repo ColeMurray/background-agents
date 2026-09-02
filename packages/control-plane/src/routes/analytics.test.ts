@@ -14,6 +14,10 @@ const mockStore = {
   getBreakdown: vi.fn(),
 };
 
+const mockDashboardStore = {
+  get: vi.fn(),
+};
+
 vi.mock("../db/analytics-store", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -23,6 +27,12 @@ vi.mock("../db/analytics-store", async (importOriginal) => {
     }),
   };
 });
+
+vi.mock("../db/analytics-dashboard-store", () => ({
+  AnalyticsDashboardStore: vi.fn().mockImplementation(function () {
+    return mockDashboardStore;
+  }),
+}));
 
 function getHandler(method: string, path: string) {
   const pathname = new URL(`https://test.local${path}`).pathname;
@@ -72,6 +82,29 @@ describe("analytics route handlers", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(FIXED_NOW);
+  });
+
+  describe("GET /analytics/dashboard", () => {
+    it("anchors one shared dashboard window", async () => {
+      mockDashboardStore.get.mockResolvedValue({ generatedAt: FIXED_NOW });
+
+      const response = await callRoute("GET", "/analytics/dashboard?days=14");
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ generatedAt: FIXED_NOW });
+      expect(mockDashboardStore.get).toHaveBeenCalledWith({
+        days: 14,
+        startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
+        endAt: FIXED_NOW,
+      });
+    });
+
+    it("rejects invalid ranges before querying", async () => {
+      const response = await callRoute("GET", "/analytics/dashboard?days=31");
+
+      expect(response.status).toBe(400);
+      expect(mockDashboardStore.get).not.toHaveBeenCalled();
+    });
   });
 
   afterEach(() => {

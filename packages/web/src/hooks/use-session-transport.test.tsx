@@ -111,6 +111,49 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
+  it("does not fetch a token or open a socket when transport is disabled", async () => {
+    const { result } = renderHook(() =>
+      useSessionTransport("session-1", { onMessage, onClose }, false)
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(result.current.connected).toBe(false);
+    expect(result.current.connecting).toBe(false);
+
+    act(() => result.current.reconnect());
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("resets transport state across enabled to disabled to enabled", async () => {
+    const rendered = renderHook(
+      ({ enabled }) => useSessionTransport("session-1", { onMessage, onClose }, enabled),
+      { initialProps: { enabled: true } }
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.instances[0].open());
+    await waitFor(() => expect(rendered.result.current.connected).toBe(true));
+
+    rendered.rerender({ enabled: false });
+
+    await waitFor(() => {
+      expect(rendered.result.current.connected).toBe(false);
+      expect(rendered.result.current.connecting).toBe(false);
+    });
+    expect(rendered.result.current.isOpen()).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rendered.rerender({ enabled: true });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    act(() => FakeWebSocket.instances[1].open());
+    await waitFor(() => expect(rendered.result.current.connected).toBe(true));
+  });
+
   it("forwards schema-valid messages to onMessage", async () => {
     const { socket } = await openSocket();
 
@@ -194,6 +237,57 @@ describe("useSessionTransport", () => {
       expect(result.current.connectionError).toBe("Session expired. Please reconnect.");
     });
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("fetches a fresh credential and reconnects after authorization revocation", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(Response.json({ token: "original-token" }))
+      .mockResolvedValueOnce(Response.json({ token: "refreshed-token" }));
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const original = FakeWebSocket.instances[0];
+    act(() => {
+      original.open();
+      original.serverClose(4010, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const replacement = FakeWebSocket.instances[1];
+    act(() => replacement.open());
+    expect(replacement.sentMessages).toEqual([
+      expect.objectContaining({ token: "refreshed-token" }),
+    ]);
+    rendered.unmount();
+  });
+
+  it("retries a clean transient server failure with the cached credential", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(1011, true);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    act(() => FakeWebSocket.instances[1].open());
+    expect(FakeWebSocket.instances[1].sentMessages).toEqual([
+      expect.objectContaining({ token: "ws-token" }),
+    ]);
+    rendered.unmount();
   });
 
   it("reconnects with backoff after an unclean close and reuses the cached token", async () => {

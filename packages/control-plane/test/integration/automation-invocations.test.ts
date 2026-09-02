@@ -8,6 +8,7 @@ import {
   type AutomationRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
+import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { cleanD1Tables } from "./cleanup";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -27,7 +28,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     next_run_at: now + 86_400_000,
     consecutive_failures: 0,
     created_by: "user-1",
-    user_id: null,
+    user_id: "user-1",
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -90,7 +91,73 @@ async function countRows(table: string, where = "1=1"): Promise<number> {
 }
 
 describe("automation invocations (D1 integration)", () => {
-  beforeEach(cleanD1Tables);
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+         VALUES ('user-1', 'Execution Owner', NULL, 0, NULL, 1, 1)`
+      ),
+      env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_builtin_owner' WHERE user_id = 'user-1'"
+      ),
+    ]);
+  });
+
+  it("checks owner and target-use permissions for unattended execution", async () => {
+    const ownerId = "11111111111111111111111111111111";
+    const roleId = "role_execution_test";
+    const store = new AutomationStore(env.DB);
+    const automation = makeAutomation({ user_id: ownerId, created_by: ownerId });
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+          (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+         VALUES (?, 'Execution Owner', NULL, 0, NULL, 1, 1)`
+      ).bind(ownerId),
+      env.DB.prepare(
+        `INSERT INTO roles
+          (id, key, name, normalized_name, description, is_system)
+         VALUES (?, NULL, 'Execution Test', 'execution test', NULL, 0)`
+      ).bind(roleId),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        roleId,
+        ownerId
+      ),
+    ]);
+    await store.create(automation);
+    await Promise.all(
+      [
+        ...store.bindRepositoryInserts(
+          automation.id,
+          [{ repo_owner: "acme", repo_name: "app", repo_id: 1, base_branch: "main" }],
+          Date.now()
+        ),
+        ...store.bindEnvironmentInserts(automation.id, ["env_1"], Date.now()),
+      ].map((statement) => statement.run())
+    );
+
+    const authorized = () =>
+      isAutomationExecutionAuthorized(env.DB, {
+        automationId: automation.id,
+        requiresRepositoryUse: true,
+        requiresEnvironmentUse: true,
+      });
+    const grant = (permission: string) =>
+      env.DB.prepare("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)")
+        .bind(roleId, permission)
+        .run();
+
+    await expect(authorized()).resolves.toBe(false);
+    await grant("sessions.create");
+    await expect(authorized()).resolves.toBe(false);
+    await grant("repositories.use");
+    await expect(authorized()).resolves.toBe(false);
+    await grant("environments.use");
+    await expect(authorized()).resolves.toBe(true);
+  });
 
   // ─── Derived status ────────────────────────────────────────────────────────
 

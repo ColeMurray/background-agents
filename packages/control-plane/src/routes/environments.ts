@@ -20,6 +20,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
+import { resolveSessionRepositories } from "../repos/resolve";
 import {
   type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
@@ -29,7 +30,7 @@ import {
   json,
   error,
   parseJsonBody,
-  resolveRepoOrError,
+  requirePermission,
 } from "./shared";
 import type { Env } from "../types";
 
@@ -61,33 +62,21 @@ function normalizeChannelAssociations(channels: string[] | undefined): string | 
 }
 
 /**
- * Resolve every requested repository through the SCM provider concurrently. The
- * first failure IN INPUT ORDER wins (deterministic error). The resulting
- * inserts carry the resolved repoId, the request branch (or the freshly
- * resolved default), and position from list order. Propagates HttpError from
- * resolveRepoOrError (mapped centrally in the router's dispatch catch).
+ * Resolve and validate the ordered repository set exactly as session launch
+ * does, then adapt the canonical refs for environment persistence.
  */
-async function resolveEnvironmentRepositories(
+export async function resolveEnvironmentRepositories(
   env: Env,
   repositories: { repoOwner: string; repoName: string; baseBranch: string | null }[],
   ctx: RequestContext
 ): Promise<EnvironmentRepositoryInsert[]> {
-  const settled = await Promise.allSettled(
-    repositories.map((repository) =>
-      resolveRepoOrError(env, repository.repoOwner, repository.repoName, ctx, logger)
-    )
-  );
-  const resolved = settled.map((result) => {
-    if (result.status === "rejected") throw result.reason;
-    return result.value;
-  });
-
-  return repositories.map((repository, index) => ({
+  const resolved = await resolveSessionRepositories(env, repositories, ctx, logger);
+  return resolved.map((repository, index) => ({
     position: index,
     repo_owner: repository.repoOwner,
     repo_name: repository.repoName,
-    repo_id: resolved[index].repoId,
-    base_branch: repository.baseBranch ?? resolved[index].defaultBranch,
+    repo_id: repository.repoId,
+    base_branch: repository.baseBranch,
   }));
 }
 
@@ -263,13 +252,38 @@ async function handleDeleteEnvironment(
 }
 
 export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  { method: "GET", pattern: parsePattern("/environments"), handler: handleListEnvironments },
-  { method: "POST", pattern: parsePattern("/environments"), handler: handleCreateEnvironment },
-  { method: "GET", pattern: parsePattern("/environments/:id"), handler: handleGetEnvironment },
-  { method: "PUT", pattern: parsePattern("/environments/:id"), handler: handleUpdateEnvironment },
+  {
+    method: "GET",
+    pattern: parsePattern("/environments"),
+    authorization: requirePermission("environments.read", {
+      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+    }),
+    handler: handleListEnvironments,
+  },
+  {
+    method: "POST",
+    pattern: parsePattern("/environments"),
+    authorization: requirePermission("environments.manage"),
+    handler: handleCreateEnvironment,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/environments/:id"),
+    authorization: requirePermission("environments.read", {
+      actorlessGrants: [{ service: "github-bot" }],
+    }),
+    handler: handleGetEnvironment,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/environments/:id"),
+    authorization: requirePermission("environments.manage"),
+    handler: handleUpdateEnvironment,
+  },
   {
     method: "DELETE",
     pattern: parsePattern("/environments/:id"),
+    authorization: requirePermission("environments.manage"),
     handler: handleDeleteEnvironment,
   },
 ]);

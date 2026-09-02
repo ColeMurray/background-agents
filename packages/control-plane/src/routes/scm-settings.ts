@@ -25,6 +25,7 @@ import {
   error,
   parseJsonBody,
   extractRepoParams,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:scm-settings");
@@ -222,18 +223,40 @@ async function handleDeleteRepoSettings(
 }
 
 export const scmSettingsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
-  { method: "GET", pattern: parsePattern("/scm-settings"), handler: handleGetGlobal },
-  { method: "PUT", pattern: parsePattern("/scm-settings"), handler: handleSetGlobal },
-  { method: "DELETE", pattern: parsePattern("/scm-settings"), handler: handleDeleteGlobal },
-  { method: "GET", pattern: parsePattern("/scm-settings/repos"), handler: handleListRepoSettings },
+  {
+    method: "GET",
+    pattern: parsePattern("/scm-settings"),
+    authorization: requirePermission("integrations.read"),
+    handler: handleGetGlobal,
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/scm-settings"),
+    authorization: requirePermission("scm_settings.manage"),
+    handler: handleSetGlobal,
+  },
+  {
+    method: "DELETE",
+    pattern: parsePattern("/scm-settings"),
+    authorization: requirePermission("scm_settings.manage"),
+    handler: handleDeleteGlobal,
+  },
+  {
+    method: "GET",
+    pattern: parsePattern("/scm-settings/repos"),
+    authorization: requirePermission("integrations.read"),
+    handler: handleListRepoSettings,
+  },
   {
     method: "PUT",
     pattern: parsePattern("/scm-settings/repos/:owner/:name"),
+    authorization: requirePermission("scm_settings.manage"),
     handler: handleSetRepoSettings,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/scm-settings/repos/:owner/:name"),
+    authorization: requirePermission("scm_settings.manage"),
     handler: handleDeleteRepoSettings,
   },
 ]);

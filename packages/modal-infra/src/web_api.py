@@ -206,7 +206,14 @@ async def _execute_endpoint(
     except Exception as e:
         execution.http_status = 500
         execution.outcome = "error"
-        log.error("api.error", exc=e, endpoint_name=endpoint_name)
+        log.error(
+            "api.error",
+            exc=e,
+            endpoint_name=execution.endpoint_name,
+            trace_id=execution.trace_id,
+            request_id=execution.request_id,
+            **execution.log_fields,
+        )
         raise HTTPException(status_code=500, detail="Internal server error") from e
     finally:
         log.info(

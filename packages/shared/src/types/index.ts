@@ -170,6 +170,23 @@ export type {
 export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  MAX_AUDIT_EVENT_TIMESTAMP_MS,
+  auditEventTimestampSchema,
+  auditOperationResultSchema,
+  auditPrincipalKindSchema,
+  auditEventMetadataSchema,
+  auditEventSchema,
+  auditEventListResponseSchema,
+} from "./audit-events";
+export type {
+  AuditOperationResult,
+  AuditPrincipalKind,
+  AuditEventMetadata,
+  AuditEvent,
+  AuditEventListResponse,
+} from "./audit-events";
+
+export {
   MAX_AUTOMATION_REPOSITORIES,
   toRepositoryRef,
   automationRepositoryInputSchema,
@@ -267,6 +284,7 @@ export type {
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
+  AnalyticsDashboardResponse,
 } from "./analytics";
 
 export {

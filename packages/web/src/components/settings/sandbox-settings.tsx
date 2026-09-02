@@ -30,6 +30,7 @@ import {
   sandboxTimeoutMsFromMinutes,
 } from "./sandbox-timeout";
 import { SessionCostSettingsFields, useSessionCostSettings } from "./session-cost-settings-fields";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SCOPE = "__global__";
 type ResourceField = "cpuCores" | "memoryMib";
@@ -218,6 +219,9 @@ function useSandboxSettingsScope(
   };
 }
 
+/**
+ * Edits inherited sandbox settings for one scope, becoming read-only without that scope's management permission.
+ */
 export function SandboxSettingsEditor({
   scope,
   owner,
@@ -234,7 +238,15 @@ export function SandboxSettingsEditor({
   name?: string;
   environmentId?: string;
 }) {
+  const { hasPermission } = useCurrentUserAuthorization();
   const isGlobal = scope === "global";
+  const canManage = hasPermission(
+    scope === "global"
+      ? "integrations.manage"
+      : scope === "repo"
+        ? "repositories.settings.manage"
+        : "environments.settings.manage"
+  );
   const { apiUrl, ownSettings, baseDefaults, enabledRepos, isLoading, mutate } =
     useSandboxSettingsScope(scope, owner, name, environmentId);
 
@@ -595,7 +607,7 @@ export function SandboxSettingsEditor({
   }
 
   return (
-    <div className="space-y-4">
+    <fieldset disabled={!canManage} className="min-w-0 space-y-4">
       {/* Web Terminal toggle */}
       <div className="max-w-sm">
         <div className="flex items-center justify-between">
@@ -894,7 +906,7 @@ export function SandboxSettingsEditor({
         </Button>
         {success && <span className="text-sm text-success">Saved</span>}
       </div>
-    </div>
+    </fieldset>
   );
 }
 

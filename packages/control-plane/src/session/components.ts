@@ -130,6 +130,7 @@ import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
+import { AuthorizationError, AuthorizationService } from "../authorization/service";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -156,7 +157,7 @@ export interface SessionRuntime {
   readonly log: Logger;
   readonly server: SessionServer<WebSocket, ClientInfo>;
   readonly alarms: {
-    /** Re-arm any persisted alarm deadline after a cold start. */
+    /** Expire stale authorization leases and re-arm persisted deadlines after a cold start. */
     rehydrate(): void;
   };
   readonly internals: SessionComponents;
@@ -210,6 +211,7 @@ function resolveExecutionTimeoutMs(
   return parseInt(env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000), 10);
 }
 
+/** Build the session runtime, including authorization verification and lease expiry handling. */
 export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
   const { ctx, sql, db } = platform;
   const durableObjectId = ctx.id.toString();
@@ -255,14 +257,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
 
   // Tier 2 — sockets and alarm scheduling.
+  const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
     ctx,
     sandboxRepository,
     wsClientMappingRepository,
+    alarmScheduler,
     log,
     { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
   );
-  const alarmScheduler = createEarliestAlarmScheduler(ctx.storage, alarmDeadlines);
   // Hibernation-level ping/pong: the runtime answers keepalives without
   // waking the Durable Object. Platform-global wiring, so it lives here.
   ctx.setWebSocketAutoResponse(
@@ -600,7 +603,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sandboxHandler = new SandboxHandler(
     messageRepository,
     eventRepository,
-    participantRepository,
     artifactRepository,
     sessionCoreRepository,
     sandboxRepository,
@@ -636,7 +638,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
-    participantRepository,
     statusService,
     titleService,
     lifecycleWsManager,
@@ -701,6 +702,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     sandboxRepository,
     repoSecretsEncryptionKey,
+    sandboxDashboardSettings,
     log,
   });
 
@@ -717,6 +719,22 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshotReader,
     schedulePullRequestRefresh,
     scmProviderName,
+    resolveAuthorization: async (userId) => {
+      if (!db) return { kind: "unavailable" };
+      try {
+        const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
+        return authorization.suspendedAt === null
+          ? { kind: "valid", authorization }
+          : { kind: "rejected" };
+      } catch (error) {
+        if (error instanceof AuthorizationError) return { kind: "rejected" };
+        log.error("WebSocket authorization verification failed", {
+          user_id: userId,
+          error: error instanceof Error ? error : String(error),
+        });
+        return { kind: "unavailable" };
+      }
+    },
     log,
   });
 
@@ -740,7 +758,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       );
     },
     listParticipants: () => participantsHandler.listParticipants(),
-    addParticipant: (request) => sandboxHandler.addParticipant(request),
     listEvents: (_request, url) => messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => messagesHandler.listMessages(url),
@@ -751,8 +768,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     wsToken: (request, _url, requestLog) => wsTokenHandler.generateWsToken(request, requestLog),
     updateTitle: (request) => sessionLifecycleHandler.updateTitle(request),
     budget: (request) => sessionBudgetHandler.update(request),
-    archive: (request) => sessionLifecycleHandler.archive(request),
-    unarchive: (request) => sessionLifecycleHandler.unarchive(request),
+    archive: () => sessionLifecycleHandler.archive(),
+    unarchive: () => sessionLifecycleHandler.unarchive(),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, requestLog) =>
       sandboxHandler.verifySandboxToken(request, requestLog),
@@ -830,7 +847,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     handleScheduledDeadline: () =>
       handleAlarmDelivery(
         alarmDeadlines,
-        () => alarmHandler.handle(),
+        async () => {
+          await wsManager.expireAuthorizationLeases(Date.now());
+          await alarmHandler.handle();
+        },
         () => alarmScheduler.rearmPending()
       ),
   });
@@ -859,9 +879,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     server,
     alarms: {
       rehydrate: () =>
-        backgroundTasks.submit(() => alarmScheduler.rehydrate(), {
-          name: "alarm.rehydrate",
-        }),
+        backgroundTasks.submit(
+          async () => {
+            await wsManager.expireAuthorizationLeases(Date.now());
+            await alarmScheduler.rehydrate();
+          },
+          {
+            name: "alarm.rehydrate",
+          }
+        ),
     },
     internals: components,
   };

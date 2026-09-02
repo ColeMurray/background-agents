@@ -68,15 +68,6 @@ export type SpawnSource =
   | "linear-bot"
   | "slack-bot";
 
-export interface SessionParticipant {
-  id: string;
-  userId: string;
-  scmLogin: string | null;
-  scmName: string | null;
-  scmEmail: string | null;
-  role: ParticipantRole;
-}
-
 /**
  * Aggregate PR counts for a session, grouped by display status. Computed from
  * the D1 session_pull_requests table for the session list; total = open +

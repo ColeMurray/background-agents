@@ -5,6 +5,7 @@ import {
   error,
   GITHUB_USER_OR_SERVICE_ROUTE,
   parsePattern,
+  requirePermission,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -33,6 +34,7 @@ export const sessionPullRequestRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SER
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/pull-requests/refresh"),
+    authorization: requirePermission("sessions.lifecycle"),
     handler: handleRefreshPullRequests,
   }),
 ]);

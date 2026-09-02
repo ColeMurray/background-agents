@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionInternalPaths } from "../session/contracts";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
@@ -7,7 +8,10 @@ import type { Env } from "../types";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 import { SessionIndexStore } from "../db/session-index";
 
-function createCtx(db: SqlDatabase = {} as SqlDatabase): RequestContext {
+function createCtx(
+  db: SqlDatabase = {} as SqlDatabase,
+  permissions: PermissionId[] = ["sessions.read"]
+): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
@@ -16,6 +20,12 @@ function createCtx(db: SqlDatabase = {} as SqlDatabase): RequestContext {
     principal: {
       kind: "user",
       userId: "user-1",
+    },
+    authorization: {
+      userId: "user-1",
+      suspendedAt: null,
+      role: { id: "role-1", key: "viewer", name: "Viewer" },
+      permissions,
     },
     metrics: {
       d1Queries: [],
@@ -68,7 +78,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      createCtx({} as SqlDatabase, ["sessions.lifecycle"])
     );
 
     expect(response.status).toBe(200);
@@ -94,22 +104,20 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      createCtx({} as SqlDatabase, ["sessions.lifecycle"])
     );
 
     expect(response.status).toBe(403);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
-    ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],
-  ])("forwards %s for users", async (_name, path, internalPath) => {
+  it("forwards sandbox access for users", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
       return Response.json({ sessionId: "session-1" });
     });
+    const path = "/sessions/session-1/sandbox-access";
     const { handler, match } = getHandler("GET", path);
 
     const response = await handler(
@@ -120,8 +128,62 @@ describe("session runtime proxy routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(new URL(requests[0].url).pathname).toBe(internalPath);
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.sandboxAccess);
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { permissions: ["sessions.read"] as PermissionId[], exposed: false },
+    {
+      permissions: ["sessions.read", "sessions.sandbox_access"] as PermissionId[],
+      exposed: true,
+    },
+  ])("scopes snapshot sandbox locations to sandbox access ($exposed)", async (input) => {
+    const fetch = vi.fn(async () =>
+      Response.json({
+        session: {
+          id: "session-1",
+          title: "Session",
+          repoOwner: "acme",
+          repoName: "web",
+          baseBranch: "main",
+          branchName: "feature",
+          status: "active",
+          sandboxStatus: "ready",
+          messageCount: 0,
+          createdAt: 1,
+          codeServerUrl: "https://code.example",
+          vncUrl: "https://vnc.example",
+          ttydUrl: "https://terminal.example",
+          tunnelUrls: { "3000": "https://app.example" },
+          sandboxDashboardUrl: "https://provider.example",
+        },
+        artifacts: [],
+        promptQueue: [],
+        timeline: { events: [], hasMore: false, cursor: null },
+      })
+    );
+    const path = "/sessions/session-1";
+    const { handler, match } = getHandler("GET", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`),
+      createEnv(fetch),
+      match,
+      createCtx({} as SqlDatabase, input.permissions)
+    );
+    const snapshot = (await response.json()) as { session: Record<string, unknown> };
+
+    expect(response.status).toBe(200);
+    if (input.exposed) {
+      expect(snapshot.session).toHaveProperty("codeServerUrl", "https://code.example");
+    } else {
+      expect(snapshot.session).not.toHaveProperty("codeServerUrl");
+      expect(snapshot.session).not.toHaveProperty("vncUrl");
+      expect(snapshot.session).not.toHaveProperty("ttydUrl");
+      expect(snapshot.session).not.toHaveProperty("tunnelUrls");
+      expect(snapshot.session).not.toHaveProperty("sandboxDashboardUrl");
+    }
   });
 
   it("forwards event query strings through the session runtime dependency", async () => {
@@ -399,12 +461,11 @@ describe("session runtime proxy routes", () => {
     expect(requests[0].method).toBe("POST");
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.updateTitle);
     await expect(requests[0].json()).resolves.toEqual({
-      userId: "user-1",
       title: "New title",
     });
   });
 
-  it("forwards the verified service actor on title updates", async () => {
+  it("does not forward service actor identity on title updates", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
@@ -437,7 +498,6 @@ describe("session runtime proxy routes", () => {
     expect(response.status).toBe(200);
     expect(fetch).toHaveBeenCalledOnce();
     await expect(requests[0].json()).resolves.toEqual({
-      userId: "slack:U0123",
       title: "New title",
     });
   });
@@ -492,26 +552,6 @@ describe("session runtime proxy routes", () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Session not found" });
-  });
-
-  it("rejects malformed add-participant JSON without forwarding to the runtime", async () => {
-    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
-    const { handler, match } = getHandler("POST", "/sessions/session-1/participants");
-
-    const response = await handler(
-      new Request("https://test.local/sessions/session-1/participants", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{",
-      }),
-      createEnv(fetch),
-      match,
-      createCtx()
-    );
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
-    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("forwards the draft flag through the create-PR contract", async () => {

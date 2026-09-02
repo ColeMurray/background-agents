@@ -1145,6 +1145,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.log.error("Snapshot request failed", {
         error: error instanceof Error ? error : String(error),
         reason,
+        modal_object_id: sandbox.modal_object_id,
       });
     }
 
@@ -1599,7 +1600,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.log.debug("Broadcasting sandbox dashboard URL", {
         provider_object_id: providerObjectId,
       });
-      this.broadcaster.broadcast({ type: "sandbox_dashboard_url", url });
+      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
     }
   }
 
@@ -1642,7 +1643,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     if (!urls || Object.keys(urls).length === 0) return;
     this.log.info("Storing and broadcasting tunnel URLs", { ports: Object.keys(urls) });
     await this.storage.updateSandboxTunnelUrls(urls);
-    this.broadcaster.broadcast({ type: "tunnel_urls", urls });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /** Mint and persist terminal access. */

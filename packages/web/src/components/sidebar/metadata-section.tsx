@@ -50,6 +50,7 @@ interface MetadataSectionProps {
   /** Non-fatal boot/runtime warnings surfaced to the user. */
   warnings?: WarningEvent[];
   parentSessionId?: string | null;
+  canManageLifecycle: boolean;
 }
 
 /**
@@ -105,12 +106,13 @@ export function MetadataSection({
   environmentName,
   warnings = [],
   parentSessionId,
+  canManageLifecycle,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 
   const isMultiRepo = (repositories?.length ?? 0) > 1;
   const hasPrArtifact = artifacts.some((a) => a.type === "pr");
-  const showSyncButton = Boolean(sessionId) && hasPrArtifact;
+  const showSyncButton = canManageLifecycle && Boolean(sessionId) && hasPrArtifact;
 
   // Sessions can hold several PRs (one open PR per head branch); list them
   // all, oldest first — creation order matches PR-number order.

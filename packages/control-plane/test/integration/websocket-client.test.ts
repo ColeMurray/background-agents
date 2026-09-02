@@ -8,6 +8,7 @@ import {
   queryDO,
   seedMessage,
   waitForSandboxStatus,
+  issueClientWsToken,
 } from "./helpers";
 import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
@@ -190,7 +191,10 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const tokenRes = await doStub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-1" }),
+      body: JSON.stringify({
+        userId: "user-1",
+        canonicalUserId: "user-1",
+      }),
     });
     const { token } = await tokenRes.json<{ token: string }>();
 
@@ -221,6 +225,147 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const { code, reason } = await closed;
     expect(code).toBe(4001);
     expect(reason).toBe("Token expired");
+  });
+
+  it("allows workspace collaborators without a session relationship", async () => {
+    const name = `ws-client-workspace-authorization-${Date.now()}`;
+    const userId = `workspace-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+
+    const { ws } = await openClientWs(name);
+    const subscribed = collectMessages(ws, {
+      until: (message) => message.type === "subscribed",
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "workspace-client" }));
+
+    expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+    ws.close();
+  });
+
+  it("rejects a custom role that cannot read the session stream", async () => {
+    const suffix = Date.now();
+    const name = `ws-client-partial-role-${suffix}`;
+    const userId = `partial-role-user-${suffix}`;
+    const roleId = `role_custom_ws_${suffix}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles (id, key, name, normalized_name, is_system)
+         VALUES (?, NULL, ?, ?, 0)`
+      ).bind(roleId, `WebSocket Collaborator ${suffix}`, `websocket-collaborator-${suffix}`),
+      env.DB.prepare(
+        "INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'sessions.collaborate')"
+      ).bind(roleId),
+      env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").bind(
+        roleId,
+        userId
+      ),
+    ]);
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "partial-role-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("rejects a token for a suspended user", async () => {
+    const name = `ws-client-suspended-authorization-${Date.now()}`;
+    const userId = `suspended-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+      .bind(Date.now(), userId)
+      .run();
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "suspended-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("keeps the read stream after collaborate permission is lost but rejects prompts", async () => {
+    const name = `ws-client-lost-permission-${Date.now()}`;
+    const userId = `lost-permission-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_builtin_viewer' WHERE user_id = ?"
+    )
+      .bind(userId)
+      .run();
+
+    const { ws } = await openClientWs(name);
+    const subscribed = collectMessages(ws, {
+      until: (message) => message.type === "subscribed",
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "lost-permission-client" }));
+    const snapshot = (await subscribed).find((message) => message.type === "subscribed") as Record<
+      string,
+      unknown
+    >;
+
+    expect(snapshot).toBeDefined();
+    expect(snapshot.session).not.toHaveProperty("sandboxDashboardUrl");
+
+    const denied = collectMessages(ws, {
+      until: (message) => message.type === "error",
+    });
+    ws.send(
+      JSON.stringify({
+        type: "prompt",
+        clientRequestId: crypto.randomUUID(),
+        content: "not allowed",
+      })
+    );
+
+    expect((await denied).find((message) => message.type === "error")).toMatchObject({
+      code: "PERMISSION_REQUIRED",
+      message: "Permission required: sessions.collaborate",
+    });
+    ws.close();
+  });
+
+  it("rejects a token after its canonical user is removed", async () => {
+    const name = `ws-client-missing-user-${Date.now()}`;
+    const userId = `missing-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(userId),
+      env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId),
+    ]);
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "missing-user-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
+  });
+
+  it("rejects a token after the user's role assignment is removed", async () => {
+    const name = `ws-client-missing-assignment-${Date.now()}`;
+    const userId = `unassigned-user-${Date.now()}`;
+    await initNamedSession(name);
+    const { token } = await issueClientWsToken(name, { userId, canonicalUserId: userId });
+    await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(userId).run();
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+    ws.send(JSON.stringify({ type: "subscribe", token, clientId: "unassigned-client" }));
+
+    await expect(closed).resolves.toEqual({ code: 4010 });
   });
 
   it("subscribe includes batched replay with hasMore=false for empty session", async () => {
@@ -906,7 +1051,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
   it("closing the only socket for a participant broadcasts presence_leave", async () => {
     const name = `ws-client-presence-leave-${Date.now()}`;
-    await initNamedSession(name);
+    const { stub } = await initNamedSession(name);
 
     // Two distinct users so the watcher remains connected after the target leaves
     const watcher = await openClientWs(name, { subscribe: true, userId: "user-1" });
@@ -923,6 +1068,13 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const leave = messages.find((m) => m.type === "presence_leave") as Record<string, unknown>;
     expect(leave).toBeDefined();
     expect(leave.userId).toBe("user-2");
+    await expect(
+      queryDO<{ count: number }>(
+        stub,
+        "SELECT COUNT(*) AS count FROM ws_client_mapping WHERE participant_id = ?",
+        leaver.participantId
+      )
+    ).resolves.toEqual([{ count: 0 }]);
 
     watcher.ws.close();
   });

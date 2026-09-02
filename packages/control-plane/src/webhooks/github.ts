@@ -14,8 +14,13 @@ import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import type { RequestContext, Route } from "../routes/shared";
-import { defineRoute, error, GITHUB_USER_OR_SERVICE_ROUTE, parsePattern } from "../routes/shared";
-import { requireEventPoster } from "../auth/identity-enforcement";
+import {
+  defineRoute,
+  error,
+  GITHUB_SERVICE_ROUTE,
+  parsePattern,
+  serviceAuthorized,
+} from "../routes/shared";
 import {
   forwardAutomationEventToScheduler,
   logAutomationEventRejection,
@@ -100,9 +105,6 @@ async function handleGitHubAutomationEvent(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const authFailure = requireEventPoster(ctx, "github");
-  if (authFailure) return authFailure;
-
   let body: unknown;
   try {
     body = await request.json();
@@ -124,8 +126,9 @@ async function handleGitHubAutomationEvent(
   return forwardAutomationEventToScheduler(env, validated.event, ctx);
 }
 
-export const githubAutomationEventRoute: Route = defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
+export const githubAutomationEventRoute: Route = defineRoute(GITHUB_SERVICE_ROUTE, {
   method: "POST",
   pattern: parsePattern("/internal/github-event"),
+  authorization: serviceAuthorized("github-bot"),
   handler: handleGitHubAutomationEvent,
 });

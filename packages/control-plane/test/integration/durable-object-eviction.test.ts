@@ -91,11 +91,10 @@ describe("SessionDO eviction and hibernation restore", () => {
   it("handles a client prompt delivered to a reconstructed instance", async () => {
     const sessionName = `do-evict-prompt-${Date.now()}`;
     await initNamedSession(sessionName);
-    const { ws } = await openClientWs(sessionName, { subscribe: true });
+    await openClientWs(sessionName, { subscribe: true });
     const mapping = await persistedClientMapping(
       env.SESSION.get(env.SESSION.idFromName(sessionName))
     );
-    ws.close();
 
     const restored = await evictSessionDO(sessionName);
     const clientRequestId = crypto.randomUUID();
@@ -125,7 +124,10 @@ describe("SessionDO eviction and hibernation restore", () => {
     const tokenResponse = await stub.fetch("http://internal/internal/ws-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-1" }),
+      body: JSON.stringify({
+        userId: "user-1",
+        canonicalUserId: "user-1",
+      }),
     });
     const { participantId } = await tokenResponse.json<{ participantId: string }>();
 
@@ -158,7 +160,7 @@ describe("SessionDO eviction and hibernation restore", () => {
   it("rebuilds client identity from ws_client_mapping when the in-memory cache is gone", async () => {
     const sessionName = `do-evict-identity-${Date.now()}`;
     await initNamedSession(sessionName);
-    const { ws } = await openClientWs(sessionName, {
+    await openClientWs(sessionName, {
       subscribe: true,
       userId: "user-1",
       canonicalUserId: "canonical-user-42",
@@ -168,7 +170,6 @@ describe("SessionDO eviction and hibernation restore", () => {
     const mapping = await persistedClientMapping(
       env.SESSION.get(env.SESSION.idFromName(sessionName))
     );
-    ws.close();
 
     const restored = await evictSessionDO(sessionName);
     const received = await deliverOnRestoredSocket(

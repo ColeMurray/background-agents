@@ -4,7 +4,6 @@ import {
   applyIdentityEnforcement,
   deriveIdentity,
   mayAttachCallbackContext,
-  requireEventPoster,
   resolveCanonicalUserId,
 } from "./identity-enforcement";
 import type { Principal, ResolvedIdentity } from "./principal";
@@ -31,12 +30,17 @@ const SLACK_BOT_PRINCIPAL: Principal = {
 };
 
 function createCtx(principal?: Principal): RequestContext {
+  const statement = {
+    bind: vi.fn(() => statement),
+    first: vi.fn(async () => ({ active: 1 })),
+  };
   return {
     trace_id: "trace-test",
     request_id: "req-test",
     principal,
+    db: { prepare: vi.fn(() => statement) },
     executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-  } as RequestContext;
+  } as unknown as RequestContext;
 }
 
 function loggedEvents(spy: { mock: { calls: unknown[][] } }): Array<Record<string, unknown>> {
@@ -93,26 +97,7 @@ describe("applyIdentityEnforcement — identityless principals", () => {
 });
 
 describe("applyIdentityEnforcement — forbidden-field rejection", () => {
-  it("rejects forbidden keys with a 400 naming the field", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { rejection } = applyIdentityEnforcement(createCtx(USER_PRINCIPAL), "session-lifecycle", {
-      userId: "someone",
-      title: "ok",
-    });
-    expect(rejection).toBeDefined();
-    expect(rejection!.status).toBe(400);
-    expect(((await rejection!.clone().json()) as { error: string }).error).toBe(
-      "Field 'userId' is not accepted from verified callers"
-    );
-    const logged = loggedEvents(warn).find((e) => e.event === "identity.forbidden_field_rejected");
-    expect(logged).toMatchObject({ route: "session-lifecycle", field: "userId" });
-  });
-
   it("accepts bodies carrying only permitted fields", () => {
-    expect(
-      applyIdentityEnforcement(createCtx(USER_PRINCIPAL), "session-lifecycle", { title: "ok" })
-        .rejection
-    ).toBeUndefined();
     expect(
       applyIdentityEnforcement(createCtx(USER_PRINCIPAL), "session-create", {
         scmLogin: "ada",
@@ -194,11 +179,9 @@ describe("applyIdentityEnforcement — requires-user rejection", () => {
   });
 
   it("does not gate routes that accept participantless principals", () => {
-    for (const route of ["prompt", "session-lifecycle"] as const) {
-      const result = applyIdentityEnforcement(createCtx(ACTORLESS_BOT), route, {});
-      expect(result.rejection).toBeUndefined();
-      expect(result.enforced).toMatchObject({ participantUserId: null });
-    }
+    const result = applyIdentityEnforcement(createCtx(ACTORLESS_BOT), "prompt", {});
+    expect(result.rejection).toBeUndefined();
+    expect(result.enforced).toMatchObject({ participantUserId: null });
   });
 });
 
@@ -239,6 +222,67 @@ describe("resolveCanonicalUserId", () => {
     expect(resolveOrCreateUser).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "slack", providerUserId: "U0123", displayName: "Dana" })
     );
+  });
+
+  it("rejects when actor enrichment relinks to a different authorized user", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ctx = createCtx(SLACK_BOT_PRINCIPAL);
+    ctx.authorization = {
+      userId: "canon-provisional",
+      suspendedAt: null,
+      permissions: ["sessions.create"],
+      role: { id: "role-member", key: "member", name: "Member" },
+    };
+    const result = await resolveCanonicalUserId(
+      {
+        resolveOrCreateUser: vi.fn(async () => ({ id: "canon-existing" })),
+      } as unknown as UserStore,
+      ctx,
+      {
+        participantUserId: "slack:U0123",
+        canonicalUserId: null,
+        actor: SLACK_ACTOR,
+        spawnSource: "slack-bot",
+      },
+      display
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(409);
+    await expect((result as Response).json()).resolves.toMatchObject({
+      code: "actor_identity_changed",
+    });
+    expect(loggedEvents(warn)).toContainEqual(
+      expect.objectContaining({
+        event: "identity.mismatch_rejected",
+        expected: "canon-provisional",
+        actual: "canon-existing",
+      })
+    );
+  });
+
+  it("rejects a canonical identity whose workspace access is suspended", async () => {
+    const ctx = createCtx(USER_PRINCIPAL);
+    const statement = {
+      bind: vi.fn(() => statement),
+      first: vi.fn(async () => null),
+    };
+    ctx.db = { prepare: vi.fn(() => statement) } as never;
+
+    const result = await resolveCanonicalUserId(
+      { resolveOrCreateUser: vi.fn() } as unknown as UserStore,
+      ctx,
+      {
+        participantUserId: "canon-1",
+        canonicalUserId: "canon-1",
+        actor: null,
+        spawnSource: "user",
+      },
+      display
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(403);
   });
 
   it("fails closed with a 500 if a participant ever lacks both a canonical user and an actor", async () => {
@@ -294,40 +338,5 @@ describe("mayAttachCallbackContext", () => {
       mayAttachCallbackContext(createCtx({ kind: "service", service: "github-bot", actor: null }))
     ).toBe(false);
     expect(mayAttachCallbackContext(createCtx(undefined))).toBe(false);
-  });
-});
-
-describe("requireEventPoster", () => {
-  const GITHUB_BOT: Principal = {
-    kind: "service",
-    service: "github-bot",
-    actor: null,
-  };
-
-  it("logs and 401s a mismatched poster", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const rejection = requireEventPoster(createCtx(GITHUB_BOT), "slack");
-    expect(rejection?.status).toBe(401);
-    const mismatch = loggedEvents(warn).find((e) => e.event === "identity.mismatch_rejected");
-    expect(mismatch).toMatchObject({
-      route: "internal-slack-event",
-      field: "service",
-      expected: "slack-bot",
-      actual: "github-bot",
-    });
-  });
-
-  it("401s non-service principals — the gate never falls open", () => {
-    expect(requireEventPoster(createCtx(USER_PRINCIPAL), "slack")?.status).toBe(401);
-    expect(requireEventPoster(createCtx(undefined), "slack")?.status).toBe(401);
-    expect(
-      requireEventPoster(createCtx({ kind: "sandbox", sessionId: "s1" }), "sentry")?.status
-    ).toBe(401);
-  });
-
-  it("passes the matching bot and exempt sources", () => {
-    expect(requireEventPoster(createCtx(SLACK_BOT_PRINCIPAL), "slack")).toBeNull();
-    // Sentry events are not bot-posted: explicit exemption for any service.
-    expect(requireEventPoster(createCtx(GITHUB_BOT), "sentry")).toBeNull();
   });
 });

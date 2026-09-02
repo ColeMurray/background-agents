@@ -16,7 +16,9 @@ import {
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
+  NO_AUTHORIZATION,
   parsePattern,
+  requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
   type Route,
@@ -263,6 +265,7 @@ export const sessionChildRoutes: Route[] = [
   defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/children"),
+    authorization: requirePermission("sessions.read"),
     handler: handleListChildren,
   }),
   defineRoute(
@@ -270,6 +273,7 @@ export const sessionChildRoutes: Route[] = [
     sessionRoute({
       method: "GET",
       pattern: parsePattern("/sessions/:id/children/:childId"),
+      authorization: requirePermission("sessions.read"),
       handler: handleGetChild,
     })
   ),
@@ -278,6 +282,7 @@ export const sessionChildRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
+      authorization: requirePermission("sessions.lifecycle"),
       handler: handleCancelChild,
     })
   ),
@@ -286,6 +291,7 @@ export const sessionChildRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/children/:childId/prompt"),
+      authorization: NO_AUTHORIZATION,
       handler: handlePromptChild,
     })
   ),

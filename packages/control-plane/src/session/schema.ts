@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   client_id TEXT,
   capabilities TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
+  authorization_expires_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
 `;
@@ -635,6 +636,16 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 46,
+    description: "Add WebSocket authorization leases",
+    run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0`
+      );
+    },
+  },
+  {
+    id: 47,
     description: "Add session budget state",
     run: (sql) => {
       runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
@@ -653,7 +664,7 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     },
   },
   {
-    id: 47,
+    id: 48,
     description: "Add acknowledged step finish receipts",
     run: `CREATE TABLE IF NOT EXISTS step_finish_receipts (
       ack_id TEXT PRIMARY KEY,
@@ -664,12 +675,23 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     )`,
   },
   {
-    id: 48,
-    description: "Add WebSocket client capabilities",
+    id: 49,
+    description: "Reconcile budget receipts and WebSocket mapping extensions",
     run: (sql) => {
+      sql.exec(`CREATE TABLE IF NOT EXISTS step_finish_receipts (
+        ack_id TEXT PRIMARY KEY,
+        message_id TEXT,
+        event_json TEXT NOT NULL,
+        observed_cost REAL,
+        received_at INTEGER NOT NULL
+      )`);
       runMigration(
         sql,
         `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0`
       );
     },
   },

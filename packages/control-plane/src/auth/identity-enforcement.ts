@@ -9,24 +9,18 @@
  * can run the steps out of order or skip one.
  */
 
-import type { AutomationEventSource } from "@open-inspect/shared/triggers";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { createLogger } from "./../logger";
 import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
 import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
-import { error, type RequestContext } from "../routes/shared";
+import { error, json, type RequestContext } from "../routes/shared";
 
 const logger = createLogger("identity-enforcement");
 
 /** The route families that consume caller-supplied identity. */
-export type IdentityRoute =
-  | "session-create"
-  | "ws-token"
-  | "prompt"
-  | "session-lifecycle"
-  | "automation-create";
+type IdentityRoute = "session-create" | "ws-token" | "prompt" | "automation-create";
 
 const SPAWNING_FORBIDDEN_FIELDS = [
   "userId",
@@ -50,7 +44,6 @@ const FORBIDDEN_IDENTITY_FIELDS: Record<IdentityRoute, readonly string[]> = {
   "session-create": SPAWNING_FORBIDDEN_FIELDS,
   "ws-token": ["userId", "scmToken", "scmRefreshToken", "scmUserId"],
   prompt: ["authorId"],
-  "session-lifecycle": ["userId"],
   "automation-create": SPAWNING_FORBIDDEN_FIELDS,
 };
 
@@ -74,7 +67,7 @@ function requiresUserMessage(route: IdentityRoute): string | undefined {
 }
 
 /** Identity a verified principal implies for a consuming route. */
-export interface DerivedIdentity {
+interface DerivedIdentity {
   /** DO participant id: bare canonical id for users, `ns:id` for bot actors. */
   participantUserId: string | null;
   /** Canonical D1 users.id when the principal resolves to one. */
@@ -135,7 +128,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export type IdentityEnforcement<R extends IdentityRoute> =
+type IdentityEnforcement<R extends IdentityRoute> =
   | { rejection: Response; enforced?: undefined }
   | { rejection?: undefined; enforced: EnforcedIdentity<R> };
 
@@ -198,7 +191,23 @@ export async function resolveCanonicalUserId(
   enforced: DerivedIdentity & { participantUserId: string },
   display: { displayName?: string; email?: string; avatarUrl?: string }
 ): Promise<{ userId: string } | Response> {
-  if (enforced.canonicalUserId) return { userId: enforced.canonicalUserId };
+  const requireActive = async (userId: string): Promise<{ userId: string } | Response> => {
+    try {
+      const active = await ctx.db
+        .prepare("SELECT 1 AS active FROM users WHERE id = ? AND suspended_at IS NULL")
+        .bind(userId)
+        .first<{ active: number }>();
+      return active ? { userId } : error("Workspace access is disabled", 403);
+    } catch (cause) {
+      logger.error("Failed to verify workspace access", {
+        error: cause instanceof Error ? cause : String(cause),
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Authorization unavailable", 503);
+    }
+  };
+  if (enforced.canonicalUserId) return requireActive(enforced.canonicalUserId);
   const actor = enforced.actor;
   if (!actor) {
     // Unreachable while deriveIdentity holds its invariant (a participant
@@ -219,7 +228,23 @@ export async function resolveCanonicalUserId(
       providerEmail: display.email,
       avatarUrl: display.avatarUrl,
     });
-    return { userId: user.id };
+    if (ctx.authorization && user.id !== ctx.authorization.userId) {
+      logMismatchRejected(
+        "actor-resolution",
+        "canonicalUserId",
+        ctx.authorization.userId,
+        user.id,
+        ctx
+      );
+      return json(
+        {
+          error: "Actor identity changed; retry the request",
+          code: "actor_identity_changed",
+        },
+        409
+      );
+    }
+    return requireActive(user.id);
   } catch (e) {
     logger.error("Failed to resolve verified actor identity", {
       error: e instanceof Error ? e : String(e),
@@ -260,38 +285,4 @@ function logMismatchRejected(
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   });
-}
-
-/**
- * The bot service allowed to post each normalized automation event source.
- * `null` marks sources that are not bot-posted (sentry/webhook arrive on the
- * CP's own public webhook surface; linear posts no normalized events today)
- * — an explicit exemption, not a missing row.
- */
-const EVENT_SOURCE_SERVICE: Record<AutomationEventSource, ServiceName | null> = {
-  slack: "slack-bot",
-  github: "github-bot",
-  linear: null,
-  sentry: null,
-  webhook: null,
-};
-
-/**
- * Gate for the internal normalized automation-event endpoints: the poster
- * must be a service principal (401 otherwise), and per-service sources
- * accept only the source's own bot. Sources with a null row arrive via the
- * CP's own public webhook surface, so any service may forward them.
- */
-export function requireEventPoster(
-  ctx: RequestContext,
-  source: AutomationEventSource
-): Response | null {
-  const principal = ctx.principal;
-  if (principal?.kind !== "service") {
-    return error("Unauthorized", 401);
-  }
-  const expected = EVENT_SOURCE_SERVICE[source];
-  if (expected === null || principal.service === expected) return null;
-  logMismatchRejected(`internal-${source}-event`, "service", expected, principal.service, ctx);
-  return error("Unauthorized", 401);
 }

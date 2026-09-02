@@ -8,22 +8,32 @@ import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsNav } from "./settings-nav";
 import { SettingsViewportProvider } from "./settings-viewport-context";
+import { resolveSettingsCategory } from "./settings-registry";
 
 expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   isMobile: false,
   repoImagesEnabled: true,
+  allowedPermissions: null as Set<string> | null,
 }));
 
 vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.repoImagesEnabled,
 }));
 
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) =>
+      mocks.allowedPermissions === null || mocks.allowedPermissions.has(permission),
+  }),
+}));
+
 afterEach(() => {
   cleanup();
   mocks.isMobile = false;
   mocks.repoImagesEnabled = true;
+  mocks.allowedPermissions = null;
 });
 
 function renderSettingsNav(
@@ -39,6 +49,20 @@ function renderSettingsNav(
 }
 
 describe("SettingsNav", () => {
+  it("resolves defaults and deep links to an authorized category", () => {
+    const hasNoWorkspacePermissions = () => false;
+
+    expect(resolveSettingsCategory(null, true, hasNoWorkspacePermissions)).toBe("appearance");
+    expect(resolveSettingsCategory("secrets", true, hasNoWorkspacePermissions)).toBe("appearance");
+    expect(
+      resolveSettingsCategory(
+        "environments",
+        true,
+        (permission) => permission === "environments.read"
+      )
+    ).toBe("environments");
+  });
+
   it("groups settings and filters labels, descriptions, and keywords", async () => {
     const user = userEvent.setup();
     renderSettingsNav({ activeCategory: "appearance" });
@@ -85,5 +109,40 @@ describe("SettingsNav", () => {
     renderSettingsNav({ activeCategory: "secrets" });
 
     expect(screen.queryByRole("button", { name: "Images" })).not.toBeInTheDocument();
+  });
+
+  it("hides settings that require unavailable permissions", () => {
+    mocks.allowedPermissions = new Set();
+    renderSettingsNav({ activeCategory: "appearance" });
+
+    expect(screen.getByRole("button", { name: "Appearance" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workspace access" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["global secret management", ["global_secrets.manage"]],
+    ["repository read and secret management", ["repositories.read", "repositories.secrets.manage"]],
+  ])("shows secrets with %s", (_description, permissions) => {
+    mocks.allowedPermissions = new Set(permissions);
+    renderSettingsNav({ activeCategory: "secrets" });
+
+    expect(screen.getByRole("button", { name: "Secrets" })).toBeInTheDocument();
+  });
+
+  it("hides secrets from repository secret managers without repository read access", () => {
+    mocks.allowedPermissions = new Set(["repositories.secrets.manage"]);
+    renderSettingsNav({ activeCategory: "appearance" });
+
+    expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
+  });
+
+  it("keeps read-level sandbox and environment panels visible", () => {
+    mocks.allowedPermissions = new Set(["environments.read", "integrations.read"]);
+    renderSettingsNav({ activeCategory: "environments" });
+
+    expect(screen.getByRole("button", { name: "Environments" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sandbox" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Integrations" })).toBeInTheDocument();
   });
 });

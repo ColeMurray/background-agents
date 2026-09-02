@@ -51,6 +51,7 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   parsePattern,
+  requirePermission,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -243,6 +244,7 @@ export const sessionAttachmentRoutes: Route[] = [
     sessionRoute({
       method: "POST",
       pattern: parsePattern("/sessions/:id/attachments"),
+      authorization: requirePermission("sessions.collaborate"),
       handler: handleAttachmentPost,
     })
   ),
@@ -251,6 +253,7 @@ export const sessionAttachmentRoutes: Route[] = [
     sessionRoute({
       method: "GET",
       pattern: parsePattern("/sessions/:id/attachments/:attachmentId"),
+      authorization: requirePermission("sessions.read"),
       handler: handleAttachmentGet,
     })
   ),

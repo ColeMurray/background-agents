@@ -16,14 +16,14 @@ export function formatTimestamp(ts) {
   return new Date(ts).toISOString();
 }
 
-export function indentBlock(text, indent = "    ") {
+function indentBlock(text, indent = "    ") {
   return String(text)
     .split("\n")
     .map((line) => `${indent}${line}`)
     .join("\n");
 }
 
-export function formatEventData(data) {
+function formatEventData(data) {
   try {
     return JSON.stringify(data);
   } catch {
@@ -74,7 +74,7 @@ export function buildChildDetailQuery(options = {}) {
   return query ? `?${query}` : "";
 }
 
-export function formatArtifacts(artifacts = []) {
+function formatArtifacts(artifacts = []) {
   if (artifacts.length === 0) return [];
 
   const lines = ["", "  Artifacts:"];

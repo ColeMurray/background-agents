@@ -15,6 +15,8 @@ import {
   json,
   error,
   parseJsonBody,
+  activeGlobal,
+  requirePermission,
 } from "./shared";
 
 const logger = createLogger("router:model-preferences");
@@ -109,11 +111,15 @@ export const modelPreferencesRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVI
   {
     method: "GET",
     pattern: parsePattern("/model-preferences"),
+    authorization: activeGlobal({
+      actorlessGrants: [{ service: "slack-bot" }],
+    }),
     handler: handleGetModelPreferences,
   },
   {
     method: "PUT",
     pattern: parsePattern("/model-preferences"),
+    authorization: requirePermission("models.preferences.manage"),
     handler: handleSetModelPreferences,
   },
 ]);

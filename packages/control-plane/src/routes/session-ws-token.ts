@@ -1,4 +1,5 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
+import { SESSION_WEBSOCKET_CONNECT_PERMISSION } from "@open-inspect/shared/rbac";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import type { Env } from "../types";
 import {
@@ -7,6 +8,7 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   parseJsonBody,
   parsePattern,
+  requirePermission,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -33,8 +35,10 @@ async function handleSessionWsToken(
   if (!parsedBody.success) return error("Invalid websocket token body", 400);
   const body = parsedBody.data;
 
+  const authorization = ctx.authorization;
+  if (!authorization) return error("Authorization unavailable", 503);
   const userId = enforcement.enforced.participantUserId;
-  const canonicalUserId = enforcement.enforced.canonicalUserId;
+  const canonicalUserId = authorization.userId;
 
   return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
@@ -55,6 +59,7 @@ export const sessionWsTokenRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/ws-token"),
+    authorization: requirePermission(SESSION_WEBSOCKET_CONNECT_PERMISSION),
     handler: handleSessionWsToken,
   }),
 ]);

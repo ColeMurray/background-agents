@@ -10,7 +10,7 @@ function routeFor(method: string, path: string) {
   return routes.find((route) => route.method === method && route.pattern.test(path));
 }
 
-function createEnv() {
+function createEnv(options?: { actorAuthorized?: boolean }) {
   const fetch = vi.fn(async (request: Request) => {
     if (new URL(request.url).pathname === "/internal/verify-sandbox-token") {
       const body = (await request.json()) as { token?: string };
@@ -35,7 +35,42 @@ function createEnv() {
       SCM_PROVIDER: "gitlab",
       GITLAB_ACCESS_TOKEN: "glpat-test",
       DB: {
-        prepare: vi.fn(() => statement),
+        prepare: vi.fn((sql: string) => {
+          if (options?.actorAuthorized && sql.includes("FROM user_identities")) {
+            const identityStatement = {
+              bind: vi.fn(() => identityStatement),
+              first: vi.fn(async () => ({
+                id: "identity-linear-u1",
+                user_id: "user-1",
+                provider: "linear",
+                provider_user_id: "U1",
+                provider_login: null,
+                provider_email: null,
+                provider_issuer: null,
+                created_at: 1,
+              })),
+            };
+            return identityStatement;
+          }
+          if (
+            options?.actorAuthorized &&
+            sql.includes("FROM users u") &&
+            sql.includes("user_role_assignments")
+          ) {
+            const authorizationStatement = {
+              bind: vi.fn(() => authorizationStatement),
+              first: vi.fn(async () => ({
+                user_id: "user-1",
+                suspended_at: null,
+                role_id: "role_builtin_member",
+                role_key: "member",
+                role_name: "Member",
+              })),
+            };
+            return authorizationStatement;
+          }
+          return statement;
+        }),
         batch: vi.fn(),
         exec: vi.fn(),
         dump: vi.fn(),
@@ -128,7 +163,7 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(fetch.mock.calls[1][0].url).pathname).toBe("/internal/scm-credentials");
   });
 
-  it("allows GitLab deployments to reach the tunnel URLs endpoint", async () => {
+  it("requires an actor for service access to tunnel URLs", async () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
@@ -139,10 +174,9 @@ describe("SCM credentials router provider gate", () => {
       TEST_BACKGROUND_TASK_CONTEXT
     );
 
-    expect(response.status).toBe(202);
-    expect(fetch).toHaveBeenCalledOnce();
-    const request = fetch.mock.calls[0][0];
-    expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("treats provider-neutral SCM settings routes as SCM-agnostic", () => {
@@ -218,13 +252,31 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
   });
 
-  it("continues blocking unrelated GitLab session routes", async () => {
+  it("rejects actorless services before unrelated GitLab session routes", async () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
       await signedServiceRequest("https://test.local/sessions/session-1/pr", {
         method: "POST",
         service: "linear-bot",
+      }),
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns the provider gate after authorizing an actor on a GitHub-only route", async () => {
+    const { env, fetch } = createEnv({ actorAuthorized: true });
+
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        service: "linear-bot",
+        actor: "linear:U1",
       }),
       env as never,
       TEST_BACKGROUND_TASK_CONTEXT

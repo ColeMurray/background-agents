@@ -3,7 +3,7 @@ import type { SqlStorage } from "./sql-storage";
 import type { ParticipantRow } from "./types";
 
 /** Data for creating a participant. */
-export interface CreateParticipantData {
+interface CreateParticipantData {
   id: string;
   userId: string;
   canonicalUserId?: string | null;
@@ -19,7 +19,7 @@ export interface CreateParticipantData {
 }
 
 /** Data for updating a participant with COALESCE (only non-null values update). */
-export interface UpdateParticipantData {
+interface UpdateParticipantData {
   canonicalUserId?: string | null;
   scmUserId?: string | null;
   scmLogin?: string | null;
@@ -115,7 +115,9 @@ export class ParticipantRepository {
 
   updateParticipantWsToken(participantId: string, tokenHash: string, createdAt: number): void {
     this.sql.exec(
-      `UPDATE participants SET ws_auth_token = ?, ws_token_created_at = ? WHERE id = ?`,
+      `UPDATE participants
+       SET ws_auth_token = ?, ws_token_created_at = ?
+       WHERE id = ?`,
       tokenHash,
       createdAt,
       participantId

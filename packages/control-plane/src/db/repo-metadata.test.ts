@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { RepoMetadataStore } from "./repo-metadata";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 type RepoMetadataRow = {
   repo_owner: string;
@@ -15,6 +16,8 @@ type RepoMetadataRow = {
 
 const QUERY_PATTERNS = {
   SELECT_BY_PK: /^SELECT \* FROM repo_metadata WHERE repo_owner = \? AND repo_name = \?$/,
+  SELECT_SET:
+    /^SELECT \* FROM repo_metadata WHERE \(repo_owner = \? AND repo_name = \?\)(?: OR \(repo_owner = \? AND repo_name = \?\))*$/,
   UPSERT: /^INSERT INTO repo_metadata/,
 } as const;
 
@@ -24,6 +27,7 @@ function normalizeQuery(query: string): string {
 
 class FakeD1Database {
   private rows = new Map<string, RepoMetadataRow>();
+  readonly allQueries: Array<{ query: string; args: unknown[] }> = [];
 
   private rowKey(owner: string, name: string): string {
     return `${owner}/${name}`;
@@ -46,11 +50,21 @@ class FakeD1Database {
 
   all(query: string, args: unknown[]) {
     const normalized = normalizeQuery(query);
+    this.allQueries.push({ query: normalized, args });
 
     if (QUERY_PATTERNS.SELECT_BY_PK.test(normalized)) {
       const [owner, name] = args as [string, string];
       const row = this.rows.get(this.rowKey(owner, name));
       return row ? [row] : [];
+    }
+
+    if (QUERY_PATTERNS.SELECT_SET.test(normalized)) {
+      const rows: RepoMetadataRow[] = [];
+      for (let index = 0; index < args.length; index += 2) {
+        const row = this.rows.get(this.rowKey(args[index] as string, args[index + 1] as string));
+        if (row) rows.push(row);
+      }
+      return rows;
     }
 
     throw new Error(`Unexpected all() query: ${query}`);
@@ -99,13 +113,6 @@ class FakeD1Database {
 
     throw new Error(`Unexpected mutation query: ${query}`);
   }
-
-  async batch<T>(statements: FakePreparedStatement[]): Promise<Array<{ results: T[] }>> {
-    return statements.map((stmt) => {
-      const results = stmt.allSync();
-      return { results: results as T[] };
-    });
-  }
 }
 
 class FakePreparedStatement {
@@ -127,10 +134,6 @@ class FakePreparedStatement {
 
   async all<T>() {
     return { results: this.db.all(this.query, this.bound) as T[] };
-  }
-
-  allSync() {
-    return this.db.all(this.query, this.bound);
   }
 
   async run() {
@@ -220,6 +223,7 @@ describe("RepoMetadataStore", () => {
     it("returns empty map for empty input", async () => {
       const result = await store.getBatch([]);
       expect(result.size).toBe(0);
+      expect(db.allQueries).toHaveLength(0);
     });
 
     it("returns metadata for repos that have it", async () => {
@@ -238,6 +242,62 @@ describe("RepoMetadataStore", () => {
       expect(result.get("owner/repo2")?.description).toBe("Second");
       expect(result.get("owner/repo2")?.keywords).toEqual(["kw"]);
       expect(result.has("owner/repo3")).toBe(false);
+    });
+
+    it("chunks set queries at the D1 parameter limit", async () => {
+      const tupleCapacity = Math.floor(MAX_D1_QUERY_PARAMETERS / 2);
+      const repos = Array.from({ length: tupleCapacity + 1 }, (_, index) => ({
+        owner: "owner",
+        name: `repo-${index}`,
+      }));
+
+      await store.getBatch(repos.slice(0, tupleCapacity));
+      expect(db.allQueries).toHaveLength(1);
+      expect(db.allQueries[0].args).toHaveLength(MAX_D1_QUERY_PARAMETERS);
+
+      db.allQueries.length = 0;
+      await store.getBatch(repos);
+      expect(db.allQueries).toHaveLength(2);
+      expect(db.allQueries.map(({ args }) => args.length)).toEqual([MAX_D1_QUERY_PARAMETERS, 2]);
+      expect(db.allQueries.every(({ args }) => args.length <= MAX_D1_QUERY_PARAMETERS)).toBe(true);
+    });
+
+    it("deduplicates normalized identities before querying", async () => {
+      await store.upsert("Group/Subgroup", "Repo", { description: "Nested" });
+
+      const result = await store.getBatch([
+        { owner: "Group/Subgroup", name: "Repo" },
+        { owner: "group/subgroup", name: "repo" },
+        { owner: "GROUP/SUBGROUP", name: "REPO" },
+      ]);
+
+      expect(db.allQueries).toHaveLength(1);
+      expect(db.allQueries[0].args).toEqual(["group/subgroup", "repo"]);
+      expect(result).toEqual(new Map([["group/subgroup/repo", { description: "Nested" }]]));
+    });
+
+    it("returns found rows and omits missing rows across chunks", async () => {
+      const tupleCapacity = Math.floor(MAX_D1_QUERY_PARAMETERS / 2);
+      await store.upsert("Nested/Owner", "first", { description: "First" });
+      await store.upsert("NESTED/OWNER", `repo-${tupleCapacity}`, { description: "Last" });
+
+      const result = await store.getBatch([
+        { owner: "Nested/Owner", name: "FIRST" },
+        ...Array.from({ length: tupleCapacity }, (_, index) => ({
+          owner: "nested/owner",
+          name: `repo-${index + 1}`,
+        })),
+        { owner: "missing/owner", name: "missing" },
+      ]);
+
+      expect(db.allQueries).toHaveLength(2);
+      expect(result).toEqual(
+        new Map([
+          ["nested/owner/first", { description: "First" }],
+          [`nested/owner/repo-${tupleCapacity}`, { description: "Last" }],
+        ])
+      );
+      expect(result.has("missing/owner/missing")).toBe(false);
     });
   });
 });

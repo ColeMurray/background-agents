@@ -4,9 +4,23 @@
   "ignoreBinaries": ["ruff", "ssh-keygen"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/cf-logs.ts", "scripts/merge-split-users.ts", "vitest.workspace.ts"],
-      "project": ["scripts/**/*.ts"],
-      "ignoreDependencies": ["database", "survivor", "loser"]
+      "entry": [
+        "scripts/cf-logs.ts",
+        "scripts/merge-split-users.ts",
+        "vitest.workspace.ts",
+        "packages/sandbox-runtime/src/sandbox_runtime/bin/upload-media.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/plugins/codex-auth-plugin.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/plugins/inspect-plugin.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/plugins/xai-auth-plugin.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/tools/cancel-child.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/tools/get-child-status.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/tools/send-child-prompt.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/tools/slack-notify.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/tools/spawn-child.js",
+        "packages/sandbox-runtime/src/sandbox_runtime/ttyd_proxy/server.ts"
+      ],
+      "project": ["scripts/**/*.ts", "packages/sandbox-runtime/src/sandbox_runtime/**/*.{js,ts}"],
+      "ignoreDependencies": ["@opencode-ai/plugin", "database", "loser", "survivor", "zod"]
     },
     "packages/shared": {
       "project": ["src/**/*.ts"],
@@ -30,20 +44,6 @@
     },
     "packages/opencomputer-infra": {
       "project": ["src/**/*.ts"]
-    },
-    "packages/sandbox-runtime": {
-      "entry": [
-        "src/sandbox_runtime/bin/upload-media.js",
-        "src/sandbox_runtime/plugins/codex-auth-plugin.js",
-        "src/sandbox_runtime/plugins/inspect-plugin.js",
-        "src/sandbox_runtime/plugins/xai-auth-plugin.js",
-        "src/sandbox_runtime/tools/cancel-child.js",
-        "src/sandbox_runtime/tools/get-child-status.js",
-        "src/sandbox_runtime/tools/send-child-prompt.js",
-        "src/sandbox_runtime/tools/slack-notify.js",
-        "src/sandbox_runtime/tools/spawn-child.js",
-        "src/sandbox_runtime/ttyd_proxy/server.ts"
-      ]
     },
     "packages/web": {
       "next": true,

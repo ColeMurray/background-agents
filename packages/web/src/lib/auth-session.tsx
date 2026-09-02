@@ -58,6 +58,11 @@ export async function signOut(): Promise<void> {
   if (!response.ok) {
     throw new Error(`Sign-out failed with status ${response.status}`);
   }
+  await clearAuthSessionCache();
+}
+
+/** Immediately reflect a server-side session revocation in the client cache. */
+export async function clearAuthSessionCache(): Promise<void> {
   await mutate(BROWSER_AUTH_SESSION_PATH, null, false);
 }
 

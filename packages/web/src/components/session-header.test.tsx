@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { createRef } from "react";
+import { createRef, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
-import { SessionHeader } from "./session-header";
+import { SessionHeader as SessionHeaderComponent } from "./session-header";
 import type { SessionActionProps } from "./session-actions";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 expect.extend(matchers);
 
@@ -20,10 +21,27 @@ vi.mock("@/components/sidebar-layout", () => ({
 
 afterEach(cleanup);
 
+const FULL_CAPABILITIES: SessionCapabilities = {
+  read: true,
+  collaborate: true,
+  lifecycle: true,
+  sandboxAccess: true,
+};
+
+function SessionHeader({
+  capabilities = FULL_CAPABILITIES,
+  ...props
+}: Omit<ComponentProps<typeof SessionHeaderComponent>, "capabilities"> & {
+  capabilities?: SessionCapabilities;
+}) {
+  return <SessionHeaderComponent {...props} capabilities={capabilities} />;
+}
+
 const actions: SessionActionProps = {
   sessionId: "session-1",
   sessionStatus: "active",
   artifacts: [],
+  capabilities: FULL_CAPABILITIES,
 };
 
 function createSessionState(overrides: Partial<SessionState> = {}): SessionState {
@@ -43,6 +61,40 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 }
 
 describe("SessionHeader", () => {
+  it("disables lifecycle controls and connection UI for a read-only session", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState()}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Read only" }}
+        connected={false}
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={{ ...actions, capabilities: { ...FULL_CAPABILITIES, lifecycle: false } }}
+        renameSession={vi.fn()}
+        capabilities={{
+          read: false,
+          collaborate: false,
+          lifecycle: false,
+          sandboxAccess: false,
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Session 1" })).toBeDisabled();
+    expect(screen.queryByRole("status", { name: /Connection status/ })).not.toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: "Session actions" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeInTheDocument();
+  });
   it("lets desktop users hide and show the session details sidebar", () => {
     const onToggleDesktopDetails = vi.fn();
     const { rerender } = render(

@@ -8,6 +8,7 @@ import {
 import type { RepositoryInput, RepositoryRef } from "./repositories";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
+import { isCanonicalUserId } from "../user-id";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 
@@ -80,6 +81,7 @@ const automationSchema = z.object({
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
   createdBy: z.string(),
+  userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
   deletedAt: z.number().nullable(),

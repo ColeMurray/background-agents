@@ -7,6 +7,14 @@ export const SESSION_BUDGET_CAPABILITY = "session_budget" as const;
 export const clientCapabilitySchema = z.literal(SESSION_BUDGET_CAPABILITY);
 export type ClientCapability = z.infer<typeof clientCapabilitySchema>;
 
+/** Standard close code for a transient server-side failure. */
+export const WS_CLOSE_INTERNAL_ERROR = 1011;
+
+/** Signals that the browser must discard its credential and reconnect fresh. */
+export const WS_CLOSE_AUTHORIZATION_REVOKED = 4010;
+
+export const WS_AUTHORIZATION_REVOKED_REASON = "Authorization expired or changed";
+
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
   z.object({

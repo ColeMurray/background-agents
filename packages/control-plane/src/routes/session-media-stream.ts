@@ -15,6 +15,7 @@ import {
   error,
   GITHUB_USER_OR_SERVICE_ROUTE,
   parsePattern,
+  requirePermission,
   type Route,
 } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -145,6 +146,9 @@ export const sessionMediaStreamRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SER
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/media/:artifactId"),
+    authorization: requirePermission("sessions.read", {
+      actorlessGrants: [{ service: "slack-bot" }],
+    }),
     handler: handleMediaGet,
   }),
 ]);

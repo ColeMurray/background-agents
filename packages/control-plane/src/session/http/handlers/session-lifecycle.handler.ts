@@ -3,7 +3,6 @@ import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { MessageRepository } from "../../message-repository";
-import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionStatusService } from "../../session-status-service";
 import type { SessionTitleService } from "../../title-service";
 import { resolvePublicSessionId } from "../../public-session-id";
@@ -37,14 +36,7 @@ function sessionTitleUpdateStatus(
   }
 }
 
-const userIdBodySchema = z.object({
-  userId: z.string().optional(),
-});
-
-type UserIdBody = z.infer<typeof userIdBodySchema>;
-
 const titleUpdateBodySchema = z.object({
-  userId: z.string().optional(),
   title: z.string().optional(),
 });
 
@@ -55,11 +47,11 @@ type TitleUpdateBody = z.infer<typeof titleUpdateBodySchema>;
  * updates, archive/unarchive, draft expiry, and cancellation.
  */
 export class SessionLifecycleHandler {
+  /** Create the session lifecycle HTTP handler with its persistence and lifecycle services. */
   constructor(
     private readonly sessionCoreRepository: SessionCoreRepository,
     private readonly sandboxRepository: SandboxRepository,
     private readonly messageRepository: MessageRepository,
-    private readonly participantRepository: ParticipantRepository,
     private readonly statusService: SessionStatusService,
     private readonly titleService: SessionTitleService,
     private readonly sockets: WebSocketManager,
@@ -102,6 +94,7 @@ export class SessionLifecycleHandler {
     });
   }
 
+  /** Update the title after route-level lifecycle authorization has succeeded. */
   async updateTitle(request: Request): Promise<Response> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
@@ -122,21 +115,9 @@ export class SessionLifecycleHandler {
 
     const body: TitleUpdateBody = parseResult.data;
 
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
     const normalizedTitle = normalizeSessionTitle(body.title);
     if (!normalizedTitle.ok) {
       return Response.json({ error: normalizedTitle.error }, { status: 400 });
-    }
-
-    const participant = this.participantRepository.getParticipantByUserId(body.userId);
-    if (!participant) {
-      return Response.json(
-        { error: "Not authorized to update the session title" },
-        { status: 403 }
-      );
     }
 
     const result = this.titleService.applySessionTitleUpdate(normalizedTitle.title, {
@@ -149,30 +130,11 @@ export class SessionLifecycleHandler {
     return Response.json({ title: result.title });
   }
 
-  async archive(request: Request): Promise<Response> {
+  /** Archive the session after route-level lifecycle authorization has succeeded. */
+  async archive(): Promise<Response> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
       return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    let body: UserIdBody;
-    try {
-      const result = userIdBodySchema.safeParse(await request.json());
-      if (!result.success) {
-        return Response.json({ error: "Invalid request body" }, { status: 400 });
-      }
-      body = result.data;
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const participant = this.participantRepository.getParticipantByUserId(body.userId);
-    if (!participant) {
-      return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
     }
 
     if (session.status === "cancelled") {
@@ -240,30 +202,11 @@ export class SessionLifecycleHandler {
     return Response.json({ outcome: "archived", status: "archived" });
   }
 
-  async unarchive(request: Request): Promise<Response> {
+  /** Restore the session after route-level lifecycle authorization has succeeded. */
+  async unarchive(): Promise<Response> {
     const session = this.sessionCoreRepository.getSession();
     if (!session) {
       return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    let body: UserIdBody;
-    try {
-      const result = userIdBodySchema.safeParse(await request.json());
-      if (!result.success) {
-        return Response.json({ error: "Invalid request body" }, { status: 400 });
-      }
-      body = result.data;
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-
-    if (!body.userId) {
-      return Response.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    const participant = this.participantRepository.getParticipantByUserId(body.userId);
-    if (!participant) {
-      return Response.json({ error: "Not authorized to unarchive this session" }, { status: 403 });
     }
 
     if (session.status !== "archived") {

@@ -11,6 +11,7 @@ import { BranchIcon, PlusIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
 import { APP_DESTINATIONS } from "@/components/app-destinations";
 import { getSettingsGroups } from "@/components/settings/settings-registry";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   Command,
   CommandDialog,
@@ -72,6 +73,9 @@ function CommandMenuFooter() {
   );
 }
 
+/**
+ * Provides global navigation and search while exposing only settings destinations the user may access.
+ */
 export function GlobalCommandMenu({
   open,
   onOpenChange,
@@ -80,11 +84,13 @@ export function GlobalCommandMenu({
   sessions,
 }: GlobalCommandMenuProps) {
   const { labels } = useKeyboardShortcuts();
+  const { hasPermission } = useCurrentUserAuthorization();
   const searchableSessions = useMemo(
     () => sessions.filter((session) => session.status !== "archived"),
     [sessions]
   );
-  const settingsGroups = getSettingsGroups();
+  const settingsGroups = getSettingsGroups({ hasPermission });
+  const canCreateSession = hasPermission("sessions.create");
 
   const handleSelect = (callback: () => void) => {
     onOpenChange(false);
@@ -92,21 +98,28 @@ export function GlobalCommandMenu({
   };
 
   const navigationItems = [
-    {
-      label: "New session",
-      description: "Start a coding session",
-      Icon: PlusIcon,
-      onSelect: onNewSession,
-      shortcut: labels["new-session"],
-    },
-    {
-      label: "Home",
-      description: "Ask a question or describe what you want to build",
-      Icon: AppIcon,
-      onSelect: () => onNavigate("/"),
-      shortcut: undefined,
-    },
-    ...APP_DESTINATIONS.map(({ label, description, href, icon: Icon }) => ({
+    ...(canCreateSession
+      ? [
+          {
+            label: "New session",
+            description: "Start a coding session",
+            Icon: PlusIcon,
+            onSelect: onNewSession,
+            shortcut: labels["new-session"],
+          },
+          {
+            label: "Home",
+            description: "Ask a question or describe what you want to build",
+            Icon: AppIcon,
+            onSelect: () => onNavigate("/"),
+            shortcut: undefined,
+          },
+        ]
+      : []),
+    ...APP_DESTINATIONS.filter(
+      (destination) =>
+        !("requiredPermission" in destination) || hasPermission(destination.requiredPermission)
+    ).map(({ label, description, href, icon: Icon }) => ({
       label,
       description,
       Icon,

@@ -65,7 +65,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          # Minimum supported release: node:sqlite is available without an
+          # additional flag and --experimental-transform-types is present.
+          node-version: "22.13.0"
           cache: "npm"
 
       - name: Install dependencies
@@ -76,6 +78,12 @@ jobs:
 
       - name: Test complexity reporter
         run: npm run test:lint-complexity
+
+      - name: Test Owner bootstrap CLI
+        run: npm run test:rbac-bootstrap-owner
+
+      - name: Test user merge CLI
+        run: npm run test:user-merge-cli
 
       - name: Check Prettier formatting
         run: npm run format:check

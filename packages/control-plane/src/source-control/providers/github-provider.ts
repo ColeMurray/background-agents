@@ -175,7 +175,7 @@ export type GetGitHubPullRequestFeedbackConfig = GitHubPullRequestFeedbackLocati
     | { providerObject: { kind: "review"; id: string } }
   );
 
-export interface GitHubFeedbackAuthor {
+interface GitHubFeedbackAuthor {
   id: string;
   login: string;
   type: string;
@@ -199,7 +199,7 @@ export type GitHubPullRequestFeedback =
       comments: GitHubReviewComment[];
     };
 
-export interface GitHubReviewComment {
+interface GitHubReviewComment {
   id: string;
   body: string;
   url: string;

@@ -269,6 +269,23 @@ describe("applyMigrations", () => {
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
   });
 
+  it("adds WebSocket authorization lease state for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("authorization_expires_at INTEGER NOT NULL");
+    expect(SCHEMA_SQL).not.toContain("authorization_version");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 46);
+    expect(typeof migration?.run).toBe("function");
+    const run = migration!.run as (sql: SqlStorage) => void;
+    run(mock.sql);
+    expect(
+      mock.calls.filter(({ query }) => query.includes("ALTER TABLE")).map(({ query }) => query)
+    ).toEqual([
+      expect.stringContaining(
+        "ws_client_mapping ADD COLUMN authorization_expires_at INTEGER NOT NULL DEFAULT 0"
+      ),
+    ]);
+  });
+
   it("keeps repository context consistent at the session table boundary", () => {
     expect(SCHEMA_SQL).toContain("(repo_owner IS NULL) = (repo_name IS NULL)");
     expect(SCHEMA_SQL).toContain("repo_owner IS NOT NULL");
@@ -474,7 +491,7 @@ describe("applyMigrations", () => {
     expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
     expect(sessionTable).toContain("cost_tracking_unavailable INTEGER NOT NULL DEFAULT 0");
 
-    const migration = MIGRATIONS.find((entry) => entry.id === 46);
+    const migration = MIGRATIONS.find((entry) => entry.id === 47);
     expect(typeof migration?.run).toBe("function");
     const db = new DatabaseSync(":memory:");
     const sql = createDatabaseSql(db);
@@ -498,8 +515,39 @@ describe("applyMigrations", () => {
 
   it("adds acknowledged step finish receipts for fresh and migrated sessions", () => {
     expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
-    const migration = MIGRATIONS.find((entry) => entry.id === 47);
+    const migration = MIGRATIONS.find((entry) => entry.id === 48);
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS step_finish_receipts");
+  });
+
+  it("reconciles WebSocket leases and receipts from pre-merge budget schemas", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 49);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec(`CREATE TABLE ws_client_mapping (
+        ws_id TEXT PRIMARY KEY,
+        capabilities TEXT NOT NULL DEFAULT '[]'
+      )`);
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+      expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "capabilities", type: "TEXT" }),
+          expect.objectContaining({ name: "authorization_expires_at", type: "INTEGER" }),
+        ])
+      );
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'step_finish_receipts'"
+          )
+          .get()
+      ).toEqual({ name: "step_finish_receipts" });
+    } finally {
+      db.close();
+    }
   });
 
   it("adds Autofix admission metadata and indexes for fresh and migrated sessions", () => {
