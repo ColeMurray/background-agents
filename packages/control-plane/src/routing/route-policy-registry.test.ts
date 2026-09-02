@@ -36,14 +36,15 @@ describe("route policy registry", () => {
     expect(routePolicyOf(passThrough)).toBeUndefined();
   });
 
-  it("accepts an app whose every route carries a tagged policy somewhere in its chain", () => {
+  it("accepts an app whose every route chain begins with a tagged policy", () => {
     const sub = new Hono();
-    sub.post("/c", passThrough, admit(), ok);
+    sub.post("/c", admit(), passThrough, ok);
 
     const app = new Hono();
     app.use("*", passThrough);
     app.options("*", ok);
     app.get("/a/:id", admit(), ok);
+    app.get("/a/:id", ok);
     app.route("/sub", sub);
 
     expect(missingRoutePolicies(app, { exempt: ["OPTIONS /*"] })).toEqual([]);
@@ -62,7 +63,7 @@ describe("route policy registry", () => {
 
     expect(missingRoutePolicies(app)).toEqual(["GET /b", "POST /sub/c"]);
     expect(() => assertEveryRouteAdmits(app)).toThrow(
-      "Routes registered without an admission policy: GET /b, POST /sub/c"
+      "Routes whose handler chain does not begin with an admission policy: GET /b, POST /sub/c"
     );
   });
 
@@ -74,6 +75,40 @@ describe("route policy registry", () => {
     app.get("/b", ok);
 
     expect(missingRoutePolicies(app)).toEqual(["POST /a", "GET /b"]);
+  });
+
+  it("refuses a policy that an earlier handler for the same method+path can pre-empt", async () => {
+    // Hono stops at the first handler that returns without calling next, so
+    // a policy registered behind it never runs.
+    const later = new Hono();
+    later.get("/a", ok);
+    later.get("/a", admit(), ok);
+    expect(missingRoutePolicies(later)).toEqual(["GET /a"]);
+    expect(await (await later.request("/a")).text()).toBe("ok");
+
+    const trailing = new Hono();
+    trailing.get("/a", ok, admit());
+    expect(missingRoutePolicies(trailing)).toEqual(["GET /a"]);
+
+    // Untagged middleware ahead of the policy is refused too: the check does
+    // not try to tell a pass-through from a handler that answers.
+    const preceded = new Hono();
+    preceded.get("/a", passThrough, admit(), ok);
+    expect(missingRoutePolicies(preceded)).toEqual(["GET /a"]);
+  });
+
+  it("credits a policy wrapped by a mounted sub-app that owns an error handler", () => {
+    const sub = new Hono();
+    sub.onError((_error, c) => c.text("sub error", 500));
+    sub.get("/x", admit(), ok);
+
+    const app = new Hono();
+    app.route("/s", sub);
+
+    const entry = app.routes.find((route) => route.path === "/s/x");
+    expect(entry).toBeDefined();
+    expect(routePolicyOf(entry!.handler)).toBe(PUBLIC_POLICY);
+    expect(missingRoutePolicies(app)).toEqual([]);
   });
 
   it("ignores app.use middleware and honours the exempt list", () => {
@@ -88,9 +123,13 @@ describe("route policy registry", () => {
     expect(missingRoutePolicies(app, { exempt: ["OPTIONS /*", "GET /a/x"] })).toEqual([]);
   });
 
-  // The catalog adapter registers each route's handler directly, so nothing is
-  // tagged yet. This flips when admit() lands: drop `.fails` in the same change.
-  it.fails("every production route registers an admission policy", () => {
-    assertEveryRouteAdmits(createControlPlaneApp(routes), { exempt: ["OPTIONS /*"] });
+  // The catalog adapter registers each route's handler directly, so no
+  // production route is tagged yet. This pins that exact state; the change
+  // that lands admit() shrinks the expected list to empty.
+  it("reports every production route as untagged until admit() lands", () => {
+    const app = createControlPlaneApp(routes);
+    expect(missingRoutePolicies(app, { exempt: ["OPTIONS /*"] })).toEqual(
+      routes.map((route) => `${route.method} ${route.path}`)
+    );
   });
 });
