@@ -1356,6 +1356,20 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
   });
 
+  it("re-arms a future stop confirmation deadline when an earlier alarm fired", async () => {
+    const h = buildQueue();
+    const deadline = Date.now() + 10_000;
+    h.repository.getMessageAwaitingStopConfirmation.mockReturnValue({
+      id: "msg-stopped",
+      deadline,
+    });
+
+    await h.queue.recoverStopConfirmationTimeout();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+    expect(h.setAlarm).toHaveBeenCalledExactlyOnceWith(deadline);
+  });
+
   it("clears the marker and resumes only after definitive sandbox termination", async () => {
     const h = buildQueue();
     h.repository.getMessageAwaitingStopConfirmation
