@@ -1,7 +1,9 @@
 /** Hono environment shared by the control-plane app, its middleware, and its hosts. */
 
+import type { Hono } from "hono";
 import type { RequestContext } from "../http/request-context";
 import type { BackgroundTasks } from "../platform-ports";
+import type { Route } from "../routes/shared";
 import type { Env } from "../types";
 import type { AdmissionPolicy, RouteAdmission } from "./admit";
 
@@ -29,3 +31,9 @@ export interface ControlPlaneHost {
   /** Background-task port for one request. Cloudflare extends the event through `waitUntil`; a host without one supplies its own. */
   backgroundTasks(executionCtx: PlatformExecutionContext | undefined): BackgroundTasks;
 }
+
+/** A route module: a Hono sub-app whose every route is registered behind `admit()`. */
+export type RouteModule = Hono<ControlPlaneHonoEnv>;
+
+/** What the catalog lists, in precedence order: converted modules and, until they convert, legacy routes. */
+export type RouteCatalogEntry = Route | RouteModule;

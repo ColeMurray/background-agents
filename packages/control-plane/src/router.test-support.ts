@@ -9,8 +9,12 @@
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { BackgroundTasks } from "./platform-ports";
 import { createTestBackgroundTasks } from "./background-tasks.test-support";
-import { cloudflareHost, createControlPlaneApp } from "./routing/hono-app";
-import { routes } from "./routes/catalog";
+import { Hono } from "hono";
+import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
+import type { SqlDatabase, SqlStatement } from "./db/sql-database";
+import { cloudflareHost, createControlPlaneApp, type RouteCatalogEntry } from "./routing/hono-app";
+import { listRouteContracts, type RouteContract } from "./routing/route-contracts";
+import { catalog } from "./routes/catalog";
 import type { Route, RouteParams } from "./routes/shared";
 import type { Env } from "./types";
 
@@ -41,14 +45,62 @@ function executionContextFromBackgroundTasks(tasks: BackgroundTasks): ExecutionC
  * synthetic routes construct their own handler instead of mutating the
  * production catalog.
  */
-export function createTestRequestHandler(catalog: readonly Route[]): TestRequestHandler {
-  const app = createControlPlaneApp(catalog, cloudflareHost);
+export function createTestRequestHandler(
+  entries: readonly RouteCatalogEntry[]
+): TestRequestHandler {
+  const app = createControlPlaneApp(entries, cloudflareHost);
   return (request, env, backgroundTasks) =>
     Promise.resolve(app.fetch(request, env, executionContextFromBackgroundTasks(backgroundTasks)));
 }
 
 /** Test-only adapter over the production catalog. */
-export const handleRequest: TestRequestHandler = createTestRequestHandler(routes);
+export const handleRequest: TestRequestHandler = createTestRequestHandler(catalog);
+
+/** Every production route with its policy, in precedence order, as Hono registered it. */
+export const routeContracts: readonly RouteContract[] = listRouteContracts(
+  createControlPlaneApp(catalog, cloudflareHost)
+);
+
+/** The catalog entries still registered through the legacy adapter. */
+export function legacyRoutes(entries: readonly RouteCatalogEntry[] = catalog): Route[] {
+  return entries.filter((entry): entry is Route => !(entry instanceof Hono));
+}
+
+/** The production contract selected for a concrete method and path. */
+export function contractFor(method: string, path: string): RouteContract | undefined {
+  return routeContracts.find(
+    (contract) => contract.method === method && routePathPattern(contract.path).test(path)
+  );
+}
+
+/**
+ * A database whose effective-authorization lookup answers with an active
+ * workspace owner, for request-level unit tests of admitted handlers whose
+ * data access is mocked at the store.
+ */
+export function ownerAuthorizationDatabase(userId = "user-1"): SqlDatabase {
+  return {
+    prepare(sql: string) {
+      const statement: SqlStatement = {
+        bind: () => statement,
+        first: async <T>() =>
+          (sql.includes("FROM users u")
+            ? {
+                user_id: userId,
+                suspended_at: null,
+                role_id: BUILT_IN_ROLE_REGISTRY.owner.id,
+                role_key: "owner",
+                role_name: "Owner",
+              }
+            : null) as T | null,
+        all: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
+        run: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
+      };
+      return statement;
+    },
+    batch: async () => [],
+  };
+}
 
 /** Compile a catalog path into the legacy raw-path matcher, for handler-level fixtures. */
 export function routePathPattern(path: string): RegExp {
@@ -56,12 +108,12 @@ export function routePathPattern(path: string): RegExp {
 }
 
 /** Select the catalog route for a concrete path and rebuild what the adapter hands its handler. */
-export function matchRoute(
-  catalog: readonly Route[],
+export function matchRoute<Entry extends { method: string; path: string }>(
+  entries: readonly Entry[],
   method: string,
   path: string
-): { route: Route; match: RegExpMatchArray; params: RouteParams } | undefined {
-  for (const route of catalog) {
+): { route: Entry; match: RegExpMatchArray; params: RouteParams } | undefined {
+  for (const route of entries) {
     if (route.method !== method) continue;
     const match = path.match(routePathPattern(route.path));
     if (match) return { route, match, params: { ...match.groups } };

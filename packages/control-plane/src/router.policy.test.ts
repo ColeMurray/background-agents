@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { enforceRoutePrincipal } from "./routing/route-admission";
-import { routes } from "./routes/catalog";
-import { handleRequest, matchRoute, TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
+import {
+  handleRequest,
+  legacyRoutes,
+  matchRoute,
+  routeContracts as routes,
+  TEST_BACKGROUND_TASK_CONTEXT,
+} from "./router.test-support";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
 import { SCOPED_PERMISSION_PAIRS } from "@open-inspect/shared/rbac";
 
@@ -241,7 +246,7 @@ describe("route policy table", () => {
 
   it("returns 400 for a malformed percent-encoded role ID before querying D1", async () => {
     const path = "/roles/%E0%A4%A";
-    const { route, match } = matchRoute(routes, "GET", path)!;
+    const { route, match } = matchRoute(legacyRoutes(), "GET", path)!;
     const prepare = vi.fn();
 
     const response = await route.handler(

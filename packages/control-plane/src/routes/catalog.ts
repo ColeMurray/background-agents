@@ -5,6 +5,7 @@
  * and parameterized paths.
  */
 
+import type { RouteCatalogEntry } from "../routing/hono-env";
 import { webhookRoutes } from "../webhooks";
 import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
@@ -14,6 +15,7 @@ import { browserAuthRoutes } from "./browser-auth";
 import { commitSigningRoutes } from "./commit-signing";
 import { environmentSecretsRoutes } from "./environment-secrets";
 import { environmentRoutes } from "./environments";
+import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
@@ -28,33 +30,17 @@ import { sessionRoutes } from "./sessions";
 import { handleSlackNotify } from "./slack-notify";
 import { signInProviderRoutes } from "./sign-in-providers";
 import { skillRoutes } from "./skills";
-import {
-  defineRoute,
-  GITHUB_SANDBOX_FALLBACK_ROUTE,
-  json,
-  NO_AUTHORIZATION,
-  requirePermission,
-  type Route,
-} from "./shared";
+import { defineRoute, GITHUB_SANDBOX_FALLBACK_ROUTE, requirePermission } from "./shared";
 
-export const routes: Route[] = [
-  // Health check
-  defineRoute(
-    { authentication: { kind: "public" }, supportedScmProviders: "all" },
-    {
-      method: "GET",
-      path: "/health",
-      authorization: NO_AUTHORIZATION,
-      handler: async () =>
-        json({
-          status: "healthy",
-          service: "open-inspect-control-plane",
-        }),
-    }
-  ),
+/**
+ * Registration order is the precedence order. A Hono sub-app is mounted where
+ * it appears; a legacy route is registered through the catalog adapter.
+ */
+export const catalog: RouteCatalogEntry[] = [
+  healthRoutes,
 
   ...browserAuthRoutes,
-  ...signInProviderRoutes,
+  signInProviderRoutes,
 
   // Session management
   ...sessionRoutes,
@@ -80,7 +66,7 @@ export const routes: Route[] = [
   ...imageBuildRoutes,
 
   // Model preferences
-  ...modelPreferencesRoutes,
+  modelPreferencesRoutes,
 
   // Subscription provider account management and sandbox access broker
   ...modelProviderAccountRoutes,
@@ -101,10 +87,10 @@ export const routes: Route[] = [
   ...mcpServerRoutes,
 
   // Analytics
-  ...analyticsRoutes,
+  analyticsRoutes,
 
   // Workspace audit log
-  ...auditEventRoutes,
+  auditEventRoutes,
 
   // Pull request feedback Autofix activity
   ...autofixRoutes,
@@ -113,7 +99,7 @@ export const routes: Route[] = [
   ...skillRoutes,
 
   // Personal keyboard shortcuts
-  ...keyboardShortcutRoutes,
+  keyboardShortcutRoutes,
 
   // Workspace roles, members, and current-user authorization
   ...rbacRoutes,

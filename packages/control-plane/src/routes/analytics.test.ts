@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { analyticsRoutes } from "./analytics";
+import type * as AuthenticateModule from "../auth/authenticate";
 import { HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
-import type { RequestContext } from "./shared";
-import type { SqlDatabase } from "../db/sql-database";
+import {
+  createTestRequestHandler,
+  ownerAuthorizationDatabase,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "../router.test-support";
 import type { Env } from "../types";
-import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { analyticsRoutes } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
 
@@ -17,6 +21,13 @@ const mockStore = {
 const mockDashboardStore = {
   get: vi.fn(),
 };
+
+const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
+
+vi.mock("../auth/authenticate", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthenticateModule>()),
+  authenticate: mocks.authenticate,
+}));
 
 vi.mock("../db/analytics-store", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -34,46 +45,14 @@ vi.mock("../db/analytics-dashboard-store", () => ({
   }),
 }));
 
-function getHandler(method: string, path: string) {
-  const pathname = new URL(`https://test.local${path}`).pathname;
-  for (const route of analyticsRoutes) {
-    if (route.method === method && routePathPattern(route.path).test(pathname)) {
-      const match = pathname.match(routePathPattern(route.path))!;
-      return { handler: route.handler, match };
-    }
-  }
-
-  throw new Error(`No route found for ${method} ${path}`);
-}
-
-function createEnv(): Env {
-  return {
-    DB: {} as D1Database,
-  } as Env;
-}
-
-function createCtx(): RequestContext {
-  return {
-    trace_id: "trace-1",
-    request_id: "req-1",
-    db: {} as SqlDatabase,
-    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-    metrics: {
-      d1Queries: [],
-      spans: {},
-      time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
-      summarize: () => ({}),
-    },
-  };
-}
+const handleRequest = createTestRequestHandler([analyticsRoutes]);
+const env = { ...TEST_SERVICE_SECRETS, DB: ownerAuthorizationDatabase() } as unknown as Env;
 
 async function callRoute(method: string, path: string): Promise<Response> {
-  const { handler, match } = getHandler(method, path);
-  return handler(
+  return handleRequest(
     new Request(`https://test.local${path}`, { method }),
-    createEnv(),
-    match,
-    createCtx()
+    env,
+    TEST_BACKGROUND_TASK_CONTEXT
   );
 }
 
@@ -82,9 +61,17 @@ describe("analytics route handlers", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(FIXED_NOW);
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
   });
 
-  describe("GET /analytics/dashboard", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("dashboard", () => {
     it("anchors one shared dashboard window", async () => {
       mockDashboardStore.get.mockResolvedValue({ generatedAt: FIXED_NOW });
 
@@ -107,26 +94,21 @@ describe("analytics route handlers", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  describe("GET /analytics/summary", () => {
+  describe("summary", () => {
     it("defaults days to 30", async () => {
       mockStore.getSummary.mockResolvedValue({
-        totalSessions: 12,
-        activeUsers: 4,
-        totalCost: 1.5,
-        avgCost: 0.125,
-        totalPrs: 2,
-        statusBreakdown: {
-          created: 1,
-          active: 2,
-          completed: 5,
-          failed: 2,
-          archived: 1,
-          cancelled: 1,
-        },
+        totalSessions: 0,
+        activeUsers: 0,
+        prsOpened: 0,
+        prsMerged: 0,
+        mergeRate: 0,
+        avgSessionDurationMs: 0,
+        sessionsByStatus: [],
+        sessionsByRepo: [],
+        sessionsByUser: [],
+        sessionsByModel: [],
+        prBreakdown: [],
+        recentSessions: [],
       });
 
       const response = await callRoute("GET", "/analytics/summary");
@@ -148,9 +130,9 @@ describe("analytics route handlers", () => {
     });
   });
 
-  describe("GET /analytics/timeseries", () => {
+  describe("timeseries", () => {
     it("passes the requested range to the store", async () => {
-      mockStore.getTimeseries.mockResolvedValue({ series: [] });
+      mockStore.getTimeseries.mockResolvedValue([]);
 
       const response = await callRoute("GET", "/analytics/timeseries?days=14");
       expect(response.status).toBe(200);
@@ -162,7 +144,7 @@ describe("analytics route handlers", () => {
     });
   });
 
-  describe("GET /analytics/breakdown", () => {
+  describe("breakdown", () => {
     it("requires a valid by parameter", async () => {
       const response = await callRoute("GET", "/analytics/breakdown?days=30");
       expect(response.status).toBe(400);
@@ -179,5 +161,32 @@ describe("analytics route handlers", () => {
       });
       expect(mockStore.getBreakdown).not.toHaveBeenCalled();
     });
+
+    it("passes the breakdown dimension to the store", async () => {
+      mockStore.getBreakdown.mockResolvedValue([]);
+
+      const response = await callRoute("GET", "/analytics/breakdown?days=7&by=repo");
+      expect(response.status).toBe(200);
+      expect(mockStore.getBreakdown).toHaveBeenCalledWith(
+        {
+          startAt: FIXED_NOW - 7 * 24 * 60 * 60 * 1000,
+          endAt: FIXED_NOW,
+          spawnSources: HUMAN_SPAWN_SOURCES,
+        },
+        "repo"
+      );
+    });
+  });
+
+  it("denies a request without analytics permission before touching a store", async () => {
+    mocks.authenticate.mockImplementation(async () => ({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "none",
+    }));
+
+    const response = await callRoute("GET", "/analytics/summary");
+    expect(response.status).toBe(401);
+    expect(mockStore.getSummary).not.toHaveBeenCalled();
   });
 });

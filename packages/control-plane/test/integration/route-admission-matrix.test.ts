@@ -12,10 +12,15 @@ import { SELF, env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { createExecutionContext } from "cloudflare:test";
-import { createControlPlaneHttpHandler } from "../../src/routing/hono-app";
+import {
+  cloudflareHost,
+  createControlPlaneApp,
+  createControlPlaneHttpHandler,
+} from "../../src/routing/hono-app";
+import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
 import type { Env } from "../../src/types";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
-import { routes } from "../../src/routes/catalog";
+import { catalog } from "../../src/routes/catalog";
 import type { Route } from "../../src/routes/shared";
 import { cleanD1Tables } from "./cleanup";
 import {
@@ -36,6 +41,10 @@ const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // mutating session route, so the default per-test budget is too small under
 // full-suite load.
 const MATRIX_TIMEOUT_MS = 60_000;
+/** Every production route with its policy, in precedence order, as Hono registered it. */
+const routes: readonly RouteContract[] = listRouteContracts(
+  createControlPlaneApp(catalog, cloudflareHost)
+);
 
 interface MatrixFixtures {
   readonlySessionId: string;
@@ -74,17 +83,17 @@ const PARAMETER_VALUES: Record<string, string> = {
   key: "MATRIX_KEY",
 };
 
-function materialize(route: Route, values: Record<string, string>): string {
+function materialize(route: RouteContract, values: Record<string, string>): string {
   return route.path.replace(/:(\w+)/g, (_parameter, parameter: string) => {
     return values[parameter] ?? PARAMETER_VALUES[parameter] ?? `matrix-${parameter}`;
   });
 }
 
-function isSessionRoute(route: Route): boolean {
+function isSessionRoute(route: RouteContract): boolean {
   return route.path.startsWith("/sessions/:id");
 }
 
-function isAutomationRoute(route: Route): boolean {
+function isAutomationRoute(route: RouteContract): boolean {
   return route.path.startsWith("/automations/:id");
 }
 
@@ -95,7 +104,7 @@ async function createAutomation(): Promise<string> {
   return id;
 }
 
-function isMutation(route: Route): boolean {
+function isMutation(route: RouteContract): boolean {
   return route.method !== "GET";
 }
 

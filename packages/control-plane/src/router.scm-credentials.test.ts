@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { routes } from "./routes/catalog";
 import {
   handleRequest,
   matchRoute,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
+  routeContracts as routes,
 } from "./router.test-support";
 
 function routeFor(method: string, path: string) {

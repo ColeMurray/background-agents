@@ -1,15 +1,9 @@
+import { Hono } from "hono";
 import { encodeAuditEventCursor, parseAuditEventCursor } from "../db/audit-event-cursor";
 import { AuditEventStore, toAuditEvent } from "../db/audit-event-store";
-import type { Env } from "../types";
-import {
-  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-  defineRoutes,
-  error,
-  json,
-  requirePermission,
-  type RequestContext,
-  type Route,
-} from "./shared";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { error, json, requirePermission, SCM_AGNOSTIC_HUMAN_USER_ROUTE } from "./shared";
 
 const DEFAULT_AUDIT_EVENT_LIMIT = 25;
 const MAX_AUDIT_EVENT_LIMIT = 100;
@@ -20,40 +14,36 @@ function singleQueryValue(searchParams: URLSearchParams, name: string): string |
   return values[0] ?? null;
 }
 
-async function handleListAuditEvents(
-  request: Request,
-  _env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const searchParams = new URL(request.url).searchParams;
-  const rawLimit = singleQueryValue(searchParams, "limit");
-  if (rawLimit instanceof Response) return rawLimit;
-  const cursor = singleQueryValue(searchParams, "cursor");
-  if (cursor instanceof Response) return cursor;
+export const auditEventRoutes = new Hono<ControlPlaneHonoEnv>();
 
-  if (rawLimit !== null && !/^[1-9]\d*$/.test(rawLimit)) return error("Invalid limit", 400);
-  const limit = rawLimit === null ? DEFAULT_AUDIT_EVENT_LIMIT : Number(rawLimit);
-  if (!Number.isSafeInteger(limit) || limit > MAX_AUDIT_EVENT_LIMIT) {
-    return error("Invalid limit", 400);
-  }
-  const parsedCursor = parseAuditEventCursor(cursor);
-  if (!parsedCursor.ok) return error(parsedCursor.error, 400);
-
-  const result = await new AuditEventStore(ctx.db).list({ limit, cursor: parsedCursor.cursor });
-  return json({
-    events: result.rows.map(toAuditEvent),
-    hasMore: result.hasMore,
-    nextCursor: result.nextCursor ? encodeAuditEventCursor(result.nextCursor) : null,
-  });
-}
-
-export const auditEventRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_HUMAN_USER_ROUTE, [
-  {
-    method: "GET",
-    path: "/audit-events",
+auditEventRoutes.get(
+  "/audit-events",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requirePermission("workspace.audit.read", { service: "deny" }),
     cacheControl: "private, no-store",
-    handler: handleListAuditEvents,
-  },
-]);
+  }),
+  async (c) => {
+    const { request, ctx } = c.var.admitted;
+    const searchParams = new URL(request.url).searchParams;
+    const rawLimit = singleQueryValue(searchParams, "limit");
+    if (rawLimit instanceof Response) return rawLimit;
+    const cursor = singleQueryValue(searchParams, "cursor");
+    if (cursor instanceof Response) return cursor;
+
+    if (rawLimit !== null && !/^[1-9]\d*$/.test(rawLimit)) return error("Invalid limit", 400);
+    const limit = rawLimit === null ? DEFAULT_AUDIT_EVENT_LIMIT : Number(rawLimit);
+    if (!Number.isSafeInteger(limit) || limit > MAX_AUDIT_EVENT_LIMIT) {
+      return error("Invalid limit", 400);
+    }
+    const parsedCursor = parseAuditEventCursor(cursor);
+    if (!parsedCursor.ok) return error(parsedCursor.error, 400);
+
+    const result = await new AuditEventStore(ctx.db).list({ limit, cursor: parsedCursor.cursor });
+    return json({
+      events: result.rows.map(toAuditEvent),
+      hasMore: result.hasMore,
+      nextCursor: result.nextCursor ? encodeAuditEventCursor(result.nextCursor) : null,
+    });
+  }
+);

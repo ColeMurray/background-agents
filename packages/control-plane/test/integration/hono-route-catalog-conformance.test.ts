@@ -1,11 +1,17 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { routes } from "../../src/routes/catalog";
+import { catalog } from "../../src/routes/catalog";
 import { NO_AUTHORIZATION, type Route } from "../../src/routes/shared";
-import { createControlPlaneHttpHandler } from "../../src/routing/hono-app";
+import {
+  cloudflareHost,
+  createControlPlaneApp,
+  createControlPlaneHttpHandler,
+} from "../../src/routing/hono-app";
+import { listRouteContracts } from "../../src/routing/route-contracts";
 import type { Env } from "../../src/types";
 
 const PARAMETER = /:(\w+)/g;
+const routes = listRouteContracts(createControlPlaneApp(catalog, cloudflareHost));
 
 function materializePath(
   routePath: string,

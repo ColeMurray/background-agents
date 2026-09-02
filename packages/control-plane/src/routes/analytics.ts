@@ -10,12 +10,12 @@ import {
   type PullRequestAnalyticsFilters,
   PullRequestAnalyticsStore,
 } from "../db/pull-request-analytics-store";
-import type { Env } from "../types";
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   type RequestContext,
-  type Route,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   error,
   json,
   requirePermission,
@@ -51,12 +51,7 @@ function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters
   return { startAt: now - days * 24 * 60 * 60 * 1000, endAt: now, now };
 }
 
-async function handleDashboard(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function handleDashboard(request: Request, ctx: RequestContext): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
   if (!days) {
@@ -74,12 +69,7 @@ async function handleDashboard(
   );
 }
 
-async function handleSummary(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function handleSummary(request: Request, ctx: RequestContext): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
   if (!days) {
@@ -90,12 +80,7 @@ async function handleSummary(
   return json(await store.getSummary(getFilters(days)));
 }
 
-async function handleTimeseries(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function handleTimeseries(request: Request, ctx: RequestContext): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
   if (!days) {
@@ -106,12 +91,7 @@ async function handleTimeseries(
   return json(await store.getTimeseries(getFilters(days)));
 }
 
-async function handleBreakdown(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function handleBreakdown(request: Request, ctx: RequestContext): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
   if (!days) {
@@ -128,12 +108,7 @@ async function handleBreakdown(
   return json(await store.getBreakdown(getFilters(days), by));
 }
 
-async function handlePullRequests(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function handlePullRequests(request: Request, ctx: RequestContext): Promise<Response> {
   const url = new URL(request.url);
   const days = parseDaysParam(url.searchParams.get("days"));
   if (!days) {
@@ -144,35 +119,25 @@ async function handlePullRequests(
   return json(await store.get(getPullRequestFilters(days)));
 }
 
-export const analyticsRoutes: Route[] = defineRoutes(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/analytics/dashboard",
-    authorization: requirePermission("analytics.read"),
-    handler: handleDashboard,
-  },
-  {
-    method: "GET",
-    path: "/analytics/summary",
-    authorization: requirePermission("analytics.read"),
-    handler: handleSummary,
-  },
-  {
-    method: "GET",
-    path: "/analytics/timeseries",
-    authorization: requirePermission("analytics.read"),
-    handler: handleTimeseries,
-  },
-  {
-    method: "GET",
-    path: "/analytics/breakdown",
-    authorization: requirePermission("analytics.read"),
-    handler: handleBreakdown,
-  },
-  {
-    method: "GET",
-    path: "/analytics/pull-requests",
-    authorization: requirePermission("analytics.read"),
-    handler: handlePullRequests,
-  },
-]);
+const ANALYTICS_READ = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("analytics.read"),
+});
+
+export const analyticsRoutes = new Hono<ControlPlaneHonoEnv>();
+
+analyticsRoutes.get("/analytics/dashboard", ANALYTICS_READ, (c) =>
+  handleDashboard(c.var.admitted.request, c.var.admitted.ctx)
+);
+analyticsRoutes.get("/analytics/summary", ANALYTICS_READ, (c) =>
+  handleSummary(c.var.admitted.request, c.var.admitted.ctx)
+);
+analyticsRoutes.get("/analytics/timeseries", ANALYTICS_READ, (c) =>
+  handleTimeseries(c.var.admitted.request, c.var.admitted.ctx)
+);
+analyticsRoutes.get("/analytics/breakdown", ANALYTICS_READ, (c) =>
+  handleBreakdown(c.var.admitted.request, c.var.admitted.ctx)
+);
+analyticsRoutes.get("/analytics/pull-requests", ANALYTICS_READ, (c) =>
+  handlePullRequests(c.var.admitted.request, c.var.admitted.ctx)
+);

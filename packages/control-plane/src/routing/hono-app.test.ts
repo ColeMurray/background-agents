@@ -4,7 +4,9 @@ import { TEST_SERVICE_SECRETS } from "../router.test-support";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import { defineRoute, NO_AUTHORIZATION, type Route } from "../routes/shared";
 import type { Env } from "../types";
-import { createControlPlaneApp, type ControlPlaneHost } from "./hono-app";
+import { Hono } from "hono";
+import { admit } from "./admit";
+import { createControlPlaneApp, type ControlPlaneHonoEnv, type ControlPlaneHost } from "./hono-app";
 
 const PUBLIC = { authentication: { kind: "public" }, supportedScmProviders: "all" } as const;
 
@@ -130,6 +132,37 @@ describe("control-plane Hono app lifecycle", () => {
     expect(loggedEvents(errors).map((line) => [line.event, line.http_status])).toEqual([
       ["http.request", 500],
     ]);
+  });
+
+  it("mounts a route module and hands its handler the admitted request and context", async () => {
+    const module = new Hono<ControlPlaneHonoEnv>();
+    module.get("/module/:id", admit({ ...PUBLIC, authorization: NO_AUTHORIZATION }), (c) => {
+      const { request, ctx } = c.var.admitted;
+      return json({
+        id: c.req.param("id"),
+        url: request.url,
+        requestId: ctx.request_id,
+        principal: ctx.principal ?? null,
+      });
+    });
+    const app = createControlPlaneApp([module], host);
+
+    const response = await app.fetch(new Request("https://cp.test/module/m-1?x=1"), env);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      id: "m-1",
+      url: "https://cp.test/module/m-1?x=1",
+      principal: null,
+    });
+    expect(body.requestId).toBe(response.headers.get("x-request-id"));
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+  });
+
+  it("refuses a module route outside the path grammar when the app is built", () => {
+    const module = new Hono<ControlPlaneHonoEnv>();
+    module.get("/files/*", admit({ ...PUBLIC, authorization: NO_AUTHORIZATION }), () => json({}));
+    expect(() => createControlPlaneApp([module], host)).toThrow("outside the supported grammar");
   });
 
   it("refuses a route that declares the same parameter twice", () => {

@@ -2,14 +2,14 @@
  * Model-preferences routes and handlers.
  */
 
+import { Hono } from "hono";
 import { DEFAULT_ENABLED_MODELS, normalizeValidModels } from "@open-inspect/shared/models";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "../db/model-preferences";
 import { createLogger } from "../logger";
-import type { Env } from "../types";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
-  type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   type RequestContext,
   json,
   error,
@@ -20,12 +20,7 @@ import {
 
 const logger = createLogger("router:model-preferences");
 
-async function handleGetModelPreferences(
-  _request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function getModelPreferences(ctx: RequestContext): Promise<Response> {
   if (!ctx.db) {
     return json({ enabledModels: DEFAULT_ENABLED_MODELS });
   }
@@ -60,12 +55,7 @@ async function handleGetModelPreferences(
   }
 }
 
-async function handleSetModelPreferences(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function setModelPreferences(request: Request, ctx: RequestContext): Promise<Response> {
   if (!ctx.db) {
     return error("Model preferences storage is not configured", 503);
   }
@@ -106,19 +96,22 @@ async function handleSetModelPreferences(
   }
 }
 
-export const modelPreferencesRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/model-preferences",
-    authorization: activeGlobal({
-      actorlessGrants: [{ service: "slack-bot" }],
-    }),
-    handler: handleGetModelPreferences,
-  },
-  {
-    method: "PUT",
-    path: "/model-preferences",
+export const modelPreferencesRoutes = new Hono<ControlPlaneHonoEnv>();
+
+modelPreferencesRoutes.get(
+  "/model-preferences",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: activeGlobal({ actorlessGrants: [{ service: "slack-bot" }] }),
+  }),
+  (c) => getModelPreferences(c.var.admitted.ctx)
+);
+
+modelPreferencesRoutes.put(
+  "/model-preferences",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("models.preferences.manage"),
-    handler: handleSetModelPreferences,
-  },
-]);
+  }),
+  (c) => setModelPreferences(c.var.admitted.request, c.var.admitted.ctx)
+);
