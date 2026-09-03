@@ -1,7 +1,6 @@
 import {
   ANALYTICS_BREAKDOWN_BY,
   ANALYTICS_DAYS,
-  type AnalyticsBreakdownBy,
   type AnalyticsDays,
 } from "@open-inspect/shared/types/analytics";
 import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
@@ -11,29 +10,35 @@ import {
   PullRequestAnalyticsStore,
 } from "../db/pull-request-analytics-store";
 import { Hono } from "hono";
+import { z } from "zod";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { parseQuery } from "./query";
 import {
   type RequestContext,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  error,
   json,
   requirePermission,
 } from "./shared";
 
-function parseDaysParam(value: string | null): AnalyticsDays | null {
-  if (value === null) return 30;
+const DEFAULT_ANALYTICS_DAYS: AnalyticsDays = 30;
 
-  const parsed = Number(value);
-  return ANALYTICS_DAYS.includes(parsed as AnalyticsDays) ? (parsed as AnalyticsDays) : null;
-}
+/** The reporting window; absent, the default. The value is read the way `Number()` reads it. */
+const daysQuery = z.object({
+  days: z
+    .string()
+    .optional()
+    .transform((raw) => (raw === undefined ? DEFAULT_ANALYTICS_DAYS : Number(raw)))
+    .pipe(
+      z.literal(ANALYTICS_DAYS, { error: `days must be one of: ${ANALYTICS_DAYS.join(", ")}` })
+    ),
+});
 
-function parseBreakdownBy(value: string | null): AnalyticsBreakdownBy | null {
-  if (!value) return null;
-  return ANALYTICS_BREAKDOWN_BY.includes(value as AnalyticsBreakdownBy)
-    ? (value as AnalyticsBreakdownBy)
-    : null;
-}
+const breakdownQuery = daysQuery.extend({
+  by: z.enum(ANALYTICS_BREAKDOWN_BY, {
+    error: `by must be one of: ${ANALYTICS_BREAKDOWN_BY.join(", ")}`,
+  }),
+});
 
 function getFilters(days: AnalyticsDays): AnalyticsFilters {
   const endAt = Date.now();
@@ -52,11 +57,9 @@ function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters
 }
 
 async function handleDashboard(request: Request, ctx: RequestContext): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
 
   const generatedAt = Date.now();
   const store = new AnalyticsDashboardStore(ctx.db);
@@ -70,50 +73,36 @@ async function handleDashboard(request: Request, ctx: RequestContext): Promise<R
 }
 
 async function handleSummary(request: Request, ctx: RequestContext): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
 
   const store = new AnalyticsStore(ctx.db);
   return json(await store.getSummary(getFilters(days)));
 }
 
 async function handleTimeseries(request: Request, ctx: RequestContext): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
 
   const store = new AnalyticsStore(ctx.db);
   return json(await store.getTimeseries(getFilters(days)));
 }
 
 async function handleBreakdown(request: Request, ctx: RequestContext): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
-
-  const byParam = url.searchParams.get("by");
-  const by = parseBreakdownBy(byParam);
-  if (!by) {
-    return error(`by must be one of: ${ANALYTICS_BREAKDOWN_BY.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, breakdownQuery);
+  if (query instanceof Response) return query;
+  const { days, by } = query;
 
   const store = new AnalyticsStore(ctx.db);
   return json(await store.getBreakdown(getFilters(days), by));
 }
 
 async function handlePullRequests(request: Request, ctx: RequestContext): Promise<Response> {
-  const url = new URL(request.url);
-  const days = parseDaysParam(url.searchParams.get("days"));
-  if (!days) {
-    return error(`days must be one of: ${ANALYTICS_DAYS.join(", ")}`, 400);
-  }
+  const query = parseQuery(request, daysQuery);
+  if (query instanceof Response) return query;
+  const { days } = query;
 
   const store = new PullRequestAnalyticsStore(ctx.db);
   return json(await store.get(getPullRequestFilters(days)));
