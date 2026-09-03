@@ -38,6 +38,9 @@ export async function handleSessionSkillsView(
  */
 const PAGE_LIMIT_ERROR = `limit must be an integer between 1 and ${MAX_SANDBOX_SKILL_PAGE_SIZE}`;
 
+/** The position before the first manifest entry: an omitted cursor pages from the start. */
+const BEFORE_FIRST_POSITION = -1;
+
 const installationPageQuerySchema = z.object({
   limit: z
     .string()
@@ -51,7 +54,7 @@ const installationPageQuerySchema = z.object({
     .string()
     .regex(/^\d+$/, { error: "cursor is not a valid position" })
     .optional()
-    .transform((raw) => (raw === undefined ? -1 : Number(raw)))
+    .transform((raw) => (raw === undefined ? BEFORE_FIRST_POSITION : Number(raw)))
     // A digit run long enough to overflow Number is not a position either.
     .refine(Number.isSafeInteger, { error: "cursor is not a valid position" }),
 });
