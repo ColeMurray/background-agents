@@ -25,6 +25,15 @@ function createStore() {
   return new PersistedTerminalMessageProjectionStore(sql);
 }
 
+function createStoreWithPendingRows(rows: unknown[]) {
+  const sql: SqlStorage = {
+    exec(_query: string, ..._params: unknown[]): SqlResult {
+      return { toArray: () => rows, one: () => rows[0] ?? null };
+    },
+  };
+  return new PersistedTerminalMessageProjectionStore(sql);
+}
+
 const older = {
   messageId: "message-1",
   messageCreatedAt: 1_000,
@@ -48,6 +57,34 @@ describe("PersistedTerminalMessageProjectionStore", () => {
     store.setPending(older);
 
     expect(store.pending()).toEqual(older);
+  });
+
+  it("parses valid persisted pending projection rows", () => {
+    const store = createStoreWithPendingRows([
+      {
+        message_id: "message-1",
+        message_created_at: 1_000,
+        completed_at: 2_000,
+        attempts: 0,
+        next_attempt_at: 5_000,
+      },
+    ]);
+
+    expect(store.pending()).toEqual(older);
+  });
+
+  it("rejects malformed persisted pending projection rows", () => {
+    const store = createStoreWithPendingRows([
+      {
+        message_id: "message-1",
+        message_created_at: "1000",
+        completed_at: 2_000,
+        attempts: 0,
+        next_attempt_at: 5_000,
+      },
+    ]);
+
+    expect(() => store.pending()).toThrow("Malformed pending terminal message projection row");
   });
 
   it("keeps only the newest message and its retry metadata", () => {
