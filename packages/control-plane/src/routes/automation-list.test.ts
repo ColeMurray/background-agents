@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestRequestHandler } from "../router.test-support";
 import { MAX_NAME_LENGTH } from "./automation-validation";
-import { automationListRoutes } from "./automation-list";
+import { automationRoutes } from "./automations";
 import {
   mocks,
   mockStore,
@@ -69,7 +69,7 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
-const callRoute = automationRequest(createTestRequestHandler([automationListRoutes]));
+const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
 
 describe("automation listing routes", () => {
   beforeEach(() => {

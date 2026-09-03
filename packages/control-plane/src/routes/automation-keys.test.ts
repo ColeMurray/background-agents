@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestRequestHandler } from "../router.test-support";
-import { automationKeyRoutes } from "./automation-keys";
+import { automationRoutes } from "./automations";
 import {
   mocks,
   mockStore,
@@ -69,7 +69,7 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
-const callRoute = automationRequest(createTestRequestHandler([automationKeyRoutes]));
+const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
 
 describe("automation key regeneration route", () => {
   beforeEach(() => {

@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestRequestHandler } from "../router.test-support";
-import { automationRunRoutes } from "./automation-runs";
+import { automationRoutes } from "./automations";
 import {
   mocks,
   mockStore,
@@ -68,7 +68,7 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
-const callRoute = automationRequest(createTestRequestHandler([automationRunRoutes]));
+const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
 
 describe("automation run routes", () => {
   beforeEach(() => {

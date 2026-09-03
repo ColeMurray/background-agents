@@ -12,7 +12,7 @@ import type * as AuthenticateModule from "../auth/authenticate";
 import { HttpError, resolveRepoOrError } from "./shared";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import { createTestRequestHandler } from "../router.test-support";
-import { automationCrudRoutes } from "./automation-crud";
+import { automationRoutes } from "./automations";
 import {
   mocks,
   mockStore,
@@ -108,7 +108,7 @@ vi.mock("./shared", async (importOriginal) => {
   };
 });
 
-const callRoute = automationRequest(createTestRequestHandler([automationCrudRoutes]));
+const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
 
 describe("automation create route", () => {
   beforeEach(() => {

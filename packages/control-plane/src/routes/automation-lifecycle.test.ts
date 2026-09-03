@@ -14,7 +14,7 @@ import {
   AutomationTriggerBlockedError,
 } from "../scheduler/scheduler";
 import { createTestRequestHandler } from "../router.test-support";
-import { automationLifecycleRoutes } from "./automation-lifecycle";
+import { automationRoutes } from "./automations";
 import {
   mocks,
   mockStore,
@@ -104,7 +104,7 @@ vi.mock("../scheduler/scheduler", () => ({
   }),
 }));
 
-const callRoute = automationRequest(createTestRequestHandler([automationLifecycleRoutes]));
+const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
 
 describe("automation lifecycle routes", () => {
   beforeEach(() => {
