@@ -2,6 +2,8 @@ import {
   BROWSER_AUTH_CLIENT_IP_HEADER,
   isBrowserAuthProxyRoute,
 } from "@open-inspect/shared/browser-auth-routes";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
+import { SERVICE_REQUEST_MAX_BODY_BYTES } from "@open-inspect/shared/service-auth";
 import { dispatchWebServiceRequest } from "./control-plane-service";
 
 const REQUEST_HEADERS = [
@@ -25,6 +27,13 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
 ]);
 
 const DECODED_BODY_RESPONSE_HEADERS = new Set(["content-encoding", "content-length"]);
+
+function requestBodyTooLarge(): Response {
+  return Response.json(
+    { error: "Request body is too large" },
+    { status: 413, headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }
+  );
+}
 
 /**
  * A logical browser-auth request for server code that has no incoming URL.
@@ -130,8 +139,18 @@ export async function proxyBrowserAuthRequest(request: Request): Promise<Respons
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
-  const body =
-    method === "GET" || method === "HEAD" ? undefined : new Uint8Array(await request.arrayBuffer());
+  let body: Uint8Array<ArrayBuffer> | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    const contentLength = Number(request.headers.get("Content-Length"));
+    if (Number.isFinite(contentLength) && contentLength > SERVICE_REQUEST_MAX_BODY_BYTES) {
+      return requestBodyTooLarge();
+    }
+    const buffered = await readBodyCapped(request.body, SERVICE_REQUEST_MAX_BODY_BYTES);
+    if (buffered === null) {
+      return requestBodyTooLarge();
+    }
+    body = buffered;
+  }
   return dispatchAllowedBrowserAuthRequest({
     method,
     pathname: incomingUrl.pathname,
