@@ -2,6 +2,10 @@
  * Test storage over `node:sqlite`: the same `SqlStorage` + `TransactionSync`
  * surface a Durable Object supplies, backed by an in-process database, so the
  * repository suites and the schema tests can run without a Workers runtime.
+ *
+ * No SQL text is interpreted here. Whether a call is one statement or a script
+ * comes from the prepared statement's own extent, rows come from stepping it,
+ * and the write count comes from SQLite's change counter.
  */
 
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -12,28 +16,34 @@ export interface NodeSqlStorage {
   transactionSync: TransactionSync;
 }
 
-/** Statements that produce rows: reads, and writes that ask for them back. */
-const RETURNS_ROWS = /^\s*(?:PRAGMA|SELECT|WITH|EXPLAIN)\b|\bRETURNING\b/i;
-
-/** A parameterless script with more than one statement; only `exec` runs those. */
-function isMultiStatement(query: string): boolean {
-  return /;\s*\S/.test(query.trim().replace(/;\s*$/, ""));
-}
-
 export function createNodeSqlStorage(db: DatabaseSync): NodeSqlStorage {
+  const totalChanges = db.prepare("SELECT total_changes() AS n");
+  const changesSince = (before: number): number =>
+    Number((totalChanges.get() as { n: number | bigint }).n) - before;
+
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
-      const values = params as SQLInputValue[];
-      if (RETURNS_ROWS.test(query)) {
-        const rows = db.prepare(query).all(...values);
-        return { toArray: () => rows, one: () => rows[0] ?? null, rowsRead: rows.length };
-      }
-      if (values.length === 0 && isMultiStatement(query)) {
+      const before = Number((totalChanges.get() as { n: number | bigint }).n);
+      const statement = db.prepare(query);
+      // sourceSQL is the text SQLite consumed for this one statement; anything
+      // after it is a further statement, which makes the call a script.
+      const remainder = query.slice(statement.sourceSQL.length).trim();
+      if (remainder.length > 0) {
+        if (params.length > 0) {
+          throw new Error("Parameters cannot be bound to a multi-statement script");
+        }
         db.exec(query);
-        return { toArray: () => [], one: () => null };
+        return { toArray: () => [], one: () => null, rowsWritten: changesSince(before) };
       }
-      const { changes } = db.prepare(query).run(...values);
-      return { toArray: () => [], one: () => null, rowsWritten: Number(changes) };
+      // Stepping to completion returns the rows of a read or a RETURNING
+      // clause and an empty list for any other write.
+      const rows = statement.all(...(params as SQLInputValue[]));
+      return {
+        toArray: () => rows,
+        one: () => rows[0] ?? null,
+        rowsRead: rows.length,
+        rowsWritten: changesSince(before),
+      };
     },
   };
 

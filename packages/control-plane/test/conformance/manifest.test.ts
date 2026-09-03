@@ -1,35 +1,47 @@
 /**
- * The manifest's host contracts point at real tests: each named file contains
- * a test with exactly that title, so a host that ports the suite can find what
- * it must implement and a rename here cannot silently orphan a contract.
+ * Every host contract is declared somewhere in the host's integration suites
+ * through `hostContract(id, …)`, which owns the title and has no skipped form.
+ * The scan is what makes omission visible: a host that forgets a contract
+ * fails here rather than silently running fewer tests.
  */
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SESSION_CORE_CONFORMANCE_MANIFEST } from "./session-core-conformance";
+import {
+  HOST_CONTRACTS,
+  SESSION_CORE_CONFORMANCE_MANIFEST,
+  STORAGE_CONTRACTS,
+  type HostContractId,
+} from "./session-core-conformance";
 
-const packageRoot = resolve(__dirname, "../..");
+const integrationDir = resolve(__dirname, "../integration");
+
+function declaredHostContracts(): Map<HostContractId, string[]> {
+  const declared = new Map<HostContractId, string[]>();
+  for (const file of readdirSync(integrationDir).filter((name) => name.endsWith(".test.ts"))) {
+    const source = readFileSync(join(integrationDir, file), "utf8");
+    for (const id of Object.keys(HOST_CONTRACTS) as HostContractId[]) {
+      if (source.includes(`hostContract("${id}"`)) {
+        declared.set(id, [...(declared.get(id) ?? []), file]);
+      }
+    }
+  }
+  return declared;
+}
 
 describe("session-core conformance manifest", () => {
-  const hostContracts = SESSION_CORE_CONFORMANCE_MANIFEST.filter(
-    (
-      entry
-    ): entry is Extract<(typeof SESSION_CORE_CONFORMANCE_MANIFEST)[number], { scope: "host" }> =>
-      entry.scope === "host"
-  );
-
-  it("names a test for every host contract", () => {
-    expect(hostContracts.map(({ id }) => id)).toEqual([
-      "host.concurrent-prompt-claim",
-      "host.socket-terminal-upgrade",
-      "host.socket-single-sandbox",
-      "host.socket-ack-redelivery",
+  it("lists every storage and host contract exactly once", () => {
+    expect(SESSION_CORE_CONFORMANCE_MANIFEST.map(({ id }) => id)).toEqual([
+      ...Object.keys(STORAGE_CONTRACTS),
+      ...Object.keys(HOST_CONTRACTS),
     ]);
   });
 
-  it.each(hostContracts)("$id is implemented under its title", ({ test, title }) => {
-    const source = readFileSync(resolve(packageRoot, test), "utf8");
-    expect(source).toContain(`it("${title}"`);
-  });
+  it.each(Object.keys(HOST_CONTRACTS) as HostContractId[])(
+    "%s is declared by the Cloudflare host",
+    (id) => {
+      expect(declaredHostContracts().get(id) ?? []).not.toEqual([]);
+    }
+  );
 });

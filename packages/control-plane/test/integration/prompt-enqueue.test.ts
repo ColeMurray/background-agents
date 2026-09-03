@@ -7,6 +7,7 @@ import {
   queryDO,
   seedSandboxAuth,
 } from "./helpers";
+import { hostContract } from "../conformance/session-core-conformance";
 
 const SANDBOX_TOKEN = "prompt-order-sandbox-token";
 const SANDBOX_ID = "prompt-order-sandbox";
@@ -185,7 +186,7 @@ describe("POST /internal/prompt", () => {
     sandboxWs!.close();
   });
 
-  it("dispatches exactly one of two concurrent prompts and leaves the other queued", async () => {
+  hostContract("host.concurrent-prompt-claim", async () => {
     const name = `prompt-concurrent-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });

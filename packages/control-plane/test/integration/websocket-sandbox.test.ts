@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
+import { hostContract } from "../conformance/session-core-conformance";
 import { encryptToken } from "../../src/auth/crypto";
 import {
   collectMessages,
@@ -16,6 +17,10 @@ import {
 
 const SANDBOX_TOKEN = "test-sandbox-auth-token-abc123";
 const SANDBOX_ID = "sb-integration-test";
+
+function openSandboxSockets(state: DurableObjectState): WebSocket[] {
+  return state.getWebSockets("sandbox").filter((socket) => socket.readyState === WebSocket.OPEN);
+}
 
 describe("Sandbox WebSocket (via SELF.fetch)", () => {
   it("upgrade with valid auth returns 101", async () => {
@@ -158,7 +163,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
   }
 
-  it("revalidates terminal state after asynchronous authentication", async () => {
+  hostContract("host.socket-terminal-upgrade", async () => {
     const name = `ws-session-auth-race-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, {
@@ -269,7 +274,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(ws).toBeNull();
   });
 
-  it("keeps exactly one sandbox socket and tags it with the persisted sandbox ID", async () => {
+  hostContract("host.socket-single-sandbox", async () => {
     const name = `ws-sandbox-replacement-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, {
@@ -285,14 +290,15 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(rejected.response.status).toBe(403);
     expect(rejected.ws).toBeNull();
 
-    const { ws: firstWs } = await openSandboxWs(name, {
-      authToken: SANDBOX_TOKEN,
-      sandboxId: SANDBOX_ID,
-    });
-    expect(firstWs).not.toBeNull();
-    firstWs!.accept();
-    const firstClosed = new Promise<CloseEvent>((resolve) => {
-      firstWs!.addEventListener("close", resolve, { once: true });
+    // A bridge that connected before the runtime was rebuilt: after
+    // hibernation only its tagged socket survives, accepted at the platform
+    // level and unknown to the manager's in-memory pointer. Replacement must
+    // find it through the host's sockets, not through that pointer.
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      const pair = new WebSocketPair();
+      state.acceptWebSocket(pair[1], ["sandbox", `sid:${SANDBOX_ID}`]);
+      pair[0].accept();
+      expect(openSandboxSockets(state)).toHaveLength(1);
     });
 
     const { ws: replacementWs } = await openSandboxWs(name, {
@@ -302,14 +308,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(replacementWs).not.toBeNull();
     replacementWs!.accept();
 
-    await expect(firstClosed).resolves.toMatchObject({
-      code: 1000,
-      reason: "New sandbox connecting",
-    });
-    await runInSessionDO(stub, (instance, state) => {
-      const liveSandboxSockets = state
-        .getWebSockets("sandbox")
-        .filter((socket) => socket.readyState === WebSocket.OPEN);
+    await runInSessionDO(stub, (instance: SessionDO, state) => {
+      const liveSandboxSockets = openSandboxSockets(state);
       expect(liveSandboxSockets).toHaveLength(1);
       expect(state.getTags(liveSandboxSockets[0])).toContain(`sid:${SANDBOX_ID}`);
     });
@@ -594,7 +594,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ws!.close();
   });
 
-  it("acknowledges a re-flushed completion without duplicating durable effects", async () => {
+  hostContract("host.socket-ack-redelivery", async () => {
     const name = `ws-sandbox-ack-redelivery-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });

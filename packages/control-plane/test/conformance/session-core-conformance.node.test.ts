@@ -16,7 +16,8 @@ const nodeSqliteStorageFactory: SqlStorageFactory = async (run) => {
   try {
     const storage = createNodeSqlStorage(db);
     initSchema(storage.sql);
-    return run(storage);
+    // Await inside the try so the database outlives a callback that resolves later.
+    return await run(storage);
   } finally {
     db.close();
   }
