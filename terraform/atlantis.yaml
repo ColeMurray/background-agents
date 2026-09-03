@@ -12,7 +12,7 @@ projects:
     when_modified: &shipyard_when_modified
     - "*.tf"
     - ".terraform.lock.hcl"
-    - "env/*.tfvars"
+    # - "env/*.tfvars"
     - "../../modules/**/*.tf"
     - "../../d1/migrations/*.sql"
     - "../../../packages/**"
