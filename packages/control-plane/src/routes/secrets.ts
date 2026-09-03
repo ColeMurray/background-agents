@@ -2,20 +2,21 @@
  * Repository and global secrets routes and handlers.
  */
 
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { repositoryParams } from "./repository-params";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { SecretsValidationError, normalizeKey, validateKey } from "../db/secrets-validation";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import {
-  type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   type RequestContext,
   json,
   error,
   parseJsonBody,
-  extractRepoParams,
   resolveRepoOrError,
   requirePermission,
 } from "./shared";
@@ -29,7 +30,7 @@ const logger = createLogger("router:secrets");
 async function handleSetRepoSecrets(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -39,9 +40,9 @@ async function handleSetRepoSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
 
@@ -105,7 +106,7 @@ async function handleSetRepoSecrets(
 async function handleListRepoSecrets(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -115,9 +116,9 @@ async function handleListRepoSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
 
@@ -170,7 +171,7 @@ async function handleListRepoSecrets(
 async function handleDeleteRepoSecret(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string; key: string },
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -180,11 +181,11 @@ async function handleDeleteRepoSecret(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
-  const key = match.groups?.key;
+  const key = params.key;
   if (!key) {
     return error("Owner, name, and key are required");
   }
@@ -235,7 +236,6 @@ async function handleDeleteRepoSecret(
 async function handleSetGlobalSecrets(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -290,7 +290,6 @@ async function handleSetGlobalSecrets(
 async function handleListGlobalSecrets(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -326,7 +325,7 @@ async function handleListGlobalSecrets(
 async function handleDeleteGlobalSecret(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { key: string },
   ctx: RequestContext
 ): Promise<Response> {
   if (!ctx.db) {
@@ -336,7 +335,7 @@ async function handleDeleteGlobalSecret(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const key = match.groups?.key;
+  const key = params.key;
   if (!key) {
     return error("Key is required");
   }
@@ -376,41 +375,32 @@ async function handleDeleteGlobalSecret(
   }
 }
 
-export const secretsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "PUT",
-    path: "/repos/:owner/:name/secrets",
-    authorization: requirePermission("repositories.secrets.manage"),
-    handler: handleSetRepoSecrets,
-  },
-  {
-    method: "GET",
-    path: "/repos/:owner/:name/secrets",
-    authorization: requirePermission("repositories.secrets.manage"),
-    handler: handleListRepoSecrets,
-  },
-  {
-    method: "DELETE",
-    path: "/repos/:owner/:name/secrets/:key",
-    authorization: requirePermission("repositories.secrets.manage"),
-    handler: handleDeleteRepoSecret,
-  },
-  {
-    method: "PUT",
-    path: "/secrets",
-    authorization: requirePermission("global_secrets.manage"),
-    handler: handleSetGlobalSecrets,
-  },
-  {
-    method: "GET",
-    path: "/secrets",
-    authorization: requirePermission("global_secrets.manage"),
-    handler: handleListGlobalSecrets,
-  },
-  {
-    method: "DELETE",
-    path: "/secrets/:key",
-    authorization: requirePermission("global_secrets.manage"),
-    handler: handleDeleteGlobalSecret,
-  },
-]);
+const REPO_SECRETS_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("repositories.secrets.manage"),
+});
+const GLOBAL_SECRETS_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("global_secrets.manage"),
+});
+
+export const secretsRoutes = new Hono<ControlPlaneHonoEnv>();
+
+secretsRoutes.put("/repos/:owner/:name/secrets", REPO_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleSetRepoSecrets)
+);
+secretsRoutes.get("/repos/:owner/:name/secrets", REPO_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleListRepoSecrets)
+);
+secretsRoutes.delete("/repos/:owner/:name/secrets/:key", REPO_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleDeleteRepoSecret)
+);
+secretsRoutes.put("/secrets", GLOBAL_SECRETS_MANAGE, (c) =>
+  handleSetGlobalSecrets(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+secretsRoutes.get("/secrets", GLOBAL_SECRETS_MANAGE, (c) =>
+  handleListGlobalSecrets(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+secretsRoutes.delete("/secrets/:key", GLOBAL_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleDeleteGlobalSecret)
+);

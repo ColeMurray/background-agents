@@ -46,17 +46,17 @@ export const catalog: RouteCatalogEntry[] = [
   slackNotifyRoutes,
 
   // Repository management
-  ...reposRoutes,
+  reposRoutes,
 
   // Secrets
-  ...secretsRoutes,
+  secretsRoutes,
 
   // Environments (Phase-2 session target; internal-HMAC only, web BFF proxied)
-  ...environmentRoutes,
-  ...environmentSecretsRoutes,
+  environmentRoutes,
+  environmentSecretsRoutes,
 
   // Image builds (scope-generic)
-  ...imageBuildRoutes,
+  imageBuildRoutes,
 
   // Model preferences
   modelPreferencesRoutes,

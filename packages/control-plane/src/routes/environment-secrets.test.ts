@@ -1,19 +1,36 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as AuthenticateModule from "../auth/authenticate";
 import { generateEncryptionKey } from "../auth/crypto";
+import type { SqlDatabase } from "../db/sql-database";
 import { environmentSecretsRoutes } from "./environment-secrets";
-import type { RequestContext, Route } from "./shared";
-import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import {
+  createTestRequestHandler,
+  ownerAuthorizationDatabase,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "../router.test-support";
+import type { Env } from "../types";
 
-function findRoute(method: string, path: string): { route: Route; match: RegExpMatchArray } {
-  const route = environmentSecretsRoutes.find(
-    (candidate) => candidate.method === method && path.match(routePathPattern(candidate.path))
-  );
-  if (!route) throw new Error(`Missing ${method} ${path} route`);
-  return { route, match: path.match(routePathPattern(route.path))! };
+const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
+
+vi.mock("../auth/authenticate", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthenticateModule>()),
+  authenticate: mocks.authenticate,
+}));
+
+const handleRequest = createTestRequestHandler([environmentSecretsRoutes]);
+
+/** Admission's role lookup is answered for the owner; every other statement reaches the test's database. */
+function withOwnerAuthorization(delegate: SqlDatabase): SqlDatabase {
+  const authorization = ownerAuthorizationDatabase();
+  return {
+    prepare: (sql) => (sql.includes("FROM users u") ? authorization : delegate).prepare(sql),
+    batch: (statements) => delegate.batch(statements),
+  };
 }
 
-function createContext() {
-  const batch = vi.fn(async () => undefined);
+function createEnv(encryptionKey: string) {
+  const batch = vi.fn(async () => []);
   const run = vi.fn(async () => ({ meta: { changes: 0 } }));
   const all = vi.fn(async () => ({ results: [] }));
   const first = vi.fn(async () => ({
@@ -26,35 +43,42 @@ function createContext() {
     updated_at: 1,
   }));
   const bind = vi.fn(() => ({ first, all, run }));
+  const db = { batch, prepare: vi.fn(() => ({ bind })) } as unknown as SqlDatabase;
   return {
-    ctx: {
-      request_id: "request-1",
-      trace_id: "trace-1",
-      executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-      db: {
-        batch,
-        prepare: vi.fn(() => ({ bind })),
-      },
-    } as unknown as RequestContext,
+    env: {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      REPO_SECRETS_ENCRYPTION_KEY: encryptionKey,
+      DB: withOwnerAuthorization(db),
+    } as unknown as Env,
     batch,
   };
 }
 
-describe("environment secrets routes", () => {
-  it("rejects malformed secret values before persistence", async () => {
-    const { route, match } = findRoute("PUT", "/environments/env-1/secrets");
-    const { ctx, batch } = createContext();
+function putSecrets(env: Env, body: string): Promise<Response> {
+  return handleRequest(
+    new Request("https://test.local/environments/env-1/secrets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body,
+    }),
+    env,
+    TEST_BACKGROUND_TASK_CONTEXT
+  );
+}
 
-    const response = await route.handler(
-      new Request("https://test.local/environments/env-1/secrets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secrets: { API_KEY: 123 } }),
-      }),
-      { REPO_SECRETS_ENCRYPTION_KEY: "test-key" } as never,
-      match,
-      ctx
-    );
+describe("environment secrets routes", () => {
+  beforeEach(() => {
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
+  });
+
+  it("rejects malformed secret values before persistence", async () => {
+    const { env, batch } = createEnv("test-key");
+
+    const response = await putSecrets(env, JSON.stringify({ secrets: { API_KEY: 123 } }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -64,19 +88,9 @@ describe("environment secrets routes", () => {
   });
 
   it("rejects array-shaped secrets before persistence", async () => {
-    const { route, match } = findRoute("PUT", "/environments/env-1/secrets");
-    const { ctx, batch } = createContext();
+    const { env, batch } = createEnv("test-key");
 
-    const response = await route.handler(
-      new Request("https://test.local/environments/env-1/secrets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secrets: [] }),
-      }),
-      { REPO_SECRETS_ENCRYPTION_KEY: "test-key" } as never,
-      match,
-      ctx
-    );
+    const response = await putSecrets(env, JSON.stringify({ secrets: [] }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -86,19 +100,9 @@ describe("environment secrets routes", () => {
   });
 
   it("preserves an own __proto__ secret key for canonical normalization", async () => {
-    const { route, match } = findRoute("PUT", "/environments/env-1/secrets");
-    const { ctx, batch } = createContext();
+    const { env, batch } = createEnv(generateEncryptionKey());
 
-    const response = await route.handler(
-      new Request("https://test.local/environments/env-1/secrets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: '{"secrets":{"__proto__":"value"}}',
-      }),
-      { REPO_SECRETS_ENCRYPTION_KEY: generateEncryptionKey() } as never,
-      match,
-      ctx
-    );
+    const response = await putSecrets(env, '{"secrets":{"__proto__":"value"}}');
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ keys: ["__PROTO__"], created: 1 });
@@ -106,19 +110,9 @@ describe("environment secrets routes", () => {
   });
 
   it("accepts valid secret records", async () => {
-    const { route, match } = findRoute("PUT", "/environments/env-1/secrets");
-    const { ctx, batch } = createContext();
+    const { env, batch } = createEnv(generateEncryptionKey());
 
-    const response = await route.handler(
-      new Request("https://test.local/environments/env-1/secrets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secrets: { API_KEY: "secret" } }),
-      }),
-      { REPO_SECRETS_ENCRYPTION_KEY: generateEncryptionKey() } as never,
-      match,
-      ctx
-    );
+    const response = await putSecrets(env, JSON.stringify({ secrets: { API_KEY: "secret" } }));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({

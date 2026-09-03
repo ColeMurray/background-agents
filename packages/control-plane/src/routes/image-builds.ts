@@ -8,6 +8,10 @@
  * - Enabled-scope and status queries
  */
 
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { repositoryParams } from "./repository-params";
 import {
   type ImageBuildStatusResponse,
   repositoryShaEntrySchema,
@@ -40,12 +44,9 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
-  type Route,
-  defineRoute,
   GITHUB_USER_OR_SERVICE_ROUTE,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   error,
-  extractRepoParams,
   json,
   parseJsonBody,
   NO_AUTHORIZATION,
@@ -176,7 +177,6 @@ function parseCallbackBody<Schema extends z.ZodType>(
 async function handleBuildComplete(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await readCallbackBody(request);
@@ -212,7 +212,6 @@ async function handleBuildComplete(
 async function handleBuildFailed(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await readCallbackBody(request);
@@ -273,13 +272,13 @@ async function triggerBuildForScope(
 async function handleTriggerEnvironmentBuild(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const environmentId = match.groups?.id;
+  const environmentId = params.id;
   if (!environmentId) return error("Environment ID required", 400);
 
   return triggerBuildForScope(env, { kind: "environment", id: environmentId }, ctx);
@@ -292,16 +291,16 @@ async function handleTriggerEnvironmentBuild(
 async function handleTriggerRepoBuild(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
 
-  return triggerBuildForScope(env, repoImageBuildScope(params.owner, params.name), ctx);
+  return triggerBuildForScope(env, repoImageBuildScope(repository.owner, repository.name), ctx);
 }
 
 /**
@@ -314,15 +313,15 @@ async function handleTriggerRepoBuild(
 async function handleToggleRepoImageBuilds(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { owner: string; name: string },
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
-  const params = extractRepoParams(match);
-  if (params instanceof Response) return params;
-  const { owner, name } = params;
+  const repository = repositoryParams(params);
+  if (repository instanceof Response) return repository;
+  const { owner, name } = repository;
 
   const rawBody = await parseJsonBody<unknown>(request);
   if (rawBody instanceof Response) return rawBody;
@@ -406,12 +405,7 @@ async function readStatusRows(
  * `ImageBuildRecordView`, so no storage encoding, callback token, or provider
  * id reaches a client.
  */
-async function handleGetStatus(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
+async function handleGetStatus(request: Request, env: Env, ctx: RequestContext): Promise<Response> {
   const providerError = requireImageBuilds(env);
   if (providerError) return providerError;
 
@@ -439,7 +433,6 @@ async function handleGetStatus(
 async function handleGetEnabledUnits(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
@@ -473,7 +466,6 @@ async function handleGetEnabledUnits(
 async function handleGetEnabledRepos(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const providerError = requireImageBuilds(env);
@@ -491,53 +483,47 @@ async function handleGetEnabledRepos(
   }
 }
 
-export const imageBuildRoutes: Route[] = [
-  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
-    method: "POST",
-    path: "/image-builds/build-complete",
-    authorization: NO_AUTHORIZATION,
-    handler: handleBuildComplete,
-  }),
-  defineRoute(SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, {
-    method: "POST",
-    path: "/image-builds/build-failed",
-    authorization: NO_AUTHORIZATION,
-    handler: handleBuildFailed,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "POST",
-    path: "/image-builds/trigger/environment/:id",
+const BUILD_CALLBACK = admit({
+  ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
+  authorization: NO_AUTHORIZATION,
+});
+const REPO_IMAGES_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("repositories.images.manage"),
+});
+const IMAGE_BUILDS_READ = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("image_builds.read"),
+});
+
+export const imageBuildRoutes = new Hono<ControlPlaneHonoEnv>();
+
+imageBuildRoutes.post("/image-builds/build-complete", BUILD_CALLBACK, (c) =>
+  handleBuildComplete(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+imageBuildRoutes.post("/image-builds/build-failed", BUILD_CALLBACK, (c) =>
+  handleBuildFailed(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+imageBuildRoutes.post(
+  "/image-builds/trigger/environment/:id",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("environments.images.manage"),
-    handler: handleTriggerEnvironmentBuild,
   }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "POST",
-    path: "/image-builds/trigger/repo/:owner/:name",
-    authorization: requirePermission("repositories.images.manage"),
-    handler: handleTriggerRepoBuild,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "PUT",
-    path: "/image-builds/toggle/repo/:owner/:name",
-    authorization: requirePermission("repositories.images.manage"),
-    handler: handleToggleRepoImageBuilds,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    path: "/image-builds/status",
-    authorization: requirePermission("image_builds.read"),
-    handler: handleGetStatus,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    path: "/image-builds/enabled",
-    authorization: requirePermission("image_builds.read"),
-    handler: handleGetEnabledUnits,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    path: "/image-builds/enabled-repos",
-    authorization: requirePermission("image_builds.read"),
-    handler: handleGetEnabledRepos,
-  }),
-];
+  (c) => dispatch(c, handleTriggerEnvironmentBuild)
+);
+imageBuildRoutes.post("/image-builds/trigger/repo/:owner/:name", REPO_IMAGES_MANAGE, (c) =>
+  dispatch(c, handleTriggerRepoBuild)
+);
+imageBuildRoutes.put("/image-builds/toggle/repo/:owner/:name", REPO_IMAGES_MANAGE, (c) =>
+  dispatch(c, handleToggleRepoImageBuilds)
+);
+imageBuildRoutes.get("/image-builds/status", IMAGE_BUILDS_READ, (c) =>
+  handleGetStatus(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+imageBuildRoutes.get("/image-builds/enabled", IMAGE_BUILDS_READ, (c) =>
+  handleGetEnabledUnits(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+imageBuildRoutes.get("/image-builds/enabled-repos", IMAGE_BUILDS_READ, (c) =>
+  handleGetEnabledRepos(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);

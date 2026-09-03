@@ -4,6 +4,9 @@
  * Split from ./environments so each routes file stays focused.
  */
 
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
@@ -14,10 +17,8 @@ import {
 } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
 import {
-  type Route,
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   json,
   error,
   parseJsonBody,
@@ -78,13 +79,13 @@ function requireSecretsConfig(env: Env): { key: string } | Response {
 async function handleListEnvironmentSecrets(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
   const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
-  const id = match.groups?.id;
+  const id = params.id;
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
@@ -118,13 +119,13 @@ async function handleListEnvironmentSecrets(
 async function handleSetEnvironmentSecrets(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
   const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
-  const id = match.groups?.id;
+  const id = params.id;
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
@@ -175,14 +176,14 @@ async function handleSetEnvironmentSecrets(
 async function handleDeleteEnvironmentSecret(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; key: string },
   ctx: RequestContext
 ): Promise<Response> {
   const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
-  const id = match.groups?.id;
-  const key = match.groups?.key;
+  const id = params.id;
+  const key = params.key;
   if (!id || !key) return error("Environment ID and key are required", 400);
 
   const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
@@ -226,13 +227,13 @@ async function handleDeleteEnvironmentSecret(
 async function handleImportEnvironmentSecrets(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
   const config = requireSecretsConfig(env);
   if (config instanceof Response) return config;
 
-  const id = match.groups?.id;
+  const id = params.id;
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
@@ -300,29 +301,22 @@ async function handleImportEnvironmentSecrets(
   }
 }
 
-export const environmentSecretsRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/environments/:id/secrets",
-    authorization: requirePermission("environments.secrets.manage"),
-    handler: handleListEnvironmentSecrets,
-  },
-  {
-    method: "PUT",
-    path: "/environments/:id/secrets",
-    authorization: requirePermission("environments.secrets.manage"),
-    handler: handleSetEnvironmentSecrets,
-  },
-  {
-    method: "POST",
-    path: "/environments/:id/secrets/import",
-    authorization: requirePermission("environments.secrets.manage"),
-    handler: handleImportEnvironmentSecrets,
-  },
-  {
-    method: "DELETE",
-    path: "/environments/:id/secrets/:key",
-    authorization: requirePermission("environments.secrets.manage"),
-    handler: handleDeleteEnvironmentSecret,
-  },
-]);
+const ENVIRONMENT_SECRETS_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("environments.secrets.manage"),
+});
+
+export const environmentSecretsRoutes = new Hono<ControlPlaneHonoEnv>();
+
+environmentSecretsRoutes.get("/environments/:id/secrets", ENVIRONMENT_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleListEnvironmentSecrets)
+);
+environmentSecretsRoutes.put("/environments/:id/secrets", ENVIRONMENT_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleSetEnvironmentSecrets)
+);
+environmentSecretsRoutes.post("/environments/:id/secrets/import", ENVIRONMENT_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleImportEnvironmentSecrets)
+);
+environmentSecretsRoutes.delete("/environments/:id/secrets/:key", ENVIRONMENT_SECRETS_MANAGE, (c) =>
+  dispatch(c, handleDeleteEnvironmentSecret)
+);

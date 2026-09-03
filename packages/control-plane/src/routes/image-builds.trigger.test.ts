@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRequestMetrics } from "../db/instrumented-d1";
+import type * as AuthenticateModule from "../auth/authenticate";
+import {
+  createTestBackgroundTasks,
+  type TestBackgroundTasks,
+} from "../background-tasks.test-support";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { imageBuildRoutes } from "./image-builds";
 import type { Env } from "../types";
-import type { RequestContext, Route } from "./shared";
-import type { SqlDatabase } from "../db/sql-database";
 import type { RepositoryAccessResult } from "../source-control";
 import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
@@ -14,7 +16,11 @@ import type * as VercelClientModule from "../sandbox/providers/vercel/client";
 import type * as OpenComputerProviderModule from "../sandbox/providers/opencomputer-provider";
 import type * as OpenComputerClientModule from "../sandbox/opencomputer-rest-client";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
-import { routePathPattern } from "../router.test-support";
+import {
+  createTestRequestHandler,
+  ownerAuthorizationDatabase,
+  TEST_BACKGROUND_TASK_CONTEXT,
+} from "../router.test-support";
 
 // The repo trigger resolves the repo's actual default branch (never assumes
 // "main") and threads it into the build's repository set + fingerprint + the
@@ -23,6 +29,13 @@ import { routePathPattern } from "../router.test-support";
 // backend, and that a repo which can't be resolved fails instead of building
 // "main". The toggle tests pin the save-hook parity change: toggling a repo's
 // prebuild on triggers a build immediately instead of waiting for the cron.
+
+const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
+
+vi.mock("../auth/authenticate", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthenticateModule>()),
+  authenticate: mocks.authenticate,
+}));
 
 const scmProvider = vi.hoisted(() => ({
   checkRepositoryAccess: vi.fn(),
@@ -110,46 +123,11 @@ vi.mock("../session/integration-settings-resolution", async (importOriginal) => 
 const TRIGGER_PATH = "/image-builds/trigger/repo/acme/repo";
 const TOGGLE_PATH = "/image-builds/toggle/repo/acme/repo";
 
-function findRoute(method: string, path: string): Route {
-  // Match on method as well as pattern so a same-pattern route of another
-  // method (or a reordering) can never resolve to the wrong handler.
-  const route = imageBuildRoutes.find(
-    (candidate) => candidate.method === method && routePathPattern(candidate.path).test(path)
-  );
-  if (!route) throw new Error(`route not found: ${method} ${path}`);
-  return route;
-}
-
-function matchFor(route: Route, path: string): RegExpMatchArray {
-  const match = path.match(routePathPattern(route.path));
-  if (!match) throw new Error("path did not match route pattern");
-  return match;
-}
-
-function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
-  return {
-    request_id: "request-1",
-    trace_id: "trace-1",
-    db: {} as SqlDatabase,
-    metrics: createRequestMetrics(),
-    executionCtx: {
-      submit: (task: () => Promise<unknown>) => {
-        // Contract-faithful: run the factory even without a collector, and
-        // absorb synchronous throws like the production boundary does.
-        try {
-          const pending = task();
-          waitUntilTasks?.push(pending);
-        } catch {
-          // Absorbed like background_task.failed.
-        }
-      },
-    },
-  };
-}
+const handleRequest = createTestRequestHandler([imageBuildRoutes]);
 
 function createModalEnv(): Env {
   return {
-    DB: {} as unknown as D1Database,
+    DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "modal",
     WORKER_URL: "https://cp.test",
     MODAL_API_SECRET: "modal-secret",
@@ -162,7 +140,7 @@ function createModalEnv(): Env {
 
 function createVercelEnv(): Env {
   return {
-    DB: {} as unknown as D1Database,
+    DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "vercel",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
@@ -175,7 +153,7 @@ function createVercelEnv(): Env {
 
 function createOpenComputerEnv(): Env {
   return {
-    DB: {} as unknown as D1Database,
+    DB: ownerAuthorizationDatabase(),
     SANDBOX_PROVIDER: "opencomputer",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
@@ -188,30 +166,26 @@ function createOpenComputerEnv(): Env {
 }
 
 async function callTrigger(env: Env): Promise<Response> {
-  const route = findRoute("POST", TRIGGER_PATH);
-  return route.handler(
+  return handleRequest(
     new Request(`https://test.local${TRIGGER_PATH}`, { method: "POST" }),
     env,
-    matchFor(route, TRIGGER_PATH),
-    createContext()
+    TEST_BACKGROUND_TASK_CONTEXT
   );
 }
 
 async function callToggle(
   env: Env,
   body: unknown,
-  waitUntilTasks?: Promise<unknown>[]
+  backgroundTasks: TestBackgroundTasks = createTestBackgroundTasks()
 ): Promise<Response> {
-  const route = findRoute("PUT", TOGGLE_PATH);
-  return route.handler(
+  return handleRequest(
     new Request(`https://test.local${TOGGLE_PATH}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
     env,
-    matchFor(route, TOGGLE_PATH),
-    createContext(waitUntilTasks)
+    backgroundTasks
   );
 }
 
@@ -235,6 +209,10 @@ const setImageBuildEnabledSpy = vi.spyOn(RepoMetadataStore.prototype, "setImageB
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.authenticate.mockImplementation(async (request: Request) => ({
+    principal: { kind: "user", userId: "user-1" },
+    request,
+  }));
   registerBuildSpy.mockResolvedValue(true);
   getActiveBuildSpy.mockResolvedValue(null);
   hasReadyImageSpy.mockResolvedValue(false);
@@ -408,9 +386,9 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
 describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
   it("writes the flag and triggers a stale-checked build on toggle-on", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, enabled: true });
@@ -418,8 +396,8 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
 
     // Save-hook parity with environments: the detached triggerBuildIfStale
     // runs behind waitUntil.
-    expect(waitUntilTasks).toHaveLength(1);
-    await Promise.all(waitUntilTasks);
+    expect(backgroundTasks.submissions).toHaveLength(1);
+    await backgroundTasks.settle();
     expect(registerBuildSpy).toHaveBeenCalledWith(
       expect.objectContaining({ scope: { kind: "repo", id: "acme/repo" } })
     );
@@ -429,25 +407,25 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
   it("skips the build when a ready image already matches the repository set", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
     hasReadyImageSpy.mockResolvedValue(true);
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(200);
-    await Promise.all(waitUntilTasks);
+    await backgroundTasks.settle();
     expect(registerBuildSpy).not.toHaveBeenCalled();
     expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
   });
 
   it("writes the flag without triggering on toggle-off", async () => {
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: false }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: false }, backgroundTasks);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, enabled: false });
     expect(setImageBuildEnabledSpy).toHaveBeenCalledWith("acme", "repo", false);
-    expect(waitUntilTasks).toHaveLength(0);
+    expect(backgroundTasks.submissions).toHaveLength(0);
     expect(scmProvider.checkRepositoryAccess).not.toHaveBeenCalled();
   });
 
@@ -468,24 +446,24 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
 
   it("returns 404 without writing the flag when enabling an uninstalled repo", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(null);
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(404);
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
-    expect(waitUntilTasks).toHaveLength(0);
+    expect(backgroundTasks.submissions).toHaveLength(0);
   });
 
   it("returns 500 without writing the flag when enabling and resolution fails", async () => {
     scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
-    const waitUntilTasks: Promise<unknown>[] = [];
+    const backgroundTasks = createTestBackgroundTasks();
 
-    const response = await callToggle(createModalEnv(), { enabled: true }, waitUntilTasks);
+    const response = await callToggle(createModalEnv(), { enabled: true }, backgroundTasks);
 
     expect(response.status).toBe(500);
     expect(setImageBuildEnabledSpy).not.toHaveBeenCalled();
-    expect(waitUntilTasks).toHaveLength(0);
+    expect(backgroundTasks.submissions).toHaveLength(0);
   });
 
   it("disables without resolving so an unresolvable repo stays disableable", async () => {

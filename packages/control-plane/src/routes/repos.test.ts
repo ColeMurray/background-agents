@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import { reposRoutes } from "./repos";
 import type * as SharedRoutes from "./shared";
-import type { RequestContext } from "./shared";
-import { matchRoute, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import {
+  createTestRequestHandler,
+  ownerAuthorizationDatabase,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "../router.test-support";
 
 const {
   mockCacheDelete,
@@ -30,6 +34,13 @@ const {
   mockUpsert: vi.fn(),
 }));
 
+const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
+
+vi.mock("../auth/authenticate", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthenticateModule>()),
+  authenticate: mocks.authenticate,
+}));
+
 vi.mock("../db/repo-metadata", () => ({
   RepoMetadataStore: vi.fn().mockImplementation(function () {
     return { upsert: mockUpsert, getBatch: mockGetBatch };
@@ -48,22 +59,6 @@ vi.mock("../logger", () => ({
   createLogger: vi.fn(() => mockLogger),
 }));
 
-function createContext(): RequestContext {
-  return {
-    trace_id: "trace-1",
-    request_id: "request-1",
-    principal: { kind: "user", userId: "user-1" },
-    db: {} as SqlDatabase,
-    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-    metrics: {
-      d1Queries: [],
-      spans: {},
-      time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
-      summarize: () => ({}),
-    },
-  };
-}
-
 vi.mock("./shared", async () => {
   const actual = await vi.importActual<typeof SharedRoutes>("./shared");
   return {
@@ -74,21 +69,40 @@ vi.mock("./shared", async () => {
   };
 });
 
-function getListHandler() {
-  const matched = matchRoute(reposRoutes, "GET", "/repos");
-  if (!matched) throw new Error("No repository list route found");
-  return { handler: matched.route.handler, match: matched.match };
+const handleRequest = createTestRequestHandler([reposRoutes]);
+
+function createEnv(): Env {
+  return {
+    ...TEST_SERVICE_SECRETS,
+    SCM_PROVIDER: "github",
+    DB: ownerAuthorizationDatabase(),
+    REPOS_CACHE: {} as KVNamespace,
+  } as unknown as Env;
 }
 
-function getUpdateHandler(path: string) {
-  const matched = matchRoute(reposRoutes, "PUT", path);
-  if (!matched) throw new Error(`Update route did not match ${path}`);
-  return { handler: matched.route.handler, match: matched.match };
+/** Requests carry the trace id the handlers log under. */
+function request(path: string, init?: RequestInit): Request {
+  return new Request(`https://test.local${path}`, {
+    ...init,
+    headers: { "x-trace-id": "trace-1", ...(init?.headers ?? {}) },
+  });
+}
+
+function updateMetadata(path: string, body: string): Promise<Response> {
+  return handleRequest(
+    request(path, { method: "PUT", body }),
+    createEnv(),
+    TEST_BACKGROUND_TASK_CONTEXT
+  );
 }
 
 describe("repository list route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
     mockCacheGet.mockResolvedValue(null);
     mockCachePut.mockResolvedValue(undefined);
     mockGetBatch.mockResolvedValue(new Map());
@@ -112,18 +126,8 @@ describe("repository list route", () => {
     // refresh is registered with waitUntil, the KV write never lands and every
     // later request repeats the same slow path against an empty cache.
     const backgroundTasks = createTestBackgroundTasks();
-    const { handler, match } = getListHandler();
-    const ctx = createContext();
 
-    const response = await handler(
-      new Request("https://test.local/repos"),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      {
-        ...ctx,
-        executionCtx: backgroundTasks,
-      }
-    );
+    const response = await handleRequest(request("/repos"), createEnv(), backgroundTasks);
 
     expect(response.status).toBe(200);
     expect(mockCachePut).toHaveBeenCalledTimes(1);
@@ -136,6 +140,10 @@ describe("repository list route", () => {
 describe("repository metadata routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
     mockUpsert.mockResolvedValue(undefined);
     mockCacheDelete.mockResolvedValue(undefined);
   });
@@ -150,17 +158,9 @@ describe("repository metadata routes", () => {
     );
     const cacheError = new Error("KV unavailable");
     mockCacheDelete.mockRejectedValue(cacheError);
-    const path = "/repos/Acme/Widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const responsePromise = handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({ description: "Updated description" }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const responsePromise = updateMetadata(
+      "/repos/Acme/Widget/metadata",
+      JSON.stringify({ description: "Updated description" })
     );
 
     await vi.waitFor(() => expect(mockUpsert).toHaveBeenCalledOnce());
@@ -190,17 +190,9 @@ describe("repository metadata routes", () => {
   it("returns an error and skips cache invalidation when the metadata update fails", async () => {
     const updateError = new Error("D1 unavailable");
     mockUpsert.mockRejectedValue(updateError);
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({ description: "Updated description" }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const response = await updateMetadata(
+      "/repos/acme/widget/metadata",
+      JSON.stringify({ description: "Updated description" })
     );
 
     expect(response.status).toBe(500);
@@ -213,17 +205,9 @@ describe("repository metadata routes", () => {
   });
 
   it("rejects malformed metadata before persistence", async () => {
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({ aliases: ["api", 42] }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const response = await updateMetadata(
+      "/repos/acme/widget/metadata",
+      JSON.stringify({ aliases: ["api", 42] })
     );
 
     expect(response.status).toBe(400);
@@ -233,15 +217,7 @@ describe("repository metadata routes", () => {
   });
 
   it("rejects malformed JSON with the same 400 as an invalid object", async () => {
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, { method: "PUT", body: "{" }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
-    );
+    const response = await updateMetadata("/repos/acme/widget/metadata", "{");
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid repository metadata" });
@@ -250,21 +226,13 @@ describe("repository metadata routes", () => {
   });
 
   it("persists only schema fields and drops unknown keys", async () => {
-    const path = "/repos/acme/widget/metadata";
-    const { handler, match } = getUpdateHandler(path);
-
-    const response = await handler(
-      new Request(`https://test.local${path}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          description: "Updated description",
-          keywords: ["billing"],
-          notAField: "dropped",
-        }),
-      }),
-      { REPOS_CACHE: {} as KVNamespace } as Env,
-      match,
-      createContext()
+    const response = await updateMetadata(
+      "/repos/acme/widget/metadata",
+      JSON.stringify({
+        description: "Updated description",
+        keywords: ["billing"],
+        notAField: "dropped",
+      })
     );
 
     expect(response.status).toBe(200);

@@ -6,6 +6,9 @@
  * live in ./environment-secrets.
  */
 
+import { Hono } from "hono";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   createEnvironmentInputSchema,
   updateEnvironmentInputSchema,
@@ -22,9 +25,7 @@ import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
 import { resolveSessionRepositories } from "../repos/resolve";
 import {
-  type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   type RequestContext,
   json,
   error,
@@ -82,7 +83,6 @@ export async function resolveEnvironmentRepositories(
 async function handleListEnvironments(
   _request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const store = new EnvironmentStore(ctx.db);
@@ -100,7 +100,6 @@ async function handleListEnvironments(
 async function handleCreateEnvironment(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const body = await parseJsonBody<unknown>(request);
@@ -153,10 +152,10 @@ async function handleCreateEnvironment(
 async function handleGetEnvironment(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
+  const id = params.id;
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
@@ -169,10 +168,10 @@ async function handleGetEnvironment(
 async function handleUpdateEnvironment(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
+  const id = params.id;
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
@@ -230,10 +229,10 @@ async function handleUpdateEnvironment(
 async function handleDeleteEnvironment(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const id = match.groups?.id;
+  const id = params.id;
   if (!id) return error("Environment ID required", 400);
 
   const store = new EnvironmentStore(ctx.db);
@@ -250,39 +249,39 @@ async function handleDeleteEnvironment(
   return json({ status: "deleted", id });
 }
 
-export const environmentRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "GET",
-    path: "/environments",
+const ENVIRONMENTS_MANAGE = admit({
+  ...GITHUB_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("environments.manage"),
+});
+
+export const environmentRoutes = new Hono<ControlPlaneHonoEnv>();
+
+environmentRoutes.get(
+  "/environments",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("environments.read", {
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
-    handler: handleListEnvironments,
-  },
-  {
-    method: "POST",
-    path: "/environments",
-    authorization: requirePermission("environments.manage"),
-    handler: handleCreateEnvironment,
-  },
-  {
-    method: "GET",
-    path: "/environments/:id",
+  }),
+  (c) => handleListEnvironments(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+environmentRoutes.post("/environments", ENVIRONMENTS_MANAGE, (c) =>
+  handleCreateEnvironment(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+environmentRoutes.get(
+  "/environments/:id",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("environments.read", {
       actorlessGrants: [{ service: "github-bot" }],
     }),
-    handler: handleGetEnvironment,
-  },
-  {
-    method: "PUT",
-    path: "/environments/:id",
-    authorization: requirePermission("environments.manage"),
-    handler: handleUpdateEnvironment,
-  },
-  {
-    method: "DELETE",
-    path: "/environments/:id",
-    authorization: requirePermission("environments.manage"),
-    handler: handleDeleteEnvironment,
-  },
-]);
+  }),
+  (c) => dispatch(c, handleGetEnvironment)
+);
+environmentRoutes.put("/environments/:id", ENVIRONMENTS_MANAGE, (c) =>
+  dispatch(c, handleUpdateEnvironment)
+);
+environmentRoutes.delete("/environments/:id", ENVIRONMENTS_MANAGE, (c) =>
+  dispatch(c, handleDeleteEnvironment)
+);
