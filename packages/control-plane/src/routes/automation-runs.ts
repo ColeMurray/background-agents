@@ -2,6 +2,7 @@
  * Automation invocation and run read routes.
  */
 
+import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
 import { AutomationStore, toAutomationRun } from "../db/automation-store";
 import { Hono } from "hono";
 import { dispatch } from "../routing/admit";
@@ -13,7 +14,6 @@ import { AUTOMATIONS_READ } from "./automation-shared";
 import { parseQuery } from "./query";
 
 export const DEFAULT_INVOCATION_LIST_LIMIT = 20;
-export const MAX_INVOCATION_LIST_LIMIT = 100;
 /** Deepest page the list serves; beyond it an OFFSET scan is unbounded work for no reader. */
 export const MAX_INVOCATION_LIST_OFFSET = 10_000;
 
@@ -23,7 +23,9 @@ const invocationListQuerySchema = z.object({
     .regex(/^[1-9]\d*$/, { message: "Invalid limit" })
     .optional()
     .transform((raw) => (raw === undefined ? DEFAULT_INVOCATION_LIST_LIMIT : Number(raw)))
-    .refine((limit) => limit <= MAX_INVOCATION_LIST_LIMIT, { message: "Invalid limit" }),
+    .refine((limit) => limit <= MAX_AUTOMATION_INVOCATION_LIST_LIMIT, {
+      message: "Invalid limit",
+    }),
   offset: z
     .string()
     .regex(/^\d+$/, { message: "Invalid offset" })

@@ -10,12 +10,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestRequestHandler } from "../router.test-support";
+import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
 import { automationRoutes } from "./automations";
-import {
-  DEFAULT_INVOCATION_LIST_LIMIT,
-  MAX_INVOCATION_LIST_LIMIT,
-  MAX_INVOCATION_LIST_OFFSET,
-} from "./automation-runs";
+import { DEFAULT_INVOCATION_LIST_LIMIT, MAX_INVOCATION_LIST_OFFSET } from "./automation-runs";
 import {
   mocks,
   mockStore,
@@ -136,14 +133,14 @@ describe("automation run routes", () => {
 
       const res = await callRoute("GET", "/automations/auto-1/invocations", {
         query: {
-          limit: String(MAX_INVOCATION_LIST_LIMIT),
+          limit: String(MAX_AUTOMATION_INVOCATION_LIST_LIMIT),
           offset: String(MAX_INVOCATION_LIST_OFFSET),
         },
       });
 
       expect(res.status).toBe(200);
       expect(mockStore.listInvocations).toHaveBeenCalledWith("auto-1", {
-        limit: MAX_INVOCATION_LIST_LIMIT,
+        limit: MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
         offset: MAX_INVOCATION_LIST_OFFSET,
       });
     });
@@ -151,7 +148,10 @@ describe("automation run routes", () => {
     it.each<{ query: Record<string, string | string[]>; error: string }>([
       { query: { limit: "0" }, error: "Invalid limit" },
       { query: { limit: "abc" }, error: "Invalid limit" },
-      { query: { limit: String(MAX_INVOCATION_LIST_LIMIT + 1) }, error: "Invalid limit" },
+      {
+        query: { limit: String(MAX_AUTOMATION_INVOCATION_LIST_LIMIT + 1) },
+        error: "Invalid limit",
+      },
       { query: { limit: ["5", "6"] }, error: "Invalid limit" },
       { query: { offset: "-1" }, error: "Invalid offset" },
       { query: { offset: "abc" }, error: "Invalid offset" },
