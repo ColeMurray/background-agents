@@ -40,7 +40,7 @@ export function createNodeSqlStorage(db: DatabaseSync): NodeSqlStorage {
       const rows = statement.all(...(params as SQLInputValue[]));
       return {
         toArray: () => rows,
-        one: () => rows[0] ?? null,
+        one: () => exactlyOne(rows),
         rowsRead: rows.length,
         rowsWritten: changesSince(before),
       };
@@ -68,4 +68,12 @@ export function createNodeSqlStorage(db: DatabaseSync): NodeSqlStorage {
   };
 
   return { sql, transactionSync };
+}
+
+/** Durable Object cursors throw from `one()` unless the result is a single row. */
+function exactlyOne(rows: unknown[]): unknown {
+  if (rows.length !== 1) {
+    throw new Error(`Expected exactly one row, got ${rows.length}`);
+  }
+  return rows[0];
 }

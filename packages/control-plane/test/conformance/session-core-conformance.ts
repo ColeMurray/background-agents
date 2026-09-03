@@ -15,7 +15,6 @@ import type { SqlStorage, TransactionSync } from "../../src/session/sql-storage"
 import { WsClientMappingRepository } from "../../src/session/ws-client-mapping-repository";
 
 const conformanceLog = createLogger("conformance");
-const CONFORMANCE_ENCRYPTION_KEY = generateEncryptionKey();
 
 export interface SqlStorageFixture {
   sql: SqlStorage;
@@ -349,7 +348,9 @@ export const STORAGE_CONTRACTS: Record<
       it("persists lifecycle and circuit-breaker changes", async () => {
         await storageFactory(({ sql }) => {
           sql.exec("DELETE FROM sandbox");
-          const repository = new SandboxRepository(sql, conformanceLog, CONFORMANCE_ENCRYPTION_KEY);
+          // Generated here, not at module scope: Workers forbid random values
+          // during module evaluation, and this module loads inside workerd.
+          const repository = new SandboxRepository(sql, conformanceLog, generateEncryptionKey());
           repository.createSandbox({
             id: "sandbox-1",
             status: "pending",

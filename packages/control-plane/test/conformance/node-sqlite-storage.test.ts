@@ -30,6 +30,13 @@ describe("createNodeSqlStorage", () => {
     expect(result.rowsWritten).toBe(0);
   });
 
+  it("throws from one() unless the result is exactly one row, as Durable Object cursors do", () => {
+    expect(() => storage.sql.exec("SELECT a FROM t").one()).toThrow("got 0");
+    storage.sql.exec("INSERT INTO t (a) VALUES (?), (?)", "x", "y");
+    expect(storage.sql.exec("SELECT a FROM t WHERE a = ?", "x").one()).toEqual({ a: "x" });
+    expect(() => storage.sql.exec("SELECT a FROM t").one()).toThrow("got 2");
+  });
+
   it("counts the rows a write changed", () => {
     storage.sql.exec("INSERT INTO t (a) VALUES (?), (?)", "x", "y");
     const result = storage.sql.exec("UPDATE t SET a = 'z'");
