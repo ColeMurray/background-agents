@@ -1,6 +1,7 @@
 /** Hono application for ordinary control-plane HTTP requests. */
 
 import { Hono, type Handler } from "hono";
+import type { RouterRoute } from "hono/types";
 import { TrieRouter } from "hono/router/trie-router";
 import {
   auditRouteAuthorizationDecision,
@@ -58,12 +59,36 @@ function assertRoutePath(method: string, path: string): void {
   }
 }
 
-/** Mount a module or register a legacy route, checking every admitted path's grammar first. */
+/**
+ * Refuse a module unless every route it registers begins with `admit()`.
+ *
+ * Hono runs a route's handlers in registration order and stops at the first
+ * one that answers, so a handler registered ahead of the policy, or with no
+ * policy at all, would run its side effects before the lifecycle's default
+ * deny could replace the response. Module-level middleware (`app.use`) is
+ * refused for the same reason: nothing in a module runs before admission.
+ */
+function assertModuleAdmits(module: Hono<ControlPlaneHonoEnv>): void {
+  const first = new Map<string, RouterRoute>();
+  for (const route of module.routes) {
+    if (route.method === "ALL") {
+      throw new Error(`Module registers middleware outside admit(): ${route.path}`);
+    }
+    const identity = `${route.method} ${route.path}`;
+    if (!first.has(identity)) first.set(identity, route);
+  }
+  for (const [identity, route] of first) {
+    if (!("policy" in route.handler)) {
+      throw new Error(`Module route does not begin with admit(): ${identity}`);
+    }
+    assertRoutePath(route.method, route.path);
+  }
+}
+
+/** Mount a module or register a legacy route, refusing either before it can serve a request. */
 function register(app: Hono<ControlPlaneHonoEnv>, entry: RouteCatalogEntry): void {
   if (entry instanceof Hono) {
-    for (const route of entry.routes) {
-      if ("policy" in route.handler) assertRoutePath(route.method, route.path);
-    }
+    assertModuleAdmits(entry);
     app.route("/", entry);
     return;
   }

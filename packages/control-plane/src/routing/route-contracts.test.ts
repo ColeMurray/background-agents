@@ -48,4 +48,16 @@ describe("listRouteContracts", () => {
     });
     expect(contracts[0].cacheControl).toBeUndefined();
   });
+
+  it("refuses to enumerate an app whose route does not begin with admit()", () => {
+    // Built by hand, since createControlPlaneApp refuses such a module outright.
+    const app = new Hono();
+    app.use("*", async (_c, next) => next());
+    app.options("*", (c) => c.body(null));
+    app.get("/admitted", admit({ ...PUBLIC, authorization: NO_AUTHORIZATION }), () => json({}));
+    expect(listRouteContracts(app).map((contract) => contract.path)).toEqual(["/admitted"]);
+
+    app.get("/naked", () => json({}));
+    expect(() => listRouteContracts(app)).toThrow("Route does not begin with admit(): GET /naked");
+  });
 });

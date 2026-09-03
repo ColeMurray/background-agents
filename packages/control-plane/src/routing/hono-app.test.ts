@@ -159,6 +159,34 @@ describe("control-plane Hono app lifecycle", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
 
+  it("refuses a module whose route does not begin with admit(), before any request can run", () => {
+    const sideEffect = vi.fn();
+    const naked = new Hono<ControlPlaneHonoEnv>();
+    naked.post("/naked", (c) => {
+      sideEffect();
+      return c.text("wrote");
+    });
+    expect(() => createControlPlaneApp([naked], host)).toThrow(
+      "Module route does not begin with admit(): POST /naked"
+    );
+
+    const late = new Hono<ControlPlaneHonoEnv>();
+    late.post("/late", (c) => c.text("open"));
+    late.post("/late", admit({ ...PUBLIC, authorization: NO_AUTHORIZATION }), () => json({}));
+    expect(() => createControlPlaneApp([late], host)).toThrow(
+      "Module route does not begin with admit(): POST /late"
+    );
+
+    const withMiddleware = new Hono<ControlPlaneHonoEnv>();
+    withMiddleware.use("*", async (_c, next) => next());
+    withMiddleware.get("/x", admit({ ...PUBLIC, authorization: NO_AUTHORIZATION }), () => json({}));
+    expect(() => createControlPlaneApp([withMiddleware], host)).toThrow(
+      "Module registers middleware outside admit(): /*"
+    );
+
+    expect(sideEffect).not.toHaveBeenCalled();
+  });
+
   it("refuses a module route outside the path grammar when the app is built", () => {
     const module = new Hono<ControlPlaneHonoEnv>();
     module.get("/files/*", admit({ ...PUBLIC, authorization: NO_AUTHORIZATION }), () => json({}));
