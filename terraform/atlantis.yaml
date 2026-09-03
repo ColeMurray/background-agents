@@ -1,0 +1,26 @@
+# https://www.runatlantis.io/docs/repo-level-atlantis-yaml.html
+#
+# Note: Projects are kept sorted by `dir`, not `name`
+version: 3
+projects:
+- dir: terraform/environments/production
+  name: shipyard-dev
+  workspace: dev
+  branch: /^shipyard_dev$/
+  autoplan:
+    enabled: true
+    when_modified: &shipyard_when_modified
+    - "*.tf"
+    - ".terraform.lock.hcl"
+    - "env/*.tfvars"
+    - "../../modules/**/*.tf"
+    - "../../d1/migrations/*.sql"
+    - "../../../packages/**"
+    - "../../../scripts/**"
+- dir: terraform/environments/production
+  name: shipyard-prod
+  workspace: prod
+  branch: /^shipyard_prod$/
+  autoplan:
+    enabled: true
+    when_modified: *shipyard_when_modified
