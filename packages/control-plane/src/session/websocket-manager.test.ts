@@ -319,6 +319,19 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(oldWs.close).toHaveBeenCalledWith(1000, "New sandbox connecting");
     });
 
+    it("closes an attached sandbox socket after the in-memory pointer is lost", () => {
+      const { manager } = createManager();
+      const oldWs = createFakeWebSocket();
+      const newWs = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(oldWs, "sb-1");
+      manager.clearSandboxSocket();
+
+      const result = manager.acceptAndSetSandboxSocket(newWs, "sb-1");
+
+      expect(result.replaced).toBe(true);
+      expect(oldWs.close).toHaveBeenCalledWith(1000, "New sandbox connecting");
+    });
+
     it("does not try to close an already-closed sandbox socket", () => {
       const { manager } = createManager();
       const oldWs = createFakeWebSocket(WebSocket.CLOSED);
@@ -387,6 +400,16 @@ describe("SessionWebSocketManagerImpl", () => {
 
       expect(manager.getSandboxSocket()).toBeNull();
       expect(untaggedWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
+    });
+
+    it("rejects a cached socket when the persisted sandbox ID changes", () => {
+      const { manager, mockRepo } = createManager();
+      const oldWs = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(oldWs, "old-id");
+      mockRepo.setSandbox(createSandboxRow("new-id"));
+
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(oldWs.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
     });
 
     it("returns null when cached socket is closed", () => {
