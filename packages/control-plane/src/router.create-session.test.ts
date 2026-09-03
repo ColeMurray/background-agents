@@ -8,7 +8,7 @@ import {
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "./router.test-support";
-import { sessionCreateRoutes } from "./routes/session-create";
+import { handleCreateSession } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 import { resolveManagedSkills } from "./session/skill-resolution";
@@ -619,7 +619,7 @@ describe("handleCreateSession D1 ordering", () => {
     const testEnv: Record<string, unknown> = createEnv(initFetch);
     testEnv.SCM_PROVIDER = "gitlab";
 
-    const response = await sessionCreateRoutes[0].handler(
+    const response = await handleCreateSession(
       new Request("https://test.local/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -634,7 +634,6 @@ describe("handleCreateSession D1 ordering", () => {
         }),
       }),
       testEnv as never,
-      [] as unknown as RegExpMatchArray,
       {
         request_id: "test-request",
         trace_id: "test-trace",

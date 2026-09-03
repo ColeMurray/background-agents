@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   parseSessionListQuery,
   SESSION_LIST_CURRENT_USER,
@@ -13,14 +16,12 @@ import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
   error,
-  defineRoute,
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   parseJsonBody,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   requirePermission,
   type RequestContext,
-  type Route,
   type UserRouteContext,
 } from "./shared";
 import type { Env } from "../types";
@@ -53,10 +54,9 @@ function parseCreatedByFilters(
   return userIds;
 }
 
-async function handleListSessions(
+export async function handleListSessions(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -108,10 +108,9 @@ async function handleListSessions(
   return response;
 }
 
-async function handleListSessionInbox(
+export async function handleListSessionInbox(
   request: Request,
   _env: Env,
-  _match: RegExpMatchArray,
   ctx: UserRouteContext
 ): Promise<Response> {
   const searchParams = new URL(request.url).searchParams;
@@ -187,13 +186,13 @@ function encodeInboxPage(
   };
 }
 
-async function handlePatchReadState(
+export async function handlePatchReadState(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required");
 
   const unparsedBody = await parseJsonBody<unknown>(request);
@@ -220,13 +219,13 @@ async function handlePatchReadState(
   return response;
 }
 
-async function handleDeleteSession(
+export async function handleDeleteSession(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -235,29 +234,28 @@ async function handleDeleteSession(
   return json({ status: "deleted", sessionId });
 }
 
-export const sessionIndexRoutes: Route[] = [
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "GET",
-    path: "/sessions",
-    authorization: requirePermission("sessions.read"),
-    handler: handleListSessions,
-  }),
-  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
-    method: "GET",
-    path: "/sessions/inbox",
+export const sessionIndexRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionIndexRoutes.get(
+  "/sessions",
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => handleListSessions(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+sessionIndexRoutes.get(
+  "/sessions/inbox",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requirePermission("sessions.read", { service: "deny" }),
-    handler: handleListSessionInbox,
   }),
-  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
-    method: "PATCH",
-    path: "/sessions/:id/read-state",
-    authorization: requirePermission("sessions.read"),
-    handler: handlePatchReadState,
-  }),
-  defineRoute(GITHUB_USER_OR_SERVICE_ROUTE, {
-    method: "DELETE",
-    path: "/sessions/:id",
-    authorization: requirePermission("sessions.delete"),
-    handler: handleDeleteSession,
-  }),
-];
+  (c) => handleListSessionInbox(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);
+sessionIndexRoutes.patch(
+  "/sessions/:id/read-state",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => handlePatchReadState(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+);
+sessionIndexRoutes.delete(
+  "/sessions/:id",
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.delete") }),
+  (c) => handleDeleteSession(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+);

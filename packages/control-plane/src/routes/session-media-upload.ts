@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type {
   ScreenshotArtifactMetadata,
   VideoArtifactMetadata,
@@ -21,15 +24,8 @@ import {
 import { createMediaObjectStorage, type ObjectStorage } from "../storage/object-storage";
 import type { Env } from "../types";
 import { listSessionArtifactsFromRuntime, persistMediaArtifact } from "./session-media-artifacts";
-import {
-  defineRoutes,
-  error,
-  GITHUB_SANDBOX_FALLBACK_ROUTE,
-  json,
-  requirePermission,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { error, GITHUB_SANDBOX_FALLBACK_ROUTE, json, requirePermission } from "./shared";
+import { withSessionRuntime, type SessionRouteContext } from "./session-route";
 
 function getRequiredFormString(value: MultipartFieldValue | null, name: string): string | Response {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -45,13 +41,13 @@ function getOptionalFormString(value: MultipartFieldValue | null): string | unde
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-async function handleMediaUpload(
+export async function handleMediaUpload(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required");
   const storage = createMediaObjectStorage(env);
 
@@ -246,11 +242,19 @@ async function handleVideoUpload(input: {
   return json({ artifactId, objectKey }, 201);
 }
 
-export const sessionMediaUploadRoutes: Route[] = defineRoutes(GITHUB_SANDBOX_FALLBACK_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    path: "/sessions/:id/media",
+export const sessionMediaUploadRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionMediaUploadRoutes.post(
+  "/sessions/:id/media",
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
-    handler: handleMediaUpload,
   }),
-]);
+  (c) =>
+    handleMediaUpload(
+      c.var.admitted.request,
+      c.env,
+      c.req.param(),
+      withSessionRuntime(c.env, c.var.admitted.ctx)
+    )
+);

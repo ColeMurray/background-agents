@@ -3,9 +3,14 @@ import { SessionInternalPaths } from "../session/contracts";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
-import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
+import { sessionRuntimeProxyHandlers } from "./session-runtime-proxy";
 import type { Env } from "../types";
-import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import {
+  contractFor,
+  routePathPattern,
+  TEST_BACKGROUND_TASK_CONTEXT,
+} from "../router.test-support";
+import { withSessionRuntime } from "./session-route";
 
 function createCtx(
   db: SqlDatabase = {} as SqlDatabase,
@@ -44,13 +49,35 @@ function createEnv(fetch: (request: Request) => Promise<Response>): Env {
   } as unknown as Env;
 }
 
+const PROXY_HANDLERS: Record<string, keyof typeof sessionRuntimeProxyHandlers> = {
+  "GET /sessions/:id/sandbox-access": "sandboxAccess",
+  "GET /sessions/:id": "snapshot",
+  "POST /sessions/:id/stop": "stop",
+  "POST /sessions/:id/sandbox-error": "sandboxError",
+  "GET /sessions/:id/events": "events",
+  "GET /sessions/:id/artifacts": "artifacts",
+  "GET /sessions/:id/participants": "participants",
+  "GET /sessions/:id/participant-profiles": "participantProfiles",
+  "GET /sessions/:id/messages": "messages",
+  "POST /sessions/:id/pr": "createPr",
+  "POST /sessions/:id/openai-token-refresh": "openaiTokenRefresh",
+  "POST /sessions/:id/xai-token-refresh": "xaiTokenRefresh",
+  "POST /sessions/:id/scm-credentials": "scmCredentials",
+  "GET /sessions/:id/tunnel-urls": "tunnelUrls",
+  "PATCH /sessions/:id/title": "updateTitle",
+  "POST /sessions/:id/archive": "archive",
+  "POST /sessions/:id/unarchive": "unarchive",
+};
+
+/** The production contract for a concrete path, the handler behind it, and its parameters. */
 function getHandler(method: string, path: string) {
-  for (const route of sessionRuntimeProxyRoutes) {
-    if (route.method !== method) continue;
-    const match = path.match(routePathPattern(route.path));
-    if (match) return { handler: route.handler, match, route };
-  }
-  throw new Error(`No route found for ${method} ${path}`);
+  const route = contractFor(method, path);
+  if (!route) throw new Error(`No route found for ${method} ${path}`);
+  const key = PROXY_HANDLERS[`${method} ${route.path}`];
+  if (!key) throw new Error(`No proxy handler registered for ${method} ${route.path}`);
+  const id = path.match(routePathPattern(route.path))?.groups?.id;
+  if (!id) throw new Error(`No session id in ${path}`);
+  return { handler: sessionRuntimeProxyHandlers[key], match: { id }, route };
 }
 
 describe("session runtime proxy routes", () => {
@@ -67,7 +94,7 @@ describe("session runtime proxy routes", () => {
       new Request(`https://test.local${path}`),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(200);
@@ -113,7 +140,7 @@ describe("session runtime proxy routes", () => {
       new Request(`https://test.local${path}`),
       createEnv(fetch),
       match,
-      createCtx({} as SqlDatabase, input.permissions)
+      withSessionRuntime(createEnv(fetch), createCtx({} as SqlDatabase, input.permissions))
     );
     const snapshot = (await response.json()) as { session: Record<string, unknown> };
 
@@ -141,7 +168,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/events?limit=10"),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     await expect(response.json()).resolves.toEqual({ events: [] });
@@ -171,7 +198,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(200);
@@ -201,7 +228,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(413);
@@ -217,7 +244,7 @@ describe("session runtime proxy routes", () => {
       new Request(`https://test.local${path}`, { method: "POST", body: "not json" }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(401);
@@ -239,7 +266,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(400);
@@ -301,7 +328,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/participant-profiles"),
       createEnv(fetch),
       match,
-      createCtx(db)
+      withSessionRuntime(createEnv(fetch), createCtx(db))
     );
 
     expect(response.status).toBe(200);
@@ -339,7 +366,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/participant-profiles"),
       createEnv(fetch),
       match,
-      createCtx(db)
+      withSessionRuntime(createEnv(fetch), createCtx(db))
     );
 
     expect(response.status).toBe(502);
@@ -356,7 +383,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/participant-profiles"),
       createEnv(fetch),
       match,
-      createCtx(db)
+      withSessionRuntime(createEnv(fetch), createCtx(db))
     );
 
     expect(response.status).toBe(502);
@@ -373,7 +400,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/participant-profiles"),
       createEnv(fetch),
       match,
-      createCtx(db)
+      withSessionRuntime(createEnv(fetch), createCtx(db))
     );
 
     expect(response.status).toBe(404);
@@ -396,7 +423,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     await expect(response.json()).resolves.toEqual({ status: "updated" });
@@ -435,7 +462,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      ctx
+      withSessionRuntime(createEnv(fetch), ctx)
     );
 
     expect(response.status).toBe(200);
@@ -457,7 +484,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(400);
@@ -475,7 +502,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1"),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(500);
@@ -490,7 +517,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1"),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(404);
@@ -513,7 +540,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(200);
@@ -534,7 +561,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(400);
@@ -554,7 +581,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(400);
@@ -585,7 +612,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(200);
@@ -612,7 +639,7 @@ describe("session runtime proxy routes", () => {
       }),
       createEnv(fetch),
       match,
-      createCtx()
+      withSessionRuntime(createEnv(fetch), createCtx())
     );
 
     expect(response.status).toBe(400);

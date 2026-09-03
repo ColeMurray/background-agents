@@ -1,4 +1,5 @@
-import type { Route } from "./shared";
+import { Hono } from "hono";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { sessionCreateRoutes } from "./session-create";
 import { sessionChildRoutes } from "./session-children";
 import { sessionChildSpawnRoutes } from "./session-child-spawn";
@@ -12,17 +13,21 @@ import { sessionWsTokenRoutes } from "./session-ws-token";
 import { sessionDiffRoutes } from "./session-diffs";
 import { sessionSkillRoutes } from "./session-skills";
 
-export const sessionRoutes: Route[] = [
-  ...sessionCreateRoutes,
-  ...sessionIndexRoutes,
-  ...sessionRuntimeProxyRoutes,
-  ...sessionWsTokenRoutes,
-  ...sessionPromptRoutes,
-  ...sessionPullRequestRoutes,
-  ...sessionMediaRoutes,
-  ...sessionAttachmentRoutes,
-  ...sessionDiffRoutes,
-  ...sessionSkillRoutes,
-  ...sessionChildSpawnRoutes,
-  ...sessionChildRoutes,
-];
+/** Mount order is precedence order: `/sessions/inbox` must register before `/sessions/:id`. */
+export const sessionRoutes = new Hono<ControlPlaneHonoEnv>();
+for (const module of [
+  sessionCreateRoutes,
+  sessionIndexRoutes,
+  sessionRuntimeProxyRoutes,
+  sessionWsTokenRoutes,
+  sessionPromptRoutes,
+  sessionPullRequestRoutes,
+  sessionMediaRoutes,
+  sessionAttachmentRoutes,
+  sessionDiffRoutes,
+  sessionSkillRoutes,
+  sessionChildSpawnRoutes,
+  sessionChildRoutes,
+]) {
+  sessionRoutes.route("/", module);
+}

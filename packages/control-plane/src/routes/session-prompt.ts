@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   callbackContextSchema,
   sendPromptRequestSchema,
@@ -24,14 +27,8 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import {
-  defineRoutes,
-  error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
-  requirePermission,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { withSessionRuntime, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
 
@@ -50,13 +47,13 @@ function validateAttachments(raw: unknown): SessionAttachmentReference[] | Respo
   return result.data;
 }
 
-async function handleSessionPrompt(
+export async function handleSessionPrompt(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
+  const sessionId = params.id;
   if (!sessionId) return error("Session ID required");
 
   let rawBody: unknown;
@@ -180,11 +177,19 @@ async function handleSessionPrompt(
   return response;
 }
 
-export const sessionPromptRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  sessionRoute({
-    method: "POST",
-    path: "/sessions/:id/prompt",
+export const sessionPromptRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionPromptRoutes.post(
+  "/sessions/:id/prompt",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.collaborate"),
-    handler: handleSessionPrompt,
   }),
-]);
+  (c) =>
+    handleSessionPrompt(
+      c.var.admitted.request,
+      c.env,
+      c.req.param(),
+      withSessionRuntime(c.env, c.var.admitted.ctx)
+    )
+);

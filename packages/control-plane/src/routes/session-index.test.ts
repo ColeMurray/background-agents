@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sessionIndexRoutes } from "./session-index";
-import type { RequestContext } from "./shared";
+import { handleListSessions, handlePatchReadState } from "./session-index";
+import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
-import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -61,21 +61,10 @@ function createEnv(): Env {
   } as Env;
 }
 
-function getHandler(method: string, path: string) {
-  for (const route of sessionIndexRoutes) {
-    if (route.method !== method) continue;
-    const match = path.match(routePathPattern(route.path));
-    if (match) return { handler: route.handler, match };
-  }
-  throw new Error(`No route found for ${method} ${path}`);
-}
-
 async function listSessions(query = "", principal?: Principal): Promise<Response> {
-  const { handler, match } = getHandler("GET", "/sessions");
-  return handler(
+  return handleListSessions(
     new Request(`https://test.local/sessions${query}`),
     createEnv(),
-    match,
     createCtx(principal)
   );
 }
@@ -83,17 +72,16 @@ async function listSessions(query = "", principal?: Principal): Promise<Response
 async function patchReadState(
   body: string,
   principal?: Principal,
-  matchOverride?: RegExpMatchArray
+  paramsOverride?: { id: string }
 ): Promise<Response> {
-  const { handler, match } = getHandler("PATCH", "/sessions/session-1/read-state");
-  return handler(
+  return handlePatchReadState(
     new Request("https://test.local/sessions/session-1/read-state", {
       method: "PATCH",
       body,
     }),
     createEnv(),
-    matchOverride ?? match,
-    createCtx(principal)
+    paramsOverride ?? { id: "session-1" },
+    createCtx(principal) as UserRouteContext
   );
 }
 
@@ -289,11 +277,10 @@ describe("session index routes", () => {
   });
 
   it("requires a session ID for read-state mutations", async () => {
-    const { match } = getHandler("PATCH", "/sessions/session-1/read-state");
     const response = await patchReadState(
       JSON.stringify({ action: "mark_latest_message_read" }),
       { kind: "user", userId: "user-1" },
-      Object.assign(match, { groups: {} })
+      { id: "" }
     );
 
     expect(response.status).toBe(400);

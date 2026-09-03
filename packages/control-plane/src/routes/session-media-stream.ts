@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { createLogger } from "../logger";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
 import type { NormalizedArtifactResponse } from "../session/artifacts";
@@ -10,14 +13,8 @@ import {
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
-import {
-  defineRoutes,
-  error,
-  GITHUB_USER_OR_SERVICE_ROUTE,
-  requirePermission,
-  type Route,
-} from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { withSessionRuntime, type SessionRouteContext } from "./session-route";
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(
@@ -52,14 +49,14 @@ function resolveMediaContentType(
   return getMediaMimeType(artifact);
 }
 
-async function handleMediaGet(
+export async function handleMediaGet(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; artifactId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const sessionId = match.groups?.id;
-  const artifactId = match.groups?.artifactId;
+  const sessionId = params.id;
+  const artifactId = params.artifactId;
   if (!sessionId || !artifactId) {
     return error("Session ID and artifact ID are required", 400);
   }
@@ -141,13 +138,21 @@ async function handleMediaGet(
     : createStoredObjectResponse(body, metadata, contentType);
 }
 
-export const sessionMediaStreamRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  sessionRoute({
-    method: "GET",
-    path: "/sessions/:id/media/:artifactId",
+export const sessionMediaStreamRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionMediaStreamRoutes.get(
+  "/sessions/:id/media/:artifactId",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.read", {
       actorlessGrants: [{ service: "slack-bot" }],
     }),
-    handler: handleMediaGet,
   }),
-]);
+  (c) =>
+    handleMediaGet(
+      c.var.admitted.request,
+      c.env,
+      c.req.param(),
+      withSessionRuntime(c.env, c.var.admitted.ctx)
+    )
+);

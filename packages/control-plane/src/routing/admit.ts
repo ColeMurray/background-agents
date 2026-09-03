@@ -12,7 +12,6 @@ import type {
 import type { Env } from "../types";
 import type { ControlPlaneHonoEnv } from "./hono-env";
 import { admitRoute, type RouteAdmissionResult } from "./route-admission";
-import { rawRouteParams } from "./route-params";
 
 /** Everything admission and response policy need to know about a route. */
 export type AdmissionPolicy = RouteAdmissionPolicy & Pick<RouteDefinition, "cacheControl">;
@@ -65,7 +64,8 @@ export function admit<const Policy extends AdmissionPolicy>(
     // Recorded before anything can fail so the lifecycle finalizes an
     // admission error with this route's response policy.
     c.set("routePolicy", policy);
-    const params = rawRouteParams(c.req.routePath, pathname);
+    // Hono decodes each segment exactly once; admission reads those values.
+    const params = c.req.param() as RouteParams;
     const result = await admitRoute({
       request: c.req.raw,
       env: c.env,

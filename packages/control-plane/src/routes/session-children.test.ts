@@ -13,10 +13,10 @@ vi.mock("../session/integration-settings-resolution", () => ({
   resolveSandboxSettings: vi.fn(),
 }));
 
-function routeMatch(path: string, pattern: string): RegExpMatchArray {
+function routeMatch(path: string, pattern: string): { id: string; childId: string } {
   const match = path.match(routePathPattern(pattern));
-  if (!match) throw new Error("Expected route match");
-  return match;
+  if (!match?.groups?.id || !match.groups.childId) throw new Error("Expected route match");
+  return { id: match.groups.id, childId: match.groups.childId };
 }
 
 const defaultPromptAuthor: ActivePromptAuthor = {

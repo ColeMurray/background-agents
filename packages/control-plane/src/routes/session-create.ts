@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
@@ -30,9 +33,7 @@ import {
   json,
   resolveRepoOrError,
   type RequestContext,
-  type Route,
   GITHUB_USER_OR_SERVICE_ROUTE,
-  defineRoutes,
   requirePermission,
   type ServiceActorClaimsResult,
 } from "./shared";
@@ -65,10 +66,9 @@ async function extractSessionActorProfileClaims(
   };
 }
 
-async function handleCreateSession(
+export async function handleCreateSession(
   request: Request,
   env: Env,
-  _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
   const parsed = await parseCreateSessionInput(request);
@@ -292,12 +292,14 @@ async function handleCreateSession(
   return json(result, 201);
 }
 
-export const sessionCreateRoutes: Route[] = defineRoutes(GITHUB_USER_OR_SERVICE_ROUTE, [
-  {
-    method: "POST",
-    path: "/sessions",
+export const sessionCreateRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionCreateRoutes.post(
+  "/sessions",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("sessions.create"),
     serviceActorClaims: extractSessionActorProfileClaims,
-    handler: handleCreateSession,
-  },
-]);
+  }),
+  (c) => handleCreateSession(c.var.admitted.request, c.env, c.var.admitted.ctx)
+);

@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "../media";
 import type { Env } from "../types";
-import { sessionAttachmentRoutes } from "./session-attachments";
+import { handleAttachmentPost } from "./session-attachments";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
-import { routePathPattern, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
+import { withSessionRuntime } from "./session-route";
 
 const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -65,28 +66,16 @@ function oversizedStreamingUploadRequest(): Request {
   } as RequestInit & { duplex: "half" });
 }
 
-function getUploadRoute() {
-  const path = "/sessions/session-1/attachments";
-  const route = sessionAttachmentRoutes.find(
-    (candidate) => candidate.method === "POST" && path.match(routePathPattern(candidate.path))
-  );
-  if (!route) throw new Error("Attachment upload route not found");
-  const match = path.match(routePathPattern(route.path));
-  if (!match) throw new Error("Attachment upload route did not match");
-  return { route, match };
-}
-
 describe("session attachment routes", () => {
   it("bounds streamed requests when Content-Length is unavailable", async () => {
     const fetch = vi.fn(async () => Response.json({ status: "ok" }));
     const { env, put } = createEnv(fetch);
-    const { route, match } = getUploadRoute();
 
-    const response = await route.handler(
+    const response = await handleAttachmentPost(
       oversizedStreamingUploadRequest(),
       env,
-      match,
-      createContext()
+      { id: "session-1" },
+      withSessionRuntime(env, createContext())
     );
 
     expect(response.status).toBe(413);
@@ -105,9 +94,13 @@ describe("session attachment routes", () => {
         Response.json({ error: message }, { status: registryStatus })
       );
       const { env, put } = createEnv(fetch);
-      const { route, match } = getUploadRoute();
 
-      const response = await route.handler(attachmentUploadRequest(), env, match, createContext());
+      const response = await handleAttachmentPost(
+        attachmentUploadRequest(),
+        env,
+        { id: "session-1" },
+        withSessionRuntime(env, createContext())
+      );
 
       expect(response.status).toBe(routeStatus);
       await expect(response.json()).resolves.toEqual({ error: message });
@@ -133,9 +126,13 @@ describe("session attachment routes", () => {
     });
     const { env, put, remove } = createEnv(fetch);
     remove.mockRejectedValue(new Error("R2 unavailable"));
-    const { route, match } = getUploadRoute();
 
-    const response = await route.handler(attachmentUploadRequest(), env, match, createContext());
+    const response = await handleAttachmentPost(
+      attachmentUploadRequest(),
+      env,
+      { id: "session-1" },
+      withSessionRuntime(env, createContext())
+    );
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({

@@ -1,8 +1,10 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { MAX_SANDBOX_SKILL_PAGE_SIZE } from "@open-inspect/shared/types/skills";
 import { SessionSkillStore } from "../db/session-skills";
 import type { Env } from "../types";
 import {
-  defineRoute,
   error,
   json,
   NO_AUTHORIZATION,
@@ -10,22 +12,16 @@ import {
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type SandboxRouteContext,
-  type Route,
   type UserRouteContext,
 } from "./shared";
 
-function sessionId(match: RegExpMatchArray): string | Response {
-  return match.groups?.id ?? error("Session ID required", 400);
-}
-
-async function handleSessionSkillsView(
+export async function handleSessionSkillsView(
   _request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const id = sessionId(match);
-  if (id instanceof Response) return id;
+  const id = params.id;
   const view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
   if (!view) return error("Session skill manifest not found", 404);
   const response = json(view);
@@ -53,14 +49,13 @@ function installationPage(request: Request): { after: number; limit: number } | 
   return { after, limit };
 }
 
-async function handleSandboxInstallation(
+export async function handleSandboxInstallation(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: SandboxRouteContext
 ): Promise<Response> {
-  const id = sessionId(match);
-  if (id instanceof Response) return id;
+  const id = params.id;
   const page = installationPage(request);
   if (page instanceof Response) return page;
   const manifest = await new SessionSkillStore(ctx.db).getSandboxInstallation(
@@ -76,17 +71,16 @@ async function handleSandboxInstallation(
   return response;
 }
 
-export const sessionSkillRoutes: Route[] = [
-  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
-    method: "GET",
-    path: "/sessions/:id/skills",
-    authorization: requirePermission("sessions.read"),
-    handler: handleSessionSkillsView,
-  }),
-  defineRoute(SCM_AGNOSTIC_SANDBOX_ROUTE, {
-    method: "GET",
-    path: "/sessions/:id/sandbox-skills",
-    authorization: NO_AUTHORIZATION,
-    handler: handleSandboxInstallation,
-  }),
-];
+export const sessionSkillRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionSkillRoutes.get(
+  "/sessions/:id/skills",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => handleSessionSkillsView(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+);
+
+sessionSkillRoutes.get(
+  "/sessions/:id/sandbox-skills",
+  admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) => handleSandboxInstallation(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+);

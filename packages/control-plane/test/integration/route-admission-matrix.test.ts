@@ -305,14 +305,13 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     expect(observed).toMatchSnapshot();
   });
 
-  it("passes percent-encoded path segments through undecoded", async () => {
-    // Session ids are looked up by the raw segment, so an encoded letter misses.
+  it("decodes percent-encoded path segments exactly once", async () => {
+    // Session ids are decoded exactly once, by Hono, before the lookup and
+    // before the sandbox binding, so an encoded letter still names the session.
     const encodedSessionId = `%74${fixtures.readonlySessionId.slice(1)}`;
     const session = await serviceFetch(`${BASE}/sessions/${encodedSessionId}`);
-    expect(session.status).toBe(404);
-    await expect(session.json()).resolves.toEqual({ error: "Session not found" });
+    expect(session.status).toBe(200);
 
-    // The sandbox binding verifies the token against the same raw segment.
     const sandboxInit = { headers: { Authorization: `Bearer ${SANDBOX_TOKEN}` } };
     const encodedSandboxId = `%74${fixtures.sandboxSessionId.slice(1)}`;
     const plain = await SELF.fetch(
@@ -324,7 +323,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       `${BASE}/sessions/${encodedSandboxId}/tunnel-urls`,
       sandboxInit
     );
-    expect(encoded.status).toBe(401);
+    expect(encoded.status).toBe(200);
 
     // Repository segments decode exactly once in the handler: a nested owner
     // arrives as one segment, a slash in the name is refused after that one

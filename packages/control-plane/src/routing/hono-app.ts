@@ -16,6 +16,7 @@ import { catalog } from "../routes/catalog";
 import type { Route, RouteParams } from "../routes/shared";
 import type { Env } from "../types";
 import { admit } from "./admit";
+import { rawRouteParams } from "./route-params";
 import type {
   ControlPlaneHonoEnv,
   ControlPlaneHost,
@@ -126,7 +127,7 @@ function legacy(route: Route): Handler<ControlPlaneHonoEnv> {
     return route.handler(
       admission.result.handlerRequest,
       c.env,
-      legacyMatch(c.req.path, admission.params),
+      legacyMatch(c.req.path, rawRouteParams(c.req.routePath, c.req.path)),
       c.get("requestContext")
     );
   };

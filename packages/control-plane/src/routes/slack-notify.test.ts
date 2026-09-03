@@ -75,7 +75,7 @@ function createEnv(overrides?: Partial<Env>): Env {
 }
 
 async function callHandler(body: unknown, envOverrides?: Partial<Env>): Promise<Response> {
-  const match = PATH.match(PATTERN)!;
+  const params = { id: PATH.match(PATTERN)!.groups!.id };
   const init: RequestInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -84,7 +84,7 @@ async function callHandler(body: unknown, envOverrides?: Partial<Env>): Promise<
   return handleSlackNotify(
     new Request(`https://test.local${PATH}`, init),
     createEnv(envOverrides),
-    match,
+    params,
     createCtx()
   );
 }

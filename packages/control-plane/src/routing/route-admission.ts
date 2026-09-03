@@ -415,15 +415,9 @@ function actorlessGrantMatches(
   params: RouteParams
 ): boolean {
   if (grant.service !== service) return false;
-  return Object.entries(grant.pathParams ?? {}).every(([name, expected]) => {
-    const value = params[name];
-    if (value === undefined) return false;
-    try {
-      return decodeURIComponent(value) === expected;
-    } catch {
-      return false;
-    }
-  });
+  return Object.entries(grant.pathParams ?? {}).every(
+    ([name, expected]) => params[name] === expected
+  );
 }
 
 function enforceServiceRouteAuthorization(
@@ -586,14 +580,8 @@ async function enforceAutomationRequirement(
       "Forbidden"
     );
   }
-  const encodedAutomationId = params[requirement.automationIdParam];
-  if (!encodedAutomationId) return { response: json({ error: "Invalid automation route" }, 400) };
-  let automationId: string;
-  try {
-    automationId = decodeURIComponent(encodedAutomationId);
-  } catch {
-    return { response: json({ error: "Invalid automation route" }, 400) };
-  }
+  const automationId = params[requirement.automationIdParam];
+  if (!automationId) return { response: json({ error: "Invalid automation route" }, 400) };
 
   try {
     const authorization = ctx.authorization;

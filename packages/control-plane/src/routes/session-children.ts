@@ -1,3 +1,6 @@
+import { Hono } from "hono";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   cancelChildSessionRequestSchema,
   childFollowUpPromptRequestSchema,
@@ -12,7 +15,6 @@ import { resolveSandboxSettings } from "../session/integration-settings-resoluti
 import { activePromptAuthorSchema } from "../session/active-prompt-author";
 import type { Env } from "../types";
 import {
-  defineRoute,
   error,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
@@ -20,19 +22,18 @@ import {
   requirePermission,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
-  type Route,
 } from "./shared";
-import { sessionRoute, type SessionRouteContext } from "./session-route";
+import { withSessionRuntime, type SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-children");
 
-async function handleListChildren(
+export async function handleListChildren(
   _request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string },
   ctx: RequestContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
+  const parentId = params.id;
   if (!parentId) return error("Parent session ID required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -41,14 +42,14 @@ async function handleListChildren(
   return json({ children });
 }
 
-async function handleGetChild(
+export async function handleGetChild(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; childId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  const childId = match.groups?.childId;
+  const parentId = params.id;
+  const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -69,11 +70,11 @@ async function handleGetChild(
 export async function handlePromptChild(
   request: Request,
   _env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; childId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  const childId = match.groups?.childId;
+  const parentId = params.id;
+  const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
   let rawBody: unknown;
@@ -188,11 +189,11 @@ export async function handlePromptChild(
 export async function handleCancelChild(
   request: Request,
   env: Env,
-  match: RegExpMatchArray,
+  params: { id: string; childId: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
-  const parentId = match.groups?.id;
-  const childId = match.groups?.childId;
+  const parentId = params.id;
+  const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -260,38 +261,46 @@ export async function handleCancelChild(
   return response;
 }
 
-export const sessionChildRoutes: Route[] = [
-  defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
-    method: "GET",
-    path: "/sessions/:id/children",
-    authorization: requirePermission("sessions.read"),
-    handler: handleListChildren,
+export const sessionChildRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionChildRoutes.get(
+  "/sessions/:id/children",
+  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) => handleListChildren(c.var.admitted.request, c.env, c.req.param(), c.var.admitted.ctx)
+);
+sessionChildRoutes.get(
+  "/sessions/:id/children/:childId",
+  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requirePermission("sessions.read") }),
+  (c) =>
+    handleGetChild(
+      c.var.admitted.request,
+      c.env,
+      c.req.param(),
+      withSessionRuntime(c.env, c.var.admitted.ctx)
+    )
+);
+sessionChildRoutes.post(
+  "/sessions/:id/children/:childId/cancel",
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
+    authorization: requirePermission("sessions.lifecycle"),
   }),
-  defineRoute(
-    GITHUB_SANDBOX_FALLBACK_ROUTE,
-    sessionRoute({
-      method: "GET",
-      path: "/sessions/:id/children/:childId",
-      authorization: requirePermission("sessions.read"),
-      handler: handleGetChild,
-    })
-  ),
-  defineRoute(
-    GITHUB_SANDBOX_FALLBACK_ROUTE,
-    sessionRoute({
-      method: "POST",
-      path: "/sessions/:id/children/:childId/cancel",
-      authorization: requirePermission("sessions.lifecycle"),
-      handler: handleCancelChild,
-    })
-  ),
-  defineRoute(
-    SCM_AGNOSTIC_SANDBOX_ROUTE,
-    sessionRoute({
-      method: "POST",
-      path: "/sessions/:id/children/:childId/prompt",
-      authorization: NO_AUTHORIZATION,
-      handler: handlePromptChild,
-    })
-  ),
-];
+  (c) =>
+    handleCancelChild(
+      c.var.admitted.request,
+      c.env,
+      c.req.param(),
+      withSessionRuntime(c.env, c.var.admitted.ctx)
+    )
+);
+sessionChildRoutes.post(
+  "/sessions/:id/children/:childId/prompt",
+  admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, authorization: NO_AUTHORIZATION }),
+  (c) =>
+    handlePromptChild(
+      c.var.admitted.request,
+      c.env,
+      c.req.param(),
+      withSessionRuntime(c.env, c.var.admitted.ctx)
+    )
+);
