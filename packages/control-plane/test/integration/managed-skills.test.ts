@@ -510,6 +510,9 @@ describe("managed skills persistence and resolution", () => {
     await expect(fetchPage("?limit=0").then((r) => r.status)).resolves.toBe(400);
     await expect(fetchPage("?limit=201").then((r) => r.status)).resolves.toBe(400);
     await expect(fetchPage("?limit=25&cursor=nope").then((r) => r.status)).resolves.toBe(400);
+    await expect(
+      fetchPage(`?limit=25&cursor=${"9".repeat(400)}`).then((r) => r.status)
+    ).resolves.toBe(400);
   });
 
   it("maps typed profile validation and conflict failures", async () => {

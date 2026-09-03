@@ -51,7 +51,9 @@ const installationPageQuerySchema = z.object({
     .string()
     .regex(/^\d+$/, { error: "cursor is not a valid position" })
     .optional()
-    .transform((raw) => (raw === undefined ? -1 : Number(raw))),
+    .transform((raw) => (raw === undefined ? -1 : Number(raw)))
+    // A digit run long enough to overflow Number is not a position either.
+    .refine(Number.isSafeInteger, { error: "cursor is not a valid position" }),
 });
 
 function installationPage(request: Request): { after: number; limit: number } | Response | null {
