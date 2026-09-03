@@ -78,14 +78,15 @@ describe("useCurrentUserAuthorization", () => {
     expect(result.current.authorization.authorization).toEqual(AUTHORIZATION);
   });
 
-  it("withholds the cached grant once the server denies access", async () => {
+  // 401 follows a revoked session; 403 follows a removed role assignment
+  // (`assignment_required`). Both are answers, not blips.
+  it.each([401, 403])("withholds the cached grant once the server answers %i", async (status) => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
     const { result } = renderHarness();
     await waitFor(() => expect(result.current.authorization.authorization).not.toBeNull());
 
-    // 200 -> 403: a removed role assignment is a permanent denial, not a blip.
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
-      jsonResponse({ error: "assignment_required" }, 403)
+      jsonResponse({ error: "assignment_required" }, status)
     );
     await result.current.mutate(currentUserAuthorizationKey("user-1"));
 

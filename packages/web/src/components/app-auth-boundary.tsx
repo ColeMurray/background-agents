@@ -63,10 +63,10 @@ export function AppAuthBoundary({ children }: { children: React.ReactNode }) {
         </div>
       );
     }
-    // Cached authorization keeps the app mounted through a failed revalidation:
-    // SWR retains the last good value and only reports the error, and remounting
-    // this subtree would discard unsaved work (an in-progress prompt). Access is
-    // denied only when no authorization has ever resolved.
+    // No authorization means none has resolved yet, or the hook withheld a cached
+    // grant because the server denied access. A grant that merely failed to
+    // refresh is still present here, so a transient failure cannot unmount the
+    // app and discard unsaved work.
     if (!authorization) {
       return (
         <div className="min-h-screen flex items-center justify-center px-6">
