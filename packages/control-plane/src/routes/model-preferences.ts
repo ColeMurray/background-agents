@@ -14,10 +14,10 @@ import {
   type RequestContext,
   json,
   error,
-  parseJsonBody,
   activeGlobal,
   requirePermission,
 } from "./shared";
+import { parseJsonBody } from "./body";
 
 const logger = createLogger("router:model-preferences");
 

@@ -27,7 +27,8 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, parseJsonBody, requirePermission } from "./shared";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-prompt");

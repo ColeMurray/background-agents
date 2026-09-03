@@ -4,7 +4,7 @@
  * Split from ./environments so each routes file stays focused.
  */
 
-import { parseBody } from "./body";
+import { parseBody, parseJsonBody } from "./body";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -22,7 +22,6 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   error,
-  parseJsonBody,
   resolveRepoOrError,
   requirePermission,
 } from "./shared";

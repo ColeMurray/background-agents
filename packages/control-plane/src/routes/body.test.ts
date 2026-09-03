@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { bodyIssue, parseBody } from "./body";
+import { bodyIssue, parseBody, parseJsonBody } from "./body";
 
 const schema = z.object({
   name: z.string().min(1, { error: "must not be empty" }),
@@ -21,7 +21,33 @@ async function rejection(result: unknown): Promise<{ status: number; body: unkno
   return { status: response.status, body: await response.json() };
 }
 
+describe("parseJsonBody", () => {
+  it("returns the raw value", async () => {
+    await expect(parseJsonBody<unknown>(request('{"a":1}'))).resolves.toEqual({ a: 1 });
+  });
+
+  it("answers 400 when the body is not JSON", async () => {
+    await expect(rejection(await parseJsonBody<unknown>(request("nope")))).resolves.toEqual({
+      status: 400,
+      body: { error: "Invalid JSON body" },
+    });
+  });
+});
+
 describe("parseBody", () => {
+  it("runs async refinements instead of escaping as a 500", async () => {
+    const asyncSchema = z.object({
+      name: z.string().refine(async (name) => name !== "taken", { error: "name is taken" }),
+    });
+
+    await expect(parseBody(request('{"name":"free"}'), asyncSchema)).resolves.toEqual({
+      name: "free",
+    });
+    await expect(
+      rejection(await parseBody(request('{"name":"taken"}'), asyncSchema))
+    ).resolves.toEqual({ status: 400, body: { error: "name: name is taken" } });
+  });
+
   it("returns the parsed body", async () => {
     await expect(parseBody(request('{"name":"x","extra":1}'), schema)).resolves.toEqual({
       name: "x",

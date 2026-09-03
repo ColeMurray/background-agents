@@ -24,9 +24,9 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   json,
   error,
-  parseJsonBody,
   requirePermission,
 } from "./shared";
+import { parseJsonBody } from "./body";
 
 const logger = createLogger("router:scm-settings");
 

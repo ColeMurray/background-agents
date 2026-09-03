@@ -21,7 +21,6 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   NO_AUTHORIZATION,
-  parseJsonBody,
   requirePermission,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
@@ -30,6 +29,7 @@ import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   SCM_CREDENTIALS_ROUTE,
 } from "./shared";
+import { parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const participantsResponseSchema = z.object({

@@ -35,9 +35,9 @@ import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   json,
   error,
-  parseJsonBody,
   requirePermission,
 } from "./shared";
+import { parseJsonBody } from "./body";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
