@@ -8,7 +8,7 @@ import {
 } from "./scheduler";
 import { initSchema } from "../schema";
 import type { SqlStorage } from "../sql-storage";
-import { createNodeSqlStorage } from "../../../test/conformance/node-sqlite-storage";
+import { createNodeSqlStorage } from "../../node/sqlite-storage";
 
 function createDatabaseSql(db: DatabaseSync): SqlStorage {
   return createNodeSqlStorage(db).sql;

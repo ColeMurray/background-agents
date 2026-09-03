@@ -30,6 +30,8 @@ export interface SqlStorageFixture {
 export type SqlStorageFactory = <T>(run: (fixture: SqlStorageFixture) => T) => Promise<T>;
 
 export type StorageContractId =
+  | "storage.results"
+  | "storage.transactions"
   | "repository.session-core"
   | "repository.message"
   | "repository.event"
@@ -75,6 +77,79 @@ export const STORAGE_CONTRACTS: Record<
   StorageContractId,
   (storageFactory: SqlStorageFactory) => void
 > = {
+  "storage.results": (storageFactory) =>
+    describe("storage result conformance", () => {
+      it("returns rows, requires exactly one row from one(), and counts written rows", async () => {
+        await storageFactory(({ sql }) => {
+          sql.exec("CREATE TABLE IF NOT EXISTS conformance_rows (id INTEGER PRIMARY KEY, a TEXT)");
+          sql.exec("DELETE FROM conformance_rows");
+          expect(() => sql.exec("SELECT a FROM conformance_rows").one()).toThrow();
+
+          expect(
+            sql.exec("INSERT INTO conformance_rows (a) VALUES (?), (?)", "x", "y").rowsWritten
+          ).toBe(2);
+          expect(sql.exec("SELECT a FROM conformance_rows ORDER BY id").toArray()).toEqual([
+            { a: "x" },
+            { a: "y" },
+          ]);
+          expect(sql.exec("SELECT a FROM conformance_rows WHERE a = ?", "x").one()).toEqual({
+            a: "x",
+          });
+          expect(() => sql.exec("SELECT a FROM conformance_rows").one()).toThrow();
+
+          expect(
+            sql.exec("UPDATE conformance_rows SET a = 'z' WHERE a = ?", "missing").rowsWritten
+          ).toBe(0);
+          expect(
+            sql.exec("INSERT INTO conformance_rows (a) VALUES (?) RETURNING id", "w").toArray()
+          ).toEqual([{ id: 3 }]);
+        });
+      });
+    }),
+  "storage.transactions": (storageFactory) =>
+    describe("storage transaction conformance", () => {
+      it("commits a closure's writes together and rolls back every write of a throwing closure", async () => {
+        await storageFactory(({ sql, transactionSync }) => {
+          sql.exec("CREATE TABLE IF NOT EXISTS conformance_rows (id INTEGER PRIMARY KEY, a TEXT)");
+          sql.exec("DELETE FROM conformance_rows");
+          expect(
+            transactionSync(() => {
+              sql.exec("INSERT INTO conformance_rows (a) VALUES ('kept')");
+              return "result";
+            })
+          ).toBe("result");
+          expect(() =>
+            transactionSync(() => {
+              sql.exec("INSERT INTO conformance_rows (a) VALUES ('lost')");
+              sql.exec("UPDATE conformance_rows SET a = 'also lost'");
+              throw new Error("closure failed");
+            })
+          ).toThrow("closure failed");
+          expect(sql.exec("SELECT a FROM conformance_rows").toArray()).toEqual([{ a: "kept" }]);
+        });
+      });
+
+      it("scopes a nested closure's rollback to that closure", async () => {
+        await storageFactory(({ sql, transactionSync }) => {
+          sql.exec("CREATE TABLE IF NOT EXISTS conformance_rows (id INTEGER PRIMARY KEY, a TEXT)");
+          sql.exec("DELETE FROM conformance_rows");
+          transactionSync(() => {
+            sql.exec("INSERT INTO conformance_rows (a) VALUES ('outer')");
+            expect(() =>
+              transactionSync(() => {
+                sql.exec("INSERT INTO conformance_rows (a) VALUES ('inner')");
+                throw new Error("inner failed");
+              })
+            ).toThrow("inner failed");
+            transactionSync(() => sql.exec("INSERT INTO conformance_rows (a) VALUES ('inner-2')"));
+          });
+          expect(sql.exec("SELECT a FROM conformance_rows ORDER BY id").toArray()).toEqual([
+            { a: "outer" },
+            { a: "inner-2" },
+          ]);
+        });
+      });
+    }),
   "repository.session-core": (storageFactory) =>
     describe("session-core repository conformance", () => {
       it("persists session and member repository updates", async () => {

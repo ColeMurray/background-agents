@@ -26,6 +26,14 @@ describe("control-plane worker build", () => {
       expect(bundle.includes("AsyncLocalStoragePolyfill")).toBe(false);
       expect(bundle.includes("@opentelemetry/semantic-conventions/build/esm/")).toBe(true);
       expect(bundle.includes("@opentelemetry/semantic-conventions/build/src/")).toBe(false);
+
+      // The Node host's adapters (src/node/**) never reach the worker bundle.
+      const metafile = JSON.parse(
+        readFileSync(new URL("../dist/meta.json", import.meta.url), "utf8")
+      ) as { inputs: Record<string, unknown> };
+      const bundledSources = Object.keys(metafile.inputs);
+      expect(bundledSources).toContain("src/session/durable-object.ts");
+      expect(bundledSources.filter((input) => input.startsWith("src/node/"))).toEqual([]);
     },
     WORKER_BUILD_TIMEOUT_MS
   );

@@ -5,11 +5,12 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createNodeSqlStorage, type NodeSqlStorage } from "./node-sqlite-storage";
+import type { SessionStorage } from "../session/platform";
+import { createNodeSqlStorage } from "./sqlite-storage";
 
 describe("createNodeSqlStorage", () => {
   let db: DatabaseSync;
-  let storage: NodeSqlStorage;
+  let storage: SessionStorage;
 
   beforeEach(() => {
     db = new DatabaseSync(":memory:");
@@ -35,6 +36,7 @@ describe("createNodeSqlStorage", () => {
     storage.sql.exec("INSERT INTO t (a) VALUES (?), (?)", "x", "y");
     expect(storage.sql.exec("SELECT a FROM t WHERE a = ?", "x").one()).toEqual({ a: "x" });
     expect(() => storage.sql.exec("SELECT a FROM t").one()).toThrow("got 2");
+    expect(() => storage.sql.exec("DELETE FROM t; DELETE FROM t;").one()).toThrow("got 0");
   });
 
   it("counts the rows a write changed", () => {
@@ -95,6 +97,29 @@ describe("createNodeSqlStorage", () => {
     expect(storage.sql.exec("SELECT count(*) AS n FROM t").one()).toEqual({ n: 0 });
   });
 
+  it("enforces foreign keys, as Durable Object storage does", () => {
+    storage.sql.exec("CREATE TABLE child (parent INTEGER REFERENCES t(id))");
+    expect(() => storage.sql.exec("INSERT INTO child (parent) VALUES (?)", 99)).toThrow(
+      "FOREIGN KEY"
+    );
+  });
+
+  it("rolls back every write of a throwing closure and leaves the connection usable", () => {
+    const { sql, transactionSync } = storage;
+    expect(() =>
+      transactionSync(() => {
+        sql.exec("INSERT INTO t (a) VALUES ('lost')");
+        sql.exec("UPDATE t SET a = 'also lost'");
+        throw new Error("closure failed");
+      })
+    ).toThrow("closure failed");
+    expect(sql.exec("SELECT count(*) AS n FROM t").one()).toEqual({ n: 0 });
+    expect(transactionSync(() => sql.exec("INSERT INTO t (a) VALUES ('kept')").rowsWritten)).toBe(
+      1
+    );
+    expect(sql.exec("SELECT a FROM t").toArray()).toEqual([{ a: "kept" }]);
+  });
+
   it("commits nested transactions together and rolls back the failing scope only", () => {
     const { sql, transactionSync } = storage;
     transactionSync(() => {
@@ -115,6 +140,7 @@ describe("createNodeSqlStorage", () => {
     expect(() =>
       transactionSync(() => {
         sql.exec("INSERT INTO t (a) VALUES ('lost')");
+        transactionSync(() => sql.exec("INSERT INTO t (a) VALUES ('nested but lost')"));
         throw new Error("outer failed");
       })
     ).toThrow("outer failed");
