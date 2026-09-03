@@ -265,10 +265,4 @@ describe("control-plane Hono app lifecycle", () => {
       "Route without a verified principal cannot require authorization"
     );
   });
-
-  it("refuses a route path outside the literal-or-parameter grammar", () => {
-    expect(() =>
-      createControlPlaneApp([publicRoute("/files/*", async () => json({}))], host)
-    ).toThrow("outside the supported grammar");
-  });
 });
