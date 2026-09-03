@@ -9,7 +9,11 @@ export const keyboardShortcutRoutes = new Hono<ControlPlaneHonoEnv>();
 
 keyboardShortcutRoutes.get(
   "/keyboard-shortcuts",
-  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: ACTIVE_SELF }),
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: ACTIVE_SELF,
+    cacheControl: "private, no-store",
+  }),
   async (c) => {
     const { ctx } = c.var.admitted;
     const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).get(ctx.principal.userId);

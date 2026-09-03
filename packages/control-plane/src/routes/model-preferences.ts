@@ -103,6 +103,7 @@ modelPreferencesRoutes.get(
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: activeGlobal({ actorlessGrants: [{ service: "slack-bot" }] }),
+    cacheControl: "private, no-store",
   }),
   (c) => getModelPreferences(c.var.admitted.ctx)
 );

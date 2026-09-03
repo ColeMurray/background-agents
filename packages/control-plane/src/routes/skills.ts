@@ -625,6 +625,11 @@ const PROFILES_MANAGE_OWN = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   authorization: requirePermission("skill_profiles.manage_own"),
 });
+const PROFILES_READ_OWN = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  authorization: requirePermission("skill_profiles.manage_own"),
+  cacheControl: "private, no-store",
+});
 
 export const skillRoutes = new Hono<ControlPlaneHonoEnv>();
 
@@ -649,7 +654,7 @@ skillRoutes.put("/skills/:id", SKILLS_MANAGE, (c) =>
   dispatch(c, handleReplaceSkillContentAndAssignments)
 );
 skillRoutes.delete("/skills/:id", SKILLS_MANAGE, (c) => dispatch(c, handleDeleteSkill));
-skillRoutes.get("/skill-profiles", PROFILES_MANAGE_OWN, (c) => dispatch(c, handleListProfiles));
+skillRoutes.get("/skill-profiles", PROFILES_READ_OWN, (c) => dispatch(c, handleListProfiles));
 skillRoutes.post("/skill-profiles", PROFILES_MANAGE_OWN, (c) => dispatch(c, handleCreateProfile));
 skillRoutes.patch("/skill-profiles/:id", PROFILES_MANAGE_OWN, (c) =>
   dispatch(c, handleUpdateProfile)
