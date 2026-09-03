@@ -4,6 +4,7 @@
  * Split from ./environments so each routes file stays focused.
  */
 
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -130,13 +131,12 @@ async function handleSetEnvironmentSecrets(
   const environment = await store.getById(id);
   if (!environment) return error("Environment not found", 404);
 
-  const rawBody = await parseJsonBody<unknown>(request);
-  if (rawBody instanceof Response) return rawBody;
-  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) {
-    return error("Request body must include secrets object", 400);
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    secretsRequestBodySchema,
+    "Request body must include secrets object"
+  );
+  if (body instanceof Response) return body;
 
   const secretsStore = new EnvironmentSecretsStore(ctx.db, config.key);
   try {

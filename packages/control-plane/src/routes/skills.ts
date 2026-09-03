@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import {
   createSkillInputSchema,
@@ -87,14 +88,6 @@ function canonicalUserId(ctx: RequestContext): string | null {
   return null;
 }
 
-async function parsedBody(request: Request): Promise<unknown | Response> {
-  try {
-    return await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-}
-
 const skillListQuerySchema = z.object({
   limit: z
     .string()
@@ -146,12 +139,10 @@ async function handleCreateSkill(
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = createSkillInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill", 400);
+  const parsed = await parseBody(request, createSkillInputSchema, "Invalid skill");
+  if (parsed instanceof Response) return parsed;
   try {
-    const skill = await new SkillStore(ctx.db).create(parsed.data, userId);
+    const skill = await new SkillStore(ctx.db).create(parsed, userId);
     audit(ctx, {
       action: "skill.created",
       skill_id: skill.id,
@@ -169,12 +160,14 @@ async function handlePreviewSkill(
   _params: object,
   _ctx: RequestContext
 ): Promise<Response> {
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = createSkillInputSchema.pick({ name: true, content: true }).safeParse(body);
-  if (!parsed.success) return error("Invalid skill", 400);
+  const parsed = await parseBody(
+    request,
+    createSkillInputSchema.pick({ name: true, content: true }),
+    "Invalid skill"
+  );
+  if (parsed instanceof Response) return parsed;
   try {
-    const revision = await buildValidatedSkillRevision(parsed.data.name, parsed.data.content);
+    const revision = await buildValidatedSkillRevision(parsed.name, parsed.content);
     return json({
       skillMarkdown: revision.files.find((file) => file.path === "SKILL.md")?.content,
       revisionSha256: revision.revisionSha256,
@@ -248,15 +241,17 @@ async function handlePreviewSkillImport(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = skillImportPreviewInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill import source", 400);
+  const parsed = await parseBody(
+    request,
+    skillImportPreviewInputSchema,
+    "Invalid skill import source"
+  );
+  if (parsed instanceof Response) return parsed;
   try {
     const result = await fetchSkillImport(
       createRouteSourceControlProvider(env),
-      parsed.data.source,
-      parsed.data.name
+      parsed.source,
+      parsed.name
     );
     return json(await importPreviewResponse(ctx, result));
   } catch (e) {
@@ -272,20 +267,18 @@ async function handleImportSkill(
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = importSkillInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill import", 400);
+  const parsed = await parseBody(request, importSkillInputSchema, "Invalid skill import");
+  if (parsed instanceof Response) return parsed;
   try {
     const result = await fetchSkillImport(
       createRouteSourceControlProvider(env),
-      parsed.data.source,
-      parsed.data.name
+      parsed.source,
+      parsed.name
     );
-    const stale = confirmedImport(result, parsed.data);
+    const stale = confirmedImport(result, parsed);
     if (stale) return stale;
     const skill = await new SkillStore(ctx.db).create(
-      { name: result.name, content: result.content, assignments: parsed.data.assignments },
+      { name: result.name, content: result.content, assignments: parsed.assignments },
       userId,
       result.source
     );
@@ -337,15 +330,17 @@ async function handlePreviewSkillReimport(
   ctx: RequestContext
 ): Promise<Response> {
   const { id } = params;
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = reimportSkillPreviewInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill re-import", 400);
+  const parsed = await parseBody(
+    request,
+    reimportSkillPreviewInputSchema,
+    "Invalid skill re-import"
+  );
+  if (parsed instanceof Response) return parsed;
   const skill = await new SkillStore(ctx.db).get(id);
   if (!skill) return error("Skill not found", 404);
   try {
     const provider = createRouteSourceControlProvider(env);
-    const source = recordedImportSource(skill.source, parsed.data.ref, provider.name);
+    const source = recordedImportSource(skill.source, parsed.ref, provider.name);
     if (source instanceof Response) return source;
     const result = await fetchSkillImport(provider, source, skill.name);
     return json(await importPreviewResponse(ctx, result, skill.name));
@@ -365,10 +360,8 @@ async function handleReimportSkill(
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
   if (!ifMatch) return error("If-Match revision is required", 428);
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = reimportSkillInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill re-import", 400);
+  const parsed = await parseBody(request, reimportSkillInputSchema, "Invalid skill re-import");
+  if (parsed instanceof Response) return parsed;
   const store = new SkillStore(ctx.db);
   const skill = await store.get(id);
   if (!skill) return error("Skill not found", 404);
@@ -377,10 +370,10 @@ async function handleReimportSkill(
   }
   try {
     const provider = createRouteSourceControlProvider(env);
-    const source = recordedImportSource(skill.source, parsed.data.ref, provider.name);
+    const source = recordedImportSource(skill.source, parsed.ref, provider.name);
     if (source instanceof Response) return source;
     const result = await fetchSkillImport(provider, source, skill.name);
-    const stale = confirmedImport(result, parsed.data);
+    const stale = confirmedImport(result, parsed);
     if (stale) return stale;
     const applied = await store.applyImportedRevision(
       id,
@@ -423,12 +416,10 @@ async function handleSetSkillEnabled(
   const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = setSkillEnabledInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill update", 400);
+  const parsed = await parseBody(request, setSkillEnabledInputSchema, "Invalid skill update");
+  if (parsed instanceof Response) return parsed;
   try {
-    const skill = await new SkillStore(ctx.db).setEnabled(id, parsed.data, userId);
+    const skill = await new SkillStore(ctx.db).setEnabled(id, parsed, userId);
     if (skill) audit(ctx, { action: "skill.enabled_updated", skill_id: id });
     return skill ? json({ skill }) : error("Skill not found", 404);
   } catch (e) {
@@ -447,14 +438,16 @@ async function handleReplaceSkillContentAndAssignments(
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
   if (!ifMatch) return error("If-Match revision is required", 428);
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = replaceSkillContentAndAssignmentsInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill edit", 400);
+  const parsed = await parseBody(
+    request,
+    replaceSkillContentAndAssignmentsInputSchema,
+    "Invalid skill edit"
+  );
+  if (parsed instanceof Response) return parsed;
   try {
     const skill = await new SkillStore(ctx.db).replaceContentAndAssignments(
       id,
-      parsed.data,
+      parsed,
       userId,
       ifMatch
     );
@@ -503,15 +496,13 @@ async function handleCreateProfile(
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = createSkillProfileInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill profile", 400);
+  const parsed = await parseBody(request, createSkillProfileInputSchema, "Invalid skill profile");
+  if (parsed instanceof Response) return parsed;
   try {
     const profile = await new SkillProfileStore(ctx.db).create(
       userId,
-      parsed.data.name,
-      parsed.data.skillIds
+      parsed.name,
+      parsed.skillIds
     );
     const response = json({ profile }, 201);
     audit(ctx, { action: "profile.created", profile_id: profile.id });
@@ -530,12 +521,10 @@ async function handleUpdateProfile(
   const { id } = params;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = updateSkillProfileInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill profile", 400);
+  const parsed = await parseBody(request, updateSkillProfileInputSchema, "Invalid skill profile");
+  if (parsed instanceof Response) return parsed;
   try {
-    const profile = await new SkillProfileStore(ctx.db).update(id, userId, parsed.data);
+    const profile = await new SkillProfileStore(ctx.db).update(id, userId, parsed);
     if (profile) audit(ctx, { action: "profile.updated", profile_id: id });
     return profile ? json({ profile }) : error("Skill profile not found", 404);
   } catch (e) {
@@ -563,32 +552,34 @@ async function handleResolvePreview(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = skillResolutionPreviewInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill resolution target", 400);
+  const parsed = await parseBody(
+    request,
+    skillResolutionPreviewInputSchema,
+    "Invalid skill resolution target"
+  );
+  if (parsed instanceof Response) return parsed;
   let repositories =
-    parsed.data.repositories ??
-    (parsed.data.repoOwner && parsed.data.repoName
-      ? [{ repoOwner: parsed.data.repoOwner, repoName: parsed.data.repoName }]
+    parsed.repositories ??
+    (parsed.repoOwner && parsed.repoName
+      ? [{ repoOwner: parsed.repoOwner, repoName: parsed.repoName }]
       : []);
-  if (parsed.data.environmentId) {
+  if (parsed.environmentId) {
     const environments = new EnvironmentStore(ctx.db);
-    if (!(await environments.getById(parsed.data.environmentId))) {
+    if (!(await environments.getById(parsed.environmentId))) {
       return error("Environment not found", 404);
     }
-    repositories = (
-      await environments.getRepositoriesForEnvironment(parsed.data.environmentId)
-    ).map((repository) => ({
-      repoOwner: repository.repo_owner,
-      repoName: repository.repo_name,
-    }));
+    repositories = (await environments.getRepositoriesForEnvironment(parsed.environmentId)).map(
+      (repository) => ({
+        repoOwner: repository.repo_owner,
+        repoName: repository.repo_name,
+      })
+    );
   }
   try {
     const manifest = await resolveManagedSkills(
       ctx.db,
-      { repositories, environmentId: parsed.data.environmentId ?? null },
-      parsed.data.selection,
+      { repositories, environmentId: parsed.environmentId ?? null },
+      parsed.selection,
       canonicalUserId(ctx)
     );
     return json({

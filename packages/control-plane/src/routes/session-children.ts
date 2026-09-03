@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -76,14 +77,8 @@ export async function handlePromptChild(
   const childId = params.childId;
   if (!parentId || !childId) return error("Parent and child session IDs required");
 
-  let rawBody: unknown;
-  try {
-    rawBody = await request.json();
-  } catch {
-    return error("Invalid prompt body", 400);
-  }
-  const parsed = childFollowUpPromptRequestSchema.safeParse(rawBody);
-  if (!parsed.success) return error("Invalid prompt body", 400);
+  const parsed = await parseBody(request, childFollowUpPromptRequestSchema, "Invalid prompt body");
+  if (parsed instanceof Response) return parsed;
 
   const sessionStore = new SessionIndexStore(ctx.db);
   const childSession = await sessionStore.get(childId);
@@ -128,7 +123,7 @@ export async function handlePromptChild(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       parentSessionId: parentId,
-      content: parsed.data.content,
+      content: parsed.content,
       author: author.data,
     }),
   });

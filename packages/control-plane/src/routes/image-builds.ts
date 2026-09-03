@@ -8,6 +8,7 @@
  * - Enabled-scope and status queries
  */
 
+import { bodyIssue, parseBody } from "./body";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -48,7 +49,6 @@ import {
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   error,
   json,
-  parseJsonBody,
   NO_AUTHORIZATION,
   requirePermission,
 } from "./shared";
@@ -164,11 +164,7 @@ function parseCallbackBody<Schema extends z.ZodType>(
   body: unknown
 ): z.infer<Schema> | Response {
   const parsed = schema.safeParse(body);
-  if (parsed.success) return parsed.data;
-
-  const issue = parsed.error.issues[0];
-  const path = issue.path.join(".");
-  return error(path ? `${path}: ${issue.message}` : issue.message, 400);
+  return parsed.success ? parsed.data : error(bodyIssue(parsed.error), 400);
 }
 
 /**
@@ -325,13 +321,12 @@ async function handleToggleRepoImageBuilds(
   if (repository instanceof Response) return repository;
   const { owner, name } = repository;
 
-  const rawBody = await parseJsonBody<unknown>(request);
-  if (rawBody instanceof Response) return rawBody;
-  const parsedBody = toggleRepoImageBuildsBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) {
-    return error("enabled must be a boolean", 400);
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    toggleRepoImageBuildsBodySchema,
+    "enabled must be a boolean"
+  );
+  if (body instanceof Response) return body;
 
   const scope = repoImageBuildScope(owner, name);
 

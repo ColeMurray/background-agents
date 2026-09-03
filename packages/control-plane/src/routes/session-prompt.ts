@@ -27,7 +27,7 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, parseJsonBody, requirePermission } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-prompt");
@@ -55,12 +55,8 @@ export async function handleSessionPrompt(
 ): Promise<Response> {
   const sessionId = params.id;
 
-  let rawBody: unknown;
-  try {
-    rawBody = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
+  const rawBody = await parseJsonBody<unknown>(request);
+  if (rawBody instanceof Response) return rawBody;
 
   const enforcement = applyIdentityEnforcement(ctx, "prompt", rawBody);
   if (enforcement.rejection) return enforcement.rejection;

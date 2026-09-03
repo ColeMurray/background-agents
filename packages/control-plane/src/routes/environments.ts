@@ -6,6 +6,7 @@
  * live in ./environment-secrets.
  */
 
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -29,21 +30,11 @@ import {
   type RequestContext,
   json,
   error,
-  parseJsonBody,
   requirePermission,
 } from "./shared";
 import type { Env } from "../types";
 
 const logger = createLogger("router:environments");
-
-/** Turn a zod validation failure into a 400 naming the first offending field. */
-function validationError(err: {
-  issues: { path: (string | number | symbol)[]; message: string }[];
-}): Response {
-  const issue = err.issues[0];
-  const prefix = issue && issue.path.length ? `${issue.path.map(String).join(".")}: ` : "";
-  return error(`${prefix}${issue?.message ?? "invalid request"}`, 400);
-}
 
 /** Empty/whitespace description collapses to null (the column is nullable). */
 function normalizeDescription(description: string | null | undefined): string | null {
@@ -104,12 +95,9 @@ async function handleCreateEnvironment(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-
-  const parsed = createEnvironmentInputSchema.safeParse(body);
-  if (!parsed.success) return validationError(parsed.error);
-  const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed.data;
+  const parsed = await parseBody(request, createEnvironmentInputSchema);
+  if (parsed instanceof Response) return parsed;
+  const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed;
 
   const store = new EnvironmentStore(ctx.db);
   if (await store.getByName(name)) {
@@ -178,12 +166,9 @@ async function handleUpdateEnvironment(
   const existing = await store.getById(id);
   if (!existing) return error("Environment not found", 404);
 
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-
-  const parsed = updateEnvironmentInputSchema.safeParse(body);
-  if (!parsed.success) return validationError(parsed.error);
-  const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed.data;
+  const parsed = await parseBody(request, updateEnvironmentInputSchema);
+  if (parsed instanceof Response) return parsed;
+  const { name, description, prebuildEnabled, channelAssociations, repositories } = parsed;
 
   if (name !== undefined) {
     const other = await store.getByName(name);

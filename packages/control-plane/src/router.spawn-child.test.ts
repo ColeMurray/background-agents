@@ -647,6 +647,38 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(SessionIndexStore).not.toHaveBeenCalled();
   });
 
+  it("returns 400 for a child spawn body that is not JSON", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: authorizedDb(),
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: vi.fn(),
+      },
+    };
+
+    const response = await handleRequest(
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
+        method: "POST",
+        service: "linear-bot",
+        actor: "linear:U1",
+        body: "{",
+      }),
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(SessionIndexStore).not.toHaveBeenCalled();
+  });
+
   it("returns 500 for a malformed parent spawn context", async () => {
     const store = makeStore();
     vi.mocked(SessionIndexStore).mockImplementation(function () {

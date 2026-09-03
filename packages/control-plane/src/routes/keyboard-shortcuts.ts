@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { keyboardShortcutPreferencesPayloadSchema } from "@open-inspect/shared/types/keyboard-shortcuts";
 import { KeyboardShortcutPreferencesStore } from "../db/keyboard-shortcut-preferences";
@@ -6,7 +7,6 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   ACTIVE_SELF,
   activeSelf,
-  error,
   json,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type UserRouteContext,
@@ -29,17 +29,15 @@ async function handleSetKeyboardShortcuts(
   _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return error("Invalid JSON body", 400);
-  }
-  const parsed = keyboardShortcutPreferencesPayloadSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid keyboard shortcuts", 400);
+  const parsed = await parseBody(
+    request,
+    keyboardShortcutPreferencesPayloadSchema,
+    "Invalid keyboard shortcuts"
+  );
+  if (parsed instanceof Response) return parsed;
   const shortcuts = await new KeyboardShortcutPreferencesStore(ctx.db).set(
     ctx.principal.userId,
-    parsed.data.shortcuts
+    parsed.shortcuts
   );
   return json({ shortcuts });
 }

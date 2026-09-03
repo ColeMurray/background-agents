@@ -2,6 +2,7 @@
  * Repository and global secrets routes and handlers.
  */
 
+import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -16,7 +17,6 @@ import {
   type RequestContext,
   json,
   error,
-  parseJsonBody,
   resolveRepoOrError,
   requirePermission,
 } from "./shared";
@@ -46,14 +46,12 @@ async function handleSetRepoSecrets(
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
 
-  const rawBody = await parseJsonBody<unknown>(request);
-  if (rawBody instanceof Response) return rawBody;
-
-  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) {
-    return error("Request body must include secrets object", 400);
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    secretsRequestBodySchema,
+    "Request body must include secrets object"
+  );
+  if (body instanceof Response) return body;
 
   const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
@@ -246,14 +244,12 @@ async function handleSetGlobalSecrets(
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const rawBody = await parseJsonBody<unknown>(request);
-  if (rawBody instanceof Response) return rawBody;
-
-  const parsedBody = secretsRequestBodySchema.safeParse(rawBody);
-  if (!parsedBody.success) {
-    return error("Request body must include secrets object", 400);
-  }
-  const body = parsedBody.data;
+  const body = await parseBody(
+    request,
+    secretsRequestBodySchema,
+    "Request body must include secrets object"
+  );
+  if (body instanceof Response) return body;
 
   const store = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 

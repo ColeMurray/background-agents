@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import {
   createMcpServerInputSchema,
   updateMcpServerInputSchema,
@@ -18,7 +19,6 @@ import {
   type RequestContext,
   json,
   error,
-  parseJsonBody,
   requirePermission,
 } from "./shared";
 
@@ -75,15 +75,17 @@ async function handleCreateMcpServer(
 ): Promise<Response> {
   if (!ctx.db) return error("Database not configured", 503);
 
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-  const parsed = createMcpServerInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid MCP server configuration", 400);
+  const parsed = await parseBody(
+    request,
+    createMcpServerInputSchema,
+    "Invalid MCP server configuration"
+  );
+  if (parsed instanceof Response) return parsed;
 
   const encryptionKey = requireRepoSecretsEncryptionKey(env);
   try {
     const store = new McpServerStore(ctx.db, encryptionKey);
-    const server = await store.create(parsed.data);
+    const server = await store.create(parsed);
     logger.info("MCP server created", {
       event: "mcp_server.created",
       request_id: ctx.request_id,
@@ -109,15 +111,17 @@ async function handleUpdateMcpServer(
   const { id } = params;
   if (!ctx.db) return error("Database not configured", 503);
 
-  const body = await parseJsonBody<unknown>(request);
-  if (body instanceof Response) return body;
-  const parsed = updateMcpServerInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid MCP server configuration", 400);
+  const parsed = await parseBody(
+    request,
+    updateMcpServerInputSchema,
+    "Invalid MCP server configuration"
+  );
+  if (parsed instanceof Response) return parsed;
 
   const encryptionKey = requireRepoSecretsEncryptionKey(env);
   try {
     const store = new McpServerStore(ctx.db, encryptionKey);
-    const { revision, ...patch } = parsed.data;
+    const { revision, ...patch } = parsed;
     const updated = await store.update(id, patch, revision);
     if (!updated) return error("MCP server not found", 404);
 

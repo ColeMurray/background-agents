@@ -1,3 +1,4 @@
+import { parseBody } from "./body";
 import { commitSigningWriteRequestSchema } from "@open-inspect/shared/types/commit-signing";
 import { Hono } from "hono";
 
@@ -15,7 +16,6 @@ import type { Env } from "../types";
 import {
   error,
   json,
-  parseJsonBody,
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
@@ -94,17 +94,17 @@ async function handlePutCommitSigning(
   const store = createStore(env, ctx.db);
   if (store instanceof Response) return store;
 
-  const unparsedBody = await parseJsonBody<unknown>(request);
-  if (unparsedBody instanceof Response) return noStore(unparsedBody);
-  const parsedBody = commitSigningWriteRequestSchema.safeParse(unparsedBody);
-  if (!parsedBody.success) {
-    return noStore(error("Invalid commit signing configuration", 400));
-  }
+  const body = await parseBody(
+    request,
+    commitSigningWriteRequestSchema,
+    "Invalid commit signing configuration"
+  );
+  if (body instanceof Response) return noStore(body);
 
   try {
-    const validatedKey = await validateOpenSshEd25519PrivateKey(parsedBody.data.privateKey);
+    const validatedKey = await validateOpenSshEd25519PrivateKey(body.privateKey);
     const metadata = await store.save({
-      ...parsedBody.data,
+      ...body,
       ...validatedKey,
     });
     return noStore(json({ enabled: true, ...metadata }));
