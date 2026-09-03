@@ -317,6 +317,9 @@ describe("automation route handlers", () => {
     vi.clearAllMocks();
     // Defaults every test can override; re-set here so per-test overrides
     // (mockClear keeps implementations) cannot leak across tests.
+    // Admission resolves the automation for every manage route, so the
+    // lookup must not depend on what an earlier test left behind.
+    mockStore.getById.mockResolvedValue(sampleRow);
     mockStore.getRepositoriesForAutomation.mockResolvedValue([]);
     mockStore.getRepositoriesForAutomationIds.mockResolvedValue(new Map());
     mockStore.getEnvironmentsForAutomation.mockResolvedValue([]);
